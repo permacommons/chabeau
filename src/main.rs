@@ -21,7 +21,7 @@ use std::{
     error::Error,
     io,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex};
 
@@ -91,6 +91,8 @@ struct App {
     scroll_offset: u16,
     auto_scroll: bool, // Track if we should auto-scroll to bottom
     is_streaming: bool, // Track if we're currently receiving a response
+    pulse_start: Instant, // For pulsing animation
+    stream_interrupted: bool, // Track if stream was interrupted
 }
 
 impl App {
@@ -168,6 +170,8 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             scroll_offset: 0,
             auto_scroll: true,
             is_streaming: false,
+            pulse_start: Instant::now(),
+            stream_interrupted: false,
         })
     }
 
@@ -239,17 +243,20 @@ fn ui(f: &mut Frame, app: &App) {
     };
     let scroll_offset = app.scroll_offset.min(max_offset);
 
+    // Create enhanced title with model name and logging status
+    let title = format!("Chabeau - {} • Logging: disabled", app.model);
+
     let messages_paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title("Chat - Chabeau")
+                .title(title)
         )
         .wrap(Wrap { trim: true })
         .scroll((scroll_offset, 0));
 
     f.render_widget(messages_paragraph, chunks[0]);
 
-    // Input area
+    // Input area takes full width
     let input_style = if app.input_mode {
         Style::default().fg(Color::Yellow)
     } else {
@@ -257,26 +264,90 @@ fn ui(f: &mut Frame, app: &App) {
     };
 
     let input_title = if app.is_streaming {
-        "Streaming response... (Press Enter to send, Ctrl+C to quit)".to_string()
+        "Type your message (Press Enter to send, Esc to interrupt, Ctrl+C to quit)"
     } else {
-        "Type your message (Press Enter to send, Ctrl+C to quit)".to_string()
+        "Type your message (Press Enter to send, Ctrl+C to quit)"
     };
 
-    let input = Paragraph::new(app.input.as_str())
+    // Create input text with streaming indicator if needed
+    let input_text = if app.is_streaming {
+        // Calculate pulse animation (0.0 to 1.0 over 1 second)
+        let elapsed = app.pulse_start.elapsed().as_millis() as f32 / 1000.0;
+        let pulse_phase = (elapsed * 2.0) % 2.0; // 2 cycles per second
+        let pulse_intensity = if pulse_phase < 1.0 {
+            pulse_phase
+        } else {
+            2.0 - pulse_phase
+        };
+
+        // Choose symbol based on pulse intensity
+        let symbol = if pulse_intensity < 0.33 {
+            "○"
+        } else if pulse_intensity < 0.66 {
+            "◐"
+        } else {
+            "●"
+        };
+
+        // Calculate available width inside the input box (account for borders)
+        let inner_width = chunks[1].width.saturating_sub(2) as usize; // Remove left and right borders
+
+        // Build a string that's exactly inner_width characters long
+        // with the indicator ALWAYS at the last position
+        let mut result = vec![' '; inner_width]; // Start with all spaces
+
+        // Convert input to chars and place them at the beginning
+        let input_chars: Vec<char> = app.input.chars().collect();
+        let max_input_len = inner_width.saturating_sub(3); // Reserve space for gap + indicator + padding
+
+        // Copy input characters to the beginning of result
+        for (i, &ch) in input_chars.iter().take(max_input_len).enumerate() {
+            result[i] = ch;
+        }
+
+        // If input was too long, add ellipsis
+        if input_chars.len() > max_input_len && max_input_len >= 3 {
+            result[max_input_len - 3] = '.';
+            result[max_input_len - 2] = '.';
+            result[max_input_len - 1] = '.';
+        }
+
+        // Place the indicator with one space padding from the right border
+        if inner_width > 1 {
+            // Get the first character of the symbol (should be just one)
+            if let Some(symbol_char) = symbol.chars().next() {
+                result[inner_width - 2] = symbol_char; // -2 instead of -1 for padding
+            }
+        }
+
+        // Convert back to string
+        result.into_iter().collect()
+    } else {
+        app.input.clone()
+    };
+
+    let input = Paragraph::new(input_text.as_str())
         .style(input_style)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(input_title)
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false }); // Don't trim whitespace!
 
     f.render_widget(input, chunks[1]);
 
-    // Set cursor position
+    // Set cursor position (limit to avoid overlapping with indicator)
     if app.input_mode {
+        let max_cursor_pos = if app.is_streaming {
+            chunks[1].width.saturating_sub(6) // Leave space for indicator
+        } else {
+            chunks[1].width.saturating_sub(2) // Just account for borders
+        };
+
+        let cursor_x = (app.input.len() as u16 + 1).min(max_cursor_pos);
         f.set_cursor_position((
-            chunks[1].x + app.input.len() as u16 + 1,
+            chunks[1].x + cursor_x,
             chunks[1].y + 1,
         ));
     }
@@ -323,6 +394,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                             break Ok(());
                         }
+                        KeyCode::Esc => {
+                            let mut app_guard = app.lock().await;
+                            if app_guard.is_streaming {
+                                // Interrupt the stream
+                                app_guard.is_streaming = false;
+                                app_guard.stream_interrupted = true;
+                            }
+                        }
                         KeyCode::Enter => {
                             let (api_messages, client, model, api_key, base_url) = {
                                 let mut app_guard = app.lock().await;
@@ -330,12 +409,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     continue;
                                 }
 
+                                // If currently streaming, interrupt it
+                                if app_guard.is_streaming {
+                                    app_guard.is_streaming = false;
+                                    app_guard.stream_interrupted = true;
+                                }
+
                                 let input_text = app_guard.input.clone();
                                 app_guard.input.clear();
                                 // Re-enable auto-scroll when user sends a new message
                                 app_guard.auto_scroll = true;
-                                // Set streaming state
+                                // Set streaming state and reset pulse timer
                                 app_guard.is_streaming = true;
+                                app_guard.pulse_start = Instant::now();
+                                app_guard.stream_interrupted = false;
                                 let api_messages = app_guard.add_user_message(input_text);
                                 (
                                     api_messages,
@@ -347,6 +434,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             };
 
                             let tx_clone = tx.clone();
+                            let app_clone = app.clone();
                             tokio::spawn(async move {
                                 let request = ChatRequest {
                                     model,
@@ -374,6 +462,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let mut buffer = String::new();
 
                                         while let Some(chunk) = stream.next().await {
+                                            // Check if stream was interrupted
+                                            {
+                                                let app_guard = app_clone.lock().await;
+                                                if app_guard.stream_interrupted || !app_guard.is_streaming {
+                                                    // Stream was interrupted, stop processing
+                                                    let _ = tx_clone.send(STREAM_END_MARKER.to_string());
+                                                    return;
+                                                }
+                                            }
+
                                             if let Ok(chunk) = chunk {
                                                 let chunk_str = String::from_utf8_lossy(&chunk);
                                                 buffer.push_str(&chunk_str);

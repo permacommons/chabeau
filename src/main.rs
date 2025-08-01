@@ -90,6 +90,7 @@ struct App {
     base_url: String,
     scroll_offset: u16,
     auto_scroll: bool, // Track if we should auto-scroll to bottom
+    is_streaming: bool, // Track if we're currently receiving a response
 }
 
 impl App {
@@ -166,6 +167,7 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             base_url,
             scroll_offset: 0,
             auto_scroll: true,
+            is_streaming: false,
         })
     }
 
@@ -254,7 +256,11 @@ fn ui(f: &mut Frame, app: &App) {
         Style::default()
     };
 
-    let input_title = "Type your message (Press Enter to send, Ctrl+C to quit)".to_string();
+    let input_title = if app.is_streaming {
+        "Streaming response... (Press Enter to send, Ctrl+C to quit)".to_string()
+    } else {
+        "Type your message (Press Enter to send, Ctrl+C to quit)".to_string()
+    };
 
     let input = Paragraph::new(app.input.as_str())
         .style(input_style)
@@ -299,6 +305,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Channel for streaming updates
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
+    // Special message to signal end of streaming
+    const STREAM_END_MARKER: &str = "<<STREAM_END>>";
+
     // Main loop
     let result = loop {
         {
@@ -323,6 +332,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                 let input_text = app_guard.input.clone();
                                 app_guard.input.clear();
+                                // Re-enable auto-scroll when user sends a new message
+                                app_guard.auto_scroll = true;
+                                // Set streaming state
+                                app_guard.is_streaming = true;
                                 let api_messages = app_guard.add_user_message(input_text);
                                 (
                                     api_messages,
@@ -373,6 +386,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     if line.starts_with("data: ") {
                                                         let data = &line[6..];
                                                         if data == "[DONE]" {
+                                                            // Signal end of streaming
+                                                            let _ = tx_clone.send(STREAM_END_MARKER.to_string());
                                                             return;
                                                         }
 
@@ -409,14 +424,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                         KeyCode::Up => {
                             let mut app_guard = app.lock().await;
+                            // Disable auto-scroll when user manually scrolls
+                            app_guard.auto_scroll = false;
                             app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
-                            // If scrolled to bottom, re-enable auto-scroll
-                            let terminal_height = terminal.size().unwrap_or_default().height;
-                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
-                            if app_guard.scroll_offset == 0 || app_guard.scroll_offset >= max_scroll {
-                                app_guard.auto_scroll = true;
-                            }
                         }
                         KeyCode::Down => {
                             let mut app_guard = app.lock().await;
@@ -436,21 +446,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let mut app_guard = app.lock().await;
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
+                            app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(3);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            let mut app_guard = app.lock().await;
+                            // Disable auto-scroll when user manually scrolls
+                            app_guard.auto_scroll = false;
                             let terminal_height = terminal.size().unwrap_or_default().height;
                             let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
                             let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
                             app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
-                        }
-                        MouseEventKind::ScrollDown => {
-                            let mut app_guard = app.lock().await;
-                            app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(3);
-                            // If scrolled to bottom, re-enable auto-scroll
-                            let terminal_height = terminal.size().unwrap_or_default().height;
-                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
-                            if app_guard.scroll_offset == 0 || app_guard.scroll_offset >= max_scroll {
-                                app_guard.auto_scroll = true;
-                            }
                         }
                         _ => {}
                     }
@@ -462,12 +467,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Handle streaming updates - drain all available messages
         let mut received_any = false;
         while let Ok(content) = rx.try_recv() {
-            let mut app_guard = app.lock().await;
-            let terminal_height = terminal.size().unwrap_or_default().height;
-            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-            app_guard.append_to_response(&content, available_height);
-            drop(app_guard);
-            received_any = true;
+            if content == STREAM_END_MARKER {
+                // End of streaming - clear the streaming state
+                let mut app_guard = app.lock().await;
+                app_guard.is_streaming = false;
+                drop(app_guard);
+                received_any = true;
+            } else {
+                let mut app_guard = app.lock().await;
+                let terminal_height = terminal.size().unwrap_or_default().height;
+                let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                app_guard.append_to_response(&content, available_height);
+                drop(app_guard);
+                received_any = true;
+            }
         }
         if received_any {
             continue; // Force a redraw after processing all updates

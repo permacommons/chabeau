@@ -409,15 +409,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                         KeyCode::Up => {
                             let mut app_guard = app.lock().await;
-                            // Disable auto-scroll when user manually scrolls
-                            app_guard.auto_scroll = false;
-                            let terminal_height = terminal.size().unwrap_or_default().height;
-                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
-                            app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
-                        }
-                        KeyCode::Down => {
-                            let mut app_guard = app.lock().await;
                             app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
                             // If scrolled to bottom, re-enable auto-scroll
                             let terminal_height = terminal.size().unwrap_or_default().height;
@@ -426,6 +417,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if app_guard.scroll_offset == 0 || app_guard.scroll_offset >= max_scroll {
                                 app_guard.auto_scroll = true;
                             }
+                        }
+                        KeyCode::Down => {
+                            let mut app_guard = app.lock().await;
+                            // Disable auto-scroll when user manually scrolls
+                            app_guard.auto_scroll = false;
+                            let terminal_height = terminal.size().unwrap_or_default().height;
+                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
                         }
                         _ => {}
                     }

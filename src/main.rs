@@ -1,6 +1,6 @@
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
+    event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -37,11 +37,9 @@ Environment Variables:\n\
 Controls:\n\
   Type              Enter your message in the input field\n\
   Enter             Send the message\n\
-  Up/Down           Scroll through chat history\n\
-  /mouse            Toggle mouse wheel scrolling (off by default)\n\
+  Up/Down/Mouse     Scroll through chat history\n\
   Ctrl+C            Quit the application\n\
-  Backspace         Delete characters in the input field\n\n\
-Note: Mouse text selection works when mouse scrolling is disabled")]
+  Backspace         Delete characters in the input field")]
 struct Args {
     #[arg(short, long, default_value = "gpt-4o", help = "OpenAI model to use for chat")]
     model: String,
@@ -92,8 +90,6 @@ struct App {
     base_url: String,
     scroll_offset: u16,
     auto_scroll: bool, // Track if we should auto-scroll to bottom
-    mouse_enabled: bool, // Track if mouse capture is enabled
-    status_message: Option<String>, // Temporary status message that doesn't affect scrolling
 }
 
 impl App {
@@ -170,8 +166,6 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             base_url,
             scroll_offset: 0,
             auto_scroll: true,
-            mouse_enabled: false,
-            status_message: None,
         })
     }
 
@@ -201,26 +195,25 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         api_messages
     }
 
-    fn append_to_response(&mut self, content: &str) {
+    fn append_to_response(&mut self, content: &str, available_height: u16) {
         self.current_response.push_str(content);
         if let Some(last_msg) = self.messages.back_mut() {
             if last_msg.role == "assistant" {
                 last_msg.content = self.current_response.clone();
             }
         }
-        // Only auto-scroll if we're already at the bottom
+        // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
         if self.auto_scroll {
-            self.scroll_offset = 0;
+            // Calculate the scroll offset needed to show the bottom
+            let total_lines = self.build_display_lines().len() as u16;
+            if total_lines > available_height {
+                self.scroll_offset = total_lines.saturating_sub(available_height);
+            } else {
+                self.scroll_offset = 0;
+            }
         }
     }
 
-    fn set_status_message(&mut self, message: String) {
-        self.status_message = Some(message);
-    }
-
-    fn clear_status_message(&mut self) {
-        self.status_message = None;
-    }
 }
 
 fn ui(f: &mut Frame, app: &App) {
@@ -236,17 +229,13 @@ fn ui(f: &mut Frame, app: &App) {
     let available_height = chunks[0].height.saturating_sub(1); // Account for title only (no borders)
     let total_lines = lines.len() as u16;
 
-    let scroll_offset = if app.auto_scroll {
-        // Auto-scroll to bottom - show the latest content
-        if total_lines > available_height {
-            total_lines.saturating_sub(available_height)
-        } else {
-            0
-        }
+    // Always use the app's scroll_offset, but ensure it's within bounds
+    let max_offset = if total_lines > available_height {
+        total_lines.saturating_sub(available_height)
     } else {
-        // Manual scroll mode - use the scroll_offset
-        app.scroll_offset.min(total_lines.saturating_sub(available_height))
+        0
     };
+    let scroll_offset = app.scroll_offset.min(max_offset);
 
     let messages_paragraph = Paragraph::new(lines)
         .block(
@@ -265,12 +254,7 @@ fn ui(f: &mut Frame, app: &App) {
         Style::default()
     };
 
-    // Show status message in input title if present
-    let input_title = if let Some(ref status) = app.status_message {
-        format!("Type your message (Press Enter to send, Ctrl+C to quit) - {}", status)
-    } else {
-        "Type your message (Press Enter to send, Ctrl+C to quit)".to_string()
-    };
+    let input_title = "Type your message (Press Enter to send, Ctrl+C to quit)".to_string();
 
     let input = Paragraph::new(app.input.as_str())
         .style(input_style)
@@ -331,47 +315,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             break Ok(());
                         }
                         KeyCode::Enter => {
-                            let (api_messages, client, model, api_key, base_url, is_mouse_command) = {
+                            let (api_messages, client, model, api_key, base_url) = {
                                 let mut app_guard = app.lock().await;
                                 if app_guard.input.trim().is_empty() {
                                     continue;
                                 }
 
-                                // Check for /mouse command
-                                if app_guard.input.trim() == "/mouse" {
-                                    app_guard.mouse_enabled = !app_guard.mouse_enabled;
-                                    let status = if app_guard.mouse_enabled { "enabled" } else { "disabled" };
-
-                                    // Set temporary status message instead of adding to chat history
-                                    app_guard.set_status_message(format!("Mouse wheel scrolling {}", status));
-                                    app_guard.input.clear();
-
-                                    // Toggle mouse capture
-                                    if app_guard.mouse_enabled {
-                                        let _ = execute!(io::stdout(), EnableMouseCapture);
-                                    } else {
-                                        let _ = execute!(io::stdout(), DisableMouseCapture);
-                                    }
-
-                                    (Vec::new(), app_guard.client.clone(), String::new(), String::new(), String::new(), true)
-                                } else {
-                                    let input_text = app_guard.input.clone();
-                                    app_guard.input.clear();
-                                    let api_messages = app_guard.add_user_message(input_text);
-                                    (
-                                        api_messages,
-                                        app_guard.client.clone(),
-                                        app_guard.model.clone(),
-                                        app_guard.api_key.clone(),
-                                        app_guard.base_url.clone(),
-                                        false
-                                    )
-                                }
+                                let input_text = app_guard.input.clone();
+                                app_guard.input.clear();
+                                let api_messages = app_guard.add_user_message(input_text);
+                                (
+                                    api_messages,
+                                    app_guard.client.clone(),
+                                    app_guard.model.clone(),
+                                    app_guard.api_key.clone(),
+                                    app_guard.base_url.clone(),
+                                )
                             };
-
-                            if is_mouse_command {
-                                continue;
-                            }
 
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
@@ -441,8 +401,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                         KeyCode::Char(c) => {
                             let mut app_guard = app.lock().await;
-                            // Clear status message when user starts typing
-                            app_guard.clear_status_message();
                             app_guard.input.push(c);
                         }
                         KeyCode::Backspace => {
@@ -462,7 +420,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let mut app_guard = app.lock().await;
                             app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
                             // If scrolled to bottom, re-enable auto-scroll
-                            if app_guard.scroll_offset == 0 {
+                            let terminal_height = terminal.size().unwrap_or_default().height;
+                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            if app_guard.scroll_offset == 0 || app_guard.scroll_offset >= max_scroll {
                                 app_guard.auto_scroll = true;
                             }
                         }
@@ -470,32 +431,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    let mouse_enabled = {
-                        let app_guard = app.lock().await;
-                        app_guard.mouse_enabled
-                    };
-
-                    if mouse_enabled {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => {
-                                let mut app_guard = app.lock().await;
-                                // Disable auto-scroll when user manually scrolls
-                                app_guard.auto_scroll = false;
-                                let terminal_height = terminal.size().unwrap_or_default().height;
-                                let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                                let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
-                                app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
-                            }
-                            MouseEventKind::ScrollDown => {
-                                let mut app_guard = app.lock().await;
-                                app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(3);
-                                // If scrolled to bottom, re-enable auto-scroll
-                                if app_guard.scroll_offset == 0 {
-                                    app_guard.auto_scroll = true;
-                                }
-                            }
-                            _ => {}
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            let mut app_guard = app.lock().await;
+                            // Disable auto-scroll when user manually scrolls
+                            app_guard.auto_scroll = false;
+                            let terminal_height = terminal.size().unwrap_or_default().height;
+                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
                         }
+                        MouseEventKind::ScrollDown => {
+                            let mut app_guard = app.lock().await;
+                            app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(3);
+                            // If scrolled to bottom, re-enable auto-scroll
+                            let terminal_height = terminal.size().unwrap_or_default().height;
+                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            if app_guard.scroll_offset == 0 || app_guard.scroll_offset >= max_scroll {
+                                app_guard.auto_scroll = true;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -506,7 +463,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut received_any = false;
         while let Ok(content) = rx.try_recv() {
             let mut app_guard = app.lock().await;
-            app_guard.append_to_response(&content);
+            let terminal_height = terminal.size().unwrap_or_default().height;
+            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+            app_guard.append_to_response(&content, available_height);
             drop(app_guard);
             received_any = true;
         }
@@ -519,8 +478,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 

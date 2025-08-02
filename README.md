@@ -125,13 +125,29 @@ Enable/control logging during a session with commands:
 
 ### Command Line Options
 
-**Auth command:**
-- `auth` - Interactive authentication setup
-
-**Chat command (default):**
+**Global options (work with or without 'chat' command):**
 - `-m, --model <MODEL>`: Specify the model to use (default: gpt-4o)
 - `-p, --provider <PROVIDER>`: Specify provider (openai, openrouter, poe, or custom name)
-- `--log <FILE>`: Enable logging to specified file from startup
+- `-l, --log <FILE>`: Enable logging to specified file from startup
+
+**Commands:**
+- `auth` - Interactive authentication setup
+- `chat` - Start the chat interface (default command)
+- `providers` - List available providers and their authentication status
+
+**Examples:**
+```bash
+# These are equivalent (chat is the default command):
+chabeau --model gpt-3.5-turbo --provider openrouter
+chabeau chat --model gpt-3.5-turbo --provider openrouter
+
+# Short options work too:
+chabeau -m gpt-4 -p openai -l chat.log
+
+# Case-insensitive provider names:
+chabeau -p OpenAI    # Same as -p openai
+chabeau -p OPENROUTER # Same as -p openrouter
+```
 
 ### Controls
 

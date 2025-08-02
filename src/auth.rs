@@ -46,7 +46,7 @@ impl AuthManager {
     }
 
     pub fn find_provider_by_name(&self, name: &str) -> Option<&Provider> {
-        self.providers.iter().find(|p| p.name == name)
+        self.providers.iter().find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
     pub fn store_token(&self, provider_name: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -196,13 +196,14 @@ impl AuthManager {
     }
 
     pub fn get_auth_for_provider(&self, provider_name: &str) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
-        // First check if it's a built-in provider
+        // First check if it's a built-in provider (case-insensitive)
         if let Some(provider) = self.find_provider_by_name(provider_name) {
-            if let Some(token) = self.get_token(provider_name)? {
+            // Use the canonical provider name for token lookup
+            if let Some(token) = self.get_token(&provider.name)? {
                 return Ok(Some((provider.base_url.clone(), token)));
             }
         } else {
-            // Check if it's a custom provider
+            // Check if it's a custom provider (case-sensitive for custom names)
             if let Some(base_url) = self.get_custom_provider(provider_name)? {
                 if let Some(token) = self.get_token(provider_name)? {
                     return Ok(Some((base_url, token)));

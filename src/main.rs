@@ -31,6 +31,54 @@ use auth::AuthManager;
 use commands::{process_input, CommandResult};
 use ui::ui;
 
+async fn list_providers() -> Result<(), Box<dyn Error>> {
+    let auth_manager = AuthManager::new();
+
+    println!("🔗 Available Providers");
+    println!("━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    // Check built-in providers
+    let builtin_providers = vec![
+        ("openai", "OpenAI", "https://api.openai.com/v1"),
+        ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+        ("poe", "Poe", "https://api.poe.com/v1"),
+    ];
+
+    for (name, display_name, url) in builtin_providers {
+        let status = match auth_manager.get_token(name) {
+            Ok(Some(_)) => "✅ configured",
+            Ok(None) => "❌ not configured",
+            Err(_) => "❓ error checking",
+        };
+        println!("  {} ({}) - {}", display_name, name, status);
+        println!("    URL: {}", url);
+        println!();
+    }
+
+    // Check for custom providers (this would require extending AuthManager to list them)
+    println!("Custom providers: (feature not yet implemented)");
+    println!();
+
+    // Show which provider would be used by default
+    match auth_manager.find_first_available_auth() {
+        Some((provider, _)) => {
+            println!("🎯 Default provider: {} ({})", provider.display_name, provider.name);
+        }
+        None => {
+            println!("⚠️  No configured providers found");
+            println!();
+            println!("To configure authentication:");
+            println!("  chabeau auth                    # Interactive setup");
+            println!();
+            println!("Or use environment variables:");
+            println!("  export OPENAI_API_KEY=sk-...   # For OpenAI");
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(name = "chabeau")]
 #[command(about = "A terminal-based chat interface using OpenAI API")]
@@ -56,6 +104,18 @@ Commands:\n\
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Model to use for chat
+    #[arg(short = 'm', long, default_value = "gpt-4o", global = true)]
+    model: String,
+
+    /// Enable logging to specified file
+    #[arg(short = 'l', long, global = true)]
+    log: Option<String>,
+
+    /// Provider to use (openai, openrouter, poe, or custom provider name)
+    #[arg(short = 'p', long, global = true)]
+    provider: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -63,16 +123,9 @@ enum Commands {
     /// Set up authentication for API providers
     Auth,
     /// Start the chat interface (default)
-    Chat {
-        #[arg(short, long, default_value = "gpt-4o", help = "Model to use for chat")]
-        model: String,
-
-        #[arg(long, help = "Enable logging to specified file")]
-        log: Option<String>,
-
-        #[arg(short, long, help = "Provider to use (openai, openrouter, poe, or custom provider name)")]
-        provider: Option<String>,
-    },
+    Chat,
+    /// List available providers and their authentication status
+    Providers,
 }
 
 
@@ -80,21 +133,20 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    match args.command.unwrap_or(Commands::Chat {
-        model: "gpt-4o".to_string(),
-        log: None,
-        provider: None,
-    }) {
+    match args.command.unwrap_or(Commands::Chat) {
         Commands::Auth => {
             let auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_auth() {
-                eprintln!("Authentication failed: {}", e);
+                eprintln!("❌ Authentication failed: {}", e);
                 std::process::exit(1);
             }
             return Ok(());
         }
-        Commands::Chat { model, log, provider } => {
-            run_chat(model, log, provider).await
+        Commands::Chat => {
+            run_chat(args.model, args.log, args.provider).await
+        }
+        Commands::Providers => {
+            list_providers().await
         }
     }
 }
@@ -104,8 +156,20 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
     let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider) {
         Ok(app) => app,
         Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1);
+            // Check if this is an authentication error
+            let error_msg = e.to_string();
+            if error_msg.contains("No authentication") || error_msg.contains("OPENAI_API_KEY") {
+                eprintln!("{}", error_msg);
+                eprintln!();
+                eprintln!("💡 Quick fixes:");
+                eprintln!("  • chabeau auth                    # Interactive setup");
+                eprintln!("  • chabeau providers               # Check provider status");
+                eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
+                std::process::exit(2); // Authentication error
+            } else {
+                eprintln!("❌ Error: {}", e);
+                std::process::exit(1); // General error
+            }
         }
     }));
 

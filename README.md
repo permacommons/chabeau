@@ -64,12 +64,26 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
 
 ## Usage
 
-### Authentication Command
+### Authentication Management
 
-Set up secure authentication (recommended first step):
+**Set up authentication** (recommended first step):
 ```bash
 chabeau auth
 ```
+
+**Remove authentication** for providers:
+```bash
+chabeau deauth                    # Interactive menu to select provider
+chabeau deauth --provider openai  # Remove specific provider
+chabeau deauth --provider mycustom # Remove custom provider (completely)
+```
+
+**Check provider status**:
+```bash
+chabeau providers                 # List all providers and their auth status
+```
+
+Note: When removing custom providers with `deauth`, both the authentication token and the provider definition are completely removed from the system.
 
 ### Basic Usage
 
@@ -132,6 +146,7 @@ Enable/control logging during a session with commands:
 
 **Commands:**
 - `auth` - Interactive authentication setup
+- `deauth` - Remove authentication for providers
 - `chat` - Start the chat interface (default command)
 - `providers` - List available providers and their authentication status
 

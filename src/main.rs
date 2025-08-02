@@ -56,8 +56,24 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
         println!();
     }
 
-    // Check for custom providers (this would require extending AuthManager to list them)
-    println!("Custom providers: (feature not yet implemented)");
+    // Check for custom providers
+    match auth_manager.list_custom_providers() {
+        Ok(custom_providers) => {
+            if custom_providers.is_empty() {
+                println!("Custom providers: none configured");
+            } else {
+                println!("Custom providers:");
+                for (name, url, has_token) in custom_providers {
+                    let status = if has_token { "✅ configured" } else { "❌ not configured" };
+                    println!("  {} - {}", name, status);
+                    println!("    URL: {}", url);
+                }
+            }
+        }
+        Err(_) => {
+            println!("Custom providers: error checking");
+        }
+    }
     println!();
 
     // Show which provider would be used by default
@@ -122,6 +138,8 @@ struct Args {
 enum Commands {
     /// Set up authentication for API providers
     Auth,
+    /// Remove authentication for API providers
+    Deauth,
     /// Start the chat interface (default)
     Chat,
     /// List available providers and their authentication status
@@ -138,6 +156,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_auth() {
                 eprintln!("❌ Authentication failed: {}", e);
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Commands::Deauth => {
+            let auth_manager = AuthManager::new();
+            if let Err(e) = auth_manager.interactive_deauth(args.provider) {
+                eprintln!("❌ Deauthentication failed: {}", e);
                 std::process::exit(1);
             }
             return Ok(());

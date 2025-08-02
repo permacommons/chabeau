@@ -67,6 +67,33 @@ impl AuthManager {
     pub fn store_custom_provider(&self, name: &str, base_url: &str) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", &format!("custom_provider_{}", name))?;
         entry.set_password(base_url)?;
+
+        // Also add to the list of custom providers
+        self.add_to_custom_provider_list(name)?;
+        Ok(())
+    }
+
+    fn add_to_custom_provider_list(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
+        let current_list = match list_entry.get_password() {
+            Ok(list) => list,
+            Err(keyring::Error::NoEntry) => String::new(),
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        let mut providers: Vec<&str> = if current_list.is_empty() {
+            Vec::new()
+        } else {
+            current_list.split(',').collect()
+        };
+
+        // Add if not already present
+        if !providers.contains(&name) {
+            providers.push(name);
+            let new_list = providers.join(",");
+            list_entry.set_password(&new_list)?;
+        }
+
         Ok(())
     }
 
@@ -77,6 +104,40 @@ impl AuthManager {
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(Box::new(e)),
         }
+    }
+
+    pub fn list_custom_providers(&self) -> Result<Vec<(String, String, bool)>, Box<dyn std::error::Error>> {
+        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
+        let provider_list = match list_entry.get_password() {
+            Ok(list) => list,
+            Err(keyring::Error::NoEntry) => return Ok(Vec::new()),
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        if provider_list.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::new();
+        for provider_name in provider_list.split(',') {
+            let provider_name = provider_name.trim();
+            if provider_name.is_empty() {
+                continue;
+            }
+
+            // Get the base URL for this custom provider
+            let base_url = match self.get_custom_provider(provider_name)? {
+                Some(url) => url,
+                None => continue, // Skip if URL not found
+            };
+
+            // Check if token is configured
+            let has_token = self.get_token(provider_name)?.is_some();
+
+            result.push((provider_name.to_string(), base_url, has_token));
+        }
+
+        Ok(result)
     }
 
 
@@ -212,6 +273,156 @@ impl AuthManager {
         }
 
         Ok(None)
+    }
+
+    pub fn interactive_deauth(&self, provider: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(provider_name) = provider {
+            // Provider specified via --provider flag
+            self.remove_provider_auth(&provider_name)?;
+
+            // Check if it's a custom provider and remove it completely
+            if self.get_custom_provider(&provider_name)?.is_some() {
+                self.remove_custom_provider(&provider_name)?;
+            }
+
+            println!("✅ Authentication removed for {}", provider_name);
+        } else {
+            // Interactive mode - show menu of configured providers
+            self.interactive_deauth_menu()?;
+        }
+        Ok(())
+    }
+
+    fn interactive_deauth_menu(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("🗑️  Chabeau Authentication Removal");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+
+        // Collect all configured providers
+        let mut configured_providers = Vec::new();
+
+        // Check built-in providers
+        for provider in &self.providers {
+            if self.get_token(&provider.name)?.is_some() {
+                configured_providers.push((provider.name.clone(), provider.display_name.clone(), false));
+            }
+        }
+
+        // Check custom providers
+        match self.list_custom_providers() {
+            Ok(custom_providers) => {
+                for (name, _url, has_token) in custom_providers {
+                    if has_token {
+                        configured_providers.push((name.clone(), name, true));
+                    }
+                }
+            }
+            Err(_) => {
+                // Ignore errors listing custom providers
+            }
+        }
+
+        if configured_providers.is_empty() {
+            println!("No configured providers found.");
+            return Ok(());
+        }
+
+        println!("Configured providers:");
+        for (i, (_name, display_name, is_custom)) in configured_providers.iter().enumerate() {
+            let provider_type = if *is_custom { " (custom)" } else { "" };
+            println!("  {}. {}{}", i + 1, display_name, provider_type);
+        }
+        println!("  {}. Cancel", configured_providers.len() + 1);
+        println!();
+
+        print!("Select a provider to remove (1-{}): ", configured_providers.len() + 1);
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice: usize = input.trim().parse().map_err(|_| "Invalid choice")?;
+
+        if choice == 0 || choice > configured_providers.len() + 1 {
+            return Err("Invalid choice".into());
+        }
+
+        if choice == configured_providers.len() + 1 {
+            println!("Cancelled.");
+            return Ok(());
+        }
+
+        let (provider_name, display_name, is_custom) = &configured_providers[choice - 1];
+
+        // Confirm removal
+        print!("Are you sure you want to remove authentication for {}? (y/N): ", display_name);
+        io::stdout().flush()?;
+
+        let mut confirm = String::new();
+        io::stdin().read_line(&mut confirm)?;
+        let confirm = confirm.trim().to_lowercase();
+
+        if confirm != "y" && confirm != "yes" {
+            println!("Cancelled.");
+            return Ok(());
+        }
+
+        self.remove_provider_auth(provider_name)?;
+
+        if *is_custom {
+            // Also remove the custom provider URL and from the list
+            self.remove_custom_provider(provider_name)?;
+        }
+
+        println!("✅ Authentication removed for {}", display_name);
+        Ok(())
+    }
+
+    fn remove_provider_auth(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let entry = Entry::new("chabeau", provider_name)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => {
+                // Already not configured, that's fine
+                Ok(())
+            }
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+
+    fn remove_custom_provider(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Remove the custom provider URL
+        let entry = Entry::new("chabeau", &format!("custom_provider_{}", provider_name))?;
+        let _ = entry.delete_credential(); // Ignore errors
+
+        // Remove from the custom provider list
+        self.remove_from_custom_provider_list(provider_name)?;
+        Ok(())
+    }
+
+    fn remove_from_custom_provider_list(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
+        let current_list = match list_entry.get_password() {
+            Ok(list) => list,
+            Err(keyring::Error::NoEntry) => return Ok(()), // No list exists
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        if current_list.is_empty() {
+            return Ok(());
+        }
+
+        let providers: Vec<&str> = current_list.split(',').collect();
+        let filtered_providers: Vec<&str> = providers.into_iter().filter(|&p| p.trim() != name).collect();
+
+        if filtered_providers.is_empty() {
+            // Remove the entire list entry if empty
+            let _ = list_entry.delete_credential();
+        } else {
+            let new_list = filtered_providers.join(",");
+            list_entry.set_password(&new_list)?;
+        }
+
+        Ok(())
     }
 
 }

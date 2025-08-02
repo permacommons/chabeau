@@ -1,11 +1,12 @@
 mod api;
 mod app;
+mod auth;
 mod commands;
 mod logging;
 mod message;
 mod ui;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
@@ -26,17 +27,21 @@ use tokio::sync::{mpsc, Mutex};
 
 use api::{ChatRequest, ChatResponse};
 use app::App;
+use auth::AuthManager;
 use commands::{process_input, CommandResult};
 use ui::ui;
 
 #[derive(Parser)]
 #[command(name = "chabeau")]
 #[command(about = "A terminal-based chat interface using OpenAI API")]
-#[command(long_about = "Chabeau is a full-screen terminal chat interface that connects to OpenAI's API \
+#[command(long_about = "Chabeau is a full-screen terminal chat interface that connects to various AI APIs \
 for real-time conversations. It supports streaming responses and provides a clean, \
 responsive interface with color-coded messages.\n\n\
-Environment Variables:\n\
-  OPENAI_API_KEY    Your OpenAI API key (required)\n\
+Authentication:\n\
+  Use 'chabeau auth' to set up API credentials securely in your system keyring.\n\
+  Supports OpenAI, OpenRouter, Poe, and custom providers.\n\n\
+Environment Variables (fallback if no auth configured):\n\
+  OPENAI_API_KEY    Your OpenAI API key\n\
   OPENAI_BASE_URL   Custom API base URL (optional, defaults to https://api.openai.com/v1)\n\n\
 Controls:\n\
   Type              Enter your message in the input field\n\
@@ -49,11 +54,25 @@ Commands:\n\
   /log <filename>   Enable logging to specified file\n\
   /log              Toggle logging pause/resume")]
 struct Args {
-    #[arg(short, long, default_value = "gpt-4o", help = "OpenAI model to use for chat")]
-    model: String,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
-    #[arg(long, help = "Enable logging to specified file")]
-    log: Option<String>,
+#[derive(Subcommand)]
+enum Commands {
+    /// Set up authentication for API providers
+    Auth,
+    /// Start the chat interface (default)
+    Chat {
+        #[arg(short, long, default_value = "gpt-4o", help = "Model to use for chat")]
+        model: String,
+
+        #[arg(long, help = "Enable logging to specified file")]
+        log: Option<String>,
+
+        #[arg(short, long, help = "Provider to use (openai, openrouter, poe, or custom provider name)")]
+        provider: Option<String>,
+    },
 }
 
 
@@ -61,8 +80,28 @@ struct Args {
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    // Create app first (this checks environment variables)
-    let app = Arc::new(Mutex::new(match App::new(args.model, args.log) {
+    match args.command.unwrap_or(Commands::Chat {
+        model: "gpt-4o".to_string(),
+        log: None,
+        provider: None,
+    }) {
+        Commands::Auth => {
+            let auth_manager = AuthManager::new();
+            if let Err(e) = auth_manager.interactive_auth() {
+                eprintln!("Authentication failed: {}", e);
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Commands::Chat { model, log, provider } => {
+            run_chat(model, log, provider).await
+        }
+    }
+}
+
+async fn run_chat(model: String, log: Option<String>, provider: Option<String>) -> Result<(), Box<dyn Error>> {
+    // Create app with authentication
+    let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider) {
         Ok(app) => app,
         Err(e) => {
             eprintln!("{}", e);

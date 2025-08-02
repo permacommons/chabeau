@@ -1,12 +1,14 @@
 # Chabeau - Terminal Chat Interface
 
-A full-screen terminal chat interface that uses the OpenAI streaming API for real-time conversations.
+A full-screen terminal chat interface that connects to various AI APIs for real-time conversations with secure credential management.
 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Configurable OpenAI model (defaults to gpt-4o)
-- Environment variable configuration for API key and base URL
+- **Secure authentication** using system keyring for API credentials
+- **Multiple provider support**: OpenAI, OpenRouter, Poe, and custom providers
+- Configurable models (defaults to gpt-4o)
+- Provider selection with automatic fallback
 - Clean, responsive interface with color-coded messages
 - Keyboard shortcuts for easy navigation
 - **Chat logging functionality** - Log conversations to files with pause/resume capability
@@ -15,21 +17,43 @@ A full-screen terminal chat interface that uses the OpenAI streaming API for rea
 ## Prerequisites
 
 - Rust (latest stable version)
-- OpenAI API key
+- API key for at least one supported provider
 
 ## Installation
 
-1. Clone this repository
-2. Build the project:
-   ```bash
-   cargo build --release
-   ```
+Install directly from the repository:
+```bash
+cargo install --git https://github.com/your-username/chabeau
+```
 
-## Configuration
+Or clone and install locally:
+```bash
+git clone https://github.com/your-username/chabeau
+cd chabeau
+cargo install --path .
+```
 
-Set the following environment variables:
+## Authentication Setup
 
-- `OPENAI_API_KEY`: Your OpenAI API key (required)
+**Recommended**: Use the built-in authentication system to securely store your API credentials:
+
+```bash
+chabeau auth
+```
+
+This will guide you through setting up authentication for:
+1. **OpenAI** (https://api.openai.com/v1)
+2. **OpenRouter** (https://openrouter.ai/api/v1)
+3. **Poe** (https://api.poe.com/v1)
+4. **Custom providers** (specify your own name and base URL)
+
+Your credentials are stored securely in your system's keyring and can be used across sessions.
+
+### Environment Variables (Fallback)
+
+If no authentication is configured, Chabeau will fall back to environment variables:
+
+- `OPENAI_API_KEY`: Your OpenAI API key
 - `OPENAI_BASE_URL`: Custom API base URL (optional, defaults to https://api.openai.com/v1)
 
 Example:
@@ -40,32 +64,73 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
 
 ## Usage
 
+### Authentication Command
+
+Set up secure authentication (recommended first step):
+```bash
+chabeau auth
+```
+
 ### Basic Usage
 
-Run the application:
+Run the chat interface (default command):
 ```bash
-cargo run
+chabeau
 ```
 
-Or with a specific model:
+Or explicitly use the chat command:
 ```bash
-cargo run -- --model gpt-3.5-turbo
+chabeau chat
 ```
 
-### Logging
+### Provider Selection
 
-Enable logging from the command line:
+Use a specific provider:
 ```bash
-cargo run -- --log chat.log
+chabeau chat --provider openai
+chabeau chat --provider openrouter
+chabeau chat --provider poe
+chabeau chat --provider mycustom  # If you set up a custom provider
 ```
 
-Or enable/control logging during a session with commands:
+If no provider is specified, Chabeau will automatically use the first available authentication in this order:
+1. OpenAI
+2. OpenRouter
+3. Poe
+4. Custom providers
+5. Environment variables (fallback)
+
+### Model and Logging Options
+
+Specify a model:
+```bash
+chabeau chat --model gpt-3.5-turbo
+```
+
+Enable logging from startup:
+```bash
+chabeau chat --log chat.log
+```
+
+Combine options:
+```bash
+chabeau chat --provider openrouter --model gpt-4 --log conversation.log
+```
+
+### Runtime Logging Control
+
+Enable/control logging during a session with commands:
 - `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume (if already enabled)
 
 ### Command Line Options
 
-- `-m, --model <MODEL>`: Specify the OpenAI model to use (default: gpt-4o)
+**Auth command:**
+- `auth` - Interactive authentication setup
+
+**Chat command (default):**
+- `-m, --model <MODEL>`: Specify the model to use (default: gpt-4o)
+- `-p, --provider <PROVIDER>`: Specify provider (openai, openrouter, poe, or custom name)
 - `--log <FILE>`: Enable logging to specified file from startup
 
 ### Controls
@@ -111,8 +176,9 @@ The codebase is organized into focused modules:
 
 - `main.rs` - Application entry point and main event loop
 - `app.rs` - Core application state and logic
+- `auth.rs` - Authentication and provider management using system keyring
 - `ui.rs` - Terminal user interface rendering
-- `api.rs` - OpenAI API types and structures
+- `api.rs` - API types and structures for various providers
 - `logging.rs` - Chat logging functionality
 - `commands.rs` - Chat command processing
 - `message.rs` - Message data structures
@@ -121,22 +187,41 @@ This modular design makes the code easier to maintain, test, and extend.
 
 ## Example Sessions
 
-### Basic chat:
+### First-time setup:
 ```bash
-export OPENAI_API_KEY="sk-your-key-here"
-cargo run
+# Install Chabeau
+cargo install --path .
+
+# Set up authentication
+chabeau auth
+
+# Start chatting
+chabeau
 ```
 
-### Chat with logging enabled:
+### Using different providers:
 ```bash
-export OPENAI_API_KEY="sk-your-key-here"
-cargo run -- --log my-chat.log
+# Use OpenRouter with a specific model
+chabeau chat --provider openrouter --model claude-3-sonnet
+
+# Use a custom provider you set up
+chabeau chat --provider myapi --model custom-model
 ```
 
-### Chat with custom model and logging:
+### With logging:
 ```bash
+# Basic chat with logging
+chabeau chat --log my-chat.log
+
+# Specific provider with logging
+chabeau chat --provider openai --model gpt-4 --log conversation.log
+```
+
+### Fallback to environment variables:
+```bash
+# If no auth is configured, use environment variables
 export OPENAI_API_KEY="sk-your-key-here"
-cargo run -- --model gpt-3.5-turbo --log conversation.log
+chabeau
 ```
 
 ## Dependencies
@@ -148,6 +233,7 @@ cargo run -- --model gpt-3.5-turbo --log conversation.log
 - `clap` - Command line argument parsing
 - `serde` - JSON serialization/deserialization
 - `futures-util` - Stream utilities
+- `keyring` - Secure credential storage in system keyring
 
 ## License
 

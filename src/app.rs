@@ -1,3 +1,4 @@
+use crate::auth::AuthManager;
 use crate::logging::LoggingState;
 use crate::message::Message;
 use reqwest::Client;
@@ -20,6 +21,7 @@ pub struct App {
     pub model: String,
     pub api_key: String,
     pub base_url: String,
+    pub provider_name: String,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub is_streaming: bool,
@@ -33,22 +35,42 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(model: String, log_file: Option<String>) -> Result<Self, Box<dyn std::error::Error>> {
-        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-            "❌ Error: OPENAI_API_KEY environment variable not set
+    pub fn new_with_auth(model: String, log_file: Option<String>, provider: Option<String>) -> Result<Self, Box<dyn std::error::Error>> {
+        let auth_manager = AuthManager::new();
 
-Please set your OpenAI API key:
-export OPENAI_API_KEY=\"your-api-key-here\"
+        let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
+            // User specified a provider
+            if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+                (api_key, base_url, provider_name)
+            } else {
+                return Err(format!("No authentication found for provider '{}'. Run 'chabeau auth' to set up authentication.", provider_name).into());
+            }
+        } else {
+            // Try to find any available authentication
+            if let Some((provider, api_key)) = auth_manager.find_first_available_auth() {
+                (api_key, provider.base_url, provider.display_name)
+            } else {
+                // Fall back to environment variables
+                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    "❌ No authentication configured and OPENAI_API_KEY environment variable not set
 
-Optionally, you can also set a custom base URL:
-export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
-        })?;
+Please either:
+1. Run 'chabeau auth' to set up authentication, or
+2. Set environment variables:
+   export OPENAI_API_KEY=\"your-api-key-here\"
+   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+                })?;
 
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+                let base_url = std::env::var("OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+                (api_key, base_url, "Environment Variables".to_string())
+            }
+        };
 
         // Print configuration info
         eprintln!("🚀 Starting Chabeau - Terminal Chat Interface");
+        eprintln!("🔐 Provider: {}", provider_name);
         eprintln!("📡 Using model: {}", model);
         eprintln!("🌐 API endpoint: {}", base_url);
         if let Some(ref log_path) = log_file {
@@ -68,6 +90,7 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             model,
             api_key,
             base_url,
+            provider_name,
             scroll_offset: 0,
             auto_scroll: true,
             is_streaming: false,

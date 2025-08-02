@@ -27,8 +27,8 @@ pub fn ui(f: &mut Frame, app: &App) {
     };
     let scroll_offset = app.scroll_offset.min(max_offset);
 
-    // Create enhanced title with model name and logging status
-    let title = format!("Chabeau - {} • Logging: {}", app.model, app.get_logging_status());
+    // Create enhanced title with provider, model name and logging status
+    let title = format!("Chabeau - {} ({}) • Logging: {}", app.provider_name, app.model, app.get_logging_status());
 
     let messages_paragraph = Paragraph::new(lines)
         .block(

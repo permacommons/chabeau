@@ -113,10 +113,37 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         lines
     }
 
-    pub fn calculate_max_scroll_offset(&self, available_height: u16) -> u16 {
-        let total_lines = self.build_display_lines().len() as u16;
-        if total_lines > available_height {
-            total_lines.saturating_sub(available_height)
+    pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
+        let lines = self.build_display_lines();
+        let mut total_wrapped_lines = 0u16;
+
+        // Account for borders and padding in the message area
+        let content_width = terminal_width.saturating_sub(2); // Remove left and right borders if any
+
+        for line in &lines {
+            let line_text = line.to_string();
+            if line_text.is_empty() {
+                // Empty lines still take up one line
+                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
+            } else {
+                // Calculate how many lines this text will wrap to
+                let text_width = line_text.chars().count() as u16;
+                if content_width == 0 {
+                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
+                } else {
+                    let wrapped_lines = (text_width + content_width - 1) / content_width; // Ceiling division
+                    total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_lines.max(1));
+                }
+            }
+        }
+
+        total_wrapped_lines
+    }
+
+    pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
+        let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
+        if total_wrapped_lines > available_height {
+            total_wrapped_lines.saturating_sub(available_height)
         } else {
             0
         }
@@ -157,7 +184,7 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         api_messages
     }
 
-    pub fn append_to_response(&mut self, content: &str, available_height: u16) {
+    pub fn append_to_response(&mut self, content: &str, available_height: u16, terminal_width: u16) {
         self.current_response.push_str(content);
 
         // Update the message being retried, or the last message if not retrying
@@ -175,10 +202,10 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
 
         // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
         if self.auto_scroll {
-            // Calculate the scroll offset needed to show the bottom
-            let total_lines = self.build_display_lines().len() as u16;
-            if total_lines > available_height {
-                self.scroll_offset = total_lines.saturating_sub(available_height);
+            // Calculate the scroll offset needed to show the bottom using wrapped line count
+            let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
+            if total_wrapped_lines > available_height {
+                self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
             } else {
                 self.scroll_offset = 0;
             }
@@ -240,7 +267,7 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         (token, self.current_stream_id)
     }
 
-    pub fn prepare_retry(&mut self, available_height: u16) -> Option<Vec<crate::api::ChatMessage>> {
+    pub fn prepare_retry(&mut self, _available_height: u16) -> Option<Vec<crate::api::ChatMessage>> {
         if !self.can_retry() {
             return None;
         }
@@ -290,13 +317,9 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             }
         }
 
-        // Calculate scroll position
-        let total_lines = self.build_display_lines().len() as u16;
-        if total_lines > available_height {
-            self.scroll_offset = total_lines.saturating_sub(available_height);
-        } else {
-            self.scroll_offset = 0;
-        }
+        // Calculate scroll position using wrapped lines
+        // Note: We don't have terminal width here, so we'll let the UI handle scroll bounds
+        self.scroll_offset = 0;
 
         // Re-enable auto-scroll for the new response
         self.auto_scroll = true;

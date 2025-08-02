@@ -1,0 +1,120 @@
+#!/usr/bin/expect -f
+
+# Set timeout for responses
+set timeout 60
+
+# Set environment variable
+set env(OPENAI_API_KEY) "dummy-key"
+
+# Start the application
+spawn ./target/debug/chabeau
+
+# Wait for the application to start
+expect "Type your message"
+
+puts "=== Testing scrolling behavior with long responses ==="
+
+# Send a short response first for baseline
+send "!\r"
+puts "Sent: !"
+expect {
+    timeout { puts "Timeout waiting for ! response"; exit 1 }
+    -re ".*" { puts "Got ! response (short)" }
+}
+sleep 1
+
+# Send medium response
+send "!!\r"
+puts "Sent: !!"
+expect {
+    timeout { puts "Timeout waiting for !! response"; exit 1 }
+    -re ".*" { puts "Got !! response (medium)" }
+}
+sleep 1
+
+# Send long response
+send "!!!\r"
+puts "Sent: !!!"
+expect {
+    timeout { puts "Timeout waiting for !!! response"; exit 1 }
+    -re ".*" { puts "Got !!! response (long)" }
+}
+sleep 2
+
+puts "=== Now testing with multiple long responses (!!! only) that should trigger scrolling bug ==="
+
+# Send first long response
+send "!!!\r"
+puts "Sent first !!!"
+expect {
+    timeout { puts "Timeout waiting for first !!! response"; exit 1 }
+    -re ".*" { puts "Got first !!! response (long)" }
+}
+sleep 6
+
+# Send second long response
+send "!!!\r"
+puts "Sent second !!!"
+expect {
+    timeout { puts "Timeout waiting for second !!! response"; exit 1 }
+    -re ".*" { puts "Got second !!! response (long)" }
+}
+sleep 6
+
+# Send third long response
+send "!!!\r"
+puts "Sent third !!!"
+expect {
+    timeout { puts "Timeout waiting for third !!! response"; exit 1 }
+    -re ".*" { puts "Got third !!! response (long)" }
+}
+sleep 6
+
+# Send fourth long response
+send "!!!\r"
+puts "Sent fourth !!!"
+expect {
+    timeout { puts "Timeout waiting for fourth !!! response"; exit 1 }
+    -re ".*" { puts "Got fourth !!! response (long)" }
+}
+sleep 6
+
+# Send fifth long response
+send "!!!\r"
+puts "Sent fifth !!!"
+expect {
+    timeout { puts "Timeout waiting for fifth !!! response"; exit 1 }
+    -re ".*" { puts "Got fifth !!! response (long)" }
+}
+sleep 6
+
+# Send sixth long response to really test scrolling
+send "!!!\r"
+puts "Sent sixth !!!"
+expect {
+    timeout { puts "Timeout waiting for sixth !!! response"; exit 1 }
+    -re ".*" { puts "Got sixth !!! response (long)" }
+}
+sleep 6
+
+# Send seventh long response
+send "!!!\r"
+puts "Sent seventh !!!"
+expect {
+    timeout { puts "Timeout waiting for seventh !!! response"; exit 1 }
+    -re ".*" { puts "Got seventh !!! response (long)" }
+}
+sleep 6
+
+puts "=== Scrolling test completed. Check if auto-scroll worked properly ==="
+
+# Wait a bit more to observe the final state
+sleep 2
+
+# Exit the application
+send "\003"
+
+# Wait for clean exit
+expect eof
+
+puts "Scrolling bug test completed!"

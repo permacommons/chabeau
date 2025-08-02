@@ -372,9 +372,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let mut app_guard = app.lock().await;
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
-                            let terminal_height = terminal.size().unwrap_or_default().height;
-                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height, terminal_size.width);
                             app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
                         }
                         _ => {}
@@ -392,9 +392,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let mut app_guard = app.lock().await;
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
-                            let terminal_height = terminal.size().unwrap_or_default().height;
-                            let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height);
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height, terminal_size.width);
                             app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
                         }
                         _ => {}
@@ -423,9 +423,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 drop(app_guard);
                 received_any = true;
             } else {
-                let terminal_height = terminal.size().unwrap_or_default().height;
-                let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                app_guard.append_to_response(&content, available_height);
+                let terminal_size = terminal.size().unwrap_or_default();
+                let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                app_guard.append_to_response(&content, available_height, terminal_size.width);
                 drop(app_guard);
                 received_any = true;
             }

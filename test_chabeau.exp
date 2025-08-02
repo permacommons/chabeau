@@ -1,0 +1,60 @@
+#!/usr/bin/expect -f
+
+# Set timeout for responses
+set timeout 10
+
+# Set environment variable
+set env(OPENAI_API_KEY) "dummy-key"
+
+# Start the application
+spawn ./target/debug/chabeau
+
+# Wait for the application to start
+expect "Type your message"
+
+# Send first message
+send "Hello ELIZA, how are you today?\r"
+
+# Wait for response and capture it
+expect {
+    timeout { puts "Timeout waiting for response"; exit 1 }
+    -re ".*" { puts "Got response: $expect_out(buffer)" }
+}
+
+# Send another message
+send "Tell me about yourself\r"
+
+# Wait for response
+expect {
+    timeout { puts "Timeout waiting for second response"; exit 1 }
+    -re ".*" { puts "Got second response: $expect_out(buffer)" }
+}
+
+# Test the logging command
+send "/log test_chat.log\r"
+
+# Wait for logging confirmation
+expect {
+    timeout { puts "Timeout waiting for logging response"; exit 1 }
+    -re ".*" { puts "Got logging response: $expect_out(buffer)" }
+}
+
+# Send one more message to test logging
+send "This message should be logged\r"
+
+# Wait for response
+expect {
+    timeout { puts "Timeout waiting for logged message response"; exit 1 }
+    -re ".*" { puts "Got logged message response: $expect_out(buffer)" }
+}
+
+# Wait a bit more to see any additional output
+sleep 2
+
+# Exit the application
+send "\003"
+
+# Wait for clean exit
+expect eof
+
+puts "Test completed successfully!"

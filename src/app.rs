@@ -9,6 +9,7 @@ use std::{
     collections::VecDeque,
     time::Instant,
 };
+use tokio_util::sync::CancellationToken;
 
 pub struct App {
     pub messages: VecDeque<Message>,
@@ -25,6 +26,10 @@ pub struct App {
     pub pulse_start: Instant,
     pub stream_interrupted: bool,
     pub logging: LoggingState,
+    pub stream_cancel_token: Option<CancellationToken>,
+    pub current_stream_id: u64,
+    pub last_retry_time: Instant,
+    pub retrying_message_index: Option<usize>,
 }
 
 impl App {
@@ -69,6 +74,10 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             pulse_start: Instant::now(),
             stream_interrupted: false,
             logging,
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
         })
     }
 
@@ -134,6 +143,9 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         self.messages.push_back(assistant_message);
         self.current_response.clear();
 
+        // Clear retry state since we're starting a new conversation
+        self.retrying_message_index = None;
+
         // Prepare messages for API (excluding the empty assistant message we just added)
         let mut api_messages = Vec::new();
         for msg in self.messages.iter().take(self.messages.len() - 1) {
@@ -147,11 +159,20 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
 
     pub fn append_to_response(&mut self, content: &str, available_height: u16) {
         self.current_response.push_str(content);
-        if let Some(last_msg) = self.messages.back_mut() {
+
+        // Update the message being retried, or the last message if not retrying
+        if let Some(retry_index) = self.retrying_message_index {
+            if let Some(msg) = self.messages.get_mut(retry_index) {
+                if msg.role == "assistant" {
+                    msg.content = self.current_response.clone();
+                }
+            }
+        } else if let Some(last_msg) = self.messages.back_mut() {
             if last_msg.role == "assistant" {
                 last_msg.content = self.current_response.clone();
             }
         }
+
         // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
         if self.auto_scroll {
             // Calculate the scroll offset needed to show the bottom
@@ -171,6 +192,9 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
                 eprintln!("Failed to log response: {}", e);
             }
         }
+
+        // Clear retry state since response is now complete
+        self.retrying_message_index = None;
     }
 
     pub fn add_system_message(&mut self, content: String) {
@@ -186,9 +210,34 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
     }
 
     pub fn can_retry(&self) -> bool {
-        // Can retry if there's at least one assistant message and we're not currently streaming
-        !self.is_streaming &&
+        // Can retry if there's at least one assistant message (even if currently streaming)
         self.messages.iter().any(|msg| msg.role == "assistant" && !msg.content.is_empty())
+    }
+
+    pub fn cancel_current_stream(&mut self) {
+        if let Some(token) = &self.stream_cancel_token {
+            token.cancel();
+        }
+        self.stream_cancel_token = None;
+        self.is_streaming = false;
+        self.stream_interrupted = true;
+    }
+
+    pub fn start_new_stream(&mut self) -> (CancellationToken, u64) {
+        // Cancel any existing stream first
+        self.cancel_current_stream();
+
+        // Increment stream ID to distinguish this stream from previous ones
+        self.current_stream_id += 1;
+
+        // Create new cancellation token
+        let token = CancellationToken::new();
+        self.stream_cancel_token = Some(token.clone());
+        self.is_streaming = true;
+        self.stream_interrupted = false;
+        self.pulse_start = Instant::now();
+
+        (token, self.current_stream_id)
     }
 
     pub fn prepare_retry(&mut self, available_height: u16) -> Option<Vec<crate::api::ChatMessage>> {
@@ -196,31 +245,52 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
             return None;
         }
 
-        // Find the last assistant message and remove it
-        let mut found_assistant = false;
-        let mut messages_to_keep = Vec::new();
+        // Update retry time (debounce is now handled at event level)
+        self.last_retry_time = Instant::now();
 
-        for msg in self.messages.iter().rev() {
-            if msg.role == "assistant" && !msg.content.is_empty() && !found_assistant {
-                found_assistant = true;
-                // Skip this message (don't add to messages_to_keep)
-                continue;
+        // Check if we're already retrying a specific message
+        if let Some(retry_index) = self.retrying_message_index {
+            // We're already retrying a specific message - just clear its content
+            if retry_index < self.messages.len() {
+                if let Some(msg) = self.messages.get_mut(retry_index) {
+                    if msg.role == "assistant" {
+                        msg.content.clear();
+                        self.current_response.clear();
+                    }
+                }
             }
-            messages_to_keep.push(msg.clone());
+        } else {
+            // Not currently retrying - find the last assistant message to retry
+            let mut target_index = None;
+
+            // Find the last assistant message with content
+            for (i, msg) in self.messages.iter().enumerate().rev() {
+                if msg.role == "assistant" && !msg.content.is_empty() {
+                    target_index = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(index) = target_index {
+                // Mark this message as being retried
+                self.retrying_message_index = Some(index);
+
+                // Clear the content of this specific message
+                if let Some(msg) = self.messages.get_mut(index) {
+                    msg.content.clear();
+                    self.current_response.clear();
+                }
+
+                // Rewrite the log file to remove the last assistant response
+                if let Err(e) = self.logging.rewrite_log_without_last_response(&self.messages) {
+                    eprintln!("Failed to rewrite log file: {}", e);
+                }
+            } else {
+                return None;
+            }
         }
 
-        if !found_assistant {
-            return None;
-        }
-
-        // Reverse back to original order
-        messages_to_keep.reverse();
-        self.messages = messages_to_keep.into();
-
-        // Clear current response
-        self.current_response.clear();
-
-        // Calculate scroll position as if the response was deleted
+        // Calculate scroll position
         let total_lines = self.build_display_lines().len() as u16;
         if total_lines > available_height {
             self.scroll_offset = total_lines.saturating_sub(available_height);
@@ -231,25 +301,17 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
         // Re-enable auto-scroll for the new response
         self.auto_scroll = true;
 
-        // Rewrite the log file to remove the last assistant response
-        if let Err(e) = self.logging.rewrite_log_without_last_response(&self.messages) {
-            eprintln!("Failed to rewrite log file: {}", e);
-        }
-
-        // Add a new empty assistant message for the retry
-        let assistant_message = Message {
-            role: "assistant".to_string(),
-            content: String::new(),
-        };
-        self.messages.push_back(assistant_message);
-
-        // Prepare messages for API (excluding the empty assistant message we just added)
+        // Prepare messages for API (excluding the message being retried)
         let mut api_messages = Vec::new();
-        for msg in self.messages.iter().take(self.messages.len() - 1) {
-            api_messages.push(crate::api::ChatMessage {
-                role: msg.role.clone(),
-                content: msg.content.clone(),
-            });
+        if let Some(retry_index) = self.retrying_message_index {
+            for (i, msg) in self.messages.iter().enumerate() {
+                if i < retry_index {
+                    api_messages.push(crate::api::ChatMessage {
+                        role: msg.role.clone(),
+                        content: msg.content.clone(),
+                    });
+                }
+            }
         }
 
         Some(api_messages)

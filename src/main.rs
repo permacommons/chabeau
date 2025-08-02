@@ -20,7 +20,7 @@ use std::{
     error::Error,
     io,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::{mpsc, Mutex};
 
@@ -77,8 +77,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Channel for streaming updates
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    // Channel for streaming updates with stream ID
+    let (tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
 
     // Special message to signal end of streaming
     const STREAM_END_MARKER: &str = "<<STREAM_END>>";
@@ -99,24 +99,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             break Ok(());
                         }
                         KeyCode::Char('r') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                            // Retry the last bot response
-                            let (should_retry, api_messages, client, model, api_key, base_url) = {
+                            // Retry the last bot response with debounce protection
+                            let (should_retry, api_messages, client, model, api_key, base_url, cancel_token, stream_id) = {
                                 let mut app_guard = app.lock().await;
 
-                                // If currently streaming, interrupt it first
-                                if app_guard.is_streaming {
-                                    app_guard.is_streaming = false;
-                                    app_guard.stream_interrupted = true;
+                                // Check debounce at the event level to prevent any processing
+                                let now = std::time::Instant::now();
+                                if now.duration_since(app_guard.last_retry_time).as_millis() < 200 {
+                                    // Too soon since last retry, ignore completely
+                                    continue;
                                 }
 
                                 let terminal_height = terminal.size().unwrap_or_default().height;
                                 let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
 
                                 if let Some(api_messages) = app_guard.prepare_retry(available_height) {
-                                    // Set streaming state and reset pulse timer
-                                    app_guard.is_streaming = true;
-                                    app_guard.pulse_start = Instant::now();
-                                    app_guard.stream_interrupted = false;
+                                    // Start new stream (this will cancel any existing stream)
+                                    let (cancel_token, stream_id) = app_guard.start_new_stream();
 
                                     (
                                         true,
@@ -125,9 +124,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         app_guard.model.clone(),
                                         app_guard.api_key.clone(),
                                         app_guard.base_url.clone(),
+                                        cancel_token,
+                                        stream_id,
                                     )
                                 } else {
-                                    (false, Vec::new(), app_guard.client.clone(), String::new(), String::new(), String::new())
+                                    (false, Vec::new(), app_guard.client.clone(), String::new(), String::new(), String::new(), tokio_util::sync::CancellationToken::new(), 0)
                                 }
                             };
 
@@ -137,7 +138,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                             // Spawn the same API request logic as for Enter key
                             let tx_clone = tx.clone();
-                            let app_clone = app.clone();
                             tokio::spawn(async move {
                                 let request = ChatRequest {
                                     model,
@@ -145,72 +145,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     stream: true,
                                 };
 
-                                match client
-                                    .post(&format!("{}/chat/completions", base_url))
-                                    .header("Authorization", format!("Bearer {}", api_key))
-                                    .header("Content-Type", "application/json")
-                                    .json(&request)
-                                    .send()
-                                    .await
-                                {
-                                    Ok(response) => {
-                                        if !response.status().is_success() {
-                                            if let Ok(error_text) = response.text().await {
-                                                eprintln!("API request failed: {}", error_text);
-                                            }
-                                            return;
-                                        }
-
-                                        let mut stream = response.bytes_stream();
-                                        let mut buffer = String::new();
-
-                                        while let Some(chunk) = stream.next().await {
-                                            // Check if stream was interrupted
-                                            {
-                                                let app_guard = app_clone.lock().await;
-                                                if app_guard.stream_interrupted || !app_guard.is_streaming {
-                                                    // Stream was interrupted, stop processing
-                                                    let _ = tx_clone.send(STREAM_END_MARKER.to_string());
+                                // Use tokio::select! to race between the HTTP request and cancellation
+                                tokio::select! {
+                                    _ = async {
+                                        match client
+                                            .post(&format!("{}/chat/completions", base_url))
+                                            .header("Authorization", format!("Bearer {}", api_key))
+                                            .header("Content-Type", "application/json")
+                                            .json(&request)
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(response) => {
+                                                if !response.status().is_success() {
+                                                    if let Ok(error_text) = response.text().await {
+                                                        eprintln!("API request failed: {}", error_text);
+                                                    }
                                                     return;
                                                 }
-                                            }
 
-                                            if let Ok(chunk) = chunk {
-                                                let chunk_str = String::from_utf8_lossy(&chunk);
-                                                buffer.push_str(&chunk_str);
+                                                let mut stream = response.bytes_stream();
+                                                let mut buffer = String::new();
 
-                                                // Process complete lines from buffer
-                                                while let Some(newline_pos) = buffer.find('\n') {
-                                                    let line = buffer[..newline_pos].trim().to_string();
-                                                    buffer.drain(..=newline_pos);
+                                                while let Some(chunk) = stream.next().await {
+                                                    // Check for cancellation before processing each chunk
+                                                    if cancel_token.is_cancelled() {
+                                                        return;
+                                                    }
 
-                                                    if line.starts_with("data: ") {
-                                                        let data = &line[6..];
-                                                        if data == "[DONE]" {
-                                                            // Signal end of streaming
-                                                            let _ = tx_clone.send(STREAM_END_MARKER.to_string());
-                                                            return;
-                                                        }
+                                                    if let Ok(chunk) = chunk {
+                                                        let chunk_str = String::from_utf8_lossy(&chunk);
+                                                        buffer.push_str(&chunk_str);
 
-                                                        match serde_json::from_str::<ChatResponse>(data) {
-                                                            Ok(response) => {
-                                                                if let Some(choice) = response.choices.first() {
-                                                                    if let Some(content) = &choice.delta.content {
-                                                                        let _ = tx_clone.send(content.clone());
+                                                        // Process complete lines from buffer
+                                                        while let Some(newline_pos) = buffer.find('\n') {
+                                                            let line = buffer[..newline_pos].trim().to_string();
+                                                            buffer.drain(..=newline_pos);
+
+                                                            if line.starts_with("data: ") {
+                                                                let data = &line[6..];
+                                                                if data == "[DONE]" {
+                                                                    // Signal end of streaming
+                                                                    let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                                                                    return;
+                                                                }
+
+                                                                match serde_json::from_str::<ChatResponse>(data) {
+                                                                    Ok(response) => {
+                                                                        if let Some(choice) = response.choices.first() {
+                                                                            if let Some(content) = &choice.delta.content {
+                                                                                let _ = tx_clone.send((content.clone(), stream_id));
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
                                                                     }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
+                                            Err(e) => {
+                                                eprintln!("Error sending message: {}", e);
+                                            }
                                         }
+                                    } => {
+                                        // HTTP request completed normally
                                     }
-                                    Err(e) => {
-                                        eprintln!("Error sending message: {}", e);
+                                    _ = cancel_token.cancelled() => {
+                                        // Stream was cancelled, clean up
+                                        return;
                                     }
                                 }
                             });
@@ -218,22 +224,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         KeyCode::Esc => {
                             let mut app_guard = app.lock().await;
                             if app_guard.is_streaming {
-                                // Interrupt the stream
-                                app_guard.is_streaming = false;
-                                app_guard.stream_interrupted = true;
+                                // Use the new cancellation mechanism
+                                app_guard.cancel_current_stream();
                             }
                         }
                         KeyCode::Enter => {
-                            let (should_send_to_api, api_messages, client, model, api_key, base_url) = {
+                            let (should_send_to_api, api_messages, client, model, api_key, base_url, cancel_token, stream_id) = {
                                 let mut app_guard = app.lock().await;
                                 if app_guard.input.trim().is_empty() {
                                     continue;
-                                }
-
-                                // If currently streaming, interrupt it
-                                if app_guard.is_streaming {
-                                    app_guard.is_streaming = false;
-                                    app_guard.stream_interrupted = true;
                                 }
 
                                 let input_text = app_guard.input.clone();
@@ -248,11 +247,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     CommandResult::ProcessAsMessage(message) => {
                                         // Re-enable auto-scroll when user sends a new message
                                         app_guard.auto_scroll = true;
-                                        // Set streaming state and reset pulse timer
-                                        app_guard.is_streaming = true;
-                                        app_guard.pulse_start = Instant::now();
-                                        app_guard.stream_interrupted = false;
+
+                                        // Start new stream (this will cancel any existing stream)
+                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
                                         let api_messages = app_guard.add_user_message(message);
+
                                         (
                                             true,
                                             api_messages,
@@ -260,6 +259,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             app_guard.model.clone(),
                                             app_guard.api_key.clone(),
                                             app_guard.base_url.clone(),
+                                            cancel_token,
+                                            stream_id,
                                         )
                                     }
                                 }
@@ -270,7 +271,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
 
                             let tx_clone = tx.clone();
-                            let app_clone = app.clone();
                             tokio::spawn(async move {
                                 let request = ChatRequest {
                                     model,
@@ -278,72 +278,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     stream: true,
                                 };
 
-                                match client
-                                    .post(&format!("{}/chat/completions", base_url))
-                                    .header("Authorization", format!("Bearer {}", api_key))
-                                    .header("Content-Type", "application/json")
-                                    .json(&request)
-                                    .send()
-                                    .await
-                                {
-                                    Ok(response) => {
-                                        if !response.status().is_success() {
-                                            if let Ok(error_text) = response.text().await {
-                                                eprintln!("API request failed: {}", error_text);
-                                            }
-                                            return;
-                                        }
-
-                                        let mut stream = response.bytes_stream();
-                                        let mut buffer = String::new();
-
-                                        while let Some(chunk) = stream.next().await {
-                                            // Check if stream was interrupted
-                                            {
-                                                let app_guard = app_clone.lock().await;
-                                                if app_guard.stream_interrupted || !app_guard.is_streaming {
-                                                    // Stream was interrupted, stop processing
-                                                    let _ = tx_clone.send(STREAM_END_MARKER.to_string());
+                                // Use tokio::select! to race between the HTTP request and cancellation
+                                tokio::select! {
+                                    _ = async {
+                                        match client
+                                            .post(&format!("{}/chat/completions", base_url))
+                                            .header("Authorization", format!("Bearer {}", api_key))
+                                            .header("Content-Type", "application/json")
+                                            .json(&request)
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(response) => {
+                                                if !response.status().is_success() {
+                                                    if let Ok(error_text) = response.text().await {
+                                                        eprintln!("API request failed: {}", error_text);
+                                                    }
                                                     return;
                                                 }
-                                            }
 
-                                            if let Ok(chunk) = chunk {
-                                                let chunk_str = String::from_utf8_lossy(&chunk);
-                                                buffer.push_str(&chunk_str);
+                                                let mut stream = response.bytes_stream();
+                                                let mut buffer = String::new();
 
-                                                // Process complete lines from buffer
-                                                while let Some(newline_pos) = buffer.find('\n') {
-                                                    let line = buffer[..newline_pos].trim().to_string();
-                                                    buffer.drain(..=newline_pos);
+                                                while let Some(chunk) = stream.next().await {
+                                                    // Check for cancellation before processing each chunk
+                                                    if cancel_token.is_cancelled() {
+                                                        return;
+                                                    }
 
-                                                    if line.starts_with("data: ") {
-                                                        let data = &line[6..];
-                                                        if data == "[DONE]" {
-                                                            // Signal end of streaming
-                                                            let _ = tx_clone.send(STREAM_END_MARKER.to_string());
-                                                            return;
-                                                        }
+                                                    if let Ok(chunk) = chunk {
+                                                        let chunk_str = String::from_utf8_lossy(&chunk);
+                                                        buffer.push_str(&chunk_str);
 
-                                                        match serde_json::from_str::<ChatResponse>(data) {
-                                                            Ok(response) => {
-                                                                if let Some(choice) = response.choices.first() {
-                                                                    if let Some(content) = &choice.delta.content {
-                                                                        let _ = tx_clone.send(content.clone());
+                                                        // Process complete lines from buffer
+                                                        while let Some(newline_pos) = buffer.find('\n') {
+                                                            let line = buffer[..newline_pos].trim().to_string();
+                                                            buffer.drain(..=newline_pos);
+
+                                                            if line.starts_with("data: ") {
+                                                                let data = &line[6..];
+                                                                if data == "[DONE]" {
+                                                                    // Signal end of streaming
+                                                                    let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                                                                    return;
+                                                                }
+
+                                                                match serde_json::from_str::<ChatResponse>(data) {
+                                                                    Ok(response) => {
+                                                                        if let Some(choice) = response.choices.first() {
+                                                                            if let Some(content) = &choice.delta.content {
+                                                                                let _ = tx_clone.send((content.clone(), stream_id));
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
                                                                     }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
+                                            Err(e) => {
+                                                eprintln!("Error sending message: {}", e);
+                                            }
                                         }
+                                    } => {
+                                        // HTTP request completed normally
                                     }
-                                    Err(e) => {
-                                        eprintln!("Error sending message: {}", e);
+                                    _ = cancel_token.cancelled() => {
+                                        // Stream was cancelled, clean up
+                                        return;
                                     }
                                 }
                             });
@@ -400,16 +406,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // Handle streaming updates - drain all available messages
         let mut received_any = false;
-        while let Ok(content) = rx.try_recv() {
+        while let Ok((content, msg_stream_id)) = rx.try_recv() {
+            let mut app_guard = app.lock().await;
+
+            // Only process messages from the current stream
+            if msg_stream_id != app_guard.current_stream_id {
+                // This message is from an old stream, ignore it
+                drop(app_guard);
+                continue;
+            }
+
             if content == STREAM_END_MARKER {
                 // End of streaming - clear the streaming state and finalize response
-                let mut app_guard = app.lock().await;
                 app_guard.finalize_response();
                 app_guard.is_streaming = false;
                 drop(app_guard);
                 received_any = true;
             } else {
-                let mut app_guard = app.lock().await;
                 let terminal_height = terminal.size().unwrap_or_default().height;
                 let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
                 app_guard.append_to_response(&content, available_height);

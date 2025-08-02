@@ -277,11 +277,22 @@ impl AuthManager {
 
     pub fn interactive_deauth(&self, provider: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(provider_name) = provider {
-            // Provider specified via --provider flag
+            // Provider specified via --provider flag - validate it exists first
+            let has_auth = self.get_token(&provider_name)?.is_some();
+            let is_custom = self.get_custom_provider(&provider_name)?.is_some();
+
+            if !has_auth && !is_custom {
+                return Err(format!("Provider '{}' is not configured. Use 'chabeau providers' to see configured providers.", provider_name).into());
+            }
+
+            if !has_auth {
+                return Err(format!("Provider '{}' exists but has no authentication configured.", provider_name).into());
+            }
+
             self.remove_provider_auth(&provider_name)?;
 
             // Check if it's a custom provider and remove it completely
-            if self.get_custom_provider(&provider_name)?.is_some() {
+            if is_custom {
                 self.remove_custom_provider(&provider_name)?;
             }
 

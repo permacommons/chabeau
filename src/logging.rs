@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use crate::message::Message;
 
 pub struct LoggingState {
     file_path: Option<String>,
@@ -75,6 +76,47 @@ impl LoggingState {
             (Some(path), true) => format!("active ({})", Path::new(path).file_name().unwrap_or_default().to_string_lossy()),
             (Some(path), false) => format!("paused ({})", Path::new(path).file_name().unwrap_or_default().to_string_lossy()),
         }
+    }
+
+    pub fn rewrite_log_without_last_response(&self, messages: &std::collections::VecDeque<Message>) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.is_active || self.file_path.is_none() {
+            return Ok(());
+        }
+
+        let file_path = self.file_path.as_ref().unwrap();
+
+        // Recreate the log file with only the current messages
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(file_path)?;
+
+        // Write all messages in the same format as log_message
+        for msg in messages {
+            if msg.role == "user" {
+                // Write user messages with "You:" prefix
+                for line in format!("You: {}", msg.content).lines() {
+                    writeln!(file, "{}", line)?;
+                }
+                writeln!(file)?; // Empty line for spacing
+            } else if msg.role == "system" {
+                // Write system messages as-is
+                for line in msg.content.lines() {
+                    writeln!(file, "{}", line)?;
+                }
+                writeln!(file)?; // Empty line for spacing
+            } else if msg.role == "assistant" && !msg.content.is_empty() {
+                // Write assistant messages as-is (no prefix)
+                for line in msg.content.lines() {
+                    writeln!(file, "{}", line)?;
+                }
+                writeln!(file)?; // Empty line for spacing
+            }
+        }
+
+        file.flush()?;
+        Ok(())
     }
 
     fn test_file_access(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {

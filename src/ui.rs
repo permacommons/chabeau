@@ -48,7 +48,9 @@ pub fn ui(f: &mut Frame, app: &App) {
     };
 
     let input_title = if app.is_streaming {
-        "Type your message (Press Enter to send, Esc to interrupt, Ctrl+C to quit)"
+        "Type your message (Press Enter to send, Esc to interrupt, Ctrl+R to retry, Ctrl+C to quit)"
+    } else if app.can_retry() {
+        "Type your message (Press Enter to send, Ctrl+R to retry, Ctrl+C to quit)"
     } else {
         "Type your message (Press Enter to send, Ctrl+C to quit)"
     };

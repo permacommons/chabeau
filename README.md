@@ -76,6 +76,7 @@ Or enable/control logging during a session with commands:
 - **Ctrl+C**: Quit the application
 - **Backspace**: Delete characters in the input field
 - **Esc**: Interrupt streaming response
+- **Ctrl+R**: Retry the last bot response (regenerates with same context)
 
 ### Chat Commands
 

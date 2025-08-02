@@ -184,4 +184,74 @@ export OPENAI_BASE_URL=\"https://api.openai.com/v1\""
     pub fn get_logging_status(&self) -> String {
         self.logging.get_status_string()
     }
+
+    pub fn can_retry(&self) -> bool {
+        // Can retry if there's at least one assistant message and we're not currently streaming
+        !self.is_streaming &&
+        self.messages.iter().any(|msg| msg.role == "assistant" && !msg.content.is_empty())
+    }
+
+    pub fn prepare_retry(&mut self, available_height: u16) -> Option<Vec<crate::api::ChatMessage>> {
+        if !self.can_retry() {
+            return None;
+        }
+
+        // Find the last assistant message and remove it
+        let mut found_assistant = false;
+        let mut messages_to_keep = Vec::new();
+
+        for msg in self.messages.iter().rev() {
+            if msg.role == "assistant" && !msg.content.is_empty() && !found_assistant {
+                found_assistant = true;
+                // Skip this message (don't add to messages_to_keep)
+                continue;
+            }
+            messages_to_keep.push(msg.clone());
+        }
+
+        if !found_assistant {
+            return None;
+        }
+
+        // Reverse back to original order
+        messages_to_keep.reverse();
+        self.messages = messages_to_keep.into();
+
+        // Clear current response
+        self.current_response.clear();
+
+        // Calculate scroll position as if the response was deleted
+        let total_lines = self.build_display_lines().len() as u16;
+        if total_lines > available_height {
+            self.scroll_offset = total_lines.saturating_sub(available_height);
+        } else {
+            self.scroll_offset = 0;
+        }
+
+        // Re-enable auto-scroll for the new response
+        self.auto_scroll = true;
+
+        // Rewrite the log file to remove the last assistant response
+        if let Err(e) = self.logging.rewrite_log_without_last_response(&self.messages) {
+            eprintln!("Failed to rewrite log file: {}", e);
+        }
+
+        // Add a new empty assistant message for the retry
+        let assistant_message = Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        };
+        self.messages.push_back(assistant_message);
+
+        // Prepare messages for API (excluding the empty assistant message we just added)
+        let mut api_messages = Vec::new();
+        for msg in self.messages.iter().take(self.messages.len() - 1) {
+            api_messages.push(crate::api::ChatMessage {
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+            });
+        }
+
+        Some(api_messages)
+    }
 }

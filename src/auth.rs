@@ -282,9 +282,7 @@ impl AuthManager {
         self.store_custom_provider(name, base_url)?;
         self.store_token(name, token)?;
 
-        println!(
-            "✓ Custom provider '{name}' configured with URL: {base_url}"
-        );
+        println!("✓ Custom provider '{name}' configured with URL: {base_url}");
 
         Ok(())
     }
@@ -414,9 +412,7 @@ impl AuthManager {
         let (provider_name, display_name, is_custom) = &configured_providers[choice - 1];
 
         // Confirm removal
-        print!(
-            "Are you sure you want to remove authentication for {display_name}? (y/N): "
-        );
+        print!("Are you sure you want to remove authentication for {display_name}? (y/N): ");
         io::stdout().flush()?;
 
         let mut confirm = String::new();

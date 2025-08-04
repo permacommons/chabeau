@@ -16,11 +16,11 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{error::Error, io, sync::Arc, time::Duration};
-use tokio::sync::{mpsc, Mutex};
 use std::fs;
 use std::process::Command;
+use std::{error::Error, io, sync::Arc, time::Duration};
 use tempfile::NamedTempFile;
+use tokio::sync::{mpsc, Mutex};
 
 use api::{ChatRequest, ChatResponse, ModelsResponse};
 use app::App;
@@ -369,7 +369,7 @@ async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box<dyn
     execute!(io::stdout(), EnterAlternateScreen)?;
 
     if !status.success() {
-        app.add_system_message(format!("Editor exited with non-zero status: {}", status));
+        app.add_system_message(format!("Editor exited with non-zero status: {status}"));
         return Ok(None);
     }
 
@@ -378,7 +378,9 @@ async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box<dyn
 
     // Check if file has content (not zero bytes and not just whitespace)
     if content.trim().is_empty() {
-        app.add_system_message("Editor file was empty or contained only whitespace - no message sent.".to_string());
+        app.add_system_message(
+            "Editor file was empty or contained only whitespace - no message sent.".to_string(),
+        );
         Ok(None)
     } else {
         // Clear the input and return the content to be sent immediately
@@ -476,7 +478,8 @@ async fn run_chat(
                                         app_guard.auto_scroll = true;
 
                                         // Start new stream (this will cancel any existing stream)
-                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let (cancel_token, stream_id) =
+                                            app_guard.start_new_stream();
                                         let api_messages = app_guard.add_user_message(message);
 
                                         // Update scroll position to ensure latest messages are visible
@@ -589,10 +592,8 @@ async fn run_chat(
                                     // Editor returned no content or user cancelled
                                     let mut app_guard = app.lock().await;
                                     let terminal_size = terminal.size().unwrap_or_default();
-                                    let available_height = terminal_size
-                                        .height
-                                        .saturating_sub(3)
-                                        .saturating_sub(1); // 3 for input area, 1 for title
+                                    let available_height =
+                                        terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
                                     app_guard.update_scroll_position(
                                         available_height,
                                         terminal_size.width,
@@ -600,14 +601,12 @@ async fn run_chat(
                                 }
                                 Err(e) => {
                                     let mut app_guard = app.lock().await;
-                                    app_guard.add_system_message(format!("Editor error: {}", e));
+                                    app_guard.add_system_message(format!("Editor error: {e}"));
 
                                     // Update scroll position to show the new system message
                                     let terminal_size = terminal.size().unwrap_or_default();
-                                    let available_height = terminal_size
-                                        .height
-                                        .saturating_sub(3)
-                                        .saturating_sub(1); // 3 for input area, 1 for title
+                                    let available_height =
+                                        terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
                                     app_guard.update_scroll_position(
                                         available_height,
                                         terminal_size.width,

@@ -42,14 +42,12 @@ impl ScrollCalculator {
 
             if content_lines.is_empty() {
                 // Empty content, just show "You: "
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "You: ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "You: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else {
                 // First line gets the "You: " prefix
                 lines.push(Line::from(vec![
@@ -59,7 +57,10 @@ impl ScrollCalculator {
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(content_lines[0].to_string(), Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        content_lines[0].to_string(),
+                        Style::default().fg(Color::Cyan),
+                    ),
                 ]));
 
                 // Subsequent lines are indented to align with the content
@@ -72,7 +73,10 @@ impl ScrollCalculator {
                                 "     ", // 5 spaces to align with content after "You: "
                                 Style::default(),
                             ),
-                            Span::styled(content_line.to_string(), Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                content_line.to_string(),
+                                Style::default().fg(Color::Cyan),
+                            ),
                         ]));
                     }
                 }

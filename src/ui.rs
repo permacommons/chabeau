@@ -121,7 +121,7 @@ pub fn ui(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Reset)) // Explicitly reset to system default
-                .title(input_title)
+                .title(input_title),
         )
         .wrap(Wrap { trim: false }); // Don't trim whitespace!
 

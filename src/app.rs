@@ -255,6 +255,19 @@ Please either:
         self.messages.push_back(system_message);
     }
 
+    pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {
+        // Auto-scroll to bottom when new content is added, but only if auto_scroll is enabled
+        if self.auto_scroll {
+            // Calculate the scroll offset needed to show the bottom using wrapped line count
+            let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
+            if total_wrapped_lines > available_height {
+                self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
+            } else {
+                self.scroll_offset = 0;
+            }
+        }
+    }
+
     pub fn get_logging_status(&self) -> String {
         self.logging.get_status_string()
     }

@@ -6,6 +6,10 @@
 
 A full-screen terminal chat interface that connects to various AI APIs for real-time conversations with secure credential management.
 
+Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal, with your favorite editor for long prompts.
+
+![Our friendly mascot](chabeau-mascot-small.png)
+
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses

@@ -16,8 +16,8 @@ pub fn ui(f: &mut Frame, app: &App) {
     let lines = app.build_display_lines();
 
     // Calculate scroll position using wrapped line count
-    let available_height = chunks[0].height.saturating_sub(1); // Account for title only (no borders)
-    let total_wrapped_lines = app.calculate_wrapped_line_count(f.area().width);
+    let available_height = chunks[0].height.saturating_sub(1); // Account for title
+    let total_wrapped_lines = app.calculate_wrapped_line_count(chunks[0].width);
 
     // Always use the app's scroll_offset, but ensure it's within bounds
     let max_offset = if total_wrapped_lines > available_height {

@@ -140,22 +140,39 @@ Please either:
         let lines = self.build_display_lines();
         let mut total_wrapped_lines = 0u16;
 
-        // Account for borders and padding in the message area
-        let content_width = terminal_width.saturating_sub(2); // Remove left and right borders if any
-
         for line in &lines {
             let line_text = line.to_string();
             if line_text.is_empty() {
-                // Empty lines still take up one line
                 total_wrapped_lines = total_wrapped_lines.saturating_add(1);
             } else {
-                // Calculate how many lines this text will wrap to
-                let text_width = line_text.chars().count() as u16;
-                if content_width == 0 {
+                // Trim whitespace to match ratatui's Wrap { trim: true } behavior
+                let trimmed_text = line_text.trim();
+
+                if trimmed_text.is_empty() {
+                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
+                } else if terminal_width == 0 {
                     total_wrapped_lines = total_wrapped_lines.saturating_add(1);
                 } else {
-                    let wrapped_lines = (text_width + content_width - 1) / content_width; // Ceiling division
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_lines.max(1));
+                    // Word-based wrapping to match ratatui's behavior
+                    let mut current_line_len = 0;
+                    let mut line_count = 1u16;
+
+                    for word in trimmed_text.split_whitespace() {
+                        let word_len = word.chars().count();
+
+                        // Start new line if adding this word would exceed width
+                        if current_line_len > 0 && current_line_len + 1 + word_len > terminal_width as usize {
+                            line_count = line_count.saturating_add(1);
+                            current_line_len = word_len;
+                        } else {
+                            if current_line_len > 0 {
+                                current_line_len += 1; // Add space
+                            }
+                            current_line_len += word_len;
+                        }
+                    }
+
+                    total_wrapped_lines = total_wrapped_lines.saturating_add(line_count);
                 }
             }
         }

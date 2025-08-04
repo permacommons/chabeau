@@ -80,7 +80,7 @@ chabeau deauth --provider mycustom # Remove custom provider (completely)
 
 **Check provider status**:
 ```bash
-chabeau providers                 # List all providers and their auth status
+chabeau -p                        # List all providers and their auth status
 ```
 
 Note: When removing custom providers with `deauth`, both the authentication token and the provider definition are completely removed from the system.
@@ -137,18 +137,35 @@ Enable/control logging during a session with commands:
 - `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume (if already enabled)
 
+### Model and Provider Discovery
+
+**List available models** for the default provider:
+```bash
+chabeau -m                        # List models (newest first)
+```
+
+**List available models** for a specific provider:
+```bash
+chabeau -p openai -m              # List OpenAI models
+chabeau -p openrouter -m          # List OpenRouter models
+```
+
+**List available providers** and their authentication status:
+```bash
+chabeau -p                        # List all providers
+```
+
 ### Command Line Options
 
 **Global options (work with or without 'chat' command):**
-- `-m, --model <MODEL>`: Specify the model to use (default: gpt-4o)
-- `-p, --provider <PROVIDER>`: Specify provider (openai, openrouter, poe, or custom name)
+- `-m, --model [MODEL]`: Specify the model to use, or list available models if no model specified (default: gpt-4o)
+- `-p, --provider [PROVIDER]`: Specify provider, or list available providers if no provider specified
 - `-l, --log <FILE>`: Enable logging to specified file from startup
 
 **Commands:**
 - `auth` - Interactive authentication setup
 - `deauth` - Remove authentication for providers
 - `chat` - Start the chat interface (default command)
-- `providers` - List available providers and their authentication status
 
 **Examples:**
 ```bash
@@ -319,8 +336,29 @@ cargo install --path .
 # Set up authentication
 chabeau auth
 
+# Check what providers are available
+chabeau -p
+
+# See what models are available
+chabeau -m
+
 # Start chatting
 chabeau
+```
+
+### Discovery and exploration:
+```bash
+# List all providers and their status
+chabeau -p
+
+# List models for the default provider
+chabeau -m
+
+# List models for a specific provider
+chabeau -p openrouter -m
+
+# List models for OpenAI specifically
+chabeau -p openai -m
 ```
 
 ### Using different providers:

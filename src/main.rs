@@ -259,8 +259,8 @@ struct Args {
     #[arg(short = 'l', long, global = true)]
     log: Option<String>,
 
-    /// Provider to use (openai, openrouter, poe, or custom provider name)
-    #[arg(short = 'p', long, global = true)]
+    /// Provider to use, or list available providers if no provider specified
+    #[arg(short = 'p', long, global = true, value_name = "PROVIDER", num_args = 0..=1, default_missing_value = "")]
     provider: Option<String>,
 }
 
@@ -272,8 +272,6 @@ enum Commands {
     Deauth,
     /// Start the chat interface (default)
     Chat,
-    /// List available providers and their authentication status
-    Providers,
 }
 
 #[tokio::main]
@@ -298,23 +296,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         Commands::Chat => {
-            // Check if -m was provided without a model name (empty string) or not provided at all (None)
-            match args.model.as_deref() {
+            // Check if -p was provided without a provider name (empty string)
+            match args.provider.as_deref() {
                 Some("") => {
-                    // -m was provided without a value, list available models
-                    list_models(args.provider).await
+                    // -p was provided without a value, list available providers
+                    list_providers().await
                 }
-                Some(model) => {
-                    // -m was provided with a value, use it for chat
-                    run_chat(model.to_string(), args.log, args.provider).await
-                }
-                None => {
-                    // -m was not provided, use default model for chat
-                    run_chat("gpt-4o".to_string(), args.log, args.provider).await
+                _ => {
+                    // Normal flow: check -m flag behavior
+                    let provider_for_operations = if args.provider.as_deref() == Some("") {
+                        None // Don't pass empty string provider to other operations
+                    } else {
+                        args.provider
+                    };
+
+                    match args.model.as_deref() {
+                        Some("") => {
+                            // -m was provided without a value, list available models
+                            list_models(provider_for_operations).await
+                        }
+                        Some(model) => {
+                            // -m was provided with a value, use it for chat
+                            run_chat(model.to_string(), args.log, provider_for_operations).await
+                        }
+                        None => {
+                            // -m was not provided, use default model for chat
+                            run_chat("gpt-4o".to_string(), args.log, provider_for_operations).await
+                        }
+                    }
                 }
             }
         }
-        Commands::Providers => list_providers().await,
     }
 }
 
@@ -334,7 +346,7 @@ async fn run_chat(
                 eprintln!();
                 eprintln!("💡 Quick fixes:");
                 eprintln!("  • chabeau auth                    # Interactive setup");
-                eprintln!("  • chabeau providers               # Check provider status");
+                eprintln!("  • chabeau -p                      # Check provider status");
                 eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
                 std::process::exit(2); // Authentication error
             } else {

@@ -27,9 +27,10 @@ pub fn ui(f: &mut Frame, app: &App) {
     };
     let scroll_offset = app.scroll_offset.min(max_offset);
 
-    // Create enhanced title with provider, model name and logging status
+    // Create enhanced title with version, provider, model name and logging status
     let title = format!(
-        "Chabeau - {} ({}) • Logging: {}",
+        "Chabeau v{} - {} ({}) • Logging: {}",
+        env!("CARGO_PKG_VERSION"),
         app.provider_name,
         app.model,
         app.get_logging_status()
@@ -44,17 +45,17 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     // Input area takes full width
     let input_style = if app.input_mode {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::Cyan)
     } else {
         Style::default()
     };
 
     let input_title = if app.is_streaming {
-        "Type your message (Press Enter to send, Esc to interrupt, Ctrl+R to retry, Ctrl+C to quit)"
+        "Type your message (Esc to interrupt, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
     } else if app.can_retry() {
-        "Type your message (Press Enter to send, Ctrl+R to retry, Ctrl+C to quit)"
+        "Type your message (Ctrl+R to retry, /help for help, Ctrl+C to quit)"
     } else {
-        "Type your message (Press Enter to send, Ctrl+C to quit)"
+        "Type your message (/help for help, Ctrl+C to quit)"
     };
 
     // Create input text with streaming indicator if needed
@@ -116,7 +117,12 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     let input = Paragraph::new(input_text.as_str())
         .style(input_style)
-        .block(Block::default().borders(Borders::ALL).title(input_title))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Reset)) // Explicitly reset to system default
+                .title(input_title)
+        )
         .wrap(Wrap { trim: false }); // Don't trim whitespace!
 
     f.render_widget(input, chunks[1]);

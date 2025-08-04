@@ -18,6 +18,9 @@ use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{error::Error, io, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
+use std::fs;
+use std::process::Command;
+use tempfile::NamedTempFile;
 
 use api::{ChatRequest, ChatResponse, ModelsResponse};
 use app::App;
@@ -242,8 +245,10 @@ Controls:\n\
   Up/Down/Mouse     Scroll through chat history\n\
   Ctrl+C            Quit the application\n\
   Ctrl+R            Retry the last bot response\n\
+  Ctrl+E            Open external editor (requires EDITOR env var)\n\
   Backspace         Delete characters in the input field\n\n\
 Commands:\n\
+  /help             Show extended help with keyboard shortcuts\n\
   /log <filename>   Enable logging to specified file\n\
   /log              Toggle logging pause/resume"
 )]
@@ -330,6 +335,61 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
+async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box<dyn Error>> {
+    // Check if EDITOR environment variable is set
+    let editor = match std::env::var("EDITOR") {
+        Ok(editor) if !editor.trim().is_empty() => editor,
+        _ => {
+            app.add_system_message("No EDITOR environment variable set. Please set EDITOR to your preferred text editor (e.g., export EDITOR=nano).".to_string());
+            return Ok(None);
+        }
+    };
+
+    // Create a temporary file
+    let temp_file = NamedTempFile::new()?;
+    let temp_path = temp_file.path().to_path_buf();
+
+    // Write current input to the temp file if there's any
+    if !app.input.is_empty() {
+        fs::write(&temp_path, &app.input)?;
+    }
+
+    // We need to temporarily exit raw mode to allow the editor to run
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+
+    // Run the editor
+    let mut command = Command::new(&editor);
+    command.arg(&temp_path);
+
+    let status = command.status()?;
+
+    // Restore terminal mode
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+
+    if !status.success() {
+        app.add_system_message(format!("Editor exited with non-zero status: {}", status));
+        return Ok(None);
+    }
+
+    // Read the file content
+    let content = fs::read_to_string(&temp_path)?;
+
+    // Check if file has content (not zero bytes and not just whitespace)
+    if content.trim().is_empty() {
+        app.add_system_message("Editor file was empty or contained only whitespace - no message sent.".to_string());
+        Ok(None)
+    } else {
+        // Clear the input and return the content to be sent immediately
+        app.input.clear();
+        let message = content.trim_end().to_string(); // Remove trailing newlines but preserve internal formatting
+        Ok(Some(message))
+    }
+
+    // Temp file will be automatically cleaned up when it goes out of scope
+}
+
 async fn run_chat(
     model: String,
     log: Option<String>,
@@ -385,6 +445,175 @@ async fn run_chat(
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             break Ok(());
+                        }
+                        KeyCode::Char('e')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            // Handle CTRL+E for external editor
+                            let editor_result = {
+                                let mut app_guard = app.lock().await;
+                                handle_external_editor(&mut app_guard).await
+                            };
+
+                            // Force a full redraw after editor
+                            terminal.clear()?;
+
+                            match editor_result {
+                                Ok(Some(message)) => {
+                                    // Editor returned content, send it immediately
+                                    let (
+                                        api_messages,
+                                        client,
+                                        model,
+                                        api_key,
+                                        base_url,
+                                        cancel_token,
+                                        stream_id,
+                                    ) = {
+                                        let mut app_guard = app.lock().await;
+
+                                        // Re-enable auto-scroll when user sends a new message
+                                        app_guard.auto_scroll = true;
+
+                                        // Start new stream (this will cancel any existing stream)
+                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let api_messages = app_guard.add_user_message(message);
+
+                                        // Update scroll position to ensure latest messages are visible
+                                        let terminal_size = terminal.size().unwrap_or_default();
+                                        let available_height = terminal_size
+                                            .height
+                                            .saturating_sub(3)
+                                            .saturating_sub(1); // 3 for input area, 1 for title
+                                        app_guard.update_scroll_position(
+                                            available_height,
+                                            terminal_size.width,
+                                        );
+
+                                        (
+                                            api_messages,
+                                            app_guard.client.clone(),
+                                            app_guard.model.clone(),
+                                            app_guard.api_key.clone(),
+                                            app_guard.base_url.clone(),
+                                            cancel_token,
+                                            stream_id,
+                                        )
+                                    };
+
+                                    // Send the message to API
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let request = ChatRequest {
+                                            model,
+                                            messages: api_messages,
+                                            stream: true,
+                                        };
+
+                                        // Use tokio::select! to race between the HTTP request and cancellation
+                                        tokio::select! {
+                                            _ = async {
+                                                match client
+                                                    .post(format!("{base_url}/chat/completions"))
+                                                    .header("Authorization", format!("Bearer {api_key}"))
+                                                    .header("Content-Type", "application/json")
+                                                    .json(&request)
+                                                    .send()
+                                                    .await
+                                                {
+                                                    Ok(response) => {
+                                                        if !response.status().is_success() {
+                                                            if let Ok(error_text) = response.text().await {
+                                                                eprintln!("API request failed: {error_text}");
+                                                            }
+                                                            return;
+                                                        }
+
+                                                        let mut stream = response.bytes_stream();
+                                                        let mut buffer = String::new();
+
+                                                        while let Some(chunk) = stream.next().await {
+                                                            // Check for cancellation before processing each chunk
+                                                            if cancel_token.is_cancelled() {
+                                                                return;
+                                                            }
+
+                                                            if let Ok(chunk) = chunk {
+                                                                let chunk_str = String::from_utf8_lossy(&chunk);
+                                                                buffer.push_str(&chunk_str);
+
+                                                                // Process complete lines from buffer
+                                                                while let Some(newline_pos) = buffer.find('\n') {
+                                                                    let line = buffer[..newline_pos].trim().to_string();
+                                                                    buffer.drain(..=newline_pos);
+
+                                                                    if let Some(data) = line.strip_prefix("data: ") {
+                                                                        if data == "[DONE]" {
+                                                                            // Signal end of streaming
+                                                                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                                                                            return;
+                                                                        }
+
+                                                                        match serde_json::from_str::<ChatResponse>(data) {
+                                                                            Ok(response) => {
+                                                                                if let Some(choice) = response.choices.first() {
+                                                                                    if let Some(content) = &choice.delta.content {
+                                                                                        let _ = tx_clone.send((content.clone(), stream_id));
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            Err(e) => {
+                                                                                eprintln!("Failed to parse JSON: {e} - Data: {data}");
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("Error sending message: {e}");
+                                                    }
+                                                }
+                                            } => {
+                                                // HTTP request completed normally
+                                            }
+                                            _ = cancel_token.cancelled() => {
+                                                // Stream was cancelled, clean up
+                                                return;
+                                            }
+                                        }
+                                    });
+                                }
+                                Ok(None) => {
+                                    // Editor returned no content or user cancelled
+                                    let mut app_guard = app.lock().await;
+                                    let terminal_size = terminal.size().unwrap_or_default();
+                                    let available_height = terminal_size
+                                        .height
+                                        .saturating_sub(3)
+                                        .saturating_sub(1); // 3 for input area, 1 for title
+                                    app_guard.update_scroll_position(
+                                        available_height,
+                                        terminal_size.width,
+                                    );
+                                }
+                                Err(e) => {
+                                    let mut app_guard = app.lock().await;
+                                    app_guard.add_system_message(format!("Editor error: {}", e));
+
+                                    // Update scroll position to show the new system message
+                                    let terminal_size = terminal.size().unwrap_or_default();
+                                    let available_height = terminal_size
+                                        .height
+                                        .saturating_sub(3)
+                                        .saturating_sub(1); // 3 for input area, 1 for title
+                                    app_guard.update_scroll_position(
+                                        available_height,
+                                        terminal_size.width,
+                                    );
+                                }
+                            }
                         }
                         KeyCode::Char('r')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>

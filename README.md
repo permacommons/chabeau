@@ -187,12 +187,31 @@ chabeau -p OPENROUTER # Same as -p openrouter
 - **Enter**: Send the message
 - **Up/Down/Mouse**: Scroll through chat history
 - **Ctrl+C**: Quit the application
+- **Ctrl+E**: Open external editor (requires EDITOR environment variable)
 - **Backspace**: Delete characters in the input field
 - **Esc**: Interrupt streaming response
 - **Ctrl+R**: Retry the last bot response (regenerates with same context)
 
+### External Editor Support
+
+Chabeau supports opening an external text editor for composing longer messages:
+
+- **Ctrl+E**: Opens your configured editor with the current input content
+- Requires the `EDITOR` environment variable to be set
+- When you save and exit the editor, the content is sent immediately
+- Empty files or files with only whitespace are ignored
+
+**Setup:**
+```bash
+export EDITOR=nano          # Use nano
+export EDITOR=vim           # Use vim
+export EDITOR=code          # Use VS Code
+export EDITOR="code --wait" # Use VS Code and wait for window to close
+```
+
 ### Chat Commands
 
+- `/help` - Show extended help with all keyboard shortcuts and commands
 - `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume
 
@@ -207,7 +226,7 @@ The interface consists of two main areas:
 
 2. **Input Area**: Where you type your messages (highlighted in yellow when active)
 
-The title bar shows the current model and logging status.
+The title bar shows the version number, current provider, model, and logging status.
 
 ## Logging Features
 

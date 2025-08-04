@@ -37,23 +37,59 @@ impl ScrollCalculator {
     /// Add lines for a single message to the lines vector
     fn add_message_lines(lines: &mut Vec<Line<'static>>, msg: &Message) {
         if msg.role == "user" {
-            // User messages: cyan with "You:" prefix and indentation
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "You: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(msg.content.clone(), Style::default().fg(Color::Cyan)),
-            ]));
+            // User messages: cyan with "You:" prefix and proper multiline handling
+            let content_lines: Vec<&str> = msg.content.lines().collect();
+
+            if content_lines.is_empty() {
+                // Empty content, just show "You: "
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "You: ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                // First line gets the "You: " prefix
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "You: ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(content_lines[0].to_string(), Style::default().fg(Color::Cyan)),
+                ]));
+
+                // Subsequent lines are indented to align with the content
+                for content_line in content_lines.iter().skip(1) {
+                    if content_line.trim().is_empty() {
+                        lines.push(Line::from(""));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "     ", // 5 spaces to align with content after "You: "
+                                Style::default(),
+                            ),
+                            Span::styled(content_line.to_string(), Style::default().fg(Color::Cyan)),
+                        ]));
+                    }
+                }
+            }
             lines.push(Line::from("")); // Empty line for spacing
         } else if msg.role == "system" {
-            // System messages: gray/dim color
-            lines.push(Line::from(Span::styled(
-                msg.content.clone(),
-                Style::default().fg(Color::DarkGray),
-            )));
+            // System messages: gray/dim color, split content into lines for proper wrapping
+            for content_line in msg.content.lines() {
+                if content_line.trim().is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        content_line.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
             lines.push(Line::from("")); // Empty line for spacing
         } else if !msg.content.is_empty() {
             // Assistant messages: no prefix, just content in white/default color
@@ -360,6 +396,27 @@ mod tests {
         let lines = ScrollCalculator::build_display_lines(&messages);
         // Should have: Line 1, Line 2, empty line, Line 4, spacing = 5 lines
         assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn test_multiline_user_message() {
+        let mut messages = VecDeque::new();
+        messages.push_back(create_test_message("user", "Line 1\nLine 2\n\nLine 4"));
+
+        let lines = ScrollCalculator::build_display_lines(&messages);
+        // Should have: "You: Line 1", "     Line 2", empty line, "     Line 4", spacing = 5 lines
+        assert_eq!(lines.len(), 5);
+
+        // First line should have "You: " prefix
+        assert!(lines[0].to_string().starts_with("You: Line 1"));
+        // Second line should be indented
+        assert!(lines[1].to_string().starts_with("     Line 2"));
+        // Third line should be empty
+        assert_eq!(lines[2].to_string(), "");
+        // Fourth line should be indented
+        assert!(lines[3].to_string().starts_with("     Line 4"));
+        // Fifth line should be empty spacing
+        assert_eq!(lines[4].to_string(), "");
     }
 
     #[test]

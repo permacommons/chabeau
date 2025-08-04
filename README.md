@@ -213,8 +213,101 @@ The codebase is organized into focused modules:
 - `logging.rs` - Chat logging functionality
 - `commands.rs` - Chat command processing
 - `message.rs` - Message data structures
+- `scroll.rs` - Scroll calculations and line wrapping logic
 
 This modular design makes the code easier to maintain, test, and extend.
+
+## Testing
+
+Chabeau includes comprehensive unit tests, particularly for the scroll functionality which handles complex text wrapping and positioning calculations.
+
+### Running Tests
+
+**Run all tests:**
+```bash
+cargo test
+```
+
+**Run tests with verbose output:**
+```bash
+cargo test -- --nocapture
+```
+
+**Run only scroll-related tests:**
+```bash
+cargo test scroll::
+```
+
+**Run tests in release mode (faster execution):**
+```bash
+cargo test --release
+```
+
+**Run tests quietly (minimal output):**
+```bash
+cargo test --quiet
+```
+
+### Test Coverage
+
+**Generate test coverage report** (requires `cargo-tarpaulin`):
+```bash
+# Install cargo-tarpaulin if not already installed
+cargo install cargo-tarpaulin
+
+# Generate HTML coverage report
+cargo tarpaulin --out Html --output-dir coverage
+
+# Open the report
+open coverage/tarpaulin-report.html  # macOS
+xdg-open coverage/tarpaulin-report.html  # Linux
+```
+
+### Watch Mode
+
+**Run tests automatically when files change** (requires `cargo-watch`):
+```bash
+# Install cargo-watch if not already installed
+cargo install cargo-watch
+
+# Watch for changes and run tests
+cargo watch -x test
+
+# Watch and run only scroll tests
+cargo watch -x "test scroll::"
+```
+
+### Test Organization
+
+The test suite covers:
+
+- **Scroll calculations**: Word-based text wrapping that matches ratatui's behavior
+- **Line building**: Message formatting and display line generation
+- **Scroll positioning**: Automatic scroll-to-bottom and scroll-to-message functionality
+- **Edge cases**: Empty messages, long paragraphs, zero-width terminals, whitespace handling
+
+Key test areas:
+- `scroll::tests::*` - Comprehensive scroll functionality tests
+- Text wrapping with various terminal widths
+- Message formatting for different roles (user, assistant, system)
+- Scroll offset calculations for navigation and auto-scroll
+
+### Debugging Tests
+
+**Run a specific test with debug output:**
+```bash
+cargo test test_word_wrapping_with_long_paragraph -- --nocapture
+```
+
+**Run tests with backtraces on failure:**
+```bash
+RUST_BACKTRACE=1 cargo test
+```
+
+**Run tests with full backtraces:**
+```bash
+RUST_BACKTRACE=full cargo test
+```
 
 ## Example Sessions
 

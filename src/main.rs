@@ -4,6 +4,7 @@ mod auth;
 mod commands;
 mod logging;
 mod message;
+mod scroll;
 mod ui;
 
 use clap::{Parser, Subcommand};

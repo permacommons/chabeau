@@ -1,11 +1,9 @@
 use crate::auth::AuthManager;
 use crate::logging::LoggingState;
 use crate::message::Message;
+use crate::scroll::ScrollCalculator;
 use reqwest::Client;
-use ratatui::{
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::text::Line;
 use std::{
     collections::VecDeque,
     time::Instant,
@@ -105,88 +103,16 @@ Please either:
     }
 
     pub fn build_display_lines(&self) -> Vec<Line> {
-        let mut lines = Vec::new();
-
-        for msg in &self.messages {
-            if msg.role == "user" {
-                // User messages: cyan with "You:" prefix and indentation
-                lines.push(Line::from(vec![
-                    Span::styled("You: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(&msg.content, Style::default().fg(Color::Cyan)),
-                ]));
-                lines.push(Line::from(""));  // Empty line for spacing
-            } else if msg.role == "system" {
-                // System messages: gray/dim color
-                lines.push(Line::from(Span::styled(&msg.content, Style::default().fg(Color::DarkGray))));
-                lines.push(Line::from(""));  // Empty line for spacing
-            } else if !msg.content.is_empty() {
-                // Assistant messages: no prefix, just content in white/default color
-                // Split content into lines for proper wrapping
-                for content_line in msg.content.lines() {
-                    if content_line.trim().is_empty() {
-                        lines.push(Line::from(""));
-                    } else {
-                        lines.push(Line::from(Span::styled(content_line, Style::default().fg(Color::White))));
-                    }
-                }
-                lines.push(Line::from(""));  // Empty line for spacing
-            }
-        }
-
-        lines
+        ScrollCalculator::build_display_lines(&self.messages)
     }
 
     pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
         let lines = self.build_display_lines();
-        let mut total_wrapped_lines = 0u16;
-
-        for line in &lines {
-            let line_text = line.to_string();
-            if line_text.is_empty() {
-                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-            } else {
-                // Trim whitespace to match ratatui's Wrap { trim: true } behavior
-                let trimmed_text = line_text.trim();
-
-                if trimmed_text.is_empty() {
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                } else if terminal_width == 0 {
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                } else {
-                    // Word-based wrapping to match ratatui's behavior
-                    let mut current_line_len = 0;
-                    let mut line_count = 1u16;
-
-                    for word in trimmed_text.split_whitespace() {
-                        let word_len = word.chars().count();
-
-                        // Start new line if adding this word would exceed width
-                        if current_line_len > 0 && current_line_len + 1 + word_len > terminal_width as usize {
-                            line_count = line_count.saturating_add(1);
-                            current_line_len = word_len;
-                        } else {
-                            if current_line_len > 0 {
-                                current_line_len += 1; // Add space
-                            }
-                            current_line_len += word_len;
-                        }
-                    }
-
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(line_count);
-                }
-            }
-        }
-
-        total_wrapped_lines
+        ScrollCalculator::calculate_wrapped_line_count(&lines, terminal_width)
     }
 
     pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
-        let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
-        if total_wrapped_lines > available_height {
-            total_wrapped_lines.saturating_sub(available_height)
-        } else {
-            0
-        }
+        ScrollCalculator::calculate_max_scroll_offset(&self.messages, terminal_width, available_height)
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
@@ -321,78 +247,7 @@ Please either:
     }
 
     pub fn calculate_scroll_to_message(&self, message_index: usize, terminal_width: u16, available_height: u16) -> u16 {
-        // Build lines up to the specified message index
-        let mut lines = Vec::new();
-
-        for (i, msg) in self.messages.iter().enumerate() {
-            if i > message_index {
-                break;
-            }
-
-            if msg.role == "user" {
-                // User messages: cyan with "You:" prefix and indentation
-                lines.push(Line::from(vec![
-                    Span::styled("You: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(&msg.content, Style::default().fg(Color::Cyan)),
-                ]));
-                lines.push(Line::from(""));  // Empty line for spacing
-            } else if msg.role == "system" {
-                // System messages: gray/dim color
-                lines.push(Line::from(Span::styled(&msg.content, Style::default().fg(Color::DarkGray))));
-                lines.push(Line::from(""));  // Empty line for spacing
-            } else if !msg.content.is_empty() {
-                // Assistant messages: no prefix, just content in white/default color
-                // Split content into lines for proper wrapping
-                for content_line in msg.content.lines() {
-                    if content_line.trim().is_empty() {
-                        lines.push(Line::from(""));
-                    } else {
-                        lines.push(Line::from(Span::styled(content_line, Style::default().fg(Color::White))));
-                    }
-                }
-                lines.push(Line::from(""));  // Empty line for spacing
-            }
-        }
-
-        // Calculate wrapped line count for these lines
-        let mut wrapped_lines = 0u16;
-        for line in &lines {
-            let line_text = line.to_string();
-            if line_text.is_empty() {
-                wrapped_lines = wrapped_lines.saturating_add(1);
-            } else {
-                let trimmed_text = line_text.trim();
-                if trimmed_text.is_empty() {
-                    wrapped_lines = wrapped_lines.saturating_add(1);
-                } else if terminal_width == 0 {
-                    wrapped_lines = wrapped_lines.saturating_add(1);
-                } else {
-                    let mut current_line_len = 0;
-                    let mut line_count = 1u16;
-
-                    for word in trimmed_text.split_whitespace() {
-                        let word_len = word.chars().count();
-                        if current_line_len > 0 && current_line_len + 1 + word_len > terminal_width as usize {
-                            line_count = line_count.saturating_add(1);
-                            current_line_len = word_len;
-                        } else {
-                            if current_line_len > 0 {
-                                current_line_len += 1;
-                            }
-                            current_line_len += word_len;
-                        }
-                    }
-                    wrapped_lines = wrapped_lines.saturating_add(line_count);
-                }
-            }
-        }
-
-        // Calculate scroll offset to show the end of this message
-        if wrapped_lines > available_height {
-            wrapped_lines.saturating_sub(available_height)
-        } else {
-            0
-        }
+        ScrollCalculator::calculate_scroll_to_message(&self.messages, message_index, terminal_width, available_height)
     }
 
     pub fn prepare_retry(&mut self, available_height: u16, terminal_width: u16) -> Option<Vec<crate::api::ChatMessage>> {

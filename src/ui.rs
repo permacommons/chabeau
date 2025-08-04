@@ -28,13 +28,15 @@ pub fn ui(f: &mut Frame, app: &App) {
     let scroll_offset = app.scroll_offset.min(max_offset);
 
     // Create enhanced title with provider, model name and logging status
-    let title = format!("Chabeau - {} ({}) • Logging: {}", app.provider_name, app.model, app.get_logging_status());
+    let title = format!(
+        "Chabeau - {} ({}) • Logging: {}",
+        app.provider_name,
+        app.model,
+        app.get_logging_status()
+    );
 
     let messages_paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(title)
-        )
+        .block(Block::default().title(title))
         .wrap(Wrap { trim: true })
         .scroll((scroll_offset, 0));
 
@@ -114,11 +116,7 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     let input = Paragraph::new(input_text.as_str())
         .style(input_style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(input_title)
-        )
+        .block(Block::default().borders(Borders::ALL).title(input_title))
         .wrap(Wrap { trim: false }); // Don't trim whitespace!
 
     f.render_widget(input, chunks[1]);
@@ -132,9 +130,6 @@ pub fn ui(f: &mut Frame, app: &App) {
         };
 
         let cursor_x = (app.input.len() as u16 + 1).min(max_cursor_pos);
-        f.set_cursor_position((
-            chunks[1].x + cursor_x,
-            chunks[1].y + 1,
-        ));
+        f.set_cursor_position((chunks[1].x + cursor_x, chunks[1].y + 1));
     }
 }

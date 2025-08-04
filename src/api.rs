@@ -27,3 +27,15 @@ pub struct ChatResponseChoice {
 pub struct ChatResponse {
     pub choices: Vec<ChatResponseChoice>,
 }
+
+#[derive(Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub created: Option<u64>,
+    pub owned_by: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ModelsResponse {
+    pub data: Vec<ModelInfo>,
+}

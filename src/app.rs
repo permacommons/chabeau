@@ -2,12 +2,9 @@ use crate::auth::AuthManager;
 use crate::logging::LoggingState;
 use crate::message::Message;
 use crate::scroll::ScrollCalculator;
-use reqwest::Client;
 use ratatui::text::Line;
-use std::{
-    collections::VecDeque,
-    time::Instant,
-};
+use reqwest::Client;
+use std::{collections::VecDeque, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 pub struct App {
@@ -33,7 +30,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new_with_auth(model: String, log_file: Option<String>, provider: Option<String>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new_with_auth(
+        model: String,
+        log_file: Option<String>,
+        provider: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let auth_manager = AuthManager::new();
 
         let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
@@ -112,7 +113,11 @@ Please either:
     }
 
     pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
-        ScrollCalculator::calculate_max_scroll_offset(&self.messages, terminal_width, available_height)
+        ScrollCalculator::calculate_max_scroll_offset(
+            &self.messages,
+            terminal_width,
+            available_height,
+        )
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
@@ -150,7 +155,12 @@ Please either:
         api_messages
     }
 
-    pub fn append_to_response(&mut self, content: &str, available_height: u16, terminal_width: u16) {
+    pub fn append_to_response(
+        &mut self,
+        content: &str,
+        available_height: u16,
+        terminal_width: u16,
+    ) {
         self.current_response.push_str(content);
 
         // Update the message being retried, or the last message if not retrying
@@ -217,7 +227,9 @@ Please either:
 
     pub fn can_retry(&self) -> bool {
         // Can retry if there's at least one assistant message (even if currently streaming)
-        self.messages.iter().any(|msg| msg.role == "assistant" && !msg.content.is_empty())
+        self.messages
+            .iter()
+            .any(|msg| msg.role == "assistant" && !msg.content.is_empty())
     }
 
     pub fn cancel_current_stream(&mut self) {
@@ -246,11 +258,25 @@ Please either:
         (token, self.current_stream_id)
     }
 
-    pub fn calculate_scroll_to_message(&self, message_index: usize, terminal_width: u16, available_height: u16) -> u16 {
-        ScrollCalculator::calculate_scroll_to_message(&self.messages, message_index, terminal_width, available_height)
+    pub fn calculate_scroll_to_message(
+        &self,
+        message_index: usize,
+        terminal_width: u16,
+        available_height: u16,
+    ) -> u16 {
+        ScrollCalculator::calculate_scroll_to_message(
+            &self.messages,
+            message_index,
+            terminal_width,
+            available_height,
+        )
     }
 
-    pub fn prepare_retry(&mut self, available_height: u16, terminal_width: u16) -> Option<Vec<crate::api::ChatMessage>> {
+    pub fn prepare_retry(
+        &mut self,
+        available_height: u16,
+        terminal_width: u16,
+    ) -> Option<Vec<crate::api::ChatMessage>> {
         if !self.can_retry() {
             return None;
         }
@@ -292,7 +318,10 @@ Please either:
                 }
 
                 // Rewrite the log file to remove the last assistant response
-                if let Err(e) = self.logging.rewrite_log_without_last_response(&self.messages) {
+                if let Err(e) = self
+                    .logging
+                    .rewrite_log_without_last_response(&self.messages)
+                {
                     eprintln!("Failed to rewrite log file: {}", e);
                 }
             } else {
@@ -305,7 +334,11 @@ Please either:
             // Find the user message that precedes this assistant message
             if retry_index > 0 {
                 let user_message_index = retry_index - 1;
-                self.scroll_offset = self.calculate_scroll_to_message(user_message_index, terminal_width, available_height);
+                self.scroll_offset = self.calculate_scroll_to_message(
+                    user_message_index,
+                    terminal_width,
+                    available_height,
+                );
             } else {
                 self.scroll_offset = 0;
             }

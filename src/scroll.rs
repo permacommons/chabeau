@@ -39,14 +39,22 @@ impl ScrollCalculator {
         if msg.role == "user" {
             // User messages: cyan with "You:" prefix and indentation
             lines.push(Line::from(vec![
-                Span::styled("You: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "You: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(msg.content.clone(), Style::default().fg(Color::Cyan)),
             ]));
-            lines.push(Line::from(""));  // Empty line for spacing
+            lines.push(Line::from("")); // Empty line for spacing
         } else if msg.role == "system" {
             // System messages: gray/dim color
-            lines.push(Line::from(Span::styled(msg.content.clone(), Style::default().fg(Color::DarkGray))));
-            lines.push(Line::from(""));  // Empty line for spacing
+            lines.push(Line::from(Span::styled(
+                msg.content.clone(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from("")); // Empty line for spacing
         } else if !msg.content.is_empty() {
             // Assistant messages: no prefix, just content in white/default color
             // Split content into lines for proper wrapping
@@ -54,10 +62,13 @@ impl ScrollCalculator {
                 if content_line.trim().is_empty() {
                     lines.push(Line::from(""));
                 } else {
-                    lines.push(Line::from(Span::styled(content_line.to_string(), Style::default().fg(Color::White))));
+                    lines.push(Line::from(Span::styled(
+                        content_line.to_string(),
+                        Style::default().fg(Color::White),
+                    )));
                 }
             }
-            lines.push(Line::from(""));  // Empty line for spacing
+            lines.push(Line::from("")); // Empty line for spacing
         }
     }
 
@@ -79,7 +90,8 @@ impl ScrollCalculator {
                     total_wrapped_lines = total_wrapped_lines.saturating_add(1);
                 } else {
                     // Word-based wrapping to match ratatui's behavior
-                    let wrapped_count = Self::calculate_word_wrapped_lines(trimmed_text, terminal_width);
+                    let wrapped_count =
+                        Self::calculate_word_wrapped_lines(trimmed_text, terminal_width);
                     total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_count);
                 }
             }
@@ -171,7 +183,10 @@ mod tests {
         messages.push_back(create_test_message("user", "Hello"));
         messages.push_back(create_test_message("assistant", "Hi there!"));
         messages.push_back(create_test_message("user", "How are you?"));
-        messages.push_back(create_test_message("assistant", "I'm doing well, thank you for asking!"));
+        messages.push_back(create_test_message(
+            "assistant",
+            "I'm doing well, thank you for asking!",
+        ));
         messages
     }
 
@@ -230,17 +245,16 @@ mod tests {
     #[test]
     fn test_calculate_word_wrapped_lines_single_word_too_long() {
         // Single word longer than width should still count as 1 line
-        let wrapped = ScrollCalculator::calculate_word_wrapped_lines("supercalifragilisticexpialidocious", 10);
+        let wrapped = ScrollCalculator::calculate_word_wrapped_lines(
+            "supercalifragilisticexpialidocious",
+            10,
+        );
         assert_eq!(wrapped, 1);
     }
 
     #[test]
     fn test_calculate_wrapped_line_count_empty_lines() {
-        let lines = vec![
-            Line::from(""),
-            Line::from(""),
-            Line::from(""),
-        ];
+        let lines = vec![Line::from(""), Line::from(""), Line::from("")];
         let count = ScrollCalculator::calculate_wrapped_line_count(&lines, 80);
         assert_eq!(count, 3);
     }
@@ -364,9 +378,9 @@ mod tests {
     #[test]
     fn test_trimming_behavior() {
         let lines = vec![
-            Line::from("  "), // Only whitespace
+            Line::from("  "),            // Only whitespace
             Line::from("   content   "), // Content with surrounding whitespace
-            Line::from(""), // Empty
+            Line::from(""),              // Empty
         ];
 
         let count = ScrollCalculator::calculate_wrapped_line_count(&lines, 80);

@@ -1,7 +1,7 @@
+use crate::message::Message;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use crate::message::Message;
 
 pub struct LoggingState {
     file_path: Option<String>,
@@ -43,7 +43,9 @@ impl LoggingState {
                     Ok(format!("Logging paused (file: {})", path))
                 }
             }
-            None => Err("No log file specified. Use /log <filename> to enable logging first.".into()),
+            None => {
+                Err("No log file specified. Use /log <filename> to enable logging first.".into())
+            }
         }
     }
 
@@ -73,12 +75,27 @@ impl LoggingState {
     pub fn get_status_string(&self) -> String {
         match (&self.file_path, self.is_active) {
             (None, _) => "disabled".to_string(),
-            (Some(path), true) => format!("active ({})", Path::new(path).file_name().unwrap_or_default().to_string_lossy()),
-            (Some(path), false) => format!("paused ({})", Path::new(path).file_name().unwrap_or_default().to_string_lossy()),
+            (Some(path), true) => format!(
+                "active ({})",
+                Path::new(path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ),
+            (Some(path), false) => format!(
+                "paused ({})",
+                Path::new(path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ),
         }
     }
 
-    pub fn rewrite_log_without_last_response(&self, messages: &std::collections::VecDeque<Message>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn rewrite_log_without_last_response(
+        &self,
+        messages: &std::collections::VecDeque<Message>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.is_active || self.file_path.is_none() {
             return Ok(());
         }
@@ -121,10 +138,7 @@ impl LoggingState {
 
     fn test_file_access(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Try to create/open the file to ensure we have write permissions
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
 
         // Test write access
         file.flush()?;

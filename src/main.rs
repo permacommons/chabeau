@@ -7,6 +7,7 @@ mod message;
 mod scroll;
 mod ui;
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
@@ -14,23 +15,142 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures_util::StreamExt;
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
-use std::{
-    error::Error,
-    io,
-    sync::Arc,
-    time::Duration,
-};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::{error::Error, io, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
 
-use api::{ChatRequest, ChatResponse};
+use api::{ChatRequest, ChatResponse, ModelsResponse};
 use app::App;
 use auth::AuthManager;
 use commands::{process_input, CommandResult};
 use ui::ui;
+
+async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
+    let auth_manager = AuthManager::new();
+
+    let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
+        // User specified a provider
+        if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+            (api_key, base_url, provider_name)
+        } else {
+            return Err(format!("No authentication found for provider '{}'. Run 'chabeau auth' to set up authentication.", provider_name).into());
+        }
+    } else {
+        // Try to find any available authentication
+        if let Some((provider, api_key)) = auth_manager.find_first_available_auth() {
+            (api_key, provider.base_url, provider.display_name)
+        } else {
+            // Fall back to environment variables
+            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                "❌ No authentication configured and OPENAI_API_KEY environment variable not set
+
+Please either:
+1. Run 'chabeau auth' to set up authentication, or
+2. Set environment variables:
+   export OPENAI_API_KEY=\"your-api-key-here\"
+   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+            })?;
+
+            let base_url = std::env::var("OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+            (api_key, base_url, "Environment Variables".to_string())
+        }
+    };
+
+    println!("🤖 Available Models for {}", provider_name);
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    let client = reqwest::Client::new();
+
+    match client
+        .get(&format!("{}/models", base_url))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(
+                    format!("API request failed with status {}: {}", status, error_text).into(),
+                );
+            }
+
+            match response.json::<ModelsResponse>().await {
+                Ok(models_response) => {
+                    if models_response.data.is_empty() {
+                        println!("No models found for this provider.");
+                    } else {
+                        println!(
+                            "Found {} models (sorted newest first):",
+                            models_response.data.len()
+                        );
+                        println!();
+
+                        // Sort models by creation date (newest first), then by ID for consistent display
+                        let mut models = models_response.data;
+                        models.sort_by(|a, b| {
+                            // First sort by creation date (newest first)
+                            match (a.created, b.created) {
+                                (Some(a_created), Some(b_created)) => b_created.cmp(&a_created),
+                                (Some(_), None) => std::cmp::Ordering::Less, // Models with dates come first
+                                (None, Some(_)) => std::cmp::Ordering::Greater, // Models without dates come last
+                                (None, None) => a.id.cmp(&b.id), // Fall back to ID sorting
+                            }
+                        });
+
+                        for model in models {
+                            println!("  • {}", model.id);
+                            if let Some(owned_by) = &model.owned_by {
+                                if !owned_by.is_empty() && owned_by != "system" {
+                                    println!("    Owner: {}", owned_by);
+                                }
+                            }
+                            if let Some(created) = model.created {
+                                if created > 0 {
+                                    // Convert Unix timestamp to human-readable date
+                                    // Some APIs return timestamps in milliseconds, others in seconds
+                                    let timestamp_secs = if created > 10_000_000_000 {
+                                        // Likely milliseconds, convert to seconds
+                                        created / 1000
+                                    } else {
+                                        // Already in seconds
+                                        created
+                                    };
+
+                                    let datetime =
+                                        DateTime::<Utc>::from_timestamp(timestamp_secs as i64, 0);
+                                    if let Some(dt) = datetime {
+                                        println!(
+                                            "    Created: {}",
+                                            dt.format("%Y-%m-%d %H:%M:%S UTC")
+                                        );
+                                    }
+                                }
+                            }
+                            println!();
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Failed to parse models response: {}", e).into());
+                }
+            }
+        }
+        Err(e) => {
+            return Err(format!("Failed to fetch models: {}", e).into());
+        }
+    }
+
+    Ok(())
+}
 
 async fn list_providers() -> Result<(), Box<dyn Error>> {
     let auth_manager = AuthManager::new();
@@ -65,7 +185,11 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
             } else {
                 println!("Custom providers:");
                 for (name, url, has_token) in custom_providers {
-                    let status = if has_token { "✅ configured" } else { "❌ not configured" };
+                    let status = if has_token {
+                        "✅ configured"
+                    } else {
+                        "❌ not configured"
+                    };
                     println!("  {} - {}", name, status);
                     println!("    URL: {}", url);
                 }
@@ -80,7 +204,10 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
     // Show which provider would be used by default
     match auth_manager.find_first_available_auth() {
         Some((provider, _)) => {
-            println!("🎯 Default provider: {} ({})", provider.display_name, provider.name);
+            println!(
+                "🎯 Default provider: {} ({})",
+                provider.display_name, provider.name
+            );
         }
         None => {
             println!("⚠️  No configured providers found");
@@ -99,7 +226,8 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
 #[derive(Parser)]
 #[command(name = "chabeau")]
 #[command(about = "A terminal-based chat interface using OpenAI API")]
-#[command(long_about = "Chabeau is a full-screen terminal chat interface that connects to various AI APIs \
+#[command(
+    long_about = "Chabeau is a full-screen terminal chat interface that connects to various AI APIs \
 for real-time conversations. It supports streaming responses and provides a clean, \
 responsive interface with color-coded messages.\n\n\
 Authentication:\n\
@@ -117,14 +245,15 @@ Controls:\n\
   Backspace         Delete characters in the input field\n\n\
 Commands:\n\
   /log <filename>   Enable logging to specified file\n\
-  /log              Toggle logging pause/resume")]
+  /log              Toggle logging pause/resume"
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Model to use for chat
-    #[arg(short = 'm', long, default_value = "gpt-4o", global = true)]
-    model: String,
+    /// Model to use for chat, or list available models if no model specified
+    #[arg(short = 'm', long, global = true, value_name = "MODEL", num_args = 0..=1, default_missing_value = "")]
+    model: Option<String>,
 
     /// Enable logging to specified file
     #[arg(short = 'l', long, global = true)]
@@ -146,7 +275,6 @@ enum Commands {
     /// List available providers and their authentication status
     Providers,
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -170,15 +298,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         Commands::Chat => {
-            run_chat(args.model, args.log, args.provider).await
+            // Check if -m was provided without a model name (empty string) or not provided at all (None)
+            match args.model.as_deref() {
+                Some("") => {
+                    // -m was provided without a value, list available models
+                    list_models(args.provider).await
+                }
+                Some(model) => {
+                    // -m was provided with a value, use it for chat
+                    run_chat(model.to_string(), args.log, args.provider).await
+                }
+                None => {
+                    // -m was not provided, use default model for chat
+                    run_chat("gpt-4o".to_string(), args.log, args.provider).await
+                }
+            }
         }
-        Commands::Providers => {
-            list_providers().await
-        }
+        Commands::Providers => list_providers().await,
     }
 }
 
-async fn run_chat(model: String, log: Option<String>, provider: Option<String>) -> Result<(), Box<dyn Error>> {
+async fn run_chat(
+    model: String,
+    log: Option<String>,
+    provider: Option<String>,
+) -> Result<(), Box<dyn Error>> {
     // Create app with authentication
     let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider) {
         Ok(app) => app,
@@ -225,12 +369,25 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     match key.code {
-                        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             break Ok(());
                         }
-                        KeyCode::Char('r') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('r')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             // Retry the last bot response with debounce protection
-                            let (should_retry, api_messages, client, model, api_key, base_url, cancel_token, stream_id) = {
+                            let (
+                                should_retry,
+                                api_messages,
+                                client,
+                                model,
+                                api_key,
+                                base_url,
+                                cancel_token,
+                                stream_id,
+                            ) = {
                                 let mut app_guard = app.lock().await;
 
                                 // Check debounce at the event level to prevent any processing
@@ -241,9 +398,12 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                                 }
 
                                 let terminal_size = terminal.size().unwrap_or_default();
-                                let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                                let available_height =
+                                    terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
 
-                                if let Some(api_messages) = app_guard.prepare_retry(available_height, terminal_size.width) {
+                                if let Some(api_messages) =
+                                    app_guard.prepare_retry(available_height, terminal_size.width)
+                                {
                                     // Start new stream (this will cancel any existing stream)
                                     let (cancel_token, stream_id) = app_guard.start_new_stream();
 
@@ -258,7 +418,16 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                                         stream_id,
                                     )
                                 } else {
-                                    (false, Vec::new(), app_guard.client.clone(), String::new(), String::new(), String::new(), tokio_util::sync::CancellationToken::new(), 0)
+                                    (
+                                        false,
+                                        Vec::new(),
+                                        app_guard.client.clone(),
+                                        String::new(),
+                                        String::new(),
+                                        String::new(),
+                                        tokio_util::sync::CancellationToken::new(),
+                                        0,
+                                    )
                                 }
                             };
 
@@ -359,7 +528,16 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                             }
                         }
                         KeyCode::Enter => {
-                            let (should_send_to_api, api_messages, client, model, api_key, base_url, cancel_token, stream_id) = {
+                            let (
+                                should_send_to_api,
+                                api_messages,
+                                client,
+                                model,
+                                api_key,
+                                base_url,
+                                cancel_token,
+                                stream_id,
+                            ) = {
                                 let mut app_guard = app.lock().await;
                                 if app_guard.input.trim().is_empty() {
                                     continue;
@@ -374,8 +552,14 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                                         // Command was processed, don't send to API
                                         // Update scroll position to ensure latest messages are visible
                                         let terminal_size = terminal.size().unwrap_or_default();
-                                        let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                                        app_guard.update_scroll_position(available_height, terminal_size.width);
+                                        let available_height = terminal_size
+                                            .height
+                                            .saturating_sub(3)
+                                            .saturating_sub(1); // 3 for input area, 1 for title
+                                        app_guard.update_scroll_position(
+                                            available_height,
+                                            terminal_size.width,
+                                        );
                                         continue;
                                     }
                                     CommandResult::ProcessAsMessage(message) => {
@@ -383,13 +567,20 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                                         app_guard.auto_scroll = true;
 
                                         // Start new stream (this will cancel any existing stream)
-                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let (cancel_token, stream_id) =
+                                            app_guard.start_new_stream();
                                         let api_messages = app_guard.add_user_message(message);
 
                                         // Update scroll position to ensure latest messages are visible
                                         let terminal_size = terminal.size().unwrap_or_default();
-                                        let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                                        app_guard.update_scroll_position(available_height, terminal_size.width);
+                                        let available_height = terminal_size
+                                            .height
+                                            .saturating_sub(3)
+                                            .saturating_sub(1); // 3 for input area, 1 for title
+                                        app_guard.update_scroll_position(
+                                            available_height,
+                                            terminal_size.width,
+                                        );
 
                                         (
                                             true,
@@ -512,9 +703,12 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
                             let terminal_size = terminal.size().unwrap_or_default();
-                            let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height, terminal_size.width);
-                            app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
+                            let available_height =
+                                terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard
+                                .calculate_max_scroll_offset(available_height, terminal_size.width);
+                            app_guard.scroll_offset =
+                                (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
                         }
                         _ => {}
                     }
@@ -532,9 +726,12 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
                             let terminal_size = terminal.size().unwrap_or_default();
-                            let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
-                            let max_scroll = app_guard.calculate_max_scroll_offset(available_height, terminal_size.width);
-                            app_guard.scroll_offset = (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
+                            let available_height =
+                                terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                            let max_scroll = app_guard
+                                .calculate_max_scroll_offset(available_height, terminal_size.width);
+                            app_guard.scroll_offset =
+                                (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
                         }
                         _ => {}
                     }
@@ -576,10 +773,7 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result

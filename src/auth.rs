@@ -46,16 +46,25 @@ impl AuthManager {
     }
 
     pub fn find_provider_by_name(&self, name: &str) -> Option<&Provider> {
-        self.providers.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+        self.providers
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
-    pub fn store_token(&self, provider_name: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn store_token(
+        &self,
+        provider_name: &str,
+        token: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", provider_name)?;
         entry.set_password(token)?;
         Ok(())
     }
 
-    pub fn get_token(&self, provider_name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub fn get_token(
+        &self,
+        provider_name: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", provider_name)?;
         match entry.get_password() {
             Ok(token) => Ok(Some(token)),
@@ -64,7 +73,11 @@ impl AuthManager {
         }
     }
 
-    pub fn store_custom_provider(&self, name: &str, base_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn store_custom_provider(
+        &self,
+        name: &str,
+        base_url: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", &format!("custom_provider_{}", name))?;
         entry.set_password(base_url)?;
 
@@ -97,7 +110,10 @@ impl AuthManager {
         Ok(())
     }
 
-    pub fn get_custom_provider(&self, name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub fn get_custom_provider(
+        &self,
+        name: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", &format!("custom_provider_{}", name))?;
         match entry.get_password() {
             Ok(base_url) => Ok(Some(base_url)),
@@ -106,7 +122,9 @@ impl AuthManager {
         }
     }
 
-    pub fn list_custom_providers(&self) -> Result<Vec<(String, String, bool)>, Box<dyn std::error::Error>> {
+    pub fn list_custom_providers(
+        &self,
+    ) -> Result<Vec<(String, String, bool)>, Box<dyn std::error::Error>> {
         let list_entry = Entry::new("chabeau", "custom_provider_list")?;
         let provider_list = match list_entry.get_password() {
             Ok(list) => list,
@@ -140,7 +158,6 @@ impl AuthManager {
         Ok(result)
     }
 
-
     pub fn find_first_available_auth(&self) -> Option<(Provider, String)> {
         // Try built-in providers in order
         for provider in &self.providers {
@@ -160,8 +177,18 @@ impl AuthManager {
         println!("Available providers:");
         for (i, provider) in self.providers.iter().enumerate() {
             let has_token = self.get_token(&provider.name)?.is_some();
-            let status = if has_token { "✓ configured" } else { "not configured" };
-            println!("  {}. {} ({}) - {}", i + 1, provider.display_name, provider.name, status);
+            let status = if has_token {
+                "✓ configured"
+            } else {
+                "not configured"
+            };
+            println!(
+                "  {}. {} ({}) - {}",
+                i + 1,
+                provider.display_name,
+                provider.name,
+                status
+            );
         }
         println!("  {}. Custom provider", self.providers.len() + 1);
         println!();
@@ -193,7 +220,11 @@ impl AuthManager {
         Ok(())
     }
 
-    fn setup_provider_auth(&self, provider_name: &str, display_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn setup_provider_auth(
+        &self,
+        provider_name: &str,
+        display_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         println!();
         print!("Enter your {} API token: ", display_name);
         io::stdout().flush()?;
@@ -251,12 +282,18 @@ impl AuthManager {
         self.store_custom_provider(name, base_url)?;
         self.store_token(name, token)?;
 
-        println!("✓ Custom provider '{}' configured with URL: {}", name, base_url);
+        println!(
+            "✓ Custom provider '{}' configured with URL: {}",
+            name, base_url
+        );
 
         Ok(())
     }
 
-    pub fn get_auth_for_provider(&self, provider_name: &str) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+    pub fn get_auth_for_provider(
+        &self,
+        provider_name: &str,
+    ) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
         // First check if it's a built-in provider (case-insensitive)
         if let Some(provider) = self.find_provider_by_name(provider_name) {
             // Use the canonical provider name for token lookup
@@ -275,7 +312,10 @@ impl AuthManager {
         Ok(None)
     }
 
-    pub fn interactive_deauth(&self, provider: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn interactive_deauth(
+        &self,
+        provider: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(provider_name) = provider {
             // Provider specified via --provider flag - validate it exists first
             let has_auth = self.get_token(&provider_name)?.is_some();
@@ -286,7 +326,11 @@ impl AuthManager {
             }
 
             if !has_auth {
-                return Err(format!("Provider '{}' exists but has no authentication configured.", provider_name).into());
+                return Err(format!(
+                    "Provider '{}' exists but has no authentication configured.",
+                    provider_name
+                )
+                .into());
             }
 
             self.remove_provider_auth(&provider_name)?;
@@ -315,7 +359,11 @@ impl AuthManager {
         // Check built-in providers
         for provider in &self.providers {
             if self.get_token(&provider.name)?.is_some() {
-                configured_providers.push((provider.name.clone(), provider.display_name.clone(), false));
+                configured_providers.push((
+                    provider.name.clone(),
+                    provider.display_name.clone(),
+                    false,
+                ));
             }
         }
 
@@ -346,7 +394,10 @@ impl AuthManager {
         println!("  {}. Cancel", configured_providers.len() + 1);
         println!();
 
-        print!("Select a provider to remove (1-{}): ", configured_providers.len() + 1);
+        print!(
+            "Select a provider to remove (1-{}): ",
+            configured_providers.len() + 1
+        );
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -365,7 +416,10 @@ impl AuthManager {
         let (provider_name, display_name, is_custom) = &configured_providers[choice - 1];
 
         // Confirm removal
-        print!("Are you sure you want to remove authentication for {}? (y/N): ", display_name);
+        print!(
+            "Are you sure you want to remove authentication for {}? (y/N): ",
+            display_name
+        );
         io::stdout().flush()?;
 
         let mut confirm = String::new();
@@ -400,7 +454,10 @@ impl AuthManager {
         }
     }
 
-    fn remove_custom_provider(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn remove_custom_provider(
+        &self,
+        provider_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Remove the custom provider URL
         let entry = Entry::new("chabeau", &format!("custom_provider_{}", provider_name))?;
         let _ = entry.delete_credential(); // Ignore errors
@@ -410,7 +467,10 @@ impl AuthManager {
         Ok(())
     }
 
-    fn remove_from_custom_provider_list(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn remove_from_custom_provider_list(
+        &self,
+        name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let list_entry = Entry::new("chabeau", "custom_provider_list")?;
         let current_list = match list_entry.get_password() {
             Ok(list) => list,
@@ -423,7 +483,10 @@ impl AuthManager {
         }
 
         let providers: Vec<&str> = current_list.split(',').collect();
-        let filtered_providers: Vec<&str> = providers.into_iter().filter(|&p| p.trim() != name).collect();
+        let filtered_providers: Vec<&str> = providers
+            .into_iter()
+            .filter(|&p| p.trim() != name)
+            .collect();
 
         if filtered_providers.is_empty() {
             // Remove the entire list entry if empty
@@ -435,5 +498,4 @@ impl AuthManager {
 
         Ok(())
     }
-
 }

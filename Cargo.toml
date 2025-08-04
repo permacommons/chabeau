@@ -14,3 +14,4 @@ clap = { version = "4.0", features = ["derive"] }
 futures-util = "0.3"
 tokio-util = "0.7.15"
 keyring = { version = "3.0", features = ["sync-secret-service"] }
+chrono = { version = "0.4", features = ["serde"] }

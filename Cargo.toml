@@ -2,6 +2,14 @@
 name = "chabeau"
 version = "0.1.0"
 edition = "2021"
+description = "A full-screen terminal chat interface that connects to various AI APIs for real-time conversations"
+license = "CC0-1.0"
+repository = "https://github.com/permacommons/chabeau"
+homepage = "https://github.com/permacommons/chabeau"
+readme = "README.md"
+keywords = ["chat", "ai", "terminal", "openai", "cli"]
+categories = ["command-line-utilities", "api-bindings"]
+authors = ["Permacommons <info@permacommons.org>"]
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }

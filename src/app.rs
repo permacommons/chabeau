@@ -320,7 +320,82 @@ Please either:
         (token, self.current_stream_id)
     }
 
-    pub fn prepare_retry(&mut self, _available_height: u16) -> Option<Vec<crate::api::ChatMessage>> {
+    pub fn calculate_scroll_to_message(&self, message_index: usize, terminal_width: u16, available_height: u16) -> u16 {
+        // Build lines up to the specified message index
+        let mut lines = Vec::new();
+
+        for (i, msg) in self.messages.iter().enumerate() {
+            if i > message_index {
+                break;
+            }
+
+            if msg.role == "user" {
+                // User messages: cyan with "You:" prefix and indentation
+                lines.push(Line::from(vec![
+                    Span::styled("You: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(&msg.content, Style::default().fg(Color::Cyan)),
+                ]));
+                lines.push(Line::from(""));  // Empty line for spacing
+            } else if msg.role == "system" {
+                // System messages: gray/dim color
+                lines.push(Line::from(Span::styled(&msg.content, Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(""));  // Empty line for spacing
+            } else if !msg.content.is_empty() {
+                // Assistant messages: no prefix, just content in white/default color
+                // Split content into lines for proper wrapping
+                for content_line in msg.content.lines() {
+                    if content_line.trim().is_empty() {
+                        lines.push(Line::from(""));
+                    } else {
+                        lines.push(Line::from(Span::styled(content_line, Style::default().fg(Color::White))));
+                    }
+                }
+                lines.push(Line::from(""));  // Empty line for spacing
+            }
+        }
+
+        // Calculate wrapped line count for these lines
+        let mut wrapped_lines = 0u16;
+        for line in &lines {
+            let line_text = line.to_string();
+            if line_text.is_empty() {
+                wrapped_lines = wrapped_lines.saturating_add(1);
+            } else {
+                let trimmed_text = line_text.trim();
+                if trimmed_text.is_empty() {
+                    wrapped_lines = wrapped_lines.saturating_add(1);
+                } else if terminal_width == 0 {
+                    wrapped_lines = wrapped_lines.saturating_add(1);
+                } else {
+                    let mut current_line_len = 0;
+                    let mut line_count = 1u16;
+
+                    for word in trimmed_text.split_whitespace() {
+                        let word_len = word.chars().count();
+                        if current_line_len > 0 && current_line_len + 1 + word_len > terminal_width as usize {
+                            line_count = line_count.saturating_add(1);
+                            current_line_len = word_len;
+                        } else {
+                            if current_line_len > 0 {
+                                current_line_len += 1;
+                            }
+                            current_line_len += word_len;
+                        }
+                    }
+                    wrapped_lines = wrapped_lines.saturating_add(line_count);
+                }
+            }
+        }
+
+        // Calculate scroll offset to show the end of this message
+        if wrapped_lines > available_height {
+            wrapped_lines.saturating_sub(available_height)
+        } else {
+            0
+        }
+    }
+
+    pub fn prepare_retry(&mut self, available_height: u16, terminal_width: u16) -> Option<Vec<crate::api::ChatMessage>> {
         if !self.can_retry() {
             return None;
         }
@@ -370,9 +445,16 @@ Please either:
             }
         }
 
-        // Calculate scroll position using wrapped lines
-        // Note: We don't have terminal width here, so we'll let the UI handle scroll bounds
-        self.scroll_offset = 0;
+        // Set scroll position to show the user message that corresponds to the retry
+        if let Some(retry_index) = self.retrying_message_index {
+            // Find the user message that precedes this assistant message
+            if retry_index > 0 {
+                let user_message_index = retry_index - 1;
+                self.scroll_offset = self.calculate_scroll_to_message(user_message_index, terminal_width, available_height);
+            } else {
+                self.scroll_offset = 0;
+            }
+        }
 
         // Re-enable auto-scroll for the new response
         self.auto_scroll = true;

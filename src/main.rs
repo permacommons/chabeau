@@ -239,10 +239,10 @@ async fn run_chat(model: String, log: Option<String>, provider: Option<String>) 
                                     continue;
                                 }
 
-                                let terminal_height = terminal.size().unwrap_or_default().height;
-                                let available_height = terminal_height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
+                                let terminal_size = terminal.size().unwrap_or_default();
+                                let available_height = terminal_size.height.saturating_sub(3).saturating_sub(1); // 3 for input area, 1 for title
 
-                                if let Some(api_messages) = app_guard.prepare_retry(available_height) {
+                                if let Some(api_messages) = app_guard.prepare_retry(available_height, terminal_size.width) {
                                     // Start new stream (this will cancel any existing stream)
                                     let (cancel_token, stream_id) = app_guard.start_new_stream();
 

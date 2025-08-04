@@ -1,18 +1,17 @@
 # Chabeau - Terminal Chat Interface
 
+**NOTE:** This is pre-alpha software. It has only been tested on Linux.
+
 A full-screen terminal chat interface that connects to various AI APIs for real-time conversations with secure credential management.
 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- **Secure authentication** using system keyring for API credentials
-- **Multiple provider support**: OpenAI, OpenRouter, Poe, and custom providers
-- Configurable models (defaults to gpt-4o)
-- Provider selection with automatic fallback
-- Clean, responsive interface with color-coded messages
-- Keyboard shortcuts for easy navigation
-- **Chat logging functionality** - Log conversations to files with pause/resume capability
-- Modular code architecture for maintainability
+- Configure as many OpenAI-compatible providers as you like (e.g., OpenAI API, Poe, OpenRouter)
+- API keys are securely stored in the system keyring
+- Message retry
+- External editor support
+- Log conversations to files with pause/resume capability
 
 ## Prerequisites
 
@@ -21,9 +20,9 @@ A full-screen terminal chat interface that connects to various AI APIs for real-
 
 ## Installation
 
-Install directly from the repository:
+Install directly from crates.io:
 ```bash
-cargo install --git https://github.com/your-username/chabeau
+cargo install chabeau
 ```
 
 Or clone and install locally:
@@ -73,17 +72,17 @@ chabeau auth
 
 **Remove authentication** for providers:
 ```bash
-chabeau deauth                    # Interactive menu to select provider
-chabeau deauth --provider openai  # Remove specific provider
+chabeau deauth                     # Interactive menu to select provider
+chabeau deauth --provider openai   # Remove specific provider
 chabeau deauth --provider mycustom # Remove custom provider (completely)
 ```
 
 **Check provider status**:
 ```bash
-chabeau -p                        # List all providers and their auth status
+chabeau -p                         # List all providers and their auth status
 ```
 
-Note: When removing custom providers with `deauth`, both the authentication token and the provider definition are completely removed from the system.
+Note: When removing custom providers with `deauth`, both the authentication token and the provider definition are completely removed from the system keyring.
 
 ### Basic Usage
 
@@ -101,10 +100,10 @@ chabeau chat
 
 Use a specific provider:
 ```bash
-chabeau chat --provider openai
-chabeau chat --provider openrouter
-chabeau chat --provider poe
-chabeau chat --provider mycustom  # If you set up a custom provider
+chabeau --provider openai
+chabeau --provider openrouter
+chabeau --provider poe
+chabeau --provider mycustom  # If you set up a custom provider
 ```
 
 If no provider is specified, Chabeau will automatically use the first available authentication in this order:
@@ -118,17 +117,17 @@ If no provider is specified, Chabeau will automatically use the first available 
 
 Specify a model:
 ```bash
-chabeau chat --model gpt-3.5-turbo
+chabeau --model gpt-4o
 ```
 
 Enable logging from startup:
 ```bash
-chabeau chat --log chat.log
+chabeau --log chat.log
 ```
 
 Combine options:
 ```bash
-chabeau chat --provider openrouter --model gpt-4 --log conversation.log
+chabeau --provider openrouter --model gpt-4o --log conversation.log
 ```
 
 ### Runtime Logging Control
@@ -284,34 +283,6 @@ cargo test --release
 cargo test --quiet
 ```
 
-### Test Coverage
-
-**Generate test coverage report** (requires `cargo-tarpaulin`):
-```bash
-# Install cargo-tarpaulin if not already installed
-cargo install cargo-tarpaulin
-
-# Generate HTML coverage report
-cargo tarpaulin --out Html --output-dir coverage
-
-# Open the report
-open coverage/tarpaulin-report.html  # macOS
-xdg-open coverage/tarpaulin-report.html  # Linux
-```
-
-### Watch Mode
-
-**Run tests automatically when files change** (requires `cargo-watch`):
-```bash
-# Install cargo-watch if not already installed
-cargo install cargo-watch
-
-# Watch for changes and run tests
-cargo watch -x test
-
-# Watch and run only scroll tests
-cargo watch -x "test scroll::"
-```
 
 ### Test Organization
 

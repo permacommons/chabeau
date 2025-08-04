@@ -78,7 +78,7 @@ impl AuthManager {
         name: &str,
         base_url: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", &format!("custom_provider_{}", name))?;
+        let entry = Entry::new("chabeau", &format!("custom_provider_{name}"))?;
         entry.set_password(base_url)?;
 
         // Also add to the list of custom providers
@@ -114,7 +114,7 @@ impl AuthManager {
         &self,
         name: &str,
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", &format!("custom_provider_{}", name))?;
+        let entry = Entry::new("chabeau", &format!("custom_provider_{name}"))?;
         match entry.get_password() {
             Ok(base_url) => Ok(Some(base_url)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -226,7 +226,7 @@ impl AuthManager {
         display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!();
-        print!("Enter your {} API token: ", display_name);
+        print!("Enter your {display_name} API token: ");
         io::stdout().flush()?;
 
         let mut token = String::new();
@@ -238,7 +238,7 @@ impl AuthManager {
         }
 
         self.store_token(provider_name, token)?;
-        println!("✓ Token stored securely for {}", display_name);
+        println!("✓ Token stored securely for {display_name}");
 
         Ok(())
     }
@@ -267,7 +267,7 @@ impl AuthManager {
             return Err("Base URL cannot be empty".into());
         }
 
-        print!("Enter your API token for {}: ", name);
+        print!("Enter your API token for {name}: ");
         io::stdout().flush()?;
 
         let mut token = String::new();
@@ -283,8 +283,7 @@ impl AuthManager {
         self.store_token(name, token)?;
 
         println!(
-            "✓ Custom provider '{}' configured with URL: {}",
-            name, base_url
+            "✓ Custom provider '{name}' configured with URL: {base_url}"
         );
 
         Ok(())
@@ -322,13 +321,12 @@ impl AuthManager {
             let is_custom = self.get_custom_provider(&provider_name)?.is_some();
 
             if !has_auth && !is_custom {
-                return Err(format!("Provider '{}' is not configured. Use 'chabeau providers' to see configured providers.", provider_name).into());
+                return Err(format!("Provider '{provider_name}' is not configured. Use 'chabeau providers' to see configured providers.").into());
             }
 
             if !has_auth {
                 return Err(format!(
-                    "Provider '{}' exists but has no authentication configured.",
-                    provider_name
+                    "Provider '{provider_name}' exists but has no authentication configured."
                 )
                 .into());
             }
@@ -340,7 +338,7 @@ impl AuthManager {
                 self.remove_custom_provider(&provider_name)?;
             }
 
-            println!("✅ Authentication removed for {}", provider_name);
+            println!("✅ Authentication removed for {provider_name}");
         } else {
             // Interactive mode - show menu of configured providers
             self.interactive_deauth_menu()?;
@@ -417,8 +415,7 @@ impl AuthManager {
 
         // Confirm removal
         print!(
-            "Are you sure you want to remove authentication for {}? (y/N): ",
-            display_name
+            "Are you sure you want to remove authentication for {display_name}? (y/N): "
         );
         io::stdout().flush()?;
 
@@ -438,7 +435,7 @@ impl AuthManager {
             self.remove_custom_provider(provider_name)?;
         }
 
-        println!("✅ Authentication removed for {}", display_name);
+        println!("✅ Authentication removed for {display_name}");
         Ok(())
     }
 
@@ -459,7 +456,7 @@ impl AuthManager {
         provider_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Remove the custom provider URL
-        let entry = Entry::new("chabeau", &format!("custom_provider_{}", provider_name))?;
+        let entry = Entry::new("chabeau", &format!("custom_provider_{provider_name}"))?;
         let _ = entry.delete_credential(); // Ignore errors
 
         // Remove from the custom provider list

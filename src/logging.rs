@@ -30,7 +30,7 @@ impl LoggingState {
         self.file_path = Some(path.clone());
         self.is_active = true;
 
-        Ok(format!("Logging enabled to: {}", path))
+        Ok(format!("Logging enabled to: {path}"))
     }
 
     pub fn toggle_logging(&mut self) -> Result<String, Box<dyn std::error::Error>> {
@@ -38,9 +38,9 @@ impl LoggingState {
             Some(path) => {
                 self.is_active = !self.is_active;
                 if self.is_active {
-                    Ok(format!("Logging resumed to: {}", path))
+                    Ok(format!("Logging resumed to: {path}"))
                 } else {
-                    Ok(format!("Logging paused (file: {})", path))
+                    Ok(format!("Logging paused (file: {path})"))
                 }
             }
             None => {
@@ -62,7 +62,7 @@ impl LoggingState {
 
         // Write each line of content, preserving the exact formatting
         for line in content.lines() {
-            writeln!(file, "{}", line)?;
+            writeln!(file, "{line}")?;
         }
 
         // Add an empty line after each message for spacing (matching screen display)
@@ -114,19 +114,19 @@ impl LoggingState {
             if msg.role == "user" {
                 // Write user messages with "You:" prefix
                 for line in format!("You: {}", msg.content).lines() {
-                    writeln!(file, "{}", line)?;
+                    writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
             } else if msg.role == "system" {
                 // Write system messages as-is
                 for line in msg.content.lines() {
-                    writeln!(file, "{}", line)?;
+                    writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
             } else if msg.role == "assistant" && !msg.content.is_empty() {
                 // Write assistant messages as-is (no prefix)
                 for line in msg.content.lines() {
-                    writeln!(file, "{}", line)?;
+                    writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
             }

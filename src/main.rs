@@ -33,7 +33,7 @@ async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
         if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
             (api_key, base_url, provider_name)
         } else {
-            return Err(format!("No authentication found for provider '{}'. Run 'chabeau auth' to set up authentication.", provider_name).into());
+            return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
         }
     } else {
         // Try to find any available authentication
@@ -58,15 +58,15 @@ Please either:
         }
     };
 
-    println!("🤖 Available Models for {}", provider_name);
+    println!("🤖 Available Models for {provider_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
     let client = reqwest::Client::new();
 
     match client
-        .get(&format!("{}/models", base_url))
-        .header("Authorization", format!("Bearer {}", api_key))
+        .get(format!("{base_url}/models"))
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .send()
         .await
@@ -79,7 +79,7 @@ Please either:
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
                 return Err(
-                    format!("API request failed with status {}: {}", status, error_text).into(),
+                    format!("API request failed with status {status}: {error_text}").into(),
                 );
             }
 
@@ -110,7 +110,7 @@ Please either:
                             println!("  • {}", model.id);
                             if let Some(owned_by) = &model.owned_by {
                                 if !owned_by.is_empty() && owned_by != "system" {
-                                    println!("    Owner: {}", owned_by);
+                                    println!("    Owner: {owned_by}");
                                 }
                             }
                             if let Some(created) = model.created {
@@ -140,12 +140,12 @@ Please either:
                     }
                 }
                 Err(e) => {
-                    return Err(format!("Failed to parse models response: {}", e).into());
+                    return Err(format!("Failed to parse models response: {e}").into());
                 }
             }
         }
         Err(e) => {
-            return Err(format!("Failed to fetch models: {}", e).into());
+            return Err(format!("Failed to fetch models: {e}").into());
         }
     }
 
@@ -172,8 +172,8 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
             Ok(None) => "❌ not configured",
             Err(_) => "❓ error checking",
         };
-        println!("  {} ({}) - {}", display_name, name, status);
-        println!("    URL: {}", url);
+        println!("  {display_name} ({name}) - {status}");
+        println!("    URL: {url}");
         println!();
     }
 
@@ -190,8 +190,8 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
                     } else {
                         "❌ not configured"
                     };
-                    println!("  {} - {}", name, status);
-                    println!("    URL: {}", url);
+                    println!("  {name} - {status}");
+                    println!("    URL: {url}");
                 }
             }
         }
@@ -282,7 +282,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Commands::Auth => {
             let auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_auth() {
-                eprintln!("❌ Authentication failed: {}", e);
+                eprintln!("❌ Authentication failed: {e}");
                 std::process::exit(1);
             }
             return Ok(());
@@ -290,7 +290,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Commands::Deauth => {
             let auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_deauth(args.provider) {
-                eprintln!("❌ Deauthentication failed: {}", e);
+                eprintln!("❌ Deauthentication failed: {e}");
                 std::process::exit(1);
             }
             return Ok(());
@@ -342,7 +342,7 @@ async fn run_chat(
             // Check if this is an authentication error
             let error_msg = e.to_string();
             if error_msg.contains("No authentication") || error_msg.contains("OPENAI_API_KEY") {
-                eprintln!("{}", error_msg);
+                eprintln!("{error_msg}");
                 eprintln!();
                 eprintln!("💡 Quick fixes:");
                 eprintln!("  • chabeau auth                    # Interactive setup");
@@ -350,7 +350,7 @@ async fn run_chat(
                 eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
                 std::process::exit(2); // Authentication error
             } else {
-                eprintln!("❌ Error: {}", e);
+                eprintln!("❌ Error: {e}");
                 std::process::exit(1); // General error
             }
         }
@@ -460,8 +460,8 @@ async fn run_chat(
                                 tokio::select! {
                                     _ = async {
                                         match client
-                                            .post(&format!("{}/chat/completions", base_url))
-                                            .header("Authorization", format!("Bearer {}", api_key))
+                                            .post(format!("{base_url}/chat/completions"))
+                                            .header("Authorization", format!("Bearer {api_key}"))
                                             .header("Content-Type", "application/json")
                                             .json(&request)
                                             .send()
@@ -470,7 +470,7 @@ async fn run_chat(
                                             Ok(response) => {
                                                 if !response.status().is_success() {
                                                     if let Ok(error_text) = response.text().await {
-                                                        eprintln!("API request failed: {}", error_text);
+                                                        eprintln!("API request failed: {error_text}");
                                                     }
                                                     return;
                                                 }
@@ -493,8 +493,7 @@ async fn run_chat(
                                                             let line = buffer[..newline_pos].trim().to_string();
                                                             buffer.drain(..=newline_pos);
 
-                                                            if line.starts_with("data: ") {
-                                                                let data = &line[6..];
+                                                            if let Some(data) = line.strip_prefix("data: ") {
                                                                 if data == "[DONE]" {
                                                                     // Signal end of streaming
                                                                     let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
@@ -510,7 +509,7 @@ async fn run_chat(
                                                                         }
                                                                     }
                                                                     Err(e) => {
-                                                                        eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
+                                                                        eprintln!("Failed to parse JSON: {e} - Data: {data}");
                                                                     }
                                                                 }
                                                             }
@@ -519,7 +518,7 @@ async fn run_chat(
                                                 }
                                             }
                                             Err(e) => {
-                                                eprintln!("Error sending message: {}", e);
+                                                eprintln!("Error sending message: {e}");
                                             }
                                         }
                                     } => {
@@ -624,8 +623,8 @@ async fn run_chat(
                                 tokio::select! {
                                     _ = async {
                                         match client
-                                            .post(&format!("{}/chat/completions", base_url))
-                                            .header("Authorization", format!("Bearer {}", api_key))
+                                            .post(format!("{base_url}/chat/completions"))
+                                            .header("Authorization", format!("Bearer {api_key}"))
                                             .header("Content-Type", "application/json")
                                             .json(&request)
                                             .send()
@@ -634,7 +633,7 @@ async fn run_chat(
                                             Ok(response) => {
                                                 if !response.status().is_success() {
                                                     if let Ok(error_text) = response.text().await {
-                                                        eprintln!("API request failed: {}", error_text);
+                                                        eprintln!("API request failed: {error_text}");
                                                     }
                                                     return;
                                                 }
@@ -657,8 +656,7 @@ async fn run_chat(
                                                             let line = buffer[..newline_pos].trim().to_string();
                                                             buffer.drain(..=newline_pos);
 
-                                                            if line.starts_with("data: ") {
-                                                                let data = &line[6..];
+                                                            if let Some(data) = line.strip_prefix("data: ") {
                                                                 if data == "[DONE]" {
                                                                     // Signal end of streaming
                                                                     let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
@@ -674,7 +672,7 @@ async fn run_chat(
                                                                         }
                                                                     }
                                                                     Err(e) => {
-                                                                        eprintln!("Failed to parse JSON: {} - Data: {}", e, data);
+                                                                        eprintln!("Failed to parse JSON: {e} - Data: {data}");
                                                                     }
                                                                 }
                                                             }
@@ -683,7 +681,7 @@ async fn run_chat(
                                                 }
                                             }
                                             Err(e) => {
-                                                eprintln!("Error sending message: {}", e);
+                                                eprintln!("Error sending message: {e}");
                                             }
                                         }
                                     } => {

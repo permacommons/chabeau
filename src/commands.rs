@@ -20,7 +20,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.add_system_message(format!("Error: {}", e));
+                        app.add_system_message(format!("Error: {e}"));
                         CommandResult::Continue
                     }
                 }
@@ -34,7 +34,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.add_system_message(format!("Error setting log file: {}", e));
+                        app.add_system_message(format!("Error setting log file: {e}"));
                         CommandResult::Continue
                     }
                 }

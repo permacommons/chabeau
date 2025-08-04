@@ -297,8 +297,8 @@ mod tests {
         let mut messages = VecDeque::new();
         // Create many messages to force scrolling
         for i in 0..10 {
-            messages.push_back(create_test_message("user", &format!("Message {}", i)));
-            messages.push_back(create_test_message("assistant", &format!("Response {}", i)));
+            messages.push_back(create_test_message("user", &format!("Message {i}")));
+            messages.push_back(create_test_message("assistant", &format!("Response {i}")));
         }
 
         let scroll = ScrollCalculator::calculate_scroll_to_bottom(&messages, 80, 5);

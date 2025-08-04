@@ -42,7 +42,7 @@ impl App {
             if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
                 (api_key, base_url, provider_name)
             } else {
-                return Err(format!("No authentication found for provider '{}'. Run 'chabeau auth' to set up authentication.", provider_name).into());
+                return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
             }
         } else {
             // Try to find any available authentication
@@ -69,11 +69,11 @@ Please either:
 
         // Print configuration info
         eprintln!("🚀 Starting Chabeau - Terminal Chat Interface");
-        eprintln!("🔐 Provider: {}", provider_name);
-        eprintln!("📡 Using model: {}", model);
-        eprintln!("🌐 API endpoint: {}", base_url);
+        eprintln!("🔐 Provider: {provider_name}");
+        eprintln!("📡 Using model: {model}");
+        eprintln!("🌐 API endpoint: {base_url}");
         if let Some(ref log_path) = log_file {
-            eprintln!("📝 Logging to: {}", log_path);
+            eprintln!("📝 Logging to: {log_path}");
         }
         eprintln!("💡 Press Ctrl+C to quit, Enter to send messages");
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -127,8 +127,8 @@ Please either:
         };
 
         // Log the user message if logging is active
-        if let Err(e) = self.logging.log_message(&format!("You: {}", content)) {
-            eprintln!("Failed to log message: {}", e);
+        if let Err(e) = self.logging.log_message(&format!("You: {content}")) {
+            eprintln!("Failed to log message: {e}");
         }
 
         self.messages.push_back(user_message);
@@ -192,7 +192,7 @@ Please either:
         // Log the complete assistant response if logging is active
         if !self.current_response.is_empty() {
             if let Err(e) = self.logging.log_message(&self.current_response) {
-                eprintln!("Failed to log response: {}", e);
+                eprintln!("Failed to log response: {e}");
             }
         }
 
@@ -322,7 +322,7 @@ Please either:
                     .logging
                     .rewrite_log_without_last_response(&self.messages)
                 {
-                    eprintln!("Failed to rewrite log file: {}", e);
+                    eprintln!("Failed to rewrite log file: {e}");
                 }
             } else {
                 return None;

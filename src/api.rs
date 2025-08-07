@@ -32,7 +32,9 @@ pub struct ChatResponse {
 pub struct ModelInfo {
     pub id: String,
     pub created: Option<u64>,
+    pub created_at: Option<String>,
     pub owned_by: Option<String>,
+    pub display_name: Option<String>,
 }
 
 #[derive(Deserialize)]

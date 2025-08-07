@@ -40,6 +40,11 @@ impl AuthManager {
                 "https://api.poe.com/v1".to_string(),
                 "Poe".to_string(),
             ),
+            Provider::new(
+                "anthropic".to_string(),
+                "https://api.anthropic.com/v1".to_string(),
+                "Anthropic".to_string(),
+            ),
         ];
 
         Self { providers }

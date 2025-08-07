@@ -13,7 +13,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, custom)
+- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, custom)
 - Secure API key storage in system keyring
 - Message retry and external editor support
 - Conversation logging with pause/resume
@@ -27,7 +27,7 @@ cargo install chabeau
 
 ### Setup Authentication
 ```bash
-chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, or custom providers
+chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, or custom providers
 ```
 
 ### Start Chatting

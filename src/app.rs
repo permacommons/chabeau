@@ -112,7 +112,12 @@ Please either:
         eprintln!("🚀 Starting Chabeau - Terminal Chat Interface");
         eprintln!("🔐 Provider: {provider_name}");
         eprintln!("📡 Using model: {model}");
-        eprintln!("🌐 API endpoint: {base_url}");
+
+        // Note: We use the OpenAI API format for all providers including Anthropic
+        // This is known to work well with Anthropic's models
+        let api_endpoint = format!("{base_url}/chat/completions");
+        eprintln!("🌐 API endpoint: {api_endpoint}");
+
         if let Some(ref log_path) = log_file {
             eprintln!("📝 Logging to: {log_path}");
         }

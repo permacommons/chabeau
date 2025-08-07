@@ -68,13 +68,20 @@ Please either:
 
     let client = reqwest::Client::new();
 
-    match client
+    let mut request = client
         .get(format!("{base_url}/models"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .send()
-        .await
-    {
+        .header("Content-Type", "application/json");
+
+    // Handle provider-specific authentication headers
+    if provider_name.eq_ignore_ascii_case("anthropic") {
+        request = request
+            .header("x-api-key", &api_key)
+            .header("anthropic-version", "2023-06-01");
+    } else {
+        request = request.header("Authorization", format!("Bearer {api_key}"));
+    }
+
+    match request.send().await {
         Ok(response) => {
             if !response.status().is_success() {
                 let status = response.status();
@@ -102,21 +109,41 @@ Please either:
                         let mut models = models_response.data;
                         models.sort_by(|a, b| {
                             // First sort by creation date (newest first)
-                            match (a.created, b.created) {
-                                (Some(a_created), Some(b_created)) => b_created.cmp(&a_created),
-                                (Some(_), None) => std::cmp::Ordering::Less, // Models with dates come first
-                                (None, Some(_)) => std::cmp::Ordering::Greater, // Models without dates come last
-                                (None, None) => a.id.cmp(&b.id), // Fall back to ID sorting
+                            // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
+                            match (&a.created, &b.created, &a.created_at, &b.created_at) {
+                                // Both have created (OpenAI-style)
+                                (Some(a_created), Some(b_created), _, _) => b_created.cmp(a_created),
+                                // Only a has created
+                                (Some(_), None, _, _) => std::cmp::Ordering::Less,
+                                // Only b has created
+                                (None, Some(_), _, _) => std::cmp::Ordering::Greater,
+                                // Neither has created, check created_at (Anthropic-style)
+                                (None, None, Some(a_created_at), Some(b_created_at)) => {
+                                    // For Anthropic, we want newest first, so we reverse the comparison
+                                    b_created_at.cmp(a_created_at)
+                                }
+                                // Only a has created_at
+                                (None, None, Some(_), None) => std::cmp::Ordering::Less,
+                                // Only b has created_at
+                                (None, None, None, Some(_)) => std::cmp::Ordering::Greater,
+                                // Neither has any creation date, fall back to ID sorting
+                                (None, None, None, None) => a.id.cmp(&b.id),
                             }
                         });
 
                         for model in models {
                             println!("  • {}", model.id);
+                            if let Some(display_name) = &model.display_name {
+                                if !display_name.is_empty() && display_name != &model.id {
+                                    println!("    Name: {display_name}");
+                                }
+                            }
                             if let Some(owned_by) = &model.owned_by {
                                 if !owned_by.is_empty() && owned_by != "system" {
                                     println!("    Owner: {owned_by}");
                                 }
                             }
+                            // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
                             if let Some(created) = model.created {
                                 if created > 0 {
                                     // Convert Unix timestamp to human-readable date
@@ -137,6 +164,10 @@ Please either:
                                             dt.format("%Y-%m-%d %H:%M:%S UTC")
                                         );
                                     }
+                                }
+                            } else if let Some(created_at) = &model.created_at {
+                                if !created_at.is_empty() {
+                                    println!("    Created: {created_at}");
                                 }
                             }
                             println!();
@@ -169,6 +200,7 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
         ("openai", "OpenAI", "https://api.openai.com/v1"),
         ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
         ("poe", "Poe", "https://api.poe.com/v1"),
+        ("anthropic", "Anthropic", "https://api.anthropic.com/v1"),
     ];
 
     for (name, display_name, url) in builtin_providers {
@@ -241,7 +273,7 @@ for real-time conversations. It supports streaming responses and provides a clea
 responsive interface with color-coded messages.\n\n\
 Authentication:\n\
   Use 'chabeau auth' to set up API credentials securely in your system keyring.\n\
-  Supports OpenAI, OpenRouter, Poe, and custom providers.\n\n\
+  Supports OpenAI, OpenRouter, Poe, Anthropic, and custom providers.\n\n\
 Environment Variables (fallback if no auth configured):\n\
   OPENAI_API_KEY    Your OpenAI API key\n\
   OPENAI_BASE_URL   Custom API base URL (optional, defaults to https://api.openai.com/v1)\n\n\
@@ -556,25 +588,25 @@ async fn run_chat(
                                         )
                                     };
 
-                                    // Send the message to API
-                                    let tx_clone = tx.clone();
-                                    tokio::spawn(async move {
-                                        let request = ChatRequest {
-                                            model,
-                                            messages: api_messages,
-                                            stream: true,
-                                        };
+                                        // Send the message to API
+                                        let tx_clone = tx.clone();
+                                        tokio::spawn(async move {
+                                            let request = ChatRequest {
+                                                model,
+                                                messages: api_messages,
+                                                stream: true,
+                                            };
 
-                                        // Use tokio::select! to race between the HTTP request and cancellation
-                                        tokio::select! {
-                                            _ = async {
-                                                match client
-                                                    .post(format!("{base_url}/chat/completions"))
-                                                    .header("Authorization", format!("Bearer {api_key}"))
-                                                    .header("Content-Type", "application/json")
-                                                    .json(&request)
-                                                    .send()
-                                                    .await
+                                            // Use tokio::select! to race between the HTTP request and cancellation
+                                            tokio::select! {
+                                                _ = async {
+                                                    match client
+                                                        .post(format!("{base_url}/chat/completions"))
+                                                        .header("Authorization", format!("Bearer {api_key}"))
+                                                        .header("Content-Type", "application/json")
+                                                        .json(&request)
+                                                        .send()
+                                                        .await
                                                 {
                                                     Ok(response) => {
                                                         if !response.status().is_success() {
@@ -593,8 +625,8 @@ async fn run_chat(
                                                                 return;
                                                             }
 
-                                                            if let Ok(chunk) = chunk {
-                                                                let chunk_str = String::from_utf8_lossy(&chunk);
+                                                            if let Ok(chunk_bytes) = chunk {
+                                                                let chunk_str = String::from_utf8_lossy(&chunk_bytes);
                                                                 buffer.push_str(&chunk_str);
 
                                                                 // Process complete lines from buffer
@@ -699,16 +731,16 @@ async fn run_chat(
                                     // Start new stream (this will cancel any existing stream)
                                     let (cancel_token, stream_id) = app_guard.start_new_stream();
 
-                                    (
-                                        true,
-                                        api_messages,
-                                        app_guard.client.clone(),
-                                        app_guard.model.clone(),
-                                        app_guard.api_key.clone(),
-                                        app_guard.base_url.clone(),
-                                        cancel_token,
-                                        stream_id,
-                                    )
+                                        (
+                                            true,
+                                            api_messages,
+                                            app_guard.client.clone(),
+                                            app_guard.model.clone(),
+                                            app_guard.api_key.clone(),
+                                            app_guard.base_url.clone(),
+                                            cancel_token,
+                                            stream_id,
+                                        )
                                 } else {
                                     (
                                         false,
@@ -736,16 +768,16 @@ async fn run_chat(
                                     stream: true,
                                 };
 
-                                // Use tokio::select! to race between the HTTP request and cancellation
-                                tokio::select! {
-                                    _ = async {
-                                        match client
-                                            .post(format!("{base_url}/chat/completions"))
-                                            .header("Authorization", format!("Bearer {api_key}"))
-                                            .header("Content-Type", "application/json")
-                                            .json(&request)
-                                            .send()
-                                            .await
+                                        // Use tokio::select! to race between the HTTP request and cancellation
+                                        tokio::select! {
+                                            _ = async {
+                                                match client
+                                                    .post(format!("{base_url}/chat/completions"))
+                                                    .header("Authorization", format!("Bearer {api_key}"))
+                                                    .header("Content-Type", "application/json")
+                                                    .json(&request)
+                                                    .send()
+                                                    .await
                                         {
                                             Ok(response) => {
                                                 if !response.status().is_success() {
@@ -764,8 +796,8 @@ async fn run_chat(
                                                         return;
                                                     }
 
-                                                    if let Ok(chunk) = chunk {
-                                                        let chunk_str = String::from_utf8_lossy(&chunk);
+                                                    if let Ok(chunk_bytes) = chunk {
+                                                        let chunk_str = String::from_utf8_lossy(&chunk_bytes);
                                                         buffer.push_str(&chunk_str);
 
                                                         // Process complete lines from buffer
@@ -927,8 +959,8 @@ async fn run_chat(
                                                         return;
                                                     }
 
-                                                    if let Ok(chunk) = chunk {
-                                                        let chunk_str = String::from_utf8_lossy(&chunk);
+                                                    if let Ok(chunk_bytes) = chunk {
+                                                        let chunk_str = String::from_utf8_lossy(&chunk_bytes);
                                                         buffer.push_str(&chunk_str);
 
                                                         // Process complete lines from buffer

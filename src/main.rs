@@ -2,6 +2,7 @@ mod api;
 mod app;
 mod auth;
 mod commands;
+mod config;
 mod logging;
 mod message;
 mod scroll;
@@ -9,7 +10,7 @@ mod ui;
 
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use crossterm::{
+use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -157,6 +158,7 @@ Please either:
 
 async fn list_providers() -> Result<(), Box<dyn Error>> {
     let auth_manager = AuthManager::new();
+    let config = config::Config::load()?;
 
     println!("🔗 Available Providers");
     println!("━━━━━━━━━━━━━━━━━━━━━━");
@@ -205,21 +207,25 @@ async fn list_providers() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Show which provider would be used by default
-    match auth_manager.find_first_available_auth() {
-        Some((provider, _)) => {
-            println!(
-                "🎯 Default provider: {} ({})",
-                provider.display_name, provider.name
-            );
-        }
-        None => {
-            println!("⚠️  No configured providers found");
-            println!();
-            println!("To configure authentication:");
-            println!("  chabeau auth                    # Interactive setup");
-            println!();
-            println!("Or use environment variables:");
-            println!("  export OPENAI_API_KEY=sk-...   # For OpenAI");
+    if let Some(default_provider) = &config.default_provider {
+        println!("🎯 Default provider: {default_provider} (from config)");
+    } else {
+        match auth_manager.find_first_available_auth() {
+            Some((provider, _)) => {
+                println!(
+                    "🎯 Default provider: {} ({})",
+                    provider.display_name, provider.name
+                );
+            }
+            None => {
+                println!("⚠️  No configured providers found");
+                println!();
+                println!("To configure authentication:");
+                println!("  chabeau auth                    # Interactive setup");
+                println!();
+                println!("Or use environment variables:");
+                println!("  export OPENAI_API_KEY=sk-...   # For OpenAI");
+            }
         }
     }
 
@@ -277,6 +283,18 @@ enum Commands {
     Deauth,
     /// Start the chat interface (default)
     Chat,
+    /// Set configuration values
+    Set {
+        /// Configuration key to set
+        key: String,
+        /// Value to set for the key
+        value: Option<String>,
+    },
+    /// Unset configuration values
+    Unset {
+        /// Configuration key to unset
+        key: String,
+    },
 }
 
 #[tokio::main]
@@ -297,6 +315,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Err(e) = auth_manager.interactive_deauth(args.provider) {
                 eprintln!("❌ Deauthentication failed: {e}");
                 std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Commands::Set { key, value } => {
+            let mut config = config::Config::load()?;
+            match key.as_str() {
+                "default-provider" => {
+                    if let Some(val) = value {
+                        config.default_provider = Some(val.clone());
+                        config.save()?;
+                        println!("✅ Set default-provider to: {}", val);
+                    } else {
+                        config.print_all();
+                    }
+                }
+                _ => {
+                    eprintln!("❌ Unknown config key: {}", key);
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        Commands::Unset { key } => {
+            let mut config = config::Config::load()?;
+            match key.as_str() {
+                "default-provider" => {
+                    config.default_provider = None;
+                    config.save()?;
+                    println!("✅ Unset default-provider");
+                }
+                _ => {
+                    eprintln!("❌ Unknown config key: {}", key);
+                    std::process::exit(1);
+                }
             }
             return Ok(());
         }

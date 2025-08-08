@@ -81,7 +81,14 @@ Please either:
         } else if let Some(provider_name) = config.default_provider {
             // Config specifies a default provider
             if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
-                (api_key, base_url, provider_name)
+                // Get the proper display name for the provider
+                let display_name = if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                    provider.display_name.clone()
+                } else {
+                    // For custom providers, use the provider name as display name
+                    provider_name.clone()
+                };
+                (api_key, base_url, display_name)
             } else {
                 return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
             }

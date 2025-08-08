@@ -32,8 +32,10 @@ chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, or c
 
 ### Start Chatting
 ```bash
-chabeau         # Uses default provider and model (gpt-4o)
+chabeau         # Uses default provider and model (automatically selects newest model if no default configured)
 ```
+
+**Note:** Chabeau will use your configured default provider and model if set. If no default model is configured for your provider, Chabeau will automatically fetch and use the newest available model from that provider. If you haven't configured a default provider, Chabeau will use the first available authenticated provider.
 
 ## Usage
 
@@ -65,6 +67,28 @@ If no authentication is configured:
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
 ```
+
+### Configuration
+
+Chabeau supports configuring default providers and models for a smoother experience:
+
+```bash
+chabeau set default-provider openai     # Set default provider
+chabeau set default-model openai gpt-4o # Set default model for a provider
+```
+
+You can also use the interactive model selector:
+```bash
+chabeau set-default-model               # Interactive model selection
+chabeau set-default-model --provider openai  # Select model for specific provider
+```
+
+View current configuration:
+```bash
+chabeau set default-provider            # Show current configuration
+```
+
+**Note:** The `set default-model` command now accepts provider and model names without requiring quotes, making it easier to use.
 
 ## Interface Controls
 

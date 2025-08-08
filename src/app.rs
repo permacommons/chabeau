@@ -2,6 +2,7 @@ use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::logging::LoggingState;
 use crate::message::Message;
+use crate::models::{fetch_models, sort_models};
 use crate::scroll::ScrollCalculator;
 use ratatui::text::Line;
 use reqwest::Client;
@@ -31,7 +32,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new_with_auth(
+    pub async fn new_with_auth(
         model: String,
         log_file: Option<String>,
         provider: Option<String>,
@@ -39,12 +40,12 @@ impl App {
         let auth_manager = AuthManager::new();
         let config = Config::load()?;
 
-        let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
+        let (api_key, base_url, provider_name) = if let Some(ref provider_name) = provider {
             if provider_name.is_empty() {
                 // User specified -p without a value, use config default if available
-                if let Some(default_provider) = config.default_provider {
+                if let Some(ref default_provider) = config.default_provider {
                     if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&default_provider)? {
-                        (api_key, base_url, default_provider)
+                        (api_key, base_url, default_provider.to_string())
                     } else {
                         return Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into());
                     }
@@ -73,12 +74,12 @@ Please either:
             } else {
                 // User specified a provider
                 if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
-                    (api_key, base_url, provider_name)
+                    (api_key, base_url, provider_name.clone())
                 } else {
                     return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
                 }
             }
-        } else if let Some(provider_name) = config.default_provider {
+        } else if let Some(ref provider_name) = config.default_provider {
             // Config specifies a default provider
             if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
                 // Get the proper display name for the provider
@@ -115,10 +116,58 @@ Please either:
             }
         };
 
+        // Determine the model to use:
+        // 1. If a specific model was requested (not "default"), use that
+        // 2. If a default model is set for this provider in config, use that
+        // 3. Otherwise, fetch and use the newest available model
+        let final_model = if model != "default" {
+            model
+        } else if let Some(default_model) = config.get_default_model(&provider_name) {
+            default_model.clone()
+        } else {
+            // Try to fetch the newest model directly since we're already in an async context
+            let temp_client = Client::new();
+            let temp_app = App {
+                messages: VecDeque::new(),
+                input: String::new(),
+                input_mode: true,
+                current_response: String::new(),
+                client: temp_client.clone(),
+                model: model.clone(),
+                api_key: api_key.clone(),
+                base_url: base_url.clone(),
+                provider_name: provider_name.to_string(),
+                scroll_offset: 0,
+                auto_scroll: true,
+                is_streaming: false,
+                pulse_start: Instant::now(),
+                stream_interrupted: false,
+                logging: LoggingState::new(None)?,
+                stream_cancel_token: None,
+                current_stream_id: 0,
+                last_retry_time: Instant::now(),
+                retrying_message_index: None,
+            };
+
+            // Try to fetch the newest model
+            match temp_app.fetch_newest_model().await {
+                Ok(Some(newest_model)) => {
+                    eprintln!("🔄 Using newest available model: {}", newest_model);
+                    newest_model
+                }
+                Ok(None) => {
+                    return Err("No models found for this provider. Please specify a model explicitly.".into());
+                }
+                Err(e) => {
+                    return Err(format!("Failed to fetch models from API: {e}. Please specify a model explicitly.").into());
+                }
+            }
+        };
+
         // Print configuration info
         eprintln!("🚀 Starting Chabeau - Terminal Chat Interface");
         eprintln!("🔐 Provider: {provider_name}");
-        eprintln!("📡 Using model: {model}");
+        eprintln!("📡 Using model: {final_model}");
 
         // Note: We use the OpenAI API format for all providers including Anthropic
         // This is known to work well with Anthropic's models
@@ -139,10 +188,10 @@ Please either:
             input_mode: true,
             current_response: String::new(),
             client: Client::new(),
-            model,
+            model: final_model,
             api_key,
             base_url,
-            provider_name,
+            provider_name: provider_name.to_string(),
             scroll_offset: 0,
             auto_scroll: true,
             is_streaming: false,
@@ -241,18 +290,6 @@ Please either:
         }
     }
 
-    pub fn finalize_response(&mut self) {
-        // Log the complete assistant response if logging is active
-        if !self.current_response.is_empty() {
-            if let Err(e) = self.logging.log_message(&self.current_response) {
-                eprintln!("Failed to log response: {e}");
-            }
-        }
-
-        // Clear retry state since response is now complete
-        self.retrying_message_index = None;
-    }
-
     pub fn add_system_message(&mut self, content: String) {
         let system_message = Message {
             role: "system".to_string(),
@@ -323,6 +360,18 @@ Please either:
             terminal_width,
             available_height,
         )
+    }
+
+    pub fn finalize_response(&mut self) {
+        // Log the complete assistant response if logging is active
+        if !self.current_response.is_empty() {
+            if let Err(e) = self.logging.log_message(&self.current_response) {
+                eprintln!("Failed to log response: {e}");
+            }
+        }
+
+        // Clear retry state since response is now complete
+        self.retrying_message_index = None;
     }
 
     pub fn prepare_retry(
@@ -414,5 +463,31 @@ Please either:
         }
 
         Some(api_messages)
+    }
+
+    pub async fn fetch_newest_model(
+        &self,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        // We need to create a new client here because we're in a different context
+        let client = reqwest::Client::new();
+
+        // Use the shared function to fetch models
+        let models_response = fetch_models(
+            &client,
+            &self.base_url,
+            &self.api_key,
+            &self.provider_name,
+        ).await?;
+
+        if models_response.data.is_empty() {
+            return Ok(None);
+        }
+
+        // Sort models using the shared function
+        let mut models = models_response.data;
+        sort_models(&mut models);
+
+        // Return the ID of the first (newest) model
+        Ok(models.first().map(|m| m.id.clone()))
     }
 }

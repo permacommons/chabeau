@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod logging;
 mod message;
+mod models;
 mod scroll;
 mod ui;
 
@@ -23,10 +24,11 @@ use std::{error::Error, io, sync::Arc, time::Duration};
 use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, Mutex};
 
-use api::{ChatRequest, ChatResponse, ModelsResponse};
+use api::{ChatRequest, ChatResponse};
 use app::App;
 use auth::AuthManager;
 use commands::{process_input, CommandResult};
+use models::{fetch_models, sort_models};
 use ui::ui;
 
 async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
@@ -36,11 +38,11 @@ async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
     let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
         // User specified a provider
         if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
-            (api_key, base_url, provider_name)
+            (api_key, base_url, provider_name.clone())
         } else {
             return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
         }
-    } else if let Some(provider_name) = config.default_provider {
+    } else if let Some(ref provider_name) = config.default_provider {
         // Config specifies a default provider
         if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
             // Get the proper display name for the provider
@@ -81,121 +83,65 @@ Please either:
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
-    let client = reqwest::Client::new();
-
-    let mut request = client
-        .get(format!("{base_url}/models"))
-        .header("Content-Type", "application/json");
-
-    // Handle provider-specific authentication headers
-    if provider_name.eq_ignore_ascii_case("anthropic") {
-        request = request
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01");
-    } else {
-        request = request.header("Authorization", format!("Bearer {api_key}"));
+    // Show default model for this provider if set
+    if let Some(default_model) = config.get_default_model(&provider_name) {
+        println!("🎯 Default model for this provider: {default_model} (from config)");
+        println!();
     }
 
-    match request.send().await {
-        Ok(response) => {
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(
-                    format!("API request failed with status {status}: {error_text}").into(),
-                );
+
+    let client = reqwest::Client::new();
+    let models_response = fetch_models(&client, &base_url, &api_key, &provider_name).await?;
+
+    if models_response.data.is_empty() {
+        println!("No models found for this provider.");
+    } else {
+        println!(
+            "Found {} models (sorted newest first):",
+            models_response.data.len()
+        );
+        println!();
+
+        // Sort models by creation date (newest first), then by ID for consistent display
+        let mut models = models_response.data;
+        sort_models(&mut models);
+
+        for model in models {
+            println!("  • {}", model.id);
+            if let Some(display_name) = &model.display_name {
+                if !display_name.is_empty() && display_name != &model.id {
+                    println!("    Name: {display_name}");
+                }
             }
-
-            match response.json::<ModelsResponse>().await {
-                Ok(models_response) => {
-                    if models_response.data.is_empty() {
-                        println!("No models found for this provider.");
+            if let Some(owned_by) = &model.owned_by {
+                if !owned_by.is_empty() && owned_by != "system" {
+                    println!("    Owner: {owned_by}");
+                }
+            }
+            // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
+            if let Some(created) = model.created {
+                if created > 0 {
+                    // Convert Unix timestamp to human-readable date
+                    // Some APIs return timestamps in milliseconds, others in seconds
+                    let timestamp_secs = if created > 10_000_000_000 {
+                        // Likely milliseconds, convert to seconds
+                        created / 1000
                     } else {
-                        println!(
-                            "Found {} models (sorted newest first):",
-                            models_response.data.len()
-                        );
-                        println!();
+                        // Already in seconds
+                        created
+                    };
 
-                        // Sort models by creation date (newest first), then by ID for consistent display
-                        let mut models = models_response.data;
-                        models.sort_by(|a, b| {
-                            // First sort by creation date (newest first)
-                            // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
-                            match (&a.created, &b.created, &a.created_at, &b.created_at) {
-                                // Both have created (OpenAI-style)
-                                (Some(a_created), Some(b_created), _, _) => b_created.cmp(a_created),
-                                // Only a has created
-                                (Some(_), None, _, _) => std::cmp::Ordering::Less,
-                                // Only b has created
-                                (None, Some(_), _, _) => std::cmp::Ordering::Greater,
-                                // Neither has created, check created_at (Anthropic-style)
-                                (None, None, Some(a_created_at), Some(b_created_at)) => {
-                                    // For Anthropic, we want newest first, so we reverse the comparison
-                                    b_created_at.cmp(a_created_at)
-                                }
-                                // Only a has created_at
-                                (None, None, Some(_), None) => std::cmp::Ordering::Less,
-                                // Only b has created_at
-                                (None, None, None, Some(_)) => std::cmp::Ordering::Greater,
-                                // Neither has any creation date, fall back to ID sorting
-                                (None, None, None, None) => a.id.cmp(&b.id),
-                            }
-                        });
-
-                        for model in models {
-                            println!("  • {}", model.id);
-                            if let Some(display_name) = &model.display_name {
-                                if !display_name.is_empty() && display_name != &model.id {
-                                    println!("    Name: {display_name}");
-                                }
-                            }
-                            if let Some(owned_by) = &model.owned_by {
-                                if !owned_by.is_empty() && owned_by != "system" {
-                                    println!("    Owner: {owned_by}");
-                                }
-                            }
-                            // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
-                            if let Some(created) = model.created {
-                                if created > 0 {
-                                    // Convert Unix timestamp to human-readable date
-                                    // Some APIs return timestamps in milliseconds, others in seconds
-                                    let timestamp_secs = if created > 10_000_000_000 {
-                                        // Likely milliseconds, convert to seconds
-                                        created / 1000
-                                    } else {
-                                        // Already in seconds
-                                        created
-                                    };
-
-                                    let datetime =
-                                        DateTime::<Utc>::from_timestamp(timestamp_secs as i64, 0);
-                                    if let Some(dt) = datetime {
-                                        println!(
-                                            "    Created: {}",
-                                            dt.format("%Y-%m-%d %H:%M:%S UTC")
-                                        );
-                                    }
-                                }
-                            } else if let Some(created_at) = &model.created_at {
-                                if !created_at.is_empty() {
-                                    println!("    Created: {created_at}");
-                                }
-                            }
-                            println!();
-                        }
+                    let datetime = DateTime::<Utc>::from_timestamp(timestamp_secs as i64, 0);
+                    if let Some(dt) = datetime {
+                        println!("    Created: {}", dt.format("%Y-%m-%d %H:%M:%S UTC"));
                     }
                 }
-                Err(e) => {
-                    return Err(format!("Failed to parse models response: {e}").into());
+            } else if let Some(created_at) = &model.created_at {
+                if !created_at.is_empty() {
+                    println!("    Created: {created_at}");
                 }
             }
-        }
-        Err(e) => {
-            return Err(format!("Failed to fetch models: {e}").into());
+            println!();
         }
     }
 
@@ -334,13 +280,21 @@ enum Commands {
     Set {
         /// Configuration key to set
         key: String,
-        /// Value to set for the key
-        value: Option<String>,
+        /// Value to set for the key (can be multiple words for default-model)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        value: Option<Vec<String>>,
     },
     /// Unset configuration values
     Unset {
         /// Configuration key to unset
         key: String,
+        /// Value to unset for the key (optional)
+        value: Option<String>,
+    },
+    /// Interactively select and set a default model
+    SetDefaultModel {
+        /// Provider to list models for (optional)
+        provider: Option<String>,
     },
 }
 
@@ -369,10 +323,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut config = config::Config::load()?;
             match key.as_str() {
                 "default-provider" => {
-                    if let Some(val) = value {
-                        config.default_provider = Some(val.clone());
-                        config.save()?;
-                        println!("✅ Set default-provider to: {}", val);
+                    if let Some(ref val) = value {
+                        if !val.is_empty() {
+                            config.default_provider = Some(val.join(" "));
+                            config.save()?;
+                            println!("✅ Set default-provider to: {}", val.join(" "));
+                        } else {
+                            config.print_all();
+                        }
+                    } else {
+                        config.print_all();
+                    }
+                }
+                "default-model" => {
+                    if let Some(ref val) = value {
+                        if !val.is_empty() {
+                            // Join all parts with spaces to handle multi-word values
+                            let val_str = val.join(" ");
+                            // Check if the user provided a provider-specific model in the format "provider model"
+                            let parts: Vec<&str> = val_str.splitn(2, ' ').collect();
+                            if parts.len() == 2 {
+                                // Provider-specific model
+                                let provider = parts[0].to_string();
+                                let model = parts[1].to_string();
+                                config.set_default_model(provider.clone(), model.clone());
+                                config.save()?;
+                                println!("✅ Set default-model for provider '{}' to: {}", provider, model);
+                            } else {
+                                eprintln!("⚠️  To set a default model, specify the provider and model:");
+                                eprintln!("Example: chabeau set default-model openai gpt-4o");
+                            }
+                        } else {
+                            config.print_all();
+                        }
                     } else {
                         config.print_all();
                     }
@@ -384,13 +367,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             return Ok(());
         }
-        Commands::Unset { key } => {
+        Commands::Unset { key, value } => {
             let mut config = config::Config::load()?;
             match key.as_str() {
                 "default-provider" => {
                     config.default_provider = None;
                     config.save()?;
                     println!("✅ Unset default-provider");
+                }
+                "default-model" => {
+                    if let Some(provider) = value {
+                        config.unset_default_model(&provider);
+                        config.save()?;
+                        println!("✅ Unset default-model for provider: {}", provider);
+                    } else {
+                        eprintln!("⚠️  To unset a default model, specify the provider:");
+                        eprintln!("Example: chabeau unset default-model openai");
+                    }
                 }
                 _ => {
                     eprintln!("❌ Unknown config key: {}", key);
@@ -425,13 +418,168 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                         None => {
                             // -m was not provided, use default model for chat
-                            run_chat("gpt-4o".to_string(), args.log, provider_for_operations).await
+                            run_chat("default".to_string(), args.log, provider_for_operations).await
                         }
                     }
                 }
             }
         }
+        Commands::SetDefaultModel { provider } => {
+            set_default_model(provider).await?;
+            return Ok(());
+        }
     }
+}
+
+async fn set_default_model(provider: Option<String>) -> Result<(), Box<dyn Error>> {
+    let auth_manager = AuthManager::new();
+    let mut config = config::Config::load()?;
+
+    // If no provider specified, prompt user to select one
+    let provider_name = if let Some(provider_name) = provider {
+        provider_name
+    } else {
+        // Get list of available providers
+        let mut providers = Vec::new();
+
+        // Add built-in providers that have authentication
+        let builtin_providers = vec![
+            ("openai", "OpenAI"),
+            ("openrouter", "OpenRouter"),
+            ("poe", "Poe"),
+            ("anthropic", "Anthropic"),
+        ];
+
+        for (name, display_name) in builtin_providers {
+            if auth_manager.get_token(&name)?.is_some() {
+                providers.push((name.to_string(), display_name.to_string()));
+            }
+        }
+
+        // Add custom providers
+        match auth_manager.list_custom_providers() {
+            Ok(custom_providers) => {
+                for (name, _, has_token) in custom_providers {
+                    if has_token {
+                        providers.push((name.clone(), name));
+                    }
+                }
+            }
+            Err(_) => {
+                eprintln!("⚠️  Error checking custom providers");
+            }
+        }
+
+        if providers.is_empty() {
+            return Err("No configured providers found. Run 'chabeau auth' to set up authentication.".into());
+        }
+
+        println!("Select a provider to set default model for:");
+        for (i, (name, display_name)) in providers.iter().enumerate() {
+            println!("  {}. {} ({})", i + 1, display_name, name);
+        }
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let choice: usize = input.trim().parse().map_err(|_| "Invalid choice")?;
+
+        if choice == 0 || choice > providers.len() {
+            return Err("Invalid choice".into());
+        }
+
+        providers[choice - 1].0.clone()
+    };
+
+    let (api_key, base_url, display_name) = if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+        // Get the proper display name for the provider
+        let display_name = if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+            provider.display_name.clone()
+        } else {
+            // For custom providers, use the provider name as display name
+            provider_name.clone()
+        };
+        (api_key, base_url, display_name)
+    } else {
+        return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
+    };
+
+    println!("🤖 Available Models for {display_name}");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    let client = reqwest::Client::new();
+    let models_response = fetch_models(&client, &base_url, &api_key, &provider_name).await?;
+
+    if models_response.data.is_empty() {
+        println!("No models found for this provider.");
+        return Ok(());
+    }
+
+    println!(
+        "Found {} models (sorted newest first):",
+        models_response.data.len()
+    );
+    println!();
+
+    // Sort models by creation date (newest first), then by ID for consistent display
+    let mut models = models_response.data;
+    sort_models(&mut models);
+
+    // Display models with indices
+    for (i, model) in models.iter().enumerate() {
+        println!("  {}. {}", i + 1, model.id);
+        if let Some(display_name) = &model.display_name {
+            if !display_name.is_empty() && display_name != &model.id {
+                println!("     Name: {display_name}");
+            }
+        }
+        if let Some(owned_by) = &model.owned_by {
+            if !owned_by.is_empty() && owned_by != "system" {
+                println!("     Owner: {owned_by}");
+            }
+        }
+        // Handle both created (OpenAI-style) and created_at (Anthropic-style) fields
+        if let Some(created) = model.created {
+            if created > 0 {
+                // Convert Unix timestamp to human-readable date
+                // Some APIs return timestamps in milliseconds, others in seconds
+                let timestamp_secs = if created > 10_000_000_000 {
+                    // Likely milliseconds, convert to seconds
+                    created / 1000
+                } else {
+                    // Already in seconds
+                    created
+                };
+
+                let datetime = DateTime::<Utc>::from_timestamp(timestamp_secs as i64, 0);
+                if let Some(dt) = datetime {
+                    println!("     Created: {}", dt.format("%Y-%m-%d %H:%M:%S UTC"));
+                }
+            }
+        } else if let Some(created_at) = &model.created_at {
+            if !created_at.is_empty() {
+                println!("     Created: {created_at}");
+            }
+        }
+        println!();
+    }
+
+    // Prompt user to select a model
+    println!("Select a model to set as default (enter the number):");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let choice: usize = input.trim().parse().map_err(|_| "Invalid choice")?;
+
+    if choice == 0 || choice > models.len() {
+        return Err("Invalid choice".into());
+    }
+
+    let selected_model = &models[choice - 1].id;
+    config.set_default_model(provider_name, selected_model.clone());
+    config.save()?;
+
+    println!("✅ Set default model for provider to: {}", selected_model);
+    Ok(())
 }
 
 async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box<dyn Error>> {
@@ -496,8 +644,8 @@ async fn run_chat(
     log: Option<String>,
     provider: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    // Create app with authentication
-    let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider) {
+    // Create app with authentication - model selection logic is now handled in App::new_with_auth
+    let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider).await {
         Ok(app) => app,
         Err(e) => {
             // Check if this is an authentication error

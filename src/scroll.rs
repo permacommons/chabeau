@@ -21,7 +21,10 @@ impl ScrollCalculator {
     }
 
     /// Build display lines up to a specific message index (inclusive)
-    pub fn build_display_lines_up_to(messages: &VecDeque<Message>, max_index: usize) -> Vec<Line<'_>> {
+    pub fn build_display_lines_up_to(
+        messages: &VecDeque<Message>,
+        max_index: usize,
+    ) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
 
         for (i, msg) in messages.iter().enumerate() {

@@ -127,7 +127,9 @@ export EDITOR="code --wait" # VS Code with wait
 
 Modular design with focused components:
 
-- `main.rs` - Entry point and event loop
+- `main.rs` - Entry point
+- `cli.rs` - Command-line interface parsing and handling
+- `chat_loop.rs` - Main chat event loop and UI rendering
 - `app.rs` - Core application state
 - `auth.rs` - Authentication and provider management
 - `ui.rs` - Terminal interface rendering
@@ -136,6 +138,10 @@ Modular design with focused components:
 - `commands.rs` - Chat command processing
 - `message.rs` - Message data structures
 - `scroll.rs` - Text wrapping and scroll calculations
+- `editor.rs` - External editor integration
+- `model_list.rs` - Model listing functionality
+- `provider_list.rs` - Provider listing functionality
+- `set_default_model.rs` - Default model configuration
 
 ## Development
 

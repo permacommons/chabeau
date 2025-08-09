@@ -148,7 +148,7 @@ impl Config {
     pub fn print_all(&self) {
         println!("Current configuration:");
         match &self.default_provider {
-            Some(provider) => println!("  default-provider: {}", provider),
+            Some(provider) => println!("  default-provider: {provider}"),
             None => println!("  default-provider: (unset)"),
         }
         if self.default_models.is_empty() {
@@ -156,7 +156,7 @@ impl Config {
         } else {
             println!("  default-models:");
             for (provider, model) in &self.default_models {
-                println!("    {}: {}", provider, model);
+                println!("    {provider}: {model}");
             }
         }
     }

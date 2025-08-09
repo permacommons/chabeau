@@ -45,7 +45,7 @@ impl App {
                 // User specified -p without a value, use config default if available
                 if let Some(ref default_provider) = config.default_provider {
                     if let Some((base_url, api_key)) =
-                        auth_manager.get_auth_for_provider(&default_provider)?
+                        auth_manager.get_auth_for_provider(default_provider)?
                     {
                         (api_key, base_url, default_provider.to_string())
                     } else {
@@ -76,7 +76,7 @@ Please either:
             } else {
                 // User specified a provider
                 if let Some((base_url, api_key)) =
-                    auth_manager.get_auth_for_provider(&provider_name)?
+                    auth_manager.get_auth_for_provider(provider_name)?
                 {
                     (api_key, base_url, provider_name.clone())
                 } else {
@@ -85,10 +85,10 @@ Please either:
             }
         } else if let Some(ref provider_name) = config.default_provider {
             // Config specifies a default provider
-            if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+            if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(provider_name)? {
                 // Get the proper display name for the provider
                 let display_name =
-                    if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                    if let Some(provider) = auth_manager.find_provider_by_name(provider_name) {
                         provider.display_name.clone()
                     } else {
                         // For custom providers, use the provider name as display name
@@ -157,7 +157,7 @@ Please either:
             // Try to fetch the newest model
             match temp_app.fetch_newest_model().await {
                 Ok(Some(newest_model)) => {
-                    eprintln!("🔄 Using newest available model: {}", newest_model);
+                    eprintln!("🔄 Using newest available model: {newest_model}");
                     newest_model
                 }
                 Ok(None) => {

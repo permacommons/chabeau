@@ -44,10 +44,10 @@ async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
         }
     } else if let Some(ref provider_name) = config.default_provider {
         // Config specifies a default provider
-        if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+        if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(provider_name)? {
             // Get the proper display name for the provider
             let display_name =
-                if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                if let Some(provider) = auth_manager.find_provider_by_name(provider_name) {
                     provider.display_name.clone()
                 } else {
                     // For custom providers, use the provider name as display name
@@ -349,8 +349,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 config.set_default_model(provider.clone(), model.clone());
                                 config.save()?;
                                 println!(
-                                    "✅ Set default-model for provider '{}' to: {}",
-                                    provider, model
+                                    "✅ Set default-model for provider '{provider}' to: {model}"
                                 );
                             } else {
                                 eprintln!(
@@ -366,7 +365,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 _ => {
-                    eprintln!("❌ Unknown config key: {}", key);
+                    eprintln!("❌ Unknown config key: {key}");
                     std::process::exit(1);
                 }
             }
@@ -384,14 +383,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     if let Some(provider) = value {
                         config.unset_default_model(&provider);
                         config.save()?;
-                        println!("✅ Unset default-model for provider: {}", provider);
+                        println!("✅ Unset default-model for provider: {provider}");
                     } else {
                         eprintln!("⚠️  To unset a default model, specify the provider:");
                         eprintln!("Example: chabeau unset default-model openai");
                     }
                 }
                 _ => {
-                    eprintln!("❌ Unknown config key: {}", key);
+                    eprintln!("❌ Unknown config key: {key}");
                     std::process::exit(1);
                 }
             }
@@ -456,7 +455,7 @@ async fn set_default_model(provider: Option<String>) -> Result<(), Box<dyn Error
         ];
 
         for (name, display_name) in builtin_providers {
-            if auth_manager.get_token(&name)?.is_some() {
+            if auth_manager.get_token(name)?.is_some() {
                 providers.push((name.to_string(), display_name.to_string()));
             }
         }
@@ -589,7 +588,7 @@ async fn set_default_model(provider: Option<String>) -> Result<(), Box<dyn Error
     config.set_default_model(provider_name, selected_model.clone());
     config.save()?;
 
-    println!("✅ Set default model for provider to: {}", selected_model);
+    println!("✅ Set default model for provider to: {selected_model}");
     Ok(())
 }
 

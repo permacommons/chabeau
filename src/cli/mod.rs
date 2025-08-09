@@ -2,17 +2,21 @@
 //!
 //! This module handles parsing command-line arguments and executing the appropriate commands.
 
+pub mod model_list;
+pub mod provider_list;
+pub mod set_default_model;
+
 use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
 // Import specific items we need
 use crate::auth::AuthManager;
-use crate::chat_loop::run_chat;
-use crate::config::Config;
-use crate::model_list::list_models;
-use crate::provider_list::list_providers;
-use crate::set_default_model::set_default_model;
+use crate::core::config::Config;
+use crate::ui::chat_loop::run_chat;
+use crate::cli::model_list::list_models;
+use crate::cli::provider_list::list_providers;
+use crate::cli::set_default_model::set_default_model;
 
 #[derive(Parser)]
 #[command(name = "chabeau")]

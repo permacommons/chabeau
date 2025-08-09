@@ -4,10 +4,11 @@
 //! and manages the chat session.
 
 use crate::api::{ChatRequest, ChatResponse};
-use crate::app::App;
-use crate::commands::{process_input, CommandResult};
-use crate::editor::handle_external_editor;
-use crate::ui::ui;
+use crate::core::app::App;
+use crate::commands::process_input;
+use crate::commands::CommandResult;
+use crate::utils::editor::handle_external_editor;
+use crate::ui::renderer::ui;
 use futures_util::StreamExt;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},

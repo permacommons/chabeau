@@ -2,7 +2,7 @@
 //!
 //! This module handles integration with external text editors for composing longer messages.
 
-use crate::app::App;
+use crate::core::app::App;
 use std::error::Error;
 use std::fs;
 use std::io;

@@ -1,4 +1,4 @@
-use crate::message::Message;
+use crate::core::message::Message;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},

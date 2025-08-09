@@ -128,20 +128,32 @@ export EDITOR="code --wait" # VS Code with wait
 Modular design with focused components:
 
 - `main.rs` - Entry point
-- `cli.rs` - Command-line interface parsing and handling
-- `chat_loop.rs` - Main chat event loop and UI rendering
-- `app.rs` - Core application state
-- `auth.rs` - Authentication and provider management
-- `ui.rs` - Terminal interface rendering
-- `api.rs` - API types and structures
-- `logging.rs` - Chat logging functionality
-- `commands.rs` - Chat command processing
-- `message.rs` - Message data structures
-- `scroll.rs` - Text wrapping and scroll calculations
-- `editor.rs` - External editor integration
-- `model_list.rs` - Model listing functionality
-- `provider_list.rs` - Provider listing functionality
-- `set_default_model.rs` - Default model configuration
+- `cli/` - Command-line interface parsing and handling
+  - `mod.rs` - CLI argument parsing and command dispatching
+  - `model_list.rs` - Model listing functionality
+  - `provider_list.rs` - Provider listing functionality
+  - `set_default_model.rs` - Default model configuration
+- `core/` - Core application components
+  - `mod.rs` - Core module declarations
+  - `app.rs` - Core application state
+  - `config.rs` - Configuration management
+  - `message.rs` - Message data structures
+- `auth/` - Authentication and provider management
+  - `mod.rs` - Authentication manager implementation
+- `api/` - API types and models
+  - `mod.rs` - API data structures
+  - `models.rs` - Model fetching and sorting functionality
+- `ui/` - Terminal interface rendering
+  - `mod.rs` - UI module declarations
+  - `chat_loop.rs` - Main chat event loop and UI rendering
+  - `renderer.rs` - Terminal interface rendering
+- `utils/` - Utility functions and helpers
+  - `mod.rs` - Utility module declarations
+  - `editor.rs` - External editor integration
+  - `logging.rs` - Chat logging functionality
+  - `scroll.rs` - Text wrapping and scroll calculations
+- `commands/` - Chat command processing
+  - `mod.rs` - Command processing implementation
 
 ## Development
 

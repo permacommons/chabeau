@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::core::app::App;
 
 pub enum CommandResult {
     Continue,

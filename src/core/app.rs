@@ -1,9 +1,9 @@
 use crate::auth::AuthManager;
-use crate::config::Config;
-use crate::logging::LoggingState;
-use crate::message::Message;
-use crate::models::{fetch_models, sort_models};
-use crate::scroll::ScrollCalculator;
+use crate::core::config::Config;
+use crate::core::message::Message;
+use crate::api::models::{fetch_models, sort_models};
+use crate::utils::scroll::ScrollCalculator;
+use crate::utils::logging::LoggingState;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};

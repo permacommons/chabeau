@@ -1,4 +1,4 @@
-use crate::message::Message;
+use crate::core::message::Message;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;

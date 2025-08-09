@@ -41,3 +41,5 @@ pub struct ModelInfo {
 pub struct ModelsResponse {
     pub data: Vec<ModelInfo>,
 }
+
+pub mod models;

@@ -3,8 +3,8 @@
 //! This module handles listing available models from various providers.
 
 use crate::auth::AuthManager;
-use crate::config::Config;
-use crate::models::{fetch_models, sort_models};
+use crate::core::config::Config;
+use crate::api::models::{fetch_models, sort_models};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 

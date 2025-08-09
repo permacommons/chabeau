@@ -3,7 +3,7 @@
 //! This module handles listing available providers and their authentication status.
 
 use crate::auth::AuthManager;
-use crate::config::Config;
+use crate::core::config::Config;
 use std::error::Error;
 
 pub async fn list_providers() -> Result<(), Box<dyn Error>> {

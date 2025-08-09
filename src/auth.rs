@@ -1,6 +1,8 @@
 use keyring::Entry;
 use std::io::{self, Write};
 
+type CustomProviderInfo = (String, String, bool);
+
 #[derive(Debug, Clone)]
 pub struct Provider {
     pub name: String,
@@ -129,7 +131,7 @@ impl AuthManager {
 
     pub fn list_custom_providers(
         &self,
-    ) -> Result<Vec<(String, String, bool)>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<CustomProviderInfo>, Box<dyn std::error::Error>> {
         let list_entry = Entry::new("chabeau", "custom_provider_list")?;
         let provider_list = match list_entry.get_password() {
             Ok(list) => list,

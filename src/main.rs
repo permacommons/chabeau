@@ -784,14 +784,14 @@ async fn run_chat(
                                                         .await
                                                 {
                                                     Ok(response) => {
-                                                        if !response.status().is_success() {
-                                                            if let Ok(error_text) = response.text().await {
-                                                                eprintln!("API request failed: {error_text}");
-                                                            }
-                                                            return;
-                                                        }
+                                                if !response.status().is_success() {
+                                                    if let Ok(error_text) = response.text().await {
+                                                        eprintln!("API request failed: {error_text}");
+                                                    }
+                                                    return;
+                                                }
 
-                                                        let mut stream = response.bytes_stream();
+                                                let mut stream = response.bytes_stream();
                                                         let mut buffer = String::new();
 
                                                         while let Some(chunk) = stream.next().await {
@@ -842,7 +842,6 @@ async fn run_chat(
                                             }
                                             _ = cancel_token.cancelled() => {
                                                 // Stream was cancelled, clean up
-                                                return;
                                             }
                                         }
                                     });
@@ -1013,7 +1012,6 @@ async fn run_chat(
                                     }
                                     _ = cancel_token.cancelled() => {
                                         // Stream was cancelled, clean up
-                                        return;
                                     }
                                 }
                             });
@@ -1176,7 +1174,6 @@ async fn run_chat(
                                     }
                                     _ = cancel_token.cancelled() => {
                                         // Stream was cancelled, clean up
-                                        return;
                                     }
                                 }
                             });

@@ -34,7 +34,7 @@ pub async fn fetch_models(
     Ok(models_response)
 }
 
-pub fn sort_models(models: &mut Vec<crate::api::ModelInfo>) {
+pub fn sort_models(models: &mut [crate::api::ModelInfo]) {
     // Sort models by creation date (newest first), then by ID for consistent display
     models.sort_by(|a, b| {
         // First sort by creation date (newest first)

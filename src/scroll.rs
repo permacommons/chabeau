@@ -10,7 +10,7 @@ pub struct ScrollCalculator;
 
 impl ScrollCalculator {
     /// Build display lines for all messages
-    pub fn build_display_lines(messages: &VecDeque<Message>) -> Vec<Line> {
+    pub fn build_display_lines(messages: &VecDeque<Message>) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
 
         for msg in messages {
@@ -21,7 +21,7 @@ impl ScrollCalculator {
     }
 
     /// Build display lines up to a specific message index (inclusive)
-    pub fn build_display_lines_up_to(messages: &VecDeque<Message>, max_index: usize) -> Vec<Line> {
+    pub fn build_display_lines_up_to(messages: &VecDeque<Message>, max_index: usize) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
 
         for (i, msg) in messages.iter().enumerate() {
@@ -124,9 +124,7 @@ impl ScrollCalculator {
                 // Trim whitespace to match ratatui's Wrap { trim: true } behavior
                 let trimmed_text = line_text.trim();
 
-                if trimmed_text.is_empty() {
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                } else if terminal_width == 0 {
+                if trimmed_text.is_empty() || terminal_width == 0 {
                     total_wrapped_lines = total_wrapped_lines.saturating_add(1);
                 } else {
                     // Word-based wrapping to match ratatui's behavior

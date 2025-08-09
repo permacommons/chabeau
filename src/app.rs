@@ -216,7 +216,7 @@ Please either:
         })
     }
 
-    pub fn build_display_lines(&self) -> Vec<Line> {
+    pub fn build_display_lines(&self) -> Vec<Line<'_>> {
         ScrollCalculator::build_display_lines(&self.messages)
     }
 

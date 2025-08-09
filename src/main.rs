@@ -11,12 +11,12 @@ mod ui;
 
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
+use futures_util::StreamExt;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::fs;
 use std::process::Command;
@@ -46,12 +46,13 @@ async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
         // Config specifies a default provider
         if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
             // Get the proper display name for the provider
-            let display_name = if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
-                provider.display_name.clone()
-            } else {
-                // For custom providers, use the provider name as display name
-                provider_name.clone()
-            };
+            let display_name =
+                if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                    provider.display_name.clone()
+                } else {
+                    // For custom providers, use the provider name as display name
+                    provider_name.clone()
+                };
             (api_key, base_url, display_name)
         } else {
             return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
@@ -88,7 +89,6 @@ Please either:
         println!("🎯 Default model for this provider: {default_model} (from config)");
         println!();
     }
-
 
     let client = reqwest::Client::new();
     let models_response = fetch_models(&client, &base_url, &api_key, &provider_name).await?;
@@ -348,9 +348,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 let model = parts[1].to_string();
                                 config.set_default_model(provider.clone(), model.clone());
                                 config.save()?;
-                                println!("✅ Set default-model for provider '{}' to: {}", provider, model);
+                                println!(
+                                    "✅ Set default-model for provider '{}' to: {}",
+                                    provider, model
+                                );
                             } else {
-                                eprintln!("⚠️  To set a default model, specify the provider and model:");
+                                eprintln!(
+                                    "⚠️  To set a default model, specify the provider and model:"
+                                );
                                 eprintln!("Example: chabeau set default-model openai gpt-4o");
                             }
                         } else {
@@ -471,7 +476,10 @@ async fn set_default_model(provider: Option<String>) -> Result<(), Box<dyn Error
         }
 
         if providers.is_empty() {
-            return Err("No configured providers found. Run 'chabeau auth' to set up authentication.".into());
+            return Err(
+                "No configured providers found. Run 'chabeau auth' to set up authentication."
+                    .into(),
+            );
         }
 
         println!("Select a provider to set default model for:");
@@ -490,14 +498,17 @@ async fn set_default_model(provider: Option<String>) -> Result<(), Box<dyn Error
         providers[choice - 1].0.clone()
     };
 
-    let (api_key, base_url, display_name) = if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+    let (api_key, base_url, display_name) = if let Some((base_url, api_key)) =
+        auth_manager.get_auth_for_provider(&provider_name)?
+    {
         // Get the proper display name for the provider
-        let display_name = if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
-            provider.display_name.clone()
-        } else {
-            // For custom providers, use the provider name as display name
-            provider_name.clone()
-        };
+        let display_name =
+            if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                provider.display_name.clone()
+            } else {
+                // For custom providers, use the provider name as display name
+                provider_name.clone()
+            };
         (api_key, base_url, display_name)
     } else {
         return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
@@ -645,25 +656,27 @@ async fn run_chat(
     provider: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     // Create app with authentication - model selection logic is now handled in App::new_with_auth
-    let app = Arc::new(Mutex::new(match App::new_with_auth(model, log, provider).await {
-        Ok(app) => app,
-        Err(e) => {
-            // Check if this is an authentication error
-            let error_msg = e.to_string();
-            if error_msg.contains("No authentication") || error_msg.contains("OPENAI_API_KEY") {
-                eprintln!("{error_msg}");
-                eprintln!();
-                eprintln!("💡 Quick fixes:");
-                eprintln!("  • chabeau auth                    # Interactive setup");
-                eprintln!("  • chabeau -p                      # Check provider status");
-                eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
-                std::process::exit(2); // Authentication error
-            } else {
-                eprintln!("❌ Error: {e}");
-                std::process::exit(1); // General error
+    let app = Arc::new(Mutex::new(
+        match App::new_with_auth(model, log, provider).await {
+            Ok(app) => app,
+            Err(e) => {
+                // Check if this is an authentication error
+                let error_msg = e.to_string();
+                if error_msg.contains("No authentication") || error_msg.contains("OPENAI_API_KEY") {
+                    eprintln!("{error_msg}");
+                    eprintln!();
+                    eprintln!("💡 Quick fixes:");
+                    eprintln!("  • chabeau auth                    # Interactive setup");
+                    eprintln!("  • chabeau -p                      # Check provider status");
+                    eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
+                    std::process::exit(2); // Authentication error
+                } else {
+                    eprintln!("❌ Error: {e}");
+                    std::process::exit(1); // General error
+                }
             }
-        }
-    }));
+        },
+    ));
 
     // Setup terminal only after successful app creation
     enable_raw_mode()?;
@@ -751,17 +764,17 @@ async fn run_chat(
                                         )
                                     };
 
-                                        // Send the message to API
-                                        let tx_clone = tx.clone();
-                                        tokio::spawn(async move {
-                                            let request = ChatRequest {
-                                                model,
-                                                messages: api_messages,
-                                                stream: true,
-                                            };
+                                    // Send the message to API
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let request = ChatRequest {
+                                            model,
+                                            messages: api_messages,
+                                            stream: true,
+                                        };
 
-                                            // Use tokio::select! to race between the HTTP request and cancellation
-                                            tokio::select! {
+                                        // Use tokio::select! to race between the HTTP request and cancellation
+                                        tokio::select! {
                                                 _ = async {
                                                     match client
                                                         .post(format!("{base_url}/chat/completions"))
@@ -894,16 +907,16 @@ async fn run_chat(
                                     // Start new stream (this will cancel any existing stream)
                                     let (cancel_token, stream_id) = app_guard.start_new_stream();
 
-                                        (
-                                            true,
-                                            api_messages,
-                                            app_guard.client.clone(),
-                                            app_guard.model.clone(),
-                                            app_guard.api_key.clone(),
-                                            app_guard.base_url.clone(),
-                                            cancel_token,
-                                            stream_id,
-                                        )
+                                    (
+                                        true,
+                                        api_messages,
+                                        app_guard.client.clone(),
+                                        app_guard.model.clone(),
+                                        app_guard.api_key.clone(),
+                                        app_guard.base_url.clone(),
+                                        cancel_token,
+                                        stream_id,
+                                    )
                                 } else {
                                     (
                                         false,
@@ -931,8 +944,8 @@ async fn run_chat(
                                     stream: true,
                                 };
 
-                                        // Use tokio::select! to race between the HTTP request and cancellation
-                                        tokio::select! {
+                                // Use tokio::select! to race between the HTTP request and cancellation
+                                tokio::select! {
                                             _ = async {
                                                 match client
                                                     .post(format!("{base_url}/chat/completions"))

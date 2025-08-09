@@ -44,7 +44,9 @@ impl App {
             if provider_name.is_empty() {
                 // User specified -p without a value, use config default if available
                 if let Some(ref default_provider) = config.default_provider {
-                    if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&default_provider)? {
+                    if let Some((base_url, api_key)) =
+                        auth_manager.get_auth_for_provider(&default_provider)?
+                    {
                         (api_key, base_url, default_provider.to_string())
                     } else {
                         return Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into());
@@ -73,7 +75,9 @@ Please either:
                 }
             } else {
                 // User specified a provider
-                if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
+                if let Some((base_url, api_key)) =
+                    auth_manager.get_auth_for_provider(&provider_name)?
+                {
                     (api_key, base_url, provider_name.clone())
                 } else {
                     return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
@@ -83,12 +87,13 @@ Please either:
             // Config specifies a default provider
             if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
                 // Get the proper display name for the provider
-                let display_name = if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
-                    provider.display_name.clone()
-                } else {
-                    // For custom providers, use the provider name as display name
-                    provider_name.clone()
-                };
+                let display_name =
+                    if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
+                        provider.display_name.clone()
+                    } else {
+                        // For custom providers, use the provider name as display name
+                        provider_name.clone()
+                    };
                 (api_key, base_url, display_name)
             } else {
                 return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
@@ -156,10 +161,16 @@ Please either:
                     newest_model
                 }
                 Ok(None) => {
-                    return Err("No models found for this provider. Please specify a model explicitly.".into());
+                    return Err(
+                        "No models found for this provider. Please specify a model explicitly."
+                            .into(),
+                    );
                 }
                 Err(e) => {
-                    return Err(format!("Failed to fetch models from API: {e}. Please specify a model explicitly.").into());
+                    return Err(format!(
+                        "Failed to fetch models from API: {e}. Please specify a model explicitly."
+                    )
+                    .into());
                 }
             }
         };
@@ -465,19 +476,13 @@ Please either:
         Some(api_messages)
     }
 
-    pub async fn fetch_newest_model(
-        &self,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub async fn fetch_newest_model(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
         // We need to create a new client here because we're in a different context
         let client = reqwest::Client::new();
 
         // Use the shared function to fetch models
-        let models_response = fetch_models(
-            &client,
-            &self.base_url,
-            &self.api_key,
-            &self.provider_name,
-        ).await?;
+        let models_response =
+            fetch_models(&client, &self.base_url, &self.api_key, &self.provider_name).await?;
 
         if models_response.data.is_empty() {
             return Ok(None);

@@ -37,13 +37,18 @@ mod tests {
         config.default_provider = Some("test-provider".to_string());
 
         // Save the config
-        config.save_to_path(&config_path).expect("Failed to save config");
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
 
         // Load the config back
         let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
 
         // Verify the loaded config matches what we saved
-        assert_eq!(loaded_config.default_provider, Some("test-provider".to_string()));
+        assert_eq!(
+            loaded_config.default_provider,
+            Some("test-provider".to_string())
+        );
     }
 
     #[test]
@@ -56,11 +61,15 @@ mod tests {
         config.default_provider = Some("test-provider".to_string());
 
         // Save the config
-        config.save_to_path(&config_path).expect("Failed to save config");
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
 
         // Unset the default provider
         config.default_provider = None;
-        config.save_to_path(&config_path).expect("Failed to save config");
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
 
         // Load the config back
         let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
@@ -79,17 +88,24 @@ mod tests {
         config.default_provider = Some("initial-provider".to_string());
 
         // Save the config
-        config.save_to_path(&config_path).expect("Failed to save config");
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
 
         // Change the default provider
         config.default_provider = Some("new-provider".to_string());
-        config.save_to_path(&config_path).expect("Failed to save config");
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
 
         // Load the config back
         let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
 
         // Verify the default provider was changed
-        assert_eq!(loaded_config.default_provider, Some("new-provider".to_string()));
+        assert_eq!(
+            loaded_config.default_provider,
+            Some("new-provider".to_string())
+        );
     }
 }
 

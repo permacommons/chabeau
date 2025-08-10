@@ -1,6 +1,6 @@
 # Chabeau - Terminal Chat Interface
 
-![Screenshot of the terminal interface](screenshot.png)
+![Chabeau in action](vhs.gif)
 
 **NOTE:** This is pre-alpha software. It has only been tested on Linux.
 

@@ -37,7 +37,7 @@ Controls:\n\
   Up/Down/Mouse     Scroll through chat history\n\
   Ctrl+C            Quit the application\n\
   Ctrl+R            Retry the last bot response\n\
-  Ctrl+E            Open external editor (requires EDITOR env var)\n\
+  Ctrl+T            Open external editor (requires EDITOR env var)\n\
   Backspace         Delete characters in the input field\n\n\
 Commands:\n\
   /help             Show extended help with keyboard shortcuts\n\

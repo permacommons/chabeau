@@ -99,7 +99,7 @@ chabeau set default-provider            # Show current configuration
 | **Up/Down/Mouse** | Scroll chat history |
 | **Ctrl+C** | Quit |
 | **Ctrl+R** | Retry last response |
-| **Ctrl+E** | Open external editor |
+| **Ctrl+T** | Open external editor |
 | **Esc** | Interrupt streaming |
 
 ### Chat Commands

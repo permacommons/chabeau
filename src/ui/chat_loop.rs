@@ -81,10 +81,10 @@ pub async fn run_chat(
                         {
                             break Ok(());
                         }
-                        KeyCode::Char('e')
+                        KeyCode::Char('t')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            // Handle CTRL+E for external editor
+                            // Handle CTRL+T for external editor
                             let editor_result = {
                                 let mut app_guard = app.lock().await;
                                 handle_external_editor(&mut app_guard).await

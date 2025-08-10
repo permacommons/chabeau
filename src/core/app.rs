@@ -1,9 +1,9 @@
+use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
 use crate::core::message::Message;
-use crate::api::models::{fetch_models, sort_models};
-use crate::utils::scroll::ScrollCalculator;
 use crate::utils::logging::LoggingState;
+use crate::utils::scroll::ScrollCalculator;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
@@ -29,6 +29,7 @@ pub struct App {
     pub current_stream_id: u64,
     pub last_retry_time: Instant,
     pub retrying_message_index: Option<usize>,
+    pub input_scroll_offset: u16,
 }
 
 impl App {
@@ -152,6 +153,7 @@ Please either:
                 current_stream_id: 0,
                 last_retry_time: Instant::now(),
                 retrying_message_index: None,
+                input_scroll_offset: 0,
             };
 
             // Try to fetch the newest model
@@ -213,6 +215,7 @@ Please either:
             current_stream_id: 0,
             last_retry_time: Instant::now(),
             retrying_message_index: None,
+            input_scroll_offset: 0,
         })
     }
 
@@ -494,5 +497,96 @@ Please either:
 
         // Return the ID of the first (newest) model
         Ok(models.first().map(|m| m.id.clone()))
+    }
+
+    /// Calculate how many lines the input text will wrap to
+    pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
+        if self.input.is_empty() {
+            return 1; // At least one line for the cursor
+        }
+
+        // Split input by newlines first
+        let lines: Vec<&str> = self.input.split('\n').collect();
+
+        let mut total_lines = 0;
+        for line in lines {
+            if line.is_empty() {
+                total_lines += 1;
+            } else {
+                // For each line, calculate how many wrapped lines it needs
+                let words: Vec<&str> = line.split_whitespace().collect();
+                if words.is_empty() {
+                    total_lines += 1;
+                    continue;
+                }
+
+                let mut current_line_len = 0;
+                let mut line_count = 1;
+
+                for word in words {
+                    let word_len = word.chars().count() as u16;
+
+                    // Start new line if adding this word would exceed width
+                    if current_line_len > 0 && current_line_len + 1 + word_len > width {
+                        line_count += 1;
+                        current_line_len = word_len;
+                    } else {
+                        if current_line_len > 0 {
+                            current_line_len += 1; // Add space
+                        }
+                        current_line_len += word_len;
+                    }
+                }
+
+                total_lines += line_count;
+            }
+        }
+
+        // Ensure we have at least one line
+        total_lines.max(1)
+    }
+
+    /// Calculate the input area height based on content
+    pub fn calculate_input_area_height(&self, width: u16) -> u16 {
+        if self.input.is_empty() {
+            return 1; // Default to 1 line when empty
+        }
+
+        let wrapped_lines = self.calculate_input_wrapped_lines(width.saturating_sub(2)); // Account for borders
+
+        // Start at 1 line, expand to 2 when we have content that wraps or newlines
+        // Then expand up to maximum of 6 lines
+        if wrapped_lines <= 1 && !self.input.contains('\n') {
+            1 // Single line, no wrapping, no newlines
+        } else {
+            (wrapped_lines as u16).clamp(2, 6) // Expand to 2-6 lines
+        }
+    }
+
+    /// Update input scroll offset to keep cursor visible
+    pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
+        let total_input_lines = self.calculate_input_wrapped_lines(width.saturating_sub(2)) as u16;
+
+        if total_input_lines <= input_area_height {
+            // All content fits, no scrolling needed
+            self.input_scroll_offset = 0;
+        } else {
+            // Calculate cursor position
+            let input_lines: Vec<&str> = self.input.split('\n').collect();
+            let cursor_line = input_lines.len().saturating_sub(1) as u16;
+
+            // Ensure cursor is visible within the input area
+            if cursor_line < self.input_scroll_offset {
+                // Cursor is above visible area, scroll up
+                self.input_scroll_offset = cursor_line;
+            } else if cursor_line >= self.input_scroll_offset + input_area_height {
+                // Cursor is below visible area, scroll down
+                self.input_scroll_offset = cursor_line.saturating_sub(input_area_height - 1);
+            }
+
+            // Ensure scroll offset doesn't exceed bounds
+            let max_scroll = total_input_lines.saturating_sub(input_area_height);
+            self.input_scroll_offset = self.input_scroll_offset.min(max_scroll);
+        }
     }
 }

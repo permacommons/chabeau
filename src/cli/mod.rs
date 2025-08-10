@@ -12,11 +12,11 @@ use clap::{Parser, Subcommand};
 
 // Import specific items we need
 use crate::auth::AuthManager;
-use crate::core::config::Config;
-use crate::ui::chat_loop::run_chat;
 use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
 use crate::cli::set_default_model::set_default_model;
+use crate::core::config::Config;
+use crate::ui::chat_loop::run_chat;
 
 #[derive(Parser)]
 #[command(name = "chabeau")]

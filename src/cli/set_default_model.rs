@@ -2,9 +2,9 @@
 //!
 //! This module handles the interactive selection and configuration of default models for providers.
 
+use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
-use crate::api::models::{fetch_models, sort_models};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 

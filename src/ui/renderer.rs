@@ -7,9 +7,15 @@ use ratatui::{
 };
 
 pub fn ui(f: &mut Frame, app: &App) {
+    // Calculate dynamic input area height based on content
+    let input_area_height = app.calculate_input_area_height(f.area().width);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(input_area_height + 2), // +2 for borders
+        ])
         .split(f.area());
 
     // Use the shared method to build display lines
@@ -51,11 +57,11 @@ pub fn ui(f: &mut Frame, app: &App) {
     };
 
     let input_title = if app.is_streaming {
-        "Type your message (Esc to interrupt, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
+        "Type your message (Alt+Enter for new line, Esc to interrupt, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
     } else if app.can_retry() {
-        "Type your message (Ctrl+R to retry, /help for help, Ctrl+C to quit)"
+        "Type your message (Alt+Enter for new line, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
     } else {
-        "Type your message (/help for help, Ctrl+C to quit)"
+        "Type your message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
     };
 
     // Create input text with streaming indicator if needed
@@ -123,19 +129,41 @@ pub fn ui(f: &mut Frame, app: &App) {
                 .border_style(Style::default().fg(Color::Reset)) // Explicitly reset to system default
                 .title(input_title),
         )
-        .wrap(Wrap { trim: false }); // Don't trim whitespace!
+        .wrap(Wrap { trim: false }) // Don't trim whitespace to preserve newlines
+        .scroll((app.input_scroll_offset, 0)); // Apply input scrolling
 
     f.render_widget(input, chunks[1]);
 
-    // Set cursor position (limit to avoid overlapping with indicator)
+    // Set cursor position for multi-line input with scrolling support
     if app.input_mode {
-        let max_cursor_pos = if app.is_streaming {
-            chunks[1].width.saturating_sub(6) // Leave space for indicator
+        // Calculate the position of the cursor within the input text
+        let input_lines: Vec<&str> = app.input.split('\n').collect();
+
+        // The cursor is always at the end of the input
+        // Find which line that corresponds to
+        let cursor_line = input_lines.len().saturating_sub(1) as u16;
+        let cursor_col = if let Some(last_line) = input_lines.last() {
+            last_line.len()
         } else {
-            chunks[1].width.saturating_sub(2) // Just account for borders
+            0
         };
 
-        let cursor_x = (app.input.len() as u16 + 1).min(max_cursor_pos);
-        f.set_cursor_position((chunks[1].x + cursor_x, chunks[1].y + 1));
+        // Calculate the visible cursor position accounting for scroll offset
+        let visible_cursor_line = cursor_line.saturating_sub(app.input_scroll_offset);
+
+        // Only show cursor if it's within the visible area
+        if visible_cursor_line < input_area_height {
+            // Calculate the x position within the current line
+            let max_cursor_x = if app.is_streaming {
+                chunks[1].width.saturating_sub(6) // Leave space for indicator
+            } else {
+                chunks[1].width.saturating_sub(2) // Just account for borders
+            };
+
+            let cursor_x = (cursor_col as u16 + 1).min(max_cursor_x);
+            let cursor_y = chunks[1].y + 1 + visible_cursor_line;
+
+            f.set_cursor_position((chunks[1].x + cursor_x, cursor_y));
+        }
     }
 }

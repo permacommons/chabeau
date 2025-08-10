@@ -1,11 +1,11 @@
 // Declare all modules
 mod api;
-mod core;
 mod auth;
+mod cli;
 mod commands;
+mod core;
 mod ui;
 mod utils;
-mod cli;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     cli::main()

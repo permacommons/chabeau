@@ -630,9 +630,23 @@ pub async fn run_chat(
                     }
                 }
                 Event::Paste(text) => {
-                    // Handle paste events - add the pasted text directly to input
+                    // Handle paste events - sanitize and add the pasted text to input
                     let mut app_guard = app.lock().await;
-                    app_guard.input.push_str(&text);
+
+                    // Sanitize the pasted text to prevent TUI corruption
+                    // Convert tabs to spaces and carriage returns to newlines
+                    let sanitized_text = text
+                        .replace('\t', "    ") // Convert tabs to 4 spaces
+                        .replace('\r', "\n") // Convert carriage returns to newlines
+                        .chars()
+                        .filter(|&c| {
+                            // Allow printable characters and newlines, filter out other control characters
+                            c == '\n' || !c.is_control()
+                        })
+                        .collect::<String>();
+
+                    app_guard.input.push_str(&sanitized_text);
+
                     // Update input scroll to keep cursor visible
                     let terminal_size = terminal.size().unwrap_or_default();
                     let input_area_height =

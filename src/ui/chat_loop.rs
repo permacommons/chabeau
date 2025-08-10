@@ -418,7 +418,7 @@ pub async fn run_chat(
                             if modifiers.contains(event::KeyModifiers::ALT) {
                                 // Alt+Enter: insert newline in input
                                 let mut app_guard = app.lock().await;
-                                app_guard.input.push('\n');
+                                app_guard.insert_char_at_cursor('\n');
                                 // Update input scroll to keep cursor visible
                                 let terminal_size = terminal.size().unwrap_or_default();
                                 let input_area_height =
@@ -443,7 +443,7 @@ pub async fn run_chat(
                                     }
 
                                     let input_text = app_guard.input.clone();
-                                    app_guard.input.clear();
+                                    app_guard.clear_input();
 
                                     // Process input for commands
                                     match process_input(&mut app_guard, &input_text) {
@@ -586,9 +586,53 @@ pub async fn run_chat(
                                 });
                             }
                         }
+                        KeyCode::Char('a')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            // Ctrl+A: Move cursor to beginning of input
+                            let mut app_guard = app.lock().await;
+                            app_guard.move_cursor_to_beginning();
+                            // Update input scroll to keep cursor visible
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(terminal_size.width);
+                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                        }
+                        KeyCode::Char('e')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            // Ctrl+E: Move cursor to end of input
+                            let mut app_guard = app.lock().await;
+                            app_guard.move_cursor_to_end();
+                            // Update input scroll to keep cursor visible
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(terminal_size.width);
+                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                        }
+                        KeyCode::Left => {
+                            // Left Arrow: Move cursor one position left
+                            let mut app_guard = app.lock().await;
+                            app_guard.move_cursor_left();
+                            // Update input scroll to keep cursor visible
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(terminal_size.width);
+                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                        }
+                        KeyCode::Right => {
+                            // Right Arrow: Move cursor one position right
+                            let mut app_guard = app.lock().await;
+                            app_guard.move_cursor_right();
+                            // Update input scroll to keep cursor visible
+                            let terminal_size = terminal.size().unwrap_or_default();
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(terminal_size.width);
+                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                        }
                         KeyCode::Char(c) => {
                             let mut app_guard = app.lock().await;
-                            app_guard.input.push(c);
+                            app_guard.insert_char_at_cursor(c);
                             // Update input scroll to keep cursor visible
                             let terminal_size = terminal.size().unwrap_or_default();
                             let input_area_height =
@@ -597,7 +641,7 @@ pub async fn run_chat(
                         }
                         KeyCode::Backspace => {
                             let mut app_guard = app.lock().await;
-                            app_guard.input.pop();
+                            app_guard.delete_char_before_cursor();
                             // Update input scroll to keep cursor visible
                             let terminal_size = terminal.size().unwrap_or_default();
                             let input_area_height =
@@ -645,7 +689,7 @@ pub async fn run_chat(
                         })
                         .collect::<String>();
 
-                    app_guard.input.push_str(&sanitized_text);
+                    app_guard.insert_str_at_cursor(&sanitized_text);
 
                     // Update input scroll to keep cursor visible
                     let terminal_size = terminal.size().unwrap_or_default();

@@ -96,6 +96,10 @@ chabeau set default-provider            # Show current configuration
 |-----|--------|
 | **Type** | Enter message |
 | **Enter** | Send message |
+| **Alt+Enter** | Insert newline in input |
+| **Ctrl+A** | Move cursor to beginning of input |
+| **Ctrl+E** | Move cursor to end of input |
+| **Left/Right** | Move cursor left/right in input |
 | **Up/Down/Mouse** | Scroll chat history |
 | **Ctrl+C** | Quit |
 | **Ctrl+R** | Retry last response |

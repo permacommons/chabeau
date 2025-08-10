@@ -137,19 +137,31 @@ pub fn ui(f: &mut Frame, app: &App) {
     // Set cursor position for multi-line input with scrolling support
     if app.input_mode {
         // Calculate the position of the cursor within the input text
-        let input_lines: Vec<&str> = app.input.split('\n').collect();
+        let input_chars: Vec<char> = app.input.chars().collect();
+        let cursor_position = app.input_cursor_position.min(input_chars.len());
 
-        // The cursor is always at the end of the input
-        // Find which line that corresponds to
-        let cursor_line = input_lines.len().saturating_sub(1) as u16;
-        let cursor_col = if let Some(last_line) = input_lines.last() {
-            last_line.len()
-        } else {
-            0
-        };
+        // Find which line and column the cursor is on
+        let mut current_line = 0u16;
+        let mut current_col = 0usize;
+        let mut chars_processed = 0;
+
+        for (_, &ch) in input_chars.iter().enumerate() {
+            if chars_processed >= cursor_position {
+                break;
+            }
+
+            if ch == '\n' {
+                current_line += 1;
+                current_col = 0;
+            } else {
+                current_col += 1;
+            }
+
+            chars_processed += 1;
+        }
 
         // Calculate the visible cursor position accounting for scroll offset
-        let visible_cursor_line = cursor_line.saturating_sub(app.input_scroll_offset);
+        let visible_cursor_line = current_line.saturating_sub(app.input_scroll_offset);
 
         // Only show cursor if it's within the visible area
         if visible_cursor_line < input_area_height {
@@ -160,7 +172,7 @@ pub fn ui(f: &mut Frame, app: &App) {
                 chunks[1].width.saturating_sub(2) // Just account for borders
             };
 
-            let cursor_x = (cursor_col as u16 + 1).min(max_cursor_x);
+            let cursor_x = (current_col as u16 + 1).min(max_cursor_x);
             let cursor_y = chunks[1].y + 1 + visible_cursor_line;
 
             f.set_cursor_position((chunks[1].x + cursor_x, cursor_y));

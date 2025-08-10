@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
+    pub input_cursor_position: usize,
     pub input_mode: bool,
     pub current_response: String,
     pub client: Client,
@@ -136,6 +137,7 @@ Please either:
             let temp_app = App {
                 messages: VecDeque::new(),
                 input: String::new(),
+                input_cursor_position: 0,
                 input_mode: true,
                 current_response: String::new(),
                 client: temp_client.clone(),
@@ -198,6 +200,7 @@ Please either:
         Ok(App {
             messages: VecDeque::new(),
             input: String::new(),
+            input_cursor_position: 0,
             input_mode: true,
             current_response: String::new(),
             client: Client::new(),
@@ -588,5 +591,100 @@ Please either:
             let max_scroll = total_input_lines.saturating_sub(input_area_height);
             self.input_scroll_offset = self.input_scroll_offset.min(max_scroll);
         }
+    }
+
+    // Input cursor movement methods
+
+    /// Move cursor to the beginning of the input (Ctrl+A)
+    pub fn move_cursor_to_beginning(&mut self) {
+        self.input_cursor_position = 0;
+    }
+
+    /// Move cursor to the end of the input (Ctrl+E)
+    pub fn move_cursor_to_end(&mut self) {
+        self.input_cursor_position = self.input.chars().count();
+    }
+
+    /// Move cursor one position to the left (Left Arrow)
+    pub fn move_cursor_left(&mut self) {
+        if self.input_cursor_position > 0 {
+            self.input_cursor_position -= 1;
+        }
+    }
+
+    /// Move cursor one position to the right (Right Arrow)
+    pub fn move_cursor_right(&mut self) {
+        let max_position = self.input.chars().count();
+        if self.input_cursor_position < max_position {
+            self.input_cursor_position += 1;
+        }
+    }
+
+    // Input text manipulation methods
+
+    /// Insert character at cursor position
+    pub fn insert_char_at_cursor(&mut self, c: char) {
+        let char_indices: Vec<_> = self.input.char_indices().collect();
+
+        if self.input_cursor_position >= char_indices.len() {
+            // Cursor is at the end, just append
+            self.input.push(c);
+        } else {
+            // Insert at the cursor position
+            let byte_index = char_indices[self.input_cursor_position].0;
+            self.input.insert(byte_index, c);
+        }
+
+        self.input_cursor_position += 1;
+    }
+
+    /// Insert string at cursor position
+    pub fn insert_str_at_cursor(&mut self, s: &str) {
+        let char_indices: Vec<_> = self.input.char_indices().collect();
+
+        if self.input_cursor_position >= char_indices.len() {
+            // Cursor is at the end, just append
+            self.input.push_str(s);
+        } else {
+            // Insert at the cursor position
+            let byte_index = char_indices[self.input_cursor_position].0;
+            self.input.insert_str(byte_index, s);
+        }
+
+        self.input_cursor_position += s.chars().count();
+    }
+
+    /// Delete character before cursor (backspace)
+    pub fn delete_char_before_cursor(&mut self) -> bool {
+        if self.input_cursor_position == 0 {
+            return false; // Nothing to delete
+        }
+
+        let char_indices: Vec<_> = self.input.char_indices().collect();
+
+        if self.input_cursor_position <= char_indices.len() {
+            let char_to_remove_index = self.input_cursor_position - 1;
+
+            if char_to_remove_index < char_indices.len() {
+                let byte_start = char_indices[char_to_remove_index].0;
+                let byte_end = if char_to_remove_index + 1 < char_indices.len() {
+                    char_indices[char_to_remove_index + 1].0
+                } else {
+                    self.input.len()
+                };
+
+                self.input.drain(byte_start..byte_end);
+                self.input_cursor_position -= 1;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Clear input and reset cursor
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.input_cursor_position = 0;
     }
 }

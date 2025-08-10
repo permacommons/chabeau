@@ -11,7 +11,10 @@ use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
 use futures_util::StreamExt;
 use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, MouseEventKind},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -50,7 +53,7 @@ pub async fn run_chat(
     // Setup terminal only after successful app creation
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -626,6 +629,17 @@ pub async fn run_chat(
                         _ => {}
                     }
                 }
+                Event::Paste(text) => {
+                    // Handle paste events - add the pasted text directly to input
+                    let mut app_guard = app.lock().await;
+                    app_guard.input.push_str(&text);
+                    // Update input scroll to keep cursor visible
+                    let terminal_size = terminal.size().unwrap_or_default();
+                    let input_area_height =
+                        app_guard.calculate_input_area_height(terminal_size.width);
+                    app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                    should_redraw = true;
+                }
                 Event::Mouse(mouse) => {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
@@ -699,7 +713,11 @@ pub async fn run_chat(
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     result

@@ -1,5 +1,12 @@
 # Changelog
 
+
+## Unreleased changes
+
+
+### Fixed
+- Sanitize pasted text input to prevent TUI corruption by converting tabs to spaces and filtering control characters (`src/ui/chat_loop.rs`)
+
 ## 0.2.1
 
 ### Added  

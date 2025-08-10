@@ -1,8 +1,9 @@
 # Changelog
 
+## 0.2.2
 
-## Unreleased changes
-
+### Added
+- Support for Ctrl+A/Ctrl+E, left/right to navigate input
 
 ### Fixed
 - Sanitize pasted text input to prevent TUI corruption by converting tabs to spaces and filtering control characters (`src/ui/chat_loop.rs`)

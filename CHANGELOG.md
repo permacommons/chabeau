@@ -1,5 +1,18 @@
 # Changelog
 
+
+## Unreleased changes
+
+
+### Added  
+- Multi-line input support with Alt+Enter keybinding (`src/core/app.rs`, `src/ui/chat_loop.rs`)  
+- Input area scrolling for long messages (`src/core/app.rs`)  
+- Dynamic input height expanding up to 6 lines (`src/core/app.rs`)  
+
+### Changed  
+- Improved terminal paste handling with bracketed paste mode support (`src/ui/chat_loop.rs`)  
+- Enhanced input field layout with proper cursor positioning during multi-line editing (`src/ui/renderer.rs`)
+
 ## 0.2.0
 
 ### Added  

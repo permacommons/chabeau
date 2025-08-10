@@ -1,8 +1,6 @@
 # Changelog
 
-
-## Unreleased changes
-
+## 0.2.1
 
 ### Added  
 - Multi-line input support with Alt+Enter keybinding (`src/core/app.rs`, `src/ui/chat_loop.rs`)  
@@ -11,7 +9,7 @@
 
 ### Changed  
 - Improved terminal paste handling with bracketed paste mode support (`src/ui/chat_loop.rs`)  
-- Enhanced input field layout with proper cursor positioning during multi-line editing (`src/ui/renderer.rs`)
+- Updated external editor shortcut from Ctrl+E to Ctrl+T (`README.md`, `src/cli/mod.rs`, `src/commands/mod.rs`)
 
 ## 0.2.0
 

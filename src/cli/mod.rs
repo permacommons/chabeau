@@ -71,13 +71,13 @@ pub enum Commands {
     Deauth,
     /// Start the chat interface (default)
     Chat,
-    /// Set configuration values
+    /// Set configuration values, or show current configuration if no arguments are provided.
     Set {
-        /// Configuration key to set
-        key: String,
-        /// Value to set for the key (can be multiple words for default-model)
+        /// Configuration key to set. If no key is provided, the current configuration is shown.
+        key: Option<String>,
+        /// Value to set for the key (e.g., `openai` for `default-provider`).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        value: Option<Vec<String>>,
+        value: Vec<String>,
     },
     /// Unset configuration values
     Unset {
@@ -123,35 +123,29 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         }
         Commands::Set { key, value } => {
             let mut config = Config::load()?;
-            match key.as_str() {
-                "default-provider" => {
-                    if let Some(ref val) = value {
-                        if !val.is_empty() {
-                            config.default_provider = Some(val.join(" "));
+            if let Some(key) = key {
+                match key.as_str() {
+                    "default-provider" => {
+                        if !value.is_empty() {
+                            config.default_provider = Some(value.join(" "));
                             config.save()?;
-                            println!("✅ Set default-provider to: {}", val.join(" "));
+                            println!("✅ Set default-provider to: {}", value.join(" "));
                         } else {
                             config.print_all();
                         }
-                    } else {
-                        config.print_all();
                     }
-                }
-                "default-model" => {
-                    if let Some(ref val) = value {
-                        if !val.is_empty() {
-                            // Join all parts with spaces to handle multi-word values
-                            let val_str = val.join(" ");
-                            // Check if the user provided a provider-specific model in the format "provider model"
+                    "default-model" => {
+                        if !value.is_empty() {
+                            let val_str = value.join(" ");
                             let parts: Vec<&str> = val_str.splitn(2, ' ').collect();
                             if parts.len() == 2 {
-                                // Provider-specific model
                                 let provider = parts[0].to_string();
                                 let model = parts[1].to_string();
                                 config.set_default_model(provider.clone(), model.clone());
                                 config.save()?;
                                 println!(
-                                    "✅ Set default-model for provider '{provider}' to: {model}"
+                                    "✅ Set default-model for provider '{}' to: {}",
+                                    provider, model
                                 );
                             } else {
                                 eprintln!(
@@ -162,14 +156,14 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         } else {
                             config.print_all();
                         }
-                    } else {
-                        config.print_all();
+                    }
+                    _ => {
+                        eprintln!("❌ Unknown config key: {key}");
+                        std::process::exit(1);
                     }
                 }
-                _ => {
-                    eprintln!("❌ Unknown config key: {key}");
-                    std::process::exit(1);
-                }
+            } else {
+                config.print_all();
             }
             Ok(())
         }

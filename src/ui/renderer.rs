@@ -5,6 +5,128 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use std::time::Instant;
+
+// Constants for streaming indicator layout
+const BORDER_WIDTH: usize = 2;
+const INDICATOR_SPACING: usize = 3; // Space for gap + indicator + padding
+const ELLIPSIS_LENGTH: usize = 3;
+
+/// Creates input text with a pulsing streaming indicator positioned in the top-right corner
+fn create_input_with_streaming_indicator(input: &str, pulse_start: Instant, terminal_width: u16) -> String {
+    // Calculate pulse animation (0.0 to 1.0 over 1 second)
+    let elapsed = pulse_start.elapsed().as_millis() as f32 / 1000.0;
+    let pulse_phase = (elapsed * 2.0) % 2.0; // 2 cycles per second
+    let pulse_intensity = if pulse_phase < 1.0 {
+        pulse_phase
+    } else {
+        2.0 - pulse_phase
+    };
+
+    // Choose symbol based on pulse intensity
+    let symbol = if pulse_intensity < 0.33 {
+        "○"
+    } else if pulse_intensity < 0.66 {
+        "◐"
+    } else {
+        "●"
+    };
+
+    let input_lines: Vec<&str> = input.split('\n').collect();
+    let inner_width = terminal_width.saturating_sub(BORDER_WIDTH as u16) as usize;
+
+    if input_lines.len() == 1 {
+        create_single_line_with_indicator(input, symbol, inner_width)
+    } else {
+        create_multiline_with_indicator(&input_lines, symbol, inner_width)
+    }
+}
+
+/// Creates a single line with the streaming indicator at the end
+fn create_single_line_with_indicator(input: &str, symbol: &str, inner_width: usize) -> String {
+    let mut result = vec![' '; inner_width];
+    let input_chars: Vec<char> = input.chars().collect();
+    let max_input_len = inner_width.saturating_sub(INDICATOR_SPACING);
+
+    // Copy input characters to the beginning
+    for (i, &ch) in input_chars.iter().take(max_input_len).enumerate() {
+        result[i] = ch;
+    }
+
+    // Add ellipsis if input was truncated
+    if input_chars.len() > max_input_len && max_input_len >= ELLIPSIS_LENGTH {
+        for i in 0..ELLIPSIS_LENGTH {
+            result[max_input_len - ELLIPSIS_LENGTH + i] = '.';
+        }
+    }
+
+    // Place the indicator with padding from the right border
+    if inner_width > 1 {
+        if let Some(symbol_char) = symbol.chars().next() {
+            result[inner_width - 2] = symbol_char;
+        }
+    }
+
+    result.into_iter().collect()
+}
+
+/// Creates multi-line input with the streaming indicator on the first line only
+fn create_multiline_with_indicator(input_lines: &[&str], symbol: &str, inner_width: usize) -> String {
+    let mut modified_lines = Vec::new();
+
+    for (line_idx, line) in input_lines.iter().enumerate() {
+        if line_idx == 0 {
+            // First line gets the indicator
+            modified_lines.push(add_indicator_to_line(line, symbol, inner_width));
+        } else {
+            // Other lines remain unchanged
+            modified_lines.push(line.to_string());
+        }
+    }
+
+    modified_lines.join("\n")
+}
+
+/// Adds the streaming indicator to a single line, handling padding and truncation
+fn add_indicator_to_line(line: &str, symbol: &str, inner_width: usize) -> String {
+    let line_chars: Vec<char> = line.chars().collect();
+    let available_space = inner_width.saturating_sub(INDICATOR_SPACING);
+
+    if line_chars.len() <= available_space {
+        // Line fits - pad to full width and add indicator
+        let mut padded_line = String::from(line);
+        let spaces_needed = inner_width.saturating_sub(line_chars.len()).saturating_sub(2);
+
+        for _ in 0..spaces_needed {
+            padded_line.push(' ');
+        }
+
+        padded_line.push_str(symbol);
+        padded_line
+    } else {
+        // Line is too long - truncate with ellipsis and add indicator
+        let mut truncated_line = String::new();
+        let truncate_at = available_space.saturating_sub(ELLIPSIS_LENGTH);
+
+        for (i, &ch) in line_chars.iter().enumerate() {
+            if i >= truncate_at {
+                break;
+            }
+            truncated_line.push(ch);
+        }
+
+        truncated_line.push_str("...");
+
+        // Add spaces to fill remaining width
+        let spaces_needed = inner_width.saturating_sub(truncated_line.chars().count()).saturating_sub(1);
+        for _ in 0..spaces_needed {
+            truncated_line.push(' ');
+        }
+
+        truncated_line.push_str(symbol);
+        truncated_line
+    }
+}
 
 pub fn ui(f: &mut Frame, app: &App) {
     // Calculate dynamic input area height based on content
@@ -66,57 +188,7 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     // Create input text with streaming indicator if needed
     let input_text = if app.is_streaming {
-        // Calculate pulse animation (0.0 to 1.0 over 1 second)
-        let elapsed = app.pulse_start.elapsed().as_millis() as f32 / 1000.0;
-        let pulse_phase = (elapsed * 2.0) % 2.0; // 2 cycles per second
-        let pulse_intensity = if pulse_phase < 1.0 {
-            pulse_phase
-        } else {
-            2.0 - pulse_phase
-        };
-
-        // Choose symbol based on pulse intensity
-        let symbol = if pulse_intensity < 0.33 {
-            "○"
-        } else if pulse_intensity < 0.66 {
-            "◐"
-        } else {
-            "●"
-        };
-
-        // Calculate available width inside the input box (account for borders)
-        let inner_width = chunks[1].width.saturating_sub(2) as usize; // Remove left and right borders
-
-        // Build a string that's exactly inner_width characters long
-        // with the indicator ALWAYS at the last position
-        let mut result = vec![' '; inner_width]; // Start with all spaces
-
-        // Convert input to chars and place them at the beginning
-        let input_chars: Vec<char> = app.input.chars().collect();
-        let max_input_len = inner_width.saturating_sub(3); // Reserve space for gap + indicator + padding
-
-        // Copy input characters to the beginning of result
-        for (i, &ch) in input_chars.iter().take(max_input_len).enumerate() {
-            result[i] = ch;
-        }
-
-        // If input was too long, add ellipsis
-        if input_chars.len() > max_input_len && max_input_len >= 3 {
-            result[max_input_len - 3] = '.';
-            result[max_input_len - 2] = '.';
-            result[max_input_len - 1] = '.';
-        }
-
-        // Place the indicator with one space padding from the right border
-        if inner_width > 1 {
-            // Get the first character of the symbol (should be just one)
-            if let Some(symbol_char) = symbol.chars().next() {
-                result[inner_width - 2] = symbol_char; // -2 instead of -1 for padding
-            }
-        }
-
-        // Convert back to string
-        result.into_iter().collect()
+        create_input_with_streaming_indicator(&app.input, app.pulse_start, f.area().width)
     } else {
         app.input.clone()
     };
@@ -143,9 +215,8 @@ pub fn ui(f: &mut Frame, app: &App) {
         // Find which line and column the cursor is on
         let mut current_line = 0u16;
         let mut current_col = 0usize;
-        let mut chars_processed = 0;
 
-        for (_, &ch) in input_chars.iter().enumerate() {
+        for (chars_processed, &ch) in input_chars.iter().enumerate() {
             if chars_processed >= cursor_position {
                 break;
             }
@@ -156,8 +227,6 @@ pub fn ui(f: &mut Frame, app: &App) {
             } else {
                 current_col += 1;
             }
-
-            chars_processed += 1;
         }
 
         // Calculate the visible cursor position accounting for scroll offset

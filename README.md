@@ -1,6 +1,6 @@
 # Chabeau - Terminal Chat Interface
 
-![Chabeau in action](vhs.gif)
+![Chabeau in action, courtesy of VHS](vhs.gif)
 
 **NOTE:** This is pre-alpha software. It has only been tested on Linux.
 

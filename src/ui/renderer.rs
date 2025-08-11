@@ -13,11 +13,7 @@ const INDICATOR_SPACING: usize = 3; // Space for gap + indicator + padding
 const ELLIPSIS_LENGTH: usize = 3;
 
 /// Creates input text with a pulsing streaming indicator positioned in the top-right corner
-fn create_input_with_streaming_indicator(
-    input: &str,
-    pulse_start: Instant,
-    terminal_width: u16,
-) -> String {
+fn create_input_with_streaming_indicator(input: &str, pulse_start: Instant, terminal_width: u16) -> String {
     // Calculate pulse animation (0.0 to 1.0 over 1 second)
     let elapsed = pulse_start.elapsed().as_millis() as f32 / 1000.0;
     let pulse_phase = (elapsed * 2.0) % 2.0; // 2 cycles per second
@@ -75,11 +71,7 @@ fn create_single_line_with_indicator(input: &str, symbol: &str, inner_width: usi
 }
 
 /// Creates multi-line input with the streaming indicator on the first line only
-fn create_multiline_with_indicator(
-    input_lines: &[&str],
-    symbol: &str,
-    inner_width: usize,
-) -> String {
+fn create_multiline_with_indicator(input_lines: &[&str], symbol: &str, inner_width: usize) -> String {
     let mut modified_lines = Vec::new();
 
     for (line_idx, line) in input_lines.iter().enumerate() {
@@ -103,9 +95,7 @@ fn add_indicator_to_line(line: &str, symbol: &str, inner_width: usize) -> String
     if line_chars.len() <= available_space {
         // Line fits - pad to full width and add indicator
         let mut padded_line = String::from(line);
-        let spaces_needed = inner_width
-            .saturating_sub(line_chars.len())
-            .saturating_sub(2);
+        let spaces_needed = inner_width.saturating_sub(line_chars.len()).saturating_sub(2);
 
         for _ in 0..spaces_needed {
             padded_line.push(' ');
@@ -128,9 +118,7 @@ fn add_indicator_to_line(line: &str, symbol: &str, inner_width: usize) -> String
         truncated_line.push_str("...");
 
         // Add spaces to fill remaining width
-        let spaces_needed = inner_width
-            .saturating_sub(truncated_line.chars().count())
-            .saturating_sub(1);
+        let spaces_needed = inner_width.saturating_sub(truncated_line.chars().count()).saturating_sub(1);
         for _ in 0..spaces_needed {
             truncated_line.push(' ');
         }
@@ -191,11 +179,9 @@ pub fn ui(f: &mut Frame, app: &App) {
     };
 
     let input_title = if app.is_streaming {
-        "Type your message (Alt+Enter for new line, Esc to interrupt, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
-    } else if app.can_retry() {
-        "Type your message (Alt+Enter for new line, Ctrl+R to retry, /help for help, Ctrl+C to quit)"
+        "Type message (Esc to interrupt, Ctrl+R to retry)"
     } else {
-        "Type your message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
+        "Type message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
     };
 
     // Create input text with streaming indicator if needed

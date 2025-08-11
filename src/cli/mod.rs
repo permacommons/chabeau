@@ -3,8 +3,8 @@
 //! This module handles parsing command-line arguments and executing the appropriate commands.
 
 pub mod model_list;
+pub mod pick_default_model;
 pub mod provider_list;
-pub mod set_default_model;
 
 use std::error::Error;
 
@@ -13,8 +13,8 @@ use clap::{Parser, Subcommand};
 // Import specific items we need
 use crate::auth::AuthManager;
 use crate::cli::model_list::list_models;
+use crate::cli::pick_default_model::pick_default_model;
 use crate::cli::provider_list::list_providers;
-use crate::cli::set_default_model::set_default_model;
 use crate::core::config::Config;
 use crate::ui::chat_loop::run_chat;
 
@@ -85,7 +85,7 @@ pub enum Commands {
         value: Option<String>,
     },
     /// Interactively select and set a default model
-    SetDefaultModel {
+    PickDefaultModel {
         /// Provider to list models for (optional)
         provider: Option<String>,
     },
@@ -226,8 +226,8 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-        Commands::SetDefaultModel { provider } => {
-            set_default_model(provider).await?;
+        Commands::PickDefaultModel { provider } => {
+            pick_default_model(provider).await?;
             Ok(())
         }
     }

@@ -4,6 +4,7 @@
 
 pub mod model_list;
 pub mod pick_default_model;
+pub mod pick_default_provider;
 pub mod provider_list;
 
 use std::error::Error;
@@ -14,6 +15,7 @@ use clap::{Parser, Subcommand};
 use crate::auth::AuthManager;
 use crate::cli::model_list::list_models;
 use crate::cli::pick_default_model::pick_default_model;
+use crate::cli::pick_default_provider::pick_default_provider;
 use crate::cli::provider_list::list_providers;
 use crate::core::config::Config;
 use crate::ui::chat_loop::run_chat;
@@ -89,6 +91,8 @@ pub enum Commands {
         /// Provider to list models for (optional)
         provider: Option<String>,
     },
+    /// Interactively select and set a default provider
+    PickDefaultProvider,
 }
 
 pub fn main() -> Result<(), Box<dyn Error>> {
@@ -228,6 +232,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         }
         Commands::PickDefaultModel { provider } => {
             pick_default_model(provider).await?;
+            Ok(())
+        }
+        Commands::PickDefaultProvider => {
+            pick_default_provider().await?;
             Ok(())
         }
     }

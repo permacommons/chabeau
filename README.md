@@ -77,8 +77,9 @@ chabeau set default-provider openai     # Set default provider
 chabeau set default-model openai gpt-4o # Set default model for a provider
 ```
 
-You can also use the interactive model selector:
+You can also use the interactive selectors:
 ```bash
+chabeau pick-default-provider            # Interactive provider selection
 chabeau pick-default-model               # Interactive model selection
 chabeau pick-default-model --provider openai  # Select model for specific provider
 ```
@@ -137,6 +138,7 @@ Modular design with focused components:
   - `model_list.rs` - Model listing functionality
   - `provider_list.rs` - Provider listing functionality
   - `pick_default_model.rs` - Default model configuration
+  - `pick_default_provider.rs` - Default provider configuration
 - `core/` - Core application components
   - `mod.rs` - Core module declarations
   - `app.rs` - Core application state

@@ -158,7 +158,7 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
     }
 
     let selected_model = &models[choice - 1].id;
-    config.set_default_model(provider_name, selected_model.clone());
+    config.set_default_model(provider_name.to_lowercase(), selected_model.clone());
     config.save()?;
 
     println!("✅ Set default model for provider to: {selected_model}");

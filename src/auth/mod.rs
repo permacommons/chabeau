@@ -257,7 +257,7 @@ impl AuthManager {
 
         let mut name = String::new();
         io::stdin().read_line(&mut name)?;
-        let name = name.trim();
+        let name = name.trim().to_lowercase(); // Normalize to lowercase
 
         if name.is_empty() || name.contains(' ') {
             return Err("Provider name cannot be empty or contain spaces".into());
@@ -286,8 +286,8 @@ impl AuthManager {
         }
 
         // Store both the custom provider URL and token
-        self.store_custom_provider(name, base_url)?;
-        self.store_token(name, token)?;
+        self.store_custom_provider(&name, base_url)?;
+        self.store_token(&name, token)?;
 
         println!("✓ Custom provider '{name}' configured with URL: {base_url}");
 

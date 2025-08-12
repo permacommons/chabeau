@@ -171,7 +171,7 @@ pub fn ui(f: &mut Frame, app: &App) {
     let title = format!(
         "Chabeau v{} - {} ({}) • Logging: {}",
         env!("CARGO_PKG_VERSION"),
-        app.provider_name,
+        app.provider_display_name,
         app.model,
         app.get_logging_status()
     );

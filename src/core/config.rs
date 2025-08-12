@@ -107,6 +107,112 @@ mod tests {
             Some("new-provider".to_string())
         );
     }
+
+    #[test]
+    fn test_default_model_lookup_uses_provider_id() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_config.toml");
+
+        let mut config = Config::default();
+
+        // Set a default model using the provider ID (as done in pick_default_model.rs)
+        config.set_default_model("openai".to_string(), "gpt-4".to_string());
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load the config back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify we can look up the model using the provider ID (not display name)
+        assert_eq!(
+            loaded_config.get_default_model("openai"),
+            Some(&"gpt-4".to_string())
+        );
+
+        // This should return None because "OpenAI" is the display name, not the ID
+        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
+    }
+
+    #[test]
+    fn test_multiple_provider_default_models() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_config.toml");
+
+        let mut config = Config::default();
+
+        // Set default models for multiple providers using their IDs
+        config.set_default_model("openai".to_string(), "gpt-4".to_string());
+        config.set_default_model(
+            "anthropic".to_string(),
+            "claude-3-opus-20240229".to_string(),
+        );
+        config.set_default_model("custom-provider".to_string(), "custom-model".to_string());
+
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load the config back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify all models can be looked up using provider IDs
+        assert_eq!(
+            loaded_config.get_default_model("openai"),
+            Some(&"gpt-4".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("anthropic"),
+            Some(&"claude-3-opus-20240229".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("custom-provider"),
+            Some(&"custom-model".to_string())
+        );
+
+        // Verify display names don't work (this was the bug)
+        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
+        assert_eq!(loaded_config.get_default_model("Anthropic"), None);
+    }
+
+    #[test]
+    fn test_case_insensitive_provider_normalization() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_config.toml");
+
+        let mut config = Config::default();
+
+        // Set default models using mixed case provider names (as would happen from CLI)
+        config.set_default_model("OpenAI".to_lowercase(), "gpt-4".to_string());
+        config.set_default_model("POE".to_lowercase(), "claude-instant".to_string());
+        config.set_default_model("AnThRoPiC".to_lowercase(), "claude-3-opus".to_string());
+
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load the config back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify all models can be looked up using lowercase provider names
+        assert_eq!(
+            loaded_config.get_default_model("openai"),
+            Some(&"gpt-4".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("poe"),
+            Some(&"claude-instant".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("anthropic"),
+            Some(&"claude-3-opus".to_string())
+        );
+
+        // Verify mixed case lookups don't work (consistent behavior)
+        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
+        assert_eq!(loaded_config.get_default_model("POE"), None);
+        assert_eq!(loaded_config.get_default_model("AnThRoPiC"), None);
+    }
 }
 
 impl Config {

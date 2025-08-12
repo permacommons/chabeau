@@ -73,7 +73,7 @@ pub async fn pick_default_provider() -> Result<(), Box<dyn Error>> {
     }
 
     let selected_provider = &providers[choice - 1].0;
-    config.default_provider = Some(selected_provider.clone());
+    config.default_provider = Some(selected_provider.to_lowercase());
     config.save()?;
 
     println!("✅ Set default provider to: {selected_provider}");

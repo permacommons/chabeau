@@ -609,15 +609,15 @@ Please either:
 
     /// Update input scroll offset to keep cursor visible
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let total_input_lines = self.calculate_input_wrapped_lines(width.saturating_sub(2)) as u16;
+        let available_width = width.saturating_sub(2); // Account for borders
+        let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {
             // All content fits, no scrolling needed
             self.input_scroll_offset = 0;
         } else {
-            // Calculate cursor position
-            let input_lines: Vec<&str> = self.input.split('\n').collect();
-            let cursor_line = input_lines.len().saturating_sub(1) as u16;
+            // Calculate cursor line position accounting for text wrapping
+            let cursor_line = self.calculate_cursor_line_position(available_width as usize);
 
             // Ensure cursor is visible within the input area
             if cursor_line < self.input_scroll_offset {
@@ -632,6 +632,44 @@ Please either:
             let max_scroll = total_input_lines.saturating_sub(input_area_height);
             self.input_scroll_offset = self.input_scroll_offset.min(max_scroll);
         }
+    }
+
+    /// Calculate which line the cursor is on, accounting for text wrapping
+    fn calculate_cursor_line_position(&self, available_width: usize) -> u16 {
+        let cursor_position = self.input_cursor_position.min(self.input.chars().count());
+
+        // Ensure we have at least 1 character width to avoid division by zero
+        let available_width = available_width.max(1);
+
+        // Simple character-by-character simulation with margin for word wrapping
+        let mut current_line = 0u16;
+        let mut current_col = 0usize;
+
+        // Leave a small margin before wrapping to match ratatui's word wrapping behavior
+        let wrap_width = available_width.saturating_sub(1);
+
+        for (char_idx, ch) in self.input.chars().enumerate() {
+            if char_idx >= cursor_position {
+                break;
+            }
+
+            if ch == '\n' {
+                // Explicit newline - move to next line
+                current_line += 1;
+                current_col = 0;
+            } else {
+                // Regular character - check if we need to wrap
+                if current_col >= wrap_width {
+                    // Need to wrap to next line
+                    current_line += 1;
+                    current_col = 1; // This character goes on the new line
+                } else {
+                    current_col += 1;
+                }
+            }
+        }
+
+        current_line
     }
 
     // Input cursor movement methods

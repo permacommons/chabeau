@@ -222,20 +222,41 @@ pub fn ui(f: &mut Frame, app: &App) {
         let input_chars: Vec<char> = app.input.chars().collect();
         let cursor_position = app.input_cursor_position.min(input_chars.len());
 
-        // Find which line and column the cursor is on
+        // Calculate available width for text (accounting for borders and streaming indicator)
+        let available_width = if app.is_streaming {
+            chunks[1].width.saturating_sub(6) // Account for borders + streaming indicator space
+        } else {
+            chunks[1].width.saturating_sub(2) // Just account for borders
+        } as usize;
+
+        // Ensure we have at least 1 character width to avoid division by zero
+        let available_width = available_width.max(1);
+
+        // Find which line and column the cursor is on by simulating text rendering
         let mut current_line = 0u16;
         let mut current_col = 0usize;
 
-        for (chars_processed, &ch) in input_chars.iter().enumerate() {
-            if chars_processed >= cursor_position {
+        // Leave a small margin before wrapping to match ratatui's word wrapping behavior
+        let wrap_width = available_width.saturating_sub(1);
+
+        for (char_idx, ch) in app.input.chars().enumerate() {
+            if char_idx >= cursor_position {
                 break;
             }
 
             if ch == '\n' {
+                // Explicit newline - move to next line
                 current_line += 1;
                 current_col = 0;
             } else {
-                current_col += 1;
+                // Regular character - check if we need to wrap
+                if current_col >= wrap_width {
+                    // Need to wrap to next line
+                    current_line += 1;
+                    current_col = 1; // This character goes on the new line
+                } else {
+                    current_col += 1;
+                }
             }
         }
 
@@ -244,14 +265,8 @@ pub fn ui(f: &mut Frame, app: &App) {
 
         // Only show cursor if it's within the visible area
         if visible_cursor_line < input_area_height {
-            // Calculate the x position within the current line
-            let max_cursor_x = if app.is_streaming {
-                chunks[1].width.saturating_sub(6) // Leave space for indicator
-            } else {
-                chunks[1].width.saturating_sub(2) // Just account for borders
-            };
-
-            let cursor_x = (current_col as u16 + 1).min(max_cursor_x);
+            // Ensure cursor stays within the input area bounds (account for borders)
+            let cursor_x = (current_col as u16 + 1).min(chunks[1].width.saturating_sub(2));
             let cursor_y = chunks[1].y + 1 + visible_cursor_line;
 
             f.set_cursor_position((chunks[1].x + cursor_x, cursor_y));

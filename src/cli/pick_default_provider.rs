@@ -3,6 +3,7 @@
 //! This module handles the interactive selection and configuration of default providers.
 
 use crate::auth::AuthManager;
+use crate::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
 use std::error::Error;
 
@@ -14,16 +15,11 @@ pub async fn pick_default_provider() -> Result<(), Box<dyn Error>> {
     let mut providers = Vec::new();
 
     // Add built-in providers that have authentication
-    let builtin_providers = vec![
-        ("openai", "OpenAI"),
-        ("openrouter", "OpenRouter"),
-        ("poe", "Poe"),
-        ("anthropic", "Anthropic"),
-    ];
+    let builtin_providers = load_builtin_providers();
 
-    for (name, display_name) in builtin_providers {
-        if auth_manager.get_token(name)?.is_some() {
-            providers.push((name.to_string(), display_name.to_string()));
+    for builtin_provider in builtin_providers {
+        if auth_manager.get_token(&builtin_provider.id)?.is_some() {
+            providers.push((builtin_provider.id, builtin_provider.display_name));
         }
     }
 

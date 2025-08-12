@@ -1,3 +1,4 @@
+use crate::builtin_providers::load_builtin_providers;
 use keyring::Entry;
 use std::io::{self, Write};
 
@@ -26,28 +27,12 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new() -> Self {
-        let providers = vec![
-            Provider::new(
-                "openai".to_string(),
-                "https://api.openai.com/v1".to_string(),
-                "OpenAI".to_string(),
-            ),
-            Provider::new(
-                "openrouter".to_string(),
-                "https://openrouter.ai/api/v1".to_string(),
-                "OpenRouter".to_string(),
-            ),
-            Provider::new(
-                "poe".to_string(),
-                "https://api.poe.com/v1".to_string(),
-                "Poe".to_string(),
-            ),
-            Provider::new(
-                "anthropic".to_string(),
-                "https://api.anthropic.com/v1".to_string(),
-                "Anthropic".to_string(),
-            ),
-        ];
+        // Load built-in providers from configuration
+        let builtin_providers = load_builtin_providers();
+        let providers = builtin_providers
+            .into_iter()
+            .map(|bp| Provider::new(bp.id, bp.base_url, bp.display_name))
+            .collect();
 
         Self { providers }
     }

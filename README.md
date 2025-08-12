@@ -133,6 +133,8 @@ export EDITOR="code --wait" # VS Code with wait
 Modular design with focused components:
 
 - `main.rs` - Entry point
+- `builtin_providers.rs` - Built-in provider configuration (loaded from `builtin_models.toml`)
+- `builtin_models.toml` - Build-time configuration for supported providers
 - `cli/` - Command-line interface parsing and handling
   - `mod.rs` - CLI argument parsing and command dispatching
   - `model_list.rs` - Model listing functionality
@@ -160,6 +162,25 @@ Modular design with focused components:
   - `scroll.rs` - Text wrapping and scroll calculations
 - `commands/` - Chat command processing
   - `mod.rs` - Command processing implementation
+
+### Built-in Provider Configuration
+
+Chabeau uses a build-time configuration system for built-in providers. The `builtin_models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes:
+
+```toml
+[[providers]]
+id = "openai"
+display_name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+
+[[providers]]
+id = "anthropic"
+display_name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+mode = "anthropic"  # Special authentication mode
+```
+
+This configuration is embedded into the binary at compile time, eliminating runtime file dependencies while allowing easy modification of supported providers during development.
 
 ## Development
 

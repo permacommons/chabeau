@@ -1,0 +1,28 @@
+# Built-in model providers configuration
+# This file is used at build time to configure supported providers
+
+[[providers]]
+id = "openai"
+display_name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+
+[[providers]]
+id = "openrouter"
+display_name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+
+[[providers]]
+id = "poe"
+display_name = "Poe"
+base_url = "https://api.poe.com/v1"
+
+[[providers]]
+id = "anthropic"
+display_name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+mode = "anthropic"
+
+[[providers]]
+id = "venice"
+display_name = "Venice AI"
+base_url = "https://api.venice.ai/v1"

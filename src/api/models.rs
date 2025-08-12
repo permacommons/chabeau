@@ -1,4 +1,5 @@
 use crate::api::ModelsResponse;
+use crate::builtin_providers::find_builtin_provider;
 
 pub async fn fetch_models(
     client: &reqwest::Client,
@@ -11,11 +12,17 @@ pub async fn fetch_models(
         .header("Content-Type", "application/json");
 
     // Handle provider-specific authentication headers
-    if provider_name.eq_ignore_ascii_case("anthropic") {
-        request = request
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01");
+    // Check if this is a built-in provider with special authentication mode
+    if let Some(builtin_provider) = find_builtin_provider(provider_name) {
+        if builtin_provider.is_anthropic_mode() {
+            request = request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01");
+        } else {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+        }
     } else {
+        // For custom providers, default to OpenAI-style authentication
         request = request.header("Authorization", format!("Bearer {api_key}"));
     }
 

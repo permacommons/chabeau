@@ -19,6 +19,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "  Ctrl+A            Move cursor to beginning of input",
             "  Ctrl+E            Move cursor to end of input",
             "  Left/Right        Move cursor left/right in input",
+            "  Shift+Left/Right  Move cursor left/right in input (alias)",
+            "  Shift+Up/Down     Move cursor up/down lines in multi-line input",
             "  Ctrl+C            Quit the application",
             "  Ctrl+T            Open external editor (requires EDITOR env var)",
             "  Ctrl+R            Retry the last bot response",

@@ -1,7 +1,9 @@
 use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
+use crate::core::constants::INDICATOR_SPACE;
 use crate::core::message::Message;
+use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
 use ratatui::text::Line;
@@ -543,51 +545,14 @@ Please either:
         Ok(models.first().map(|m| m.id.clone()))
     }
 
-    /// Calculate how many lines the input text will wrap to
+    /// Calculate how many lines the input text will wrap to using word wrapping
     pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
         if self.input.is_empty() {
             return 1; // At least one line for the cursor
         }
 
-        // Split input by newlines first
-        let lines: Vec<&str> = self.input.split('\n').collect();
-
-        let mut total_lines = 0;
-        for line in lines {
-            if line.is_empty() {
-                total_lines += 1;
-            } else {
-                // For each line, calculate how many wrapped lines it needs
-                let words: Vec<&str> = line.split_whitespace().collect();
-                if words.is_empty() {
-                    total_lines += 1;
-                    continue;
-                }
-
-                let mut current_line_len = 0;
-                let mut line_count = 1;
-
-                for word in words {
-                    let word_len = word.chars().count() as u16;
-
-                    // Start new line if adding this word would exceed width
-                    if current_line_len > 0 && current_line_len + 1 + word_len > width {
-                        line_count += 1;
-                        current_line_len = word_len;
-                    } else {
-                        if current_line_len > 0 {
-                            current_line_len += 1; // Add space
-                        }
-                        current_line_len += word_len;
-                    }
-                }
-
-                total_lines += line_count;
-            }
-        }
-
-        // Ensure we have at least one line
-        total_lines.max(1)
+        let config = WrapConfig::new(width as usize);
+        TextWrapper::count_wrapped_lines(&self.input, &config)
     }
 
     /// Calculate the input area height based on content
@@ -596,7 +561,8 @@ Please either:
             return 1; // Default to 1 line when empty
         }
 
-        let wrapped_lines = self.calculate_input_wrapped_lines(width.saturating_sub(2)); // Account for borders
+        let available_width = width.saturating_sub(2 + INDICATOR_SPACE); // Account for borders + indicator space
+        let wrapped_lines = self.calculate_input_wrapped_lines(available_width);
 
         // Start at 1 line, expand to 2 when we have content that wraps or newlines
         // Then expand up to maximum of 6 lines
@@ -609,15 +575,15 @@ Please either:
 
     /// Update input scroll offset to keep cursor visible
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let total_input_lines = self.calculate_input_wrapped_lines(width.saturating_sub(2)) as u16;
+        let available_width = width.saturating_sub(2 + INDICATOR_SPACE); // Account for borders + indicator space
+        let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {
             // All content fits, no scrolling needed
             self.input_scroll_offset = 0;
         } else {
-            // Calculate cursor position
-            let input_lines: Vec<&str> = self.input.split('\n').collect();
-            let cursor_line = input_lines.len().saturating_sub(1) as u16;
+            // Calculate cursor line position accounting for text wrapping
+            let cursor_line = self.calculate_cursor_line_position(available_width as usize);
 
             // Ensure cursor is visible within the input area
             if cursor_line < self.input_scroll_offset {
@@ -632,6 +598,12 @@ Please either:
             let max_scroll = total_input_lines.saturating_sub(input_area_height);
             self.input_scroll_offset = self.input_scroll_offset.min(max_scroll);
         }
+    }
+
+    /// Calculate which line the cursor is on, accounting for word wrapping
+    fn calculate_cursor_line_position(&self, available_width: usize) -> u16 {
+        let config = WrapConfig::new(available_width);
+        TextWrapper::calculate_cursor_line(&self.input, self.input_cursor_position, &config) as u16
     }
 
     // Input cursor movement methods
@@ -659,6 +631,78 @@ Please either:
         if self.input_cursor_position < max_position {
             self.input_cursor_position += 1;
         }
+    }
+
+    /// Move cursor up one line in multi-line input (Alt+Up)
+    pub fn move_cursor_up_line(&mut self, available_width: usize) {
+        let config = WrapConfig::new(available_width);
+        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            &self.input,
+            self.input_cursor_position,
+            &config
+        );
+
+        if current_line > 0 {
+            // Move to the previous line at the same column position (or end of line if shorter)
+            let target_line = current_line - 1;
+            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
+            self.input_cursor_position = target_position;
+        }
+    }
+
+    /// Move cursor down one line in multi-line input (Alt+Down)
+    pub fn move_cursor_down_line(&mut self, available_width: usize) {
+        let config = WrapConfig::new(available_width);
+        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            &self.input,
+            self.input_cursor_position,
+            &config
+        );
+
+        let total_lines = TextWrapper::count_wrapped_lines(&self.input, &config);
+        if current_line < total_lines - 1 {
+            // Move to the next line at the same column position (or end of line if shorter)
+            let target_line = current_line + 1;
+            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
+            self.input_cursor_position = target_position;
+        }
+    }
+
+    /// Helper function to find cursor position at a specific line and column in wrapped text
+    fn find_position_at_line_col(&self, target_line: usize, target_col: usize, config: &WrapConfig) -> usize {
+        let wrapped_text = TextWrapper::wrap_text(&self.input, config);
+        let lines: Vec<&str> = wrapped_text.split('\n').collect();
+
+        if target_line >= lines.len() {
+            return self.input.chars().count(); // End of input
+        }
+
+        // Count characters up to the target line
+        let mut char_count = 0;
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line_idx == target_line {
+                // We're at the target line, add the column position (clamped to line length)
+                let line_len = line.chars().count();
+                char_count += target_col.min(line_len);
+                break;
+            } else {
+                // Add all characters from this line plus the newline (if it was an original newline)
+                char_count += line.chars().count();
+
+                // Check if this line break corresponds to an original newline in the input
+                // by comparing with the original text structure
+                if line_idx < lines.len() - 1 {
+                    // Find the corresponding position in original text
+                    let original_chars: Vec<char> = self.input.chars().collect();
+                    if char_count < original_chars.len() && original_chars[char_count] == '\n' {
+                        char_count += 1; // This was an original newline
+                    }
+                    // If it wasn't an original newline, it was a wrap point, so don't add 1
+                }
+            }
+        }
+
+        char_count.min(self.input.chars().count())
     }
 
     // Input text manipulation methods

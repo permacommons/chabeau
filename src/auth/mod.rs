@@ -16,7 +16,12 @@ pub struct Provider {
 }
 
 impl Provider {
-    pub fn new(name: String, base_url: String, display_name: String, _mode: Option<String>) -> Self {
+    pub fn new(
+        name: String,
+        base_url: String,
+        display_name: String,
+        _mode: Option<String>,
+    ) -> Self {
         Self {
             name,
             base_url,

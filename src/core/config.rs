@@ -393,7 +393,6 @@ impl CustomProvider {
             mode,
         }
     }
-
 }
 
 /// Generate a suggested ID from a display name

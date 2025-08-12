@@ -1,4 +1,6 @@
 use crate::core::app::App;
+use crate::core::constants::INDICATOR_SPACE;
+use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -6,9 +8,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap, Widget},
     Frame,
 };
-
-// Constants for input area layout
-const INDICATOR_SPACE: u16 = 4; // Space reserved for streaming indicator + margin
 
 /// A custom input widget that handles text wrapping, cursor positioning, and streaming indicator
 struct InputWidget<'a> {
@@ -103,128 +102,8 @@ impl<'a> Widget for InputWidget<'a> {
 impl<'a> InputWidget<'a> {
     /// Pre-process text to insert line breaks at word boundaries while preserving spacing
     fn wrap_text_at_boundaries(&self, text: &str, width: usize) -> String {
-        if width == 0 {
-            return text.to_string();
-        }
-
-        let mut result = String::new();
-        let mut current_line_len = 0;
-
-        // Split text by explicit newlines first
-        for (line_idx, line) in text.split('\n').enumerate() {
-            if line_idx > 0 {
-                result.push('\n');
-                current_line_len = 0;
-            }
-
-            // Process each character, keeping track of words and spaces
-            let mut chars = line.chars().peekable();
-            let mut current_word = String::new();
-
-            while let Some(ch) = chars.next() {
-                if ch.is_whitespace() {
-                    // Flush current word if we have one
-                    if !current_word.is_empty() {
-                        let word_len = current_word.chars().count();
-
-                        // Check if word fits on current line
-                        if current_line_len > 0 && current_line_len + word_len > width {
-                            // Need to wrap before this word
-                            result.push('\n');
-                            current_line_len = 0;
-                        }
-
-                        // Handle very long words
-                        if word_len > width {
-                            let mut remaining_word = current_word.as_str();
-                            while !remaining_word.is_empty() {
-                                let chars_to_take = width.saturating_sub(current_line_len);
-                                if chars_to_take == 0 {
-                                    result.push('\n');
-                                    current_line_len = 0;
-                                    continue;
-                                }
-
-                                let word_chars: Vec<char> = remaining_word.chars().collect();
-                                let chunk: String = word_chars.iter().take(chars_to_take).collect();
-                                result.push_str(&chunk);
-                                current_line_len += chunk.chars().count();
-
-                                remaining_word = &remaining_word[chunk.len()..];
-
-                                if !remaining_word.is_empty() {
-                                    result.push('\n');
-                                    current_line_len = 0;
-                                }
-                            }
-                        } else {
-                            // Normal word that fits
-                            result.push_str(&current_word);
-                            current_line_len += word_len;
-                        }
-
-                        current_word.clear();
-                    }
-
-                    // Add the whitespace character if it fits
-                    if current_line_len < width {
-                        result.push(ch);
-                        current_line_len += 1;
-                    } else {
-                        // Whitespace would exceed line, wrap and skip it
-                        result.push('\n');
-                        current_line_len = 0;
-                        // Don't add the space at the beginning of a new line
-                    }
-                } else {
-                    // Regular character - add to current word
-                    current_word.push(ch);
-                }
-            }
-
-            // Flush any remaining word
-            if !current_word.is_empty() {
-                let word_len = current_word.chars().count();
-
-                // Check if word fits on current line
-                if current_line_len > 0 && current_line_len + word_len > width {
-                    // Need to wrap before this word
-                    result.push('\n');
-                    current_line_len = 0;
-                }
-
-                // Handle very long words
-                if word_len > width {
-                    let mut remaining_word = current_word.as_str();
-                    while !remaining_word.is_empty() {
-                        let chars_to_take = width.saturating_sub(current_line_len);
-                        if chars_to_take == 0 {
-                            result.push('\n');
-                            current_line_len = 0;
-                            continue;
-                        }
-
-                        let word_chars: Vec<char> = remaining_word.chars().collect();
-                        let chunk: String = word_chars.iter().take(chars_to_take).collect();
-                        result.push_str(&chunk);
-                        current_line_len += chunk.chars().count();
-
-                        remaining_word = &remaining_word[chunk.len()..];
-
-                        if !remaining_word.is_empty() {
-                            result.push('\n');
-                            current_line_len = 0;
-                        }
-                    }
-                } else {
-                    // Normal word that fits
-                    result.push_str(&current_word);
-                    current_line_len += word_len;
-                }
-            }
-        }
-
-        result
+        let config = WrapConfig::new(width);
+        TextWrapper::wrap_text(text, &config)
     }
 
     /// Calculate cursor position using word wrapping logic that matches text rendering
@@ -253,27 +132,16 @@ impl<'a> InputWidget<'a> {
 
         let cursor_position = self.cursor_position.min(self.text.chars().count());
 
-        // Count characters in original text up to cursor position
-        let text_before_cursor: String = self.text.chars().take(cursor_position).collect();
-
-        // Get the wrapped version of text before cursor
-        let wrapped_before_cursor = self.wrap_text_at_boundaries(&text_before_cursor, text_area.width as usize);
-
-        // Count lines and find column position in wrapped text
-        let lines: Vec<&str> = wrapped_before_cursor.split('\n').collect();
-        let line = (lines.len() as u16).saturating_sub(1);
-        let col = if let Some(last_line) = lines.last() {
-            last_line.chars().count() as u16
-        } else {
-            0
-        };
+        // Use TextWrapper to calculate cursor position
+        let config = WrapConfig::new(text_area.width as usize);
+        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(self.text, cursor_position, &config);
 
         // Apply scroll offset
-        let visible_line = line.saturating_sub(self.scroll_offset);
+        let visible_line = (line as u16).saturating_sub(self.scroll_offset);
 
         // Only return position if cursor is within visible area
         if visible_line < text_area.height {
-            Some((text_area.x + col, text_area.y + visible_line))
+            Some((text_area.x + col as u16, text_area.y + visible_line))
         } else {
             None
         }

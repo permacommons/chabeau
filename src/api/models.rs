@@ -1,5 +1,5 @@
 use crate::api::ModelsResponse;
-use crate::builtin_providers::find_builtin_provider;
+use crate::core::builtin_providers::find_builtin_provider;
 
 pub async fn fetch_models(
     client: &reqwest::Client,

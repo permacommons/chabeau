@@ -1,7 +1,6 @@
 // Declare all modules
 mod api;
 mod auth;
-mod builtin_providers;
 mod cli;
 mod commands;
 mod core;

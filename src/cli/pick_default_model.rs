@@ -4,7 +4,7 @@
 
 use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
-use crate::builtin_providers::load_builtin_providers;
+use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
 use chrono::{DateTime, Utc};
 use std::error::Error;

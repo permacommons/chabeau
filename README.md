@@ -133,7 +133,6 @@ export EDITOR="code --wait" # VS Code with wait
 Modular design with focused components:
 
 - `main.rs` - Entry point
-- `builtin_providers.rs` - Built-in provider configuration (loaded from `builtin_models.toml`)
 - `builtin_models.toml` - Build-time configuration for supported providers
 - `cli/` - Command-line interface parsing and handling
   - `mod.rs` - CLI argument parsing and command dispatching
@@ -144,6 +143,7 @@ Modular design with focused components:
 - `core/` - Core application components
   - `mod.rs` - Core module declarations
   - `app.rs` - Core application state
+  - `builtin_providers.rs` - Built-in provider configuration (loads from `builtin_models.toml`)
   - `config.rs` - Configuration management
   - `message.rs` - Message data structures
 - `auth/` - Authentication and provider management

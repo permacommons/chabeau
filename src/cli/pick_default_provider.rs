@@ -3,7 +3,7 @@
 //! This module handles the interactive selection and configuration of default providers.
 
 use crate::auth::AuthManager;
-use crate::builtin_providers::load_builtin_providers;
+use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
 use std::error::Error;
 

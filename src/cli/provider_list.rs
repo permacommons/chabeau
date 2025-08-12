@@ -3,6 +3,7 @@
 //! This module handles listing available providers and their authentication status.
 
 use crate::auth::AuthManager;
+use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
 use std::error::Error;
 
@@ -15,21 +16,19 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Check built-in providers
-    let builtin_providers = vec![
-        ("openai", "OpenAI", "https://api.openai.com/v1"),
-        ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
-        ("poe", "Poe", "https://api.poe.com/v1"),
-        ("anthropic", "Anthropic", "https://api.anthropic.com/v1"),
-    ];
+    let builtin_providers = load_builtin_providers();
 
-    for (name, display_name, url) in builtin_providers {
-        let status = match auth_manager.get_token(name) {
+    for provider in builtin_providers {
+        let status = match auth_manager.get_token(&provider.id) {
             Ok(Some(_)) => "✅ configured",
             Ok(None) => "❌ not configured",
             Err(_) => "❓ error checking",
         };
-        println!("  {display_name} ({name}) - {status}");
-        println!("    URL: {url}");
+        println!("  {} ({}) - {status}", provider.display_name, provider.id);
+        println!("    URL: {}", provider.base_url);
+        if let Some(mode) = &provider.mode {
+            println!("    Auth mode: {mode}");
+        }
         println!();
     }
 

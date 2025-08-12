@@ -1,4 +1,4 @@
-use crate::builtin_providers::load_builtin_providers;
+use crate::core::builtin_providers::load_builtin_providers;
 use keyring::Entry;
 use std::io::{self, Write};
 

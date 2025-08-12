@@ -1,4 +1,5 @@
 use crate::core::builtin_providers::load_builtin_providers;
+use crate::core::config::{suggest_provider_id, Config, CustomProvider};
 use keyring::Entry;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -6,8 +7,6 @@ use ratatui::crossterm::{
 };
 use std::io::{self, Write};
 use std::time::Duration;
-
-type CustomProviderInfo = (String, String, bool);
 
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -17,7 +16,7 @@ pub struct Provider {
 }
 
 impl Provider {
-    pub fn new(name: String, base_url: String, display_name: String) -> Self {
+    pub fn new(name: String, base_url: String, display_name: String, _mode: Option<String>) -> Self {
         Self {
             name,
             base_url,
@@ -28,18 +27,32 @@ impl Provider {
 
 pub struct AuthManager {
     providers: Vec<Provider>,
+    config: Config,
 }
 
 impl AuthManager {
     pub fn new() -> Self {
+        // Load config first
+        let config = Config::load().unwrap_or_default();
+
         // Load built-in providers from configuration
         let builtin_providers = load_builtin_providers();
-        let providers = builtin_providers
+        let mut providers: Vec<Provider> = builtin_providers
             .into_iter()
-            .map(|bp| Provider::new(bp.id, bp.base_url, bp.display_name))
+            .map(|bp| Provider::new(bp.id, bp.base_url, bp.display_name, bp.mode))
             .collect();
 
-        Self { providers }
+        // Add custom providers from config
+        for custom_provider in config.list_custom_providers() {
+            providers.push(Provider::new(
+                custom_provider.id.clone(),
+                custom_provider.base_url.clone(),
+                custom_provider.display_name.clone(),
+                custom_provider.mode.clone(),
+            ));
+        }
+
+        Self { providers, config }
     }
 
     pub fn find_provider_by_name(&self, name: &str) -> Option<&Provider> {
@@ -71,88 +84,33 @@ impl AuthManager {
     }
 
     pub fn store_custom_provider(
-        &self,
-        name: &str,
-        base_url: &str,
+        &mut self,
+        provider: CustomProvider,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", &format!("custom_provider_{name}"))?;
-        entry.set_password(base_url)?;
-
-        // Also add to the list of custom providers
-        self.add_to_custom_provider_list(name)?;
+        self.config.add_custom_provider(provider);
+        self.config.save()?;
         Ok(())
     }
 
-    fn add_to_custom_provider_list(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
-        let current_list = match list_entry.get_password() {
-            Ok(list) => list,
-            Err(keyring::Error::NoEntry) => String::new(),
-            Err(e) => return Err(Box::new(e)),
-        };
-
-        let mut providers: Vec<&str> = if current_list.is_empty() {
-            Vec::new()
-        } else {
-            current_list.split(',').collect()
-        };
-
-        // Add if not already present
-        if !providers.contains(&name) {
-            providers.push(name);
-            let new_list = providers.join(",");
-            list_entry.set_password(&new_list)?;
-        }
-
-        Ok(())
+    pub fn get_custom_provider(&self, id: &str) -> Option<&CustomProvider> {
+        self.config.get_custom_provider(id)
     }
 
-    pub fn get_custom_provider(
-        &self,
-        name: &str,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", &format!("custom_provider_{name}"))?;
-        match entry.get_password() {
-            Ok(base_url) => Ok(Some(base_url)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
-
-    pub fn list_custom_providers(
-        &self,
-    ) -> Result<Vec<CustomProviderInfo>, Box<dyn std::error::Error>> {
-        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
-        let provider_list = match list_entry.get_password() {
-            Ok(list) => list,
-            Err(keyring::Error::NoEntry) => return Ok(Vec::new()),
-            Err(e) => return Err(Box::new(e)),
-        };
-
-        if provider_list.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    pub fn list_custom_providers(&self) -> Vec<(String, String, String, bool)> {
         let mut result = Vec::new();
-        for provider_name in provider_list.split(',') {
-            let provider_name = provider_name.trim();
-            if provider_name.is_empty() {
-                continue;
-            }
-
-            // Get the base URL for this custom provider
-            let base_url = match self.get_custom_provider(provider_name)? {
-                Some(url) => url,
-                None => continue, // Skip if URL not found
-            };
-
-            // Check if token is configured
-            let has_token = self.get_token(provider_name)?.is_some();
-
-            result.push((provider_name.to_string(), base_url, has_token));
+        for custom_provider in self.config.list_custom_providers() {
+            let has_token = self
+                .get_token(&custom_provider.id)
+                .unwrap_or(None)
+                .is_some();
+            result.push((
+                custom_provider.id.clone(),
+                custom_provider.display_name.clone(),
+                custom_provider.base_url.clone(),
+                has_token,
+            ));
         }
-
-        Ok(result)
+        result
     }
 
     pub fn find_first_available_auth(&self) -> Option<(Provider, String)> {
@@ -165,7 +123,7 @@ impl AuthManager {
         None
     }
 
-    pub fn interactive_auth(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn interactive_auth(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔐 Chabeau Authentication Setup");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
@@ -238,17 +196,43 @@ impl AuthManager {
         Ok(())
     }
 
-    fn setup_custom_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn setup_custom_provider(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!();
-        print!("Enter a short name for your custom provider (no spaces): ");
+        print!("Enter a display name for your custom provider: ");
         io::stdout().flush()?;
 
-        let mut name = String::new();
-        io::stdin().read_line(&mut name)?;
-        let name = name.trim().to_lowercase(); // Normalize to lowercase
+        let mut display_name = String::new();
+        io::stdin().read_line(&mut display_name)?;
+        let display_name = display_name.trim();
 
-        if name.is_empty() || name.contains(' ') {
-            return Err("Provider name cannot be empty or contain spaces".into());
+        if display_name.is_empty() {
+            return Err("Display name cannot be empty".into());
+        }
+
+        // Suggest an ID based on the display name
+        let suggested_id = suggest_provider_id(display_name);
+        print!("Enter an ID for your provider [default: {suggested_id}]: ");
+        io::stdout().flush()?;
+
+        let mut id_input = String::new();
+        io::stdin().read_line(&mut id_input)?;
+        let id = id_input.trim();
+
+        let final_id = if id.is_empty() {
+            suggested_id
+        } else {
+            // Validate the ID - only alphanumeric characters
+            if !id.chars().all(|c| c.is_alphanumeric()) {
+                return Err("Provider ID can only contain alphanumeric characters".into());
+            }
+            id.to_lowercase()
+        };
+
+        // Check if ID already exists
+        if self.find_provider_by_name(&final_id).is_some()
+            || self.get_custom_provider(&final_id).is_some()
+        {
+            return Err(format!("Provider with ID '{final_id}' already exists").into());
         }
 
         print!("Enter the API base URL (typically, https://some-url.example/api/v1): ");
@@ -262,7 +246,9 @@ impl AuthManager {
             return Err("Base URL cannot be empty".into());
         }
 
-        print!("Enter your API token for {name} (press F2 to reveal last 4 chars): ");
+        let auth_mode = None; // Default to openai mode for now
+
+        print!("Enter your API token for {display_name} (press F2 to reveal last 4 chars): ");
         io::stdout().flush()?;
 
         let token = self.read_masked_input()?;
@@ -271,11 +257,20 @@ impl AuthManager {
             return Err("Token cannot be empty".into());
         }
 
-        // Store both the custom provider URL and token
-        self.store_custom_provider(&name, base_url)?;
-        self.store_token(&name, &token)?;
+        // Create and store the custom provider
+        let custom_provider = CustomProvider::new(
+            final_id.clone(),
+            display_name.to_string(),
+            base_url.to_string(),
+            auth_mode,
+        );
 
-        println!("✓ Custom provider '{name}' configured with URL: {base_url}");
+        self.store_custom_provider(custom_provider)?;
+        self.store_token(&final_id, &token)?;
+
+        println!(
+            "✓ Custom provider '{display_name}' (ID: {final_id}) configured with URL: {base_url}"
+        );
 
         Ok(())
     }
@@ -292,9 +287,9 @@ impl AuthManager {
             }
         } else {
             // Check if it's a custom provider (case-sensitive for custom names)
-            if let Some(base_url) = self.get_custom_provider(provider_name)? {
+            if let Some(custom_provider) = self.get_custom_provider(provider_name) {
                 if let Some(token) = self.get_token(provider_name)? {
-                    return Ok(Some((base_url, token)));
+                    return Ok(Some((custom_provider.base_url.clone(), token)));
                 }
             }
         }
@@ -303,13 +298,13 @@ impl AuthManager {
     }
 
     pub fn interactive_deauth(
-        &self,
+        &mut self,
         provider: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(provider_name) = provider {
             // Provider specified via --provider flag - validate it exists first
             let has_auth = self.get_token(&provider_name)?.is_some();
-            let is_custom = self.get_custom_provider(&provider_name)?.is_some();
+            let is_custom = self.get_custom_provider(&provider_name).is_some();
 
             if !has_auth && !is_custom {
                 return Err(format!("Provider '{provider_name}' is not configured. Use 'chabeau providers' to see configured providers.").into());
@@ -337,7 +332,7 @@ impl AuthManager {
         Ok(())
     }
 
-    fn interactive_deauth_menu(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn interactive_deauth_menu(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🗑️  Chabeau Authentication Removal");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
@@ -357,16 +352,10 @@ impl AuthManager {
         }
 
         // Check custom providers
-        match self.list_custom_providers() {
-            Ok(custom_providers) => {
-                for (name, _url, has_token) in custom_providers {
-                    if has_token {
-                        configured_providers.push((name.clone(), name, true));
-                    }
-                }
-            }
-            Err(_) => {
-                // Ignore errors listing custom providers
+        let custom_providers = self.list_custom_providers();
+        for (id, display_name, _url, has_token) in custom_providers {
+            if has_token {
+                configured_providers.push((id, display_name, true));
             }
         }
 
@@ -441,47 +430,11 @@ impl AuthManager {
     }
 
     fn remove_custom_provider(
-        &self,
-        provider_name: &str,
+        &mut self,
+        provider_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Remove the custom provider URL
-        let entry = Entry::new("chabeau", &format!("custom_provider_{provider_name}"))?;
-        let _ = entry.delete_credential(); // Ignore errors
-
-        // Remove from the custom provider list
-        self.remove_from_custom_provider_list(provider_name)?;
-        Ok(())
-    }
-
-    fn remove_from_custom_provider_list(
-        &self,
-        name: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let list_entry = Entry::new("chabeau", "custom_provider_list")?;
-        let current_list = match list_entry.get_password() {
-            Ok(list) => list,
-            Err(keyring::Error::NoEntry) => return Ok(()), // No list exists
-            Err(e) => return Err(Box::new(e)),
-        };
-
-        if current_list.is_empty() {
-            return Ok(());
-        }
-
-        let providers: Vec<&str> = current_list.split(',').collect();
-        let filtered_providers: Vec<&str> = providers
-            .into_iter()
-            .filter(|&p| p.trim() != name)
-            .collect();
-
-        if filtered_providers.is_empty() {
-            // Remove the entire list entry if empty
-            let _ = list_entry.delete_credential();
-        } else {
-            let new_list = filtered_providers.join(",");
-            list_entry.set_password(&new_list)?;
-        }
-
+        self.config.remove_custom_provider(provider_id);
+        self.config.save()?;
         Ok(())
     }
 

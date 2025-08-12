@@ -4,11 +4,21 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomProvider {
+    pub id: String,
+    pub display_name: String,
+    pub base_url: String,
+    pub mode: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub default_provider: Option<String>,
     #[serde(default)]
     pub default_models: HashMap<String, String>,
+    #[serde(default)]
+    pub custom_providers: Vec<CustomProvider>,
 }
 
 #[cfg(test)]
@@ -213,6 +223,84 @@ mod tests {
         assert_eq!(loaded_config.get_default_model("POE"), None);
         assert_eq!(loaded_config.get_default_model("AnThRoPiC"), None);
     }
+
+    #[test]
+    fn test_custom_provider_management() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_config.toml");
+
+        let mut config = Config::default();
+
+        // Add a custom provider
+        let custom_provider = CustomProvider::new(
+            "myapi".to_string(),
+            "My Custom API".to_string(),
+            "https://api.example.com/v1".to_string(),
+            Some("anthropic".to_string()),
+        );
+
+        config.add_custom_provider(custom_provider);
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load the config back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify the custom provider was saved and loaded correctly
+        let retrieved_provider = loaded_config.get_custom_provider("myapi");
+        assert!(retrieved_provider.is_some());
+
+        let provider = retrieved_provider.unwrap();
+        assert_eq!(provider.id, "myapi");
+        assert_eq!(provider.display_name, "My Custom API");
+        assert_eq!(provider.base_url, "https://api.example.com/v1");
+        assert_eq!(provider.mode, Some("anthropic".to_string()));
+
+        // Test listing custom providers
+        let providers = loaded_config.list_custom_providers();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "myapi");
+
+        // Test removing custom provider
+        let mut config = loaded_config;
+        config.remove_custom_provider("myapi");
+        assert!(config.get_custom_provider("myapi").is_none());
+        assert_eq!(config.list_custom_providers().len(), 0);
+    }
+
+    #[test]
+    fn test_suggest_provider_id() {
+        assert_eq!(suggest_provider_id("OpenAI GPT"), "openaigpt");
+        assert_eq!(suggest_provider_id("My Custom API 123"), "mycustomapi123");
+        assert_eq!(
+            suggest_provider_id("Test-Provider_Name!"),
+            "testprovidername"
+        );
+        assert_eq!(suggest_provider_id("   Spaces   "), "spaces");
+        assert_eq!(suggest_provider_id("123Numbers456"), "123numbers456");
+        assert_eq!(suggest_provider_id(""), "");
+    }
+
+    #[test]
+    fn test_custom_provider_auth_modes() {
+        let openai_provider = CustomProvider::new(
+            "test1".to_string(),
+            "Test OpenAI".to_string(),
+            "https://api.test.com/v1".to_string(),
+            None,
+        );
+
+        let anthropic_provider = CustomProvider::new(
+            "test2".to_string(),
+            "Test Anthropic".to_string(),
+            "https://api.test.com/v1".to_string(),
+            Some("anthropic".to_string()),
+        );
+
+        assert_eq!(openai_provider.mode, None);
+        assert_eq!(anthropic_provider.mode, Some("anthropic".to_string()));
+    }
 }
 
 impl Config {
@@ -278,4 +366,42 @@ impl Config {
     pub fn unset_default_model(&mut self, provider: &str) {
         self.default_models.remove(provider);
     }
+
+    pub fn add_custom_provider(&mut self, provider: CustomProvider) {
+        self.custom_providers.push(provider);
+    }
+
+    pub fn remove_custom_provider(&mut self, id: &str) {
+        self.custom_providers.retain(|p| p.id != id);
+    }
+
+    pub fn get_custom_provider(&self, id: &str) -> Option<&CustomProvider> {
+        self.custom_providers.iter().find(|p| p.id == id)
+    }
+
+    pub fn list_custom_providers(&self) -> Vec<&CustomProvider> {
+        self.custom_providers.iter().collect()
+    }
+}
+
+impl CustomProvider {
+    pub fn new(id: String, display_name: String, base_url: String, mode: Option<String>) -> Self {
+        Self {
+            id,
+            display_name,
+            base_url,
+            mode,
+        }
+    }
+
+}
+
+/// Generate a suggested ID from a display name
+/// Converts to lowercase and keeps only alphanumeric characters
+pub fn suggest_provider_id(display_name: &str) -> String {
+    display_name
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }

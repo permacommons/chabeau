@@ -106,7 +106,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 
     match args.command.unwrap_or(Commands::Chat) {
         Commands::Auth => {
-            let auth_manager = AuthManager::new();
+            let mut auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_auth() {
                 eprintln!("❌ Authentication failed: {e}");
                 std::process::exit(1);
@@ -114,7 +114,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Commands::Deauth => {
-            let auth_manager = AuthManager::new();
+            let mut auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_deauth(args.provider) {
                 eprintln!("❌ Deauthentication failed: {e}");
                 std::process::exit(1);

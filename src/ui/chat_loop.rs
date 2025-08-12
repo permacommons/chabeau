@@ -611,9 +611,17 @@ pub async fn run_chat(
                             app_guard.update_input_scroll(input_area_height, terminal_size.width);
                         }
                         KeyCode::Left => {
-                            // Left Arrow: Move cursor one position left
+                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-                            app_guard.move_cursor_left();
+
+                            if modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Shift+Left: Same as Left Arrow (alias)
+                                app_guard.move_cursor_left();
+                            } else {
+                                // Left Arrow: Move cursor one position left
+                                app_guard.move_cursor_left();
+                            }
+
                             // Update input scroll to keep cursor visible
                             let terminal_size = terminal.size().unwrap_or_default();
                             let input_area_height =
@@ -621,9 +629,17 @@ pub async fn run_chat(
                             app_guard.update_input_scroll(input_area_height, terminal_size.width);
                         }
                         KeyCode::Right => {
-                            // Right Arrow: Move cursor one position right
+                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-                            app_guard.move_cursor_right();
+
+                            if modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Shift+Right: Same as Right Arrow (alias)
+                                app_guard.move_cursor_right();
+                            } else {
+                                // Right Arrow: Move cursor one position right
+                                app_guard.move_cursor_right();
+                            }
+
                             // Update input scroll to keep cursor visible
                             let terminal_size = terminal.size().unwrap_or_default();
                             let input_area_height =
@@ -649,26 +665,54 @@ pub async fn run_chat(
                             app_guard.update_input_scroll(input_area_height, terminal_size.width);
                         }
                         KeyCode::Up => {
+                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-                            // Disable auto-scroll when user manually scrolls
-                            app_guard.auto_scroll = false;
-                            app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
+
+                            if modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Shift+Up: Move cursor up one line in multi-line input
+                                let terminal_size = terminal.size().unwrap_or_default();
+                                let available_width = terminal_size.width.saturating_sub(2 + 4); // Account for borders + indicator space
+                                app_guard.move_cursor_up_line(available_width as usize);
+
+                                // Update input scroll to keep cursor visible
+                                let input_area_height =
+                                    app_guard.calculate_input_area_height(terminal_size.width);
+                                app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            } else {
+                                // Up Arrow: Scroll chat history up
+                                app_guard.auto_scroll = false;
+                                app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
+                            }
                         }
                         KeyCode::Down => {
+                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-                            // Disable auto-scroll when user manually scrolls
-                            app_guard.auto_scroll = false;
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            let available_height = terminal_size
-                                .height
-                                .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                .saturating_sub(1); // 1 for title
-                            let max_scroll = app_guard
-                                .calculate_max_scroll_offset(available_height, terminal_size.width);
-                            app_guard.scroll_offset =
-                                (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
+
+                            if modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Shift+Down: Move cursor down one line in multi-line input
+                                let terminal_size = terminal.size().unwrap_or_default();
+                                let available_width = terminal_size.width.saturating_sub(2 + 4); // Account for borders + indicator space
+                                app_guard.move_cursor_down_line(available_width as usize);
+
+                                // Update input scroll to keep cursor visible
+                                let input_area_height =
+                                    app_guard.calculate_input_area_height(terminal_size.width);
+                                app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            } else {
+                                // Down Arrow: Scroll chat history down
+                                app_guard.auto_scroll = false;
+                                let terminal_size = terminal.size().unwrap_or_default();
+                                let input_area_height =
+                                    app_guard.calculate_input_area_height(terminal_size.width);
+                                let available_height = terminal_size
+                                    .height
+                                    .saturating_sub(input_area_height + 2) // Dynamic input area + borders
+                                    .saturating_sub(1); // 1 for title
+                                let max_scroll = app_guard
+                                    .calculate_max_scroll_offset(available_height, terminal_size.width);
+                                app_guard.scroll_offset =
+                                    (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
+                            }
                         }
                         _ => {}
                     }

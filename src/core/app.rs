@@ -633,6 +633,78 @@ Please either:
         }
     }
 
+    /// Move cursor up one line in multi-line input (Alt+Up)
+    pub fn move_cursor_up_line(&mut self, available_width: usize) {
+        let config = WrapConfig::new(available_width);
+        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            &self.input,
+            self.input_cursor_position,
+            &config
+        );
+
+        if current_line > 0 {
+            // Move to the previous line at the same column position (or end of line if shorter)
+            let target_line = current_line - 1;
+            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
+            self.input_cursor_position = target_position;
+        }
+    }
+
+    /// Move cursor down one line in multi-line input (Alt+Down)
+    pub fn move_cursor_down_line(&mut self, available_width: usize) {
+        let config = WrapConfig::new(available_width);
+        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            &self.input,
+            self.input_cursor_position,
+            &config
+        );
+
+        let total_lines = TextWrapper::count_wrapped_lines(&self.input, &config);
+        if current_line < total_lines - 1 {
+            // Move to the next line at the same column position (or end of line if shorter)
+            let target_line = current_line + 1;
+            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
+            self.input_cursor_position = target_position;
+        }
+    }
+
+    /// Helper function to find cursor position at a specific line and column in wrapped text
+    fn find_position_at_line_col(&self, target_line: usize, target_col: usize, config: &WrapConfig) -> usize {
+        let wrapped_text = TextWrapper::wrap_text(&self.input, config);
+        let lines: Vec<&str> = wrapped_text.split('\n').collect();
+
+        if target_line >= lines.len() {
+            return self.input.chars().count(); // End of input
+        }
+
+        // Count characters up to the target line
+        let mut char_count = 0;
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line_idx == target_line {
+                // We're at the target line, add the column position (clamped to line length)
+                let line_len = line.chars().count();
+                char_count += target_col.min(line_len);
+                break;
+            } else {
+                // Add all characters from this line plus the newline (if it was an original newline)
+                char_count += line.chars().count();
+
+                // Check if this line break corresponds to an original newline in the input
+                // by comparing with the original text structure
+                if line_idx < lines.len() - 1 {
+                    // Find the corresponding position in original text
+                    let original_chars: Vec<char> = self.input.chars().collect();
+                    if char_count < original_chars.len() && original_chars[char_count] == '\n' {
+                        char_count += 1; // This was an original newline
+                    }
+                    // If it wasn't an original newline, it was a wrap point, so don't add 1
+                }
+            }
+        }
+
+        char_count.min(self.input.chars().count())
+    }
+
     // Input text manipulation methods
 
     /// Insert character at cursor position

@@ -33,25 +33,19 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     }
 
     // Check for custom providers
-    match auth_manager.list_custom_providers() {
-        Ok(custom_providers) => {
-            if custom_providers.is_empty() {
-                println!("Custom providers: none configured");
+    let custom_providers = auth_manager.list_custom_providers();
+    if custom_providers.is_empty() {
+        println!("Custom providers: none configured");
+    } else {
+        println!("Custom providers:");
+        for (id, display_name, url, has_token) in custom_providers {
+            let status = if has_token {
+                "✅ configured"
             } else {
-                println!("Custom providers:");
-                for (name, url, has_token) in custom_providers {
-                    let status = if has_token {
-                        "✅ configured"
-                    } else {
-                        "❌ not configured"
-                    };
-                    println!("  {name} - {status}");
-                    println!("    URL: {url}");
-                }
-            }
-        }
-        Err(_) => {
-            println!("Custom providers: error checking");
+                "❌ not configured"
+            };
+            println!("  {} ({}) - {status}", display_name, id);
+            println!("    URL: {url}");
         }
     }
     println!();

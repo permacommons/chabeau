@@ -24,16 +24,10 @@ pub async fn pick_default_provider() -> Result<(), Box<dyn Error>> {
     }
 
     // Add custom providers
-    match auth_manager.list_custom_providers() {
-        Ok(custom_providers) => {
-            for (name, _, has_token) in custom_providers {
-                if has_token {
-                    providers.push((name.clone(), name));
-                }
-            }
-        }
-        Err(_) => {
-            eprintln!("⚠️  Error checking custom providers");
+    let custom_providers = auth_manager.list_custom_providers();
+    for (id, display_name, _, has_token) in custom_providers {
+        if has_token {
+            providers.push((id, display_name));
         }
     }
 

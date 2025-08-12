@@ -25,4 +25,19 @@ mode = "anthropic"
 [[providers]]
 id = "venice"
 display_name = "Venice AI"
-base_url = "https://api.venice.ai/v1"
+base_url = "https://api.venice.ai/api/v1"
+
+[[providers]]
+id = "groq"
+display_name = "Groq"
+base_url = "https://api.groq.com/openai/v1"
+
+[[providers]]
+id = "mistral"
+display_name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+
+[[providers]]
+id = "cerebras"
+display_name = "Cerebras"
+base_url = "https://api.cerebras.ai/v1"

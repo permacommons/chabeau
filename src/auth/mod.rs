@@ -1,6 +1,11 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use keyring::Entry;
+use ratatui::crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode},
+};
 use std::io::{self, Write};
+use std::time::Duration;
 
 type CustomProviderInfo = (String, String, bool);
 
@@ -218,18 +223,16 @@ impl AuthManager {
         display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!();
-        print!("Enter your {display_name} API token: ");
+        print!("Enter your {display_name} API token (press F2 to reveal last 4 chars): ");
         io::stdout().flush()?;
 
-        let mut token = String::new();
-        io::stdin().read_line(&mut token)?;
-        let token = token.trim();
+        let token = self.read_masked_input()?;
 
         if token.is_empty() {
             return Err("Token cannot be empty".into());
         }
 
-        self.store_token(provider_name, token)?;
+        self.store_token(provider_name, &token)?;
         println!("✓ Token stored securely for {display_name}");
 
         Ok(())
@@ -248,7 +251,7 @@ impl AuthManager {
             return Err("Provider name cannot be empty or contain spaces".into());
         }
 
-        print!("Enter the base URL for your custom provider: ");
+        print!("Enter the API base URL (typically, https://some-url.example/api/v1): ");
         io::stdout().flush()?;
 
         let mut base_url = String::new();
@@ -259,12 +262,10 @@ impl AuthManager {
             return Err("Base URL cannot be empty".into());
         }
 
-        print!("Enter your API token for {name}: ");
+        print!("Enter your API token for {name} (press F2 to reveal last 4 chars): ");
         io::stdout().flush()?;
 
-        let mut token = String::new();
-        io::stdin().read_line(&mut token)?;
-        let token = token.trim();
+        let token = self.read_masked_input()?;
 
         if token.is_empty() {
             return Err("Token cannot be empty".into());
@@ -272,7 +273,7 @@ impl AuthManager {
 
         // Store both the custom provider URL and token
         self.store_custom_provider(&name, base_url)?;
-        self.store_token(&name, token)?;
+        self.store_token(&name, &token)?;
 
         println!("✓ Custom provider '{name}' configured with URL: {base_url}");
 
@@ -482,5 +483,103 @@ impl AuthManager {
         }
 
         Ok(())
+    }
+
+    /// Read masked input with F2 to reveal last 4 characters
+    ///
+    /// Features:
+    /// - Input is masked with asterisks (*)
+    /// - F2 toggles showing the last 4 characters
+    /// - Backspace/Delete to remove characters
+    /// - Ctrl+U to clear entire line
+    /// - Ctrl+W to delete last word
+    /// - Ctrl+C or Esc to cancel
+    /// - Enter to confirm input
+    fn read_masked_input(&self) -> Result<String, Box<dyn std::error::Error>> {
+        enable_raw_mode()?;
+        let mut input = String::new();
+        let mut show_last_four = false;
+
+        loop {
+            // Clear the line and redraw the prompt with current state
+            print!("\r\x1b[K"); // Clear line
+            if show_last_four && input.len() >= 4 {
+                let masked_part = "*".repeat(input.len() - 4);
+                let visible_part = &input[input.len() - 4..];
+                print!(
+                    "Enter your API token (press F2 to reveal last 4 chars): {}{}",
+                    masked_part, visible_part
+                );
+            } else {
+                let masked = "*".repeat(input.len());
+                print!(
+                    "Enter your API token (press F2 to reveal last 4 chars): {}",
+                    masked
+                );
+            }
+            io::stdout().flush()?;
+
+            // Wait for events with a timeout
+            if event::poll(Duration::from_millis(100))? {
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        match key.code {
+                            KeyCode::Enter => {
+                                disable_raw_mode()?;
+                                println!(); // Move to next line
+                                return Ok(input);
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                input.push(c);
+                                show_last_four = false; // Hide reveal when typing
+                            }
+                            KeyCode::Backspace => {
+                                if !input.is_empty() {
+                                    input.pop();
+                                    show_last_four = false; // Hide reveal when editing
+                                }
+                            }
+                            KeyCode::Delete => {
+                                // Delete key - same as backspace for single-line input
+                                if !input.is_empty() {
+                                    input.pop();
+                                    show_last_four = false; // Hide reveal when editing
+                                }
+                            }
+                            KeyCode::F(2) => {
+                                show_last_four = !show_last_four;
+                            }
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                // Ctrl+U: Clear entire line
+                                input.clear();
+                                show_last_four = false;
+                            }
+                            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                // Ctrl+W: Delete last word
+                                while input.ends_with(' ') {
+                                    input.pop();
+                                }
+                                while !input.is_empty() && !input.ends_with(' ') {
+                                    input.pop();
+                                }
+                                show_last_four = false;
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                disable_raw_mode()?;
+                                println!(); // Move to next line
+                                return Err("Cancelled by user".into());
+                            }
+                            KeyCode::Esc => {
+                                disable_raw_mode()?;
+                                println!(); // Move to next line
+                                return Err("Cancelled by user".into());
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }

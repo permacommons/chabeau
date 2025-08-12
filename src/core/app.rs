@@ -9,6 +9,9 @@ use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
 use tokio_util::sync::CancellationToken;
 
+// Constants for input area layout (must match ui/renderer.rs)
+const INDICATOR_SPACE: u16 = 4; // Space reserved for streaming indicator + margin
+
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
@@ -609,7 +612,7 @@ Please either:
 
     /// Update input scroll offset to keep cursor visible
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let available_width = width.saturating_sub(2); // Account for borders
+        let available_width = width.saturating_sub(2 + INDICATOR_SPACE); // Account for borders + indicator space
         let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {

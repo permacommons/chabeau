@@ -5,138 +5,97 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
-use std::time::Instant;
 
-// Constants for streaming indicator layout
-const BORDER_WIDTH: usize = 2;
-const INDICATOR_SPACING: usize = 3; // Space for gap + indicator + padding
-const ELLIPSIS_LENGTH: usize = 3;
+// Constants for input area layout
+const INDICATOR_SPACE: u16 = 4; // Space reserved for streaming indicator + margin
 
-/// Creates input text with a pulsing streaming indicator positioned in the top-right corner
-fn create_input_with_streaming_indicator(
-    input: &str,
-    pulse_start: Instant,
-    terminal_width: u16,
-) -> String {
-    // Calculate pulse animation (0.0 to 1.0 over 1 second)
-    let elapsed = pulse_start.elapsed().as_millis() as f32 / 1000.0;
-    let pulse_phase = (elapsed * 2.0) % 2.0; // 2 cycles per second
-    let pulse_intensity = if pulse_phase < 1.0 {
-        pulse_phase
-    } else {
-        2.0 - pulse_phase
-    };
-
-    // Choose symbol based on pulse intensity
-    let symbol = if pulse_intensity < 0.33 {
-        "○"
-    } else if pulse_intensity < 0.66 {
-        "◐"
-    } else {
-        "●"
-    };
-
-    let input_lines: Vec<&str> = input.split('\n').collect();
-    let inner_width = terminal_width.saturating_sub(BORDER_WIDTH as u16) as usize;
-
-    if input_lines.len() == 1 {
-        create_single_line_with_indicator(input, symbol, inner_width)
-    } else {
-        create_multiline_with_indicator(&input_lines, symbol, inner_width)
-    }
+/// Handles rendering of the input area with proper text wrapping and indicator positioning
+struct InputAreaRenderer {
+    area: ratatui::layout::Rect,
+    indicator_space: u16,
 }
 
-/// Creates a single line with the streaming indicator at the end
-fn create_single_line_with_indicator(input: &str, symbol: &str, inner_width: usize) -> String {
-    let mut result = vec![' '; inner_width];
-    let input_chars: Vec<char> = input.chars().collect();
-    let max_input_len = inner_width.saturating_sub(INDICATOR_SPACING);
-
-    // Copy input characters to the beginning
-    for (i, &ch) in input_chars.iter().take(max_input_len).enumerate() {
-        result[i] = ch;
-    }
-
-    // Add ellipsis if input was truncated
-    if input_chars.len() > max_input_len && max_input_len >= ELLIPSIS_LENGTH {
-        for i in 0..ELLIPSIS_LENGTH {
-            result[max_input_len - ELLIPSIS_LENGTH + i] = '.';
+impl InputAreaRenderer {
+    fn new(area: ratatui::layout::Rect) -> Self {
+        Self {
+            area,
+            indicator_space: INDICATOR_SPACE,
         }
     }
 
-    // Place the indicator with padding from the right border
-    if inner_width > 1 {
-        if let Some(symbol_char) = symbol.chars().next() {
-            result[inner_width - 2] = symbol_char;
+    /// Get the area for the text content (inside border, reserving space for indicator)
+    fn text_area(&self) -> ratatui::layout::Rect {
+        ratatui::layout::Rect {
+            x: self.area.x + 1, // Inside left border
+            y: self.area.y + 1, // Inside top border
+            width: self.area.width.saturating_sub(2 + self.indicator_space), // Reserve space for borders + indicator
+            height: self.area.height.saturating_sub(2), // Inside borders
         }
     }
 
-    result.into_iter().collect()
-}
+    /// Get the area for the streaming indicator
+    fn indicator_area(&self) -> ratatui::layout::Rect {
+        ratatui::layout::Rect {
+            x: self.area.x + self.area.width.saturating_sub(3),
+            y: self.area.y + 1,
+            width: 1,
+            height: 1,
+        }
+    }
 
-/// Creates multi-line input with the streaming indicator on the first line only
-fn create_multiline_with_indicator(
-    input_lines: &[&str],
-    symbol: &str,
-    inner_width: usize,
-) -> String {
-    let mut modified_lines = Vec::new();
+    /// Get the effective text width for cursor positioning
+    fn text_width(&self) -> usize {
+        self.area.width.saturating_sub(2 + self.indicator_space) as usize
+    }
 
-    for (line_idx, line) in input_lines.iter().enumerate() {
-        if line_idx == 0 {
-            // First line gets the indicator
-            modified_lines.push(add_indicator_to_line(line, symbol, inner_width));
+    /// Render the complete input area
+    fn render(&self, f: &mut Frame, app: &App, input_style: Style, input_title: &str) {
+        // Render the border and title
+        let border_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Reset))
+            .title(input_title);
+
+        f.render_widget(border_block, self.area);
+
+        // Render the text in the reserved area
+        let input_text = Paragraph::new(app.input.as_str())
+            .style(input_style)
+            .wrap(Wrap { trim: false })
+            .scroll((app.input_scroll_offset, 0));
+
+        f.render_widget(input_text, self.text_area());
+
+        // Render streaming indicator if needed
+        if app.is_streaming {
+            self.render_streaming_indicator(f, app);
+        }
+    }
+
+    /// Render the streaming indicator
+    fn render_streaming_indicator(&self, f: &mut Frame, app: &App) {
+        // Calculate pulse animation
+        let elapsed = app.pulse_start.elapsed().as_millis() as f32 / 1000.0;
+        let pulse_phase = (elapsed * 2.0) % 2.0;
+        let pulse_intensity = if pulse_phase < 1.0 {
+            pulse_phase
         } else {
-            // Other lines remain unchanged
-            modified_lines.push(line.to_string());
-        }
-    }
+            2.0 - pulse_phase
+        };
 
-    modified_lines.join("\n")
-}
+        // Choose symbol based on pulse intensity
+        let symbol = if pulse_intensity < 0.33 {
+            "○"
+        } else if pulse_intensity < 0.66 {
+            "◐"
+        } else {
+            "●"
+        };
 
-/// Adds the streaming indicator to a single line, handling padding and truncation
-fn add_indicator_to_line(line: &str, symbol: &str, inner_width: usize) -> String {
-    let line_chars: Vec<char> = line.chars().collect();
-    let available_space = inner_width.saturating_sub(INDICATOR_SPACING);
+        let indicator_paragraph = Paragraph::new(symbol)
+            .style(Style::default().fg(Color::Cyan));
 
-    if line_chars.len() <= available_space {
-        // Line fits - pad to full width and add indicator
-        let mut padded_line = String::from(line);
-        let spaces_needed = inner_width
-            .saturating_sub(line_chars.len())
-            .saturating_sub(2);
-
-        for _ in 0..spaces_needed {
-            padded_line.push(' ');
-        }
-
-        padded_line.push_str(symbol);
-        padded_line
-    } else {
-        // Line is too long - truncate with ellipsis and add indicator
-        let mut truncated_line = String::new();
-        let truncate_at = available_space.saturating_sub(ELLIPSIS_LENGTH);
-
-        for (i, &ch) in line_chars.iter().enumerate() {
-            if i >= truncate_at {
-                break;
-            }
-            truncated_line.push(ch);
-        }
-
-        truncated_line.push_str("...");
-
-        // Add spaces to fill remaining width
-        let spaces_needed = inner_width
-            .saturating_sub(truncated_line.chars().count())
-            .saturating_sub(1);
-        for _ in 0..spaces_needed {
-            truncated_line.push(' ');
-        }
-
-        truncated_line.push_str(symbol);
-        truncated_line
+        f.render_widget(indicator_paragraph, self.indicator_area());
     }
 }
 
@@ -196,80 +155,45 @@ pub fn ui(f: &mut Frame, app: &App) {
         "Type message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
     };
 
-    // Create input text with streaming indicator if needed
-    let input_text = if app.is_streaming {
-        create_input_with_streaming_indicator(&app.input, app.pulse_start, f.area().width)
-    } else {
-        app.input.clone()
-    };
-
-    let input = Paragraph::new(input_text.as_str())
-        .style(input_style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Reset)) // Explicitly reset to system default
-                .title(input_title),
-        )
-        .wrap(Wrap { trim: false }) // Don't trim whitespace to preserve newlines
-        .scroll((app.input_scroll_offset, 0)); // Apply input scrolling
-
-    f.render_widget(input, chunks[1]);
+    let input_renderer = InputAreaRenderer::new(chunks[1]);
+    input_renderer.render(f, app, input_style, input_title);
 
     // Set cursor position for multi-line input with scrolling support
     if app.input_mode {
-        // Calculate the position of the cursor within the input text
-        let input_chars: Vec<char> = app.input.chars().collect();
-        let cursor_position = app.input_cursor_position.min(input_chars.len());
+        let text_width = input_renderer.text_width();
 
-        // Calculate available width for text (accounting for borders and streaming indicator)
-        let available_width = if app.is_streaming {
-            chunks[1].width.saturating_sub(6) // Account for borders + streaming indicator space
-        } else {
-            chunks[1].width.saturating_sub(2) // Just account for borders
-        } as usize;
+        // Calculate cursor position using simple character counting with proper wrapping
+        let cursor_position = app.input_cursor_position.min(app.input.chars().count());
+        let mut line = 0u16;
+        let mut col = 0usize;
 
-        // Ensure we have at least 1 character width to avoid division by zero
-        let available_width = available_width.max(1);
-
-        // Find which line and column the cursor is on by simulating text rendering
-        let mut current_line = 0u16;
-        let mut current_col = 0usize;
-
-        // Leave a small margin before wrapping to match ratatui's word wrapping behavior
-        let wrap_width = available_width.saturating_sub(1);
-
-        for (char_idx, ch) in app.input.chars().enumerate() {
-            if char_idx >= cursor_position {
+        for (i, ch) in app.input.chars().enumerate() {
+            if i >= cursor_position {
                 break;
             }
 
             if ch == '\n' {
-                // Explicit newline - move to next line
-                current_line += 1;
-                current_col = 0;
+                line += 1;
+                col = 0;
             } else {
-                // Regular character - check if we need to wrap
-                if current_col >= wrap_width {
-                    // Need to wrap to next line
-                    current_line += 1;
-                    current_col = 1; // This character goes on the new line
+                if col >= text_width {
+                    line += 1;
+                    col = 1;
                 } else {
-                    current_col += 1;
+                    col += 1;
                 }
             }
         }
 
-        // Calculate the visible cursor position accounting for scroll offset
-        let visible_cursor_line = current_line.saturating_sub(app.input_scroll_offset);
+        // Calculate visible position accounting for scroll
+        let visible_line = line.saturating_sub(app.input_scroll_offset);
 
         // Only show cursor if it's within the visible area
-        if visible_cursor_line < input_area_height {
-            // Ensure cursor stays within the input area bounds (account for borders)
-            let cursor_x = (current_col as u16 + 1).min(chunks[1].width.saturating_sub(2));
-            let cursor_y = chunks[1].y + 1 + visible_cursor_line;
-
-            f.set_cursor_position((chunks[1].x + cursor_x, cursor_y));
+        if visible_line < input_area_height {
+            let text_area = input_renderer.text_area();
+            let cursor_x = text_area.x + (col as u16).min(text_width as u16);
+            let cursor_y = text_area.y + visible_line;
+            f.set_cursor_position((cursor_x, cursor_y));
         }
     }
 }

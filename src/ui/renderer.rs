@@ -1,81 +1,288 @@
 use crate::core::app::App;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    buffer::Buffer,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap, Widget},
     Frame,
 };
 
 // Constants for input area layout
 const INDICATOR_SPACE: u16 = 4; // Space reserved for streaming indicator + margin
 
-/// Handles rendering of the input area with proper text wrapping and indicator positioning
-struct InputAreaRenderer {
-    area: ratatui::layout::Rect,
-    indicator_space: u16,
+/// A custom input widget that handles text wrapping, cursor positioning, and streaming indicator
+struct InputWidget<'a> {
+    text: &'a str,
+    cursor_position: usize,
+    scroll_offset: u16,
+    style: Style,
+    block: Option<Block<'a>>,
+    is_streaming: bool,
+    pulse_start: std::time::Instant,
 }
 
-impl InputAreaRenderer {
-    fn new(area: ratatui::layout::Rect) -> Self {
+impl<'a> InputWidget<'a> {
+    fn new(text: &'a str) -> Self {
         Self {
-            area,
-            indicator_space: INDICATOR_SPACE,
+            text,
+            cursor_position: 0,
+            scroll_offset: 0,
+            style: Style::default(),
+            block: None,
+            is_streaming: false,
+            pulse_start: std::time::Instant::now(),
         }
     }
 
-    /// Get the area for the text content (inside border, reserving space for indicator)
-    fn text_area(&self) -> ratatui::layout::Rect {
-        ratatui::layout::Rect {
-            x: self.area.x + 1, // Inside left border
-            y: self.area.y + 1, // Inside top border
-            width: self.area.width.saturating_sub(2 + self.indicator_space), // Reserve space for borders + indicator
-            height: self.area.height.saturating_sub(2), // Inside borders
-        }
+    fn cursor_position(mut self, position: usize) -> Self {
+        self.cursor_position = position;
+        self
     }
 
-    /// Get the area for the streaming indicator
-    fn indicator_area(&self) -> ratatui::layout::Rect {
-        ratatui::layout::Rect {
-            x: self.area.x + self.area.width.saturating_sub(3),
-            y: self.area.y + 1,
-            width: 1,
-            height: 1,
-        }
+    fn scroll(mut self, offset: u16) -> Self {
+        self.scroll_offset = offset;
+        self
     }
 
-    /// Get the effective text width for cursor positioning
-    fn text_width(&self) -> usize {
-        self.area.width.saturating_sub(2 + self.indicator_space) as usize
+    fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
     }
 
-    /// Render the complete input area
-    fn render(&self, f: &mut Frame, app: &App, input_style: Style, input_title: &str) {
-        // Render the border and title
-        let border_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Reset))
-            .title(input_title);
+    fn block(mut self, block: Block<'a>) -> Self {
+        self.block = Some(block);
+        self
+    }
 
-        f.render_widget(border_block, self.area);
+    fn streaming(mut self, is_streaming: bool, pulse_start: std::time::Instant) -> Self {
+        self.is_streaming = is_streaming;
+        self.pulse_start = pulse_start;
+        self
+    }
+}
 
-        // Render the text in the reserved area
-        let input_text = Paragraph::new(app.input.as_str())
-            .style(input_style)
-            .wrap(Wrap { trim: false })
-            .scroll((app.input_scroll_offset, 0));
+impl<'a> Widget for InputWidget<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Render the block (border and title) first
+        let inner_area = if let Some(ref block) = self.block {
+            let inner = block.inner(area);
+            block.render(area, buf);
+            inner
+        } else {
+            area
+        };
 
-        f.render_widget(input_text, self.text_area());
+        // Reserve space for streaming indicator
+        let text_area = Rect {
+            x: inner_area.x,
+            y: inner_area.y,
+            width: inner_area.width.saturating_sub(INDICATOR_SPACE),
+            height: inner_area.height,
+        };
+
+        // Pre-process text to insert line breaks at character boundaries
+        let wrapped_text = self.wrap_text_at_boundaries(self.text, text_area.width as usize);
+
+        // Render the pre-wrapped text without additional wrapping
+        let paragraph = Paragraph::new(wrapped_text.as_str())
+            .style(self.style)
+            .scroll((self.scroll_offset, 0));
+
+        paragraph.render(text_area, buf);
 
         // Render streaming indicator if needed
-        if app.is_streaming {
-            self.render_streaming_indicator(f, app);
+        if self.is_streaming {
+            self.render_streaming_indicator(area, buf);
+        }
+
+        // Set cursor position if we're in input mode
+        // Note: This is handled by the caller since Widget trait doesn't have access to Frame
+    }
+}
+
+impl<'a> InputWidget<'a> {
+    /// Pre-process text to insert line breaks at word boundaries while preserving spacing
+    fn wrap_text_at_boundaries(&self, text: &str, width: usize) -> String {
+        if width == 0 {
+            return text.to_string();
+        }
+
+        let mut result = String::new();
+        let mut current_line_len = 0;
+
+        // Split text by explicit newlines first
+        for (line_idx, line) in text.split('\n').enumerate() {
+            if line_idx > 0 {
+                result.push('\n');
+                current_line_len = 0;
+            }
+
+            // Process each character, keeping track of words and spaces
+            let mut chars = line.chars().peekable();
+            let mut current_word = String::new();
+
+            while let Some(ch) = chars.next() {
+                if ch.is_whitespace() {
+                    // Flush current word if we have one
+                    if !current_word.is_empty() {
+                        let word_len = current_word.chars().count();
+
+                        // Check if word fits on current line
+                        if current_line_len > 0 && current_line_len + word_len > width {
+                            // Need to wrap before this word
+                            result.push('\n');
+                            current_line_len = 0;
+                        }
+
+                        // Handle very long words
+                        if word_len > width {
+                            let mut remaining_word = current_word.as_str();
+                            while !remaining_word.is_empty() {
+                                let chars_to_take = width.saturating_sub(current_line_len);
+                                if chars_to_take == 0 {
+                                    result.push('\n');
+                                    current_line_len = 0;
+                                    continue;
+                                }
+
+                                let word_chars: Vec<char> = remaining_word.chars().collect();
+                                let chunk: String = word_chars.iter().take(chars_to_take).collect();
+                                result.push_str(&chunk);
+                                current_line_len += chunk.chars().count();
+
+                                remaining_word = &remaining_word[chunk.len()..];
+
+                                if !remaining_word.is_empty() {
+                                    result.push('\n');
+                                    current_line_len = 0;
+                                }
+                            }
+                        } else {
+                            // Normal word that fits
+                            result.push_str(&current_word);
+                            current_line_len += word_len;
+                        }
+
+                        current_word.clear();
+                    }
+
+                    // Add the whitespace character if it fits
+                    if current_line_len < width {
+                        result.push(ch);
+                        current_line_len += 1;
+                    } else {
+                        // Whitespace would exceed line, wrap and skip it
+                        result.push('\n');
+                        current_line_len = 0;
+                        // Don't add the space at the beginning of a new line
+                    }
+                } else {
+                    // Regular character - add to current word
+                    current_word.push(ch);
+                }
+            }
+
+            // Flush any remaining word
+            if !current_word.is_empty() {
+                let word_len = current_word.chars().count();
+
+                // Check if word fits on current line
+                if current_line_len > 0 && current_line_len + word_len > width {
+                    // Need to wrap before this word
+                    result.push('\n');
+                    current_line_len = 0;
+                }
+
+                // Handle very long words
+                if word_len > width {
+                    let mut remaining_word = current_word.as_str();
+                    while !remaining_word.is_empty() {
+                        let chars_to_take = width.saturating_sub(current_line_len);
+                        if chars_to_take == 0 {
+                            result.push('\n');
+                            current_line_len = 0;
+                            continue;
+                        }
+
+                        let word_chars: Vec<char> = remaining_word.chars().collect();
+                        let chunk: String = word_chars.iter().take(chars_to_take).collect();
+                        result.push_str(&chunk);
+                        current_line_len += chunk.chars().count();
+
+                        remaining_word = &remaining_word[chunk.len()..];
+
+                        if !remaining_word.is_empty() {
+                            result.push('\n');
+                            current_line_len = 0;
+                        }
+                    }
+                } else {
+                    // Normal word that fits
+                    result.push_str(&current_word);
+                    current_line_len += word_len;
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Calculate cursor position using word wrapping logic that matches text rendering
+    fn calculate_cursor_position(&self, area: Rect) -> Option<(u16, u16)> {
+        let inner_area = if self.block.is_some() {
+            Rect {
+                x: area.x + 1,
+                y: area.y + 1,
+                width: area.width.saturating_sub(2),
+                height: area.height.saturating_sub(2),
+            }
+        } else {
+            area
+        };
+
+        let text_area = Rect {
+            x: inner_area.x,
+            y: inner_area.y,
+            width: inner_area.width.saturating_sub(INDICATOR_SPACE),
+            height: inner_area.height,
+        };
+
+        if text_area.width == 0 {
+            return None;
+        }
+
+        let cursor_position = self.cursor_position.min(self.text.chars().count());
+
+        // Count characters in original text up to cursor position
+        let text_before_cursor: String = self.text.chars().take(cursor_position).collect();
+
+        // Get the wrapped version of text before cursor
+        let wrapped_before_cursor = self.wrap_text_at_boundaries(&text_before_cursor, text_area.width as usize);
+
+        // Count lines and find column position in wrapped text
+        let lines: Vec<&str> = wrapped_before_cursor.split('\n').collect();
+        let line = (lines.len() as u16).saturating_sub(1);
+        let col = if let Some(last_line) = lines.last() {
+            last_line.chars().count() as u16
+        } else {
+            0
+        };
+
+        // Apply scroll offset
+        let visible_line = line.saturating_sub(self.scroll_offset);
+
+        // Only return position if cursor is within visible area
+        if visible_line < text_area.height {
+            Some((text_area.x + col, text_area.y + visible_line))
+        } else {
+            None
         }
     }
 
     /// Render the streaming indicator
-    fn render_streaming_indicator(&self, f: &mut Frame, app: &App) {
+    fn render_streaming_indicator(&self, area: Rect, buf: &mut Buffer) {
         // Calculate pulse animation
-        let elapsed = app.pulse_start.elapsed().as_millis() as f32 / 1000.0;
+        let elapsed = self.pulse_start.elapsed().as_millis() as f32 / 1000.0;
         let pulse_phase = (elapsed * 2.0) % 2.0;
         let pulse_intensity = if pulse_phase < 1.0 {
             pulse_phase
@@ -92,10 +299,15 @@ impl InputAreaRenderer {
             "●"
         };
 
-        let indicator_paragraph = Paragraph::new(symbol)
-            .style(Style::default().fg(Color::Cyan));
+        // Position indicator in top-right of the widget
+        let indicator_x = area.x + area.width.saturating_sub(3);
+        let indicator_y = area.y + 1;
 
-        f.render_widget(indicator_paragraph, self.indicator_area());
+        if indicator_x < area.x + area.width && indicator_y < area.y + area.height {
+            buf[(indicator_x, indicator_y)]
+                .set_symbol(symbol)
+                .set_style(Style::default().fg(Color::Cyan));
+        }
     }
 }
 
@@ -155,44 +367,29 @@ pub fn ui(f: &mut Frame, app: &App) {
         "Type message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
     };
 
-    let input_renderer = InputAreaRenderer::new(chunks[1]);
-    input_renderer.render(f, app, input_style, input_title);
+    // Create and render the custom input widget
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Reset))
+        .title(input_title);
 
-    // Set cursor position for multi-line input with scrolling support
+    let input_widget = InputWidget::new(&app.input)
+        .cursor_position(app.input_cursor_position)
+        .scroll(app.input_scroll_offset)
+        .style(input_style)
+        .block(input_block)
+        .streaming(app.is_streaming, app.pulse_start);
+
+    f.render_widget(input_widget, chunks[1]);
+
+    // Set cursor position using the widget's calculation
     if app.input_mode {
-        let text_width = input_renderer.text_width();
+        let widget_for_cursor = InputWidget::new(&app.input)
+            .cursor_position(app.input_cursor_position)
+            .scroll(app.input_scroll_offset)
+            .block(Block::default().borders(Borders::ALL));
 
-        // Calculate cursor position using simple character counting with proper wrapping
-        let cursor_position = app.input_cursor_position.min(app.input.chars().count());
-        let mut line = 0u16;
-        let mut col = 0usize;
-
-        for (i, ch) in app.input.chars().enumerate() {
-            if i >= cursor_position {
-                break;
-            }
-
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                if col >= text_width {
-                    line += 1;
-                    col = 1;
-                } else {
-                    col += 1;
-                }
-            }
-        }
-
-        // Calculate visible position accounting for scroll
-        let visible_line = line.saturating_sub(app.input_scroll_offset);
-
-        // Only show cursor if it's within the visible area
-        if visible_line < input_area_height {
-            let text_area = input_renderer.text_area();
-            let cursor_x = text_area.x + (col as u16).min(text_width as u16);
-            let cursor_y = text_area.y + visible_line;
+        if let Some((cursor_x, cursor_y)) = widget_for_cursor.calculate_cursor_position(chunks[1]) {
             f.set_cursor_position((cursor_x, cursor_y));
         }
     }

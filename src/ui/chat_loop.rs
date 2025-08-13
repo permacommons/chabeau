@@ -681,7 +681,8 @@ pub async fn run_chat(
                                 // Update input scroll to keep cursor visible
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(terminal_size.width);
-                                app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                                app_guard
+                                    .update_input_scroll(input_area_height, terminal_size.width);
                             } else {
                                 // Up Arrow: Scroll chat history up
                                 app_guard.auto_scroll = false;
@@ -701,7 +702,8 @@ pub async fn run_chat(
                                 // Update input scroll to keep cursor visible
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(terminal_size.width);
-                                app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                                app_guard
+                                    .update_input_scroll(input_area_height, terminal_size.width);
                             } else {
                                 // Down Arrow: Scroll chat history down
                                 app_guard.auto_scroll = false;
@@ -712,8 +714,10 @@ pub async fn run_chat(
                                     .height
                                     .saturating_sub(input_area_height + 2) // Dynamic input area + borders
                                     .saturating_sub(1); // 1 for title
-                                let max_scroll = app_guard
-                                    .calculate_max_scroll_offset(available_height, terminal_size.width);
+                                let max_scroll = app_guard.calculate_max_scroll_offset(
+                                    available_height,
+                                    terminal_size.width,
+                                );
                                 app_guard.scroll_offset =
                                     (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
                             }

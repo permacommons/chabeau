@@ -5,7 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph, Wrap, Widget},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
     Frame,
 };
 
@@ -134,7 +134,11 @@ impl<'a> InputWidget<'a> {
 
         // Use TextWrapper to calculate cursor position
         let config = WrapConfig::new(text_area.width as usize);
-        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(self.text, cursor_position, &config);
+        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            self.text,
+            cursor_position,
+            &config,
+        );
 
         // Apply scroll offset
         let visible_line = (line as u16).saturating_sub(self.scroll_offset);

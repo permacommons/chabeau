@@ -55,10 +55,10 @@ impl TextWrapper {
             }
 
             // Process each character, keeping track of words and spaces
-            let mut chars = line.chars().peekable();
+            let chars = line.chars().peekable();
             let mut current_word = String::new();
 
-            while let Some(ch) = chars.next() {
+            for ch in chars {
                 if ch.is_whitespace() {
                     // Flush current word if we have one
                     if !current_word.is_empty() {

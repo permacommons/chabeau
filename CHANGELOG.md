@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- URL normalization utilities to prevent API endpoint issues (`src/utils/url.rs`)
+- Support for additional built-in providers: Venice AI, Groq, Mistral, Cerebras (`builtin_models.toml`)
+- Multi-line cursor navigation with Shift+Up/Down in input area (`src/ui/chat_loop.rs`)
+- Token input masking with partial reveal toggle (F2) during authentication (`src/auth/mod.rs`)
+
+### Changed
+- Custom provider configurations now stored in main config file instead of keyring (`src/core/config.rs`)
+
+### Fixed
+- Prevent system messages (like `/help` output) from being sent to API (`src/core/app.rs`)
+
+### Breaking
+- Existing custom provider configurations will need to be recreated due to storage mechanism change
+
 ## 0.2.3
 
 ### Added

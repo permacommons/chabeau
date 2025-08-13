@@ -73,7 +73,12 @@ impl TextWrapper {
 
                         // Handle very long words
                         if word_len > config.width {
-                            Self::handle_long_word(&mut result, &current_word, &mut current_line_len, config.width);
+                            Self::handle_long_word(
+                                &mut result,
+                                &current_word,
+                                &mut current_line_len,
+                                config.width,
+                            );
                         } else {
                             // Normal word that fits
                             result.push_str(&current_word);
@@ -112,7 +117,12 @@ impl TextWrapper {
 
                 // Handle very long words
                 if word_len > config.width {
-                    Self::handle_long_word(&mut result, &current_word, &mut current_line_len, config.width);
+                    Self::handle_long_word(
+                        &mut result,
+                        &current_word,
+                        &mut current_line_len,
+                        config.width,
+                    );
                 } else {
                     // Normal word that fits
                     result.push_str(&current_word);
@@ -125,7 +135,12 @@ impl TextWrapper {
     }
 
     /// Handle words that are longer than the line width by breaking them
-    fn handle_long_word(result: &mut String, word: &str, current_line_len: &mut usize, width: usize) {
+    fn handle_long_word(
+        result: &mut String,
+        word: &str,
+        current_line_len: &mut usize,
+        width: usize,
+    ) {
         let mut remaining_word = word;
         while !remaining_word.is_empty() {
             let chars_to_take = width.saturating_sub(*current_line_len);
@@ -176,7 +191,11 @@ impl TextWrapper {
     }
 
     /// Calculate cursor position within wrapped text
-    pub fn calculate_cursor_position_in_wrapped_text(text: &str, cursor_position: usize, config: &WrapConfig) -> (usize, usize) {
+    pub fn calculate_cursor_position_in_wrapped_text(
+        text: &str,
+        cursor_position: usize,
+        config: &WrapConfig,
+    ) -> (usize, usize) {
         let cursor_position = cursor_position.min(text.chars().count());
 
         // Get text before cursor

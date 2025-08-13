@@ -307,13 +307,16 @@ Please either:
         // Clear retry state since we're starting a new conversation
         self.retrying_message_index = None;
 
-        // Prepare messages for API (excluding the empty assistant message we just added)
+        // Prepare messages for API (excluding the empty assistant message we just added and system messages)
         let mut api_messages = Vec::new();
         for msg in self.messages.iter().take(self.messages.len() - 1) {
-            api_messages.push(crate::api::ChatMessage {
-                role: msg.role.clone(),
-                content: msg.content.clone(),
-            });
+            // Only include user and assistant messages in API calls, exclude system messages
+            if msg.role == "user" || msg.role == "assistant" {
+                api_messages.push(crate::api::ChatMessage {
+                    role: msg.role.clone(),
+                    content: msg.content.clone(),
+                });
+            }
         }
         api_messages
     }
@@ -510,15 +513,18 @@ Please either:
         // Re-enable auto-scroll for the new response
         self.auto_scroll = true;
 
-        // Prepare messages for API (excluding the message being retried)
+        // Prepare messages for API (excluding the message being retried and system messages)
         let mut api_messages = Vec::new();
         if let Some(retry_index) = self.retrying_message_index {
             for (i, msg) in self.messages.iter().enumerate() {
                 if i < retry_index {
-                    api_messages.push(crate::api::ChatMessage {
-                        role: msg.role.clone(),
-                        content: msg.content.clone(),
-                    });
+                    // Only include user and assistant messages in API calls, exclude system messages
+                    if msg.role == "user" || msg.role == "assistant" {
+                        api_messages.push(crate::api::ChatMessage {
+                            role: msg.role.clone(),
+                            content: msg.content.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -640,7 +646,7 @@ Please either:
         let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             &self.input,
             self.input_cursor_position,
-            &config
+            &config,
         );
 
         if current_line > 0 {
@@ -657,7 +663,7 @@ Please either:
         let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             &self.input,
             self.input_cursor_position,
-            &config
+            &config,
         );
 
         let total_lines = TextWrapper::count_wrapped_lines(&self.input, &config);
@@ -670,7 +676,12 @@ Please either:
     }
 
     /// Helper function to find cursor position at a specific line and column in wrapped text
-    fn find_position_at_line_col(&self, target_line: usize, target_col: usize, config: &WrapConfig) -> usize {
+    fn find_position_at_line_col(
+        &self,
+        target_line: usize,
+        target_col: usize,
+        config: &WrapConfig,
+    ) -> usize {
         let wrapped_text = TextWrapper::wrap_text(&self.input, config);
         let lines: Vec<&str> = wrapped_text.split('\n').collect();
 
@@ -772,5 +783,135 @@ Please either:
     pub fn clear_input(&mut self) {
         self.input.clear();
         self.input_cursor_position = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn test_system_messages_excluded_from_api() {
+        // Create a mock app with some messages
+        let mut app = App {
+            messages: VecDeque::new(),
+            input: String::new(),
+            input_cursor_position: 0,
+            input_mode: true,
+            current_response: String::new(),
+            client: reqwest::Client::new(),
+            model: "test-model".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: "https://api.test.com".to_string(),
+            provider_name: "test".to_string(),
+            provider_display_name: "Test".to_string(),
+            scroll_offset: 0,
+            auto_scroll: true,
+            is_streaming: false,
+            pulse_start: Instant::now(),
+            stream_interrupted: false,
+            logging: LoggingState::new(None).unwrap(),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            input_scroll_offset: 0,
+        };
+
+        // Add a user message
+        app.messages.push_back(Message {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        });
+
+        // Add a system message (like from /help command)
+        app.add_system_message(
+            "This is a system message that should not be sent to API".to_string(),
+        );
+
+        // Add an assistant message
+        app.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: "Hi there!".to_string(),
+        });
+
+        // Add another system message
+        app.add_system_message("Another system message".to_string());
+
+        // Test add_user_message - should exclude system messages
+        let api_messages = app.add_user_message("How are you?".to_string());
+
+        // Should include: first user message, assistant message, and the new user message
+        // (the new empty assistant message gets excluded by take())
+        assert_eq!(api_messages.len(), 3);
+        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].content, "Hello");
+        assert_eq!(api_messages[1].role, "assistant");
+        assert_eq!(api_messages[1].content, "Hi there!");
+        assert_eq!(api_messages[2].role, "user");
+        assert_eq!(api_messages[2].content, "How are you?");
+
+        // Verify system messages are not included
+        for msg in &api_messages {
+            assert_ne!(msg.role, "system");
+        }
+    }
+
+    #[test]
+    fn test_prepare_retry_excludes_system_messages() {
+        let mut app = App {
+            messages: VecDeque::new(),
+            input: String::new(),
+            input_cursor_position: 0,
+            input_mode: true,
+            current_response: String::new(),
+            client: reqwest::Client::new(),
+            model: "test-model".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: "https://api.test.com".to_string(),
+            provider_name: "test".to_string(),
+            provider_display_name: "Test".to_string(),
+            scroll_offset: 0,
+            auto_scroll: true,
+            is_streaming: false,
+            pulse_start: Instant::now(),
+            stream_interrupted: false,
+            logging: LoggingState::new(None).unwrap(),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            input_scroll_offset: 0,
+        };
+
+        // Add messages in order: user, system, assistant
+        app.messages.push_back(Message {
+            role: "user".to_string(),
+            content: "Test question".to_string(),
+        });
+
+        app.add_system_message("System message between user and assistant".to_string());
+
+        app.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: "Test response".to_string(),
+        });
+
+        // Set up retry state
+        app.retrying_message_index = Some(2); // Retry the assistant message at index 2
+
+        // Test prepare_retry
+        let api_messages = app.prepare_retry(10, 80).unwrap();
+
+        // Should only include the user message, excluding the system message
+        assert_eq!(api_messages.len(), 1);
+        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].content, "Test question");
+
+        // Verify no system messages are included
+        for msg in &api_messages {
+            assert_ne!(msg.role, "system");
+        }
     }
 }

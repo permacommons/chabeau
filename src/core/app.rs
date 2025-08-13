@@ -6,6 +6,7 @@ use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
+use crate::utils::url::construct_api_url;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
@@ -228,7 +229,7 @@ Please either:
 
         // Note: We use the OpenAI API format for all providers including Anthropic
         // This is known to work well with Anthropic's models
-        let api_endpoint = format!("{base_url}/chat/completions");
+        let api_endpoint = construct_api_url(&base_url, "chat/completions");
         eprintln!("🌐 API endpoint: {api_endpoint}");
 
         if let Some(ref log_path) = log_file {

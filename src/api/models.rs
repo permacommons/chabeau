@@ -1,5 +1,6 @@
 use crate::api::ModelsResponse;
 use crate::core::builtin_providers::find_builtin_provider;
+use crate::utils::url::construct_api_url;
 
 pub async fn fetch_models(
     client: &reqwest::Client,
@@ -7,8 +8,9 @@ pub async fn fetch_models(
     api_key: &str,
     provider_name: &str,
 ) -> Result<ModelsResponse, Box<dyn std::error::Error>> {
+    let models_url = construct_api_url(base_url, "models");
     let mut request = client
-        .get(format!("{base_url}/models"))
+        .get(models_url)
         .header("Content-Type", "application/json");
 
     // Handle provider-specific authentication headers

@@ -9,6 +9,7 @@ use crate::commands::CommandResult;
 use crate::core::app::App;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
+use crate::utils::url::construct_api_url;
 use futures_util::StreamExt;
 use ratatui::crossterm::{
     event::{
@@ -151,8 +152,9 @@ pub async fn run_chat(
                                         // Use tokio::select! to race between the HTTP request and cancellation
                                         tokio::select! {
                                                 _ = async {
+                                                    let chat_url = construct_api_url(&base_url, "chat/completions");
                                                     match client
-                                                        .post(format!("{base_url}/chat/completions"))
+                                                        .post(chat_url)
                                                         .header("Authorization", format!("Bearer {api_key}"))
                                                         .header("Content-Type", "application/json")
                                                         .json(&request)
@@ -333,8 +335,9 @@ pub async fn run_chat(
                                 // Use tokio::select! to race between the HTTP request and cancellation
                                 tokio::select! {
                                             _ = async {
+                                                let chat_url = construct_api_url(&base_url, "chat/completions");
                                                 match client
-                                                    .post(format!("{base_url}/chat/completions"))
+                                                    .post(chat_url)
                                                     .header("Authorization", format!("Bearer {api_key}"))
                                                     .header("Content-Type", "application/json")
                                                     .json(&request)
@@ -514,8 +517,9 @@ pub async fn run_chat(
                                     // Use tokio::select! to race between the HTTP request and cancellation
                                     tokio::select! {
                                         _ = async {
+                                            let chat_url = construct_api_url(&base_url, "chat/completions");
                                             match client
-                                                .post(format!("{base_url}/chat/completions"))
+                                                .post(chat_url)
                                                 .header("Authorization", format!("Bearer {api_key}"))
                                                 .header("Content-Type", "application/json")
                                                 .json(&request)

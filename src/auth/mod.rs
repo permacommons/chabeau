@@ -1,5 +1,6 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::{suggest_provider_id, Config, CustomProvider};
+use crate::utils::url::normalize_base_url;
 use keyring::Entry;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -251,6 +252,9 @@ impl AuthManager {
             return Err("Base URL cannot be empty".into());
         }
 
+        // Normalize the base URL to remove trailing slashes
+        let normalized_base_url = normalize_base_url(base_url);
+
         let auth_mode = None; // Default to openai mode for now
 
         print!("Enter your API token for {display_name} (press F2 to reveal last 4 chars): ");
@@ -266,7 +270,7 @@ impl AuthManager {
         let custom_provider = CustomProvider::new(
             final_id.clone(),
             display_name.to_string(),
-            base_url.to_string(),
+            normalized_base_url.clone(),
             auth_mode,
         );
 
@@ -274,7 +278,7 @@ impl AuthManager {
         self.store_token(&final_id, &token)?;
 
         println!(
-            "✓ Custom provider '{display_name}' (ID: {final_id}) configured with URL: {base_url}"
+            "✓ Custom provider '{display_name}' (ID: {final_id}) configured with URL: {normalized_base_url}"
         );
 
         Ok(())

@@ -20,9 +20,48 @@ use crate::cli::provider_list::list_providers;
 use crate::core::config::Config;
 use crate::ui::chat_loop::run_chat;
 
+fn print_version_info() {
+    println!("chabeau {}", env!("CARGO_PKG_VERSION"));
+
+    let git_describe = env!("VERGEN_GIT_DESCRIBE");
+    let git_sha = env!("VERGEN_GIT_SHA");
+    let git_branch = env!("VERGEN_GIT_BRANCH");
+
+    // Determine build type
+    let build_type = match git_describe {
+        "unknown" => "Distribution build",
+        desc if desc.starts_with('v') && !desc.contains('-') && !desc.contains("dirty") => "Release build",
+        _ => "Development build",
+    };
+    println!("{}", build_type);
+
+    // Show git information if available
+    if git_sha != "unknown" {
+        println!("Git commit: {}", &git_sha[..7.min(git_sha.len())]);
+
+        if !git_branch.is_empty() && git_branch != "unknown" {
+            println!("Git branch: {}", git_branch);
+        }
+
+        if git_describe != git_sha {
+            println!("Git describe: {}", git_describe);
+        }
+    }
+
+    println!("Build timestamp: {}", env!("VERGEN_BUILD_TIMESTAMP"));
+    println!("Rust version: {}", env!("VERGEN_RUSTC_SEMVER"));
+    println!("Target triple: {}", env!("VERGEN_CARGO_TARGET_TRIPLE"));
+    println!("Build profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });
+
+    println!();
+    println!("Chabeau is a Permacommons project and free forever.");
+    println!("See https://permacommons.org/ for more information.");
+}
+
 #[derive(Parser)]
 #[command(name = "chabeau")]
 #[command(about = "A terminal-based chat interface using OpenAI API")]
+#[command(disable_version_flag = true)]
 #[command(
     long_about = "Chabeau is a full-screen terminal chat interface that connects to various AI APIs \
 for real-time conversations. It supports streaming responses and provides a clean, \
@@ -61,6 +100,10 @@ pub struct Args {
     /// Provider to use, or list available providers if no provider specified
     #[arg(short = 'p', long, global = true, value_name = "PROVIDER", num_args = 0..=1, default_missing_value = "")]
     pub provider: Option<String>,
+
+    /// Print version information
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
+    pub version: bool,
 }
 
 #[derive(Subcommand)]
@@ -103,6 +146,12 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
 async fn async_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+
+    // Handle version flag
+    if args.version {
+        print_version_info();
+        return Ok(());
+    }
 
     match args.command.unwrap_or(Commands::Chat) {
         Commands::Auth => {

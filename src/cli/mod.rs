@@ -23,12 +23,13 @@ use crate::ui::chat_loop::run_chat;
 fn print_version_info() {
     println!("chabeau {}", env!("CARGO_PKG_VERSION"));
 
-    let git_describe = env!("VERGEN_GIT_DESCRIBE");
-    let git_sha = env!("VERGEN_GIT_SHA");
-    let git_branch = env!("VERGEN_GIT_BRANCH");
+    // Use option_env! to handle missing git environment variables
+    let git_describe = option_env!("VERGEN_GIT_DESCRIBE").unwrap_or("unknown");
+    let git_sha = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
+    let git_branch = option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown");
 
-    // Check if git information is available (vergen sets to "VERGEN_IDEMPOTENT_OUTPUT" when git is not available)
-    let has_git_info = !git_describe.starts_with("VERGEN_") && git_describe != "unknown";
+    // Check if git information is available
+    let has_git_info = git_describe != "unknown" && !git_describe.starts_with("VERGEN_");
 
     // Determine build type
     let build_type = if !has_git_info {
@@ -53,7 +54,9 @@ fn print_version_info() {
         }
     }
 
-    println!("Build timestamp: {}", env!("VERGEN_BUILD_TIMESTAMP"));
+    if let Some(timestamp) = option_env!("VERGEN_BUILD_TIMESTAMP") {
+        println!("Build timestamp: {}", timestamp);
+    }
     println!("Rust version: {}", env!("VERGEN_RUSTC_SEMVER"));
     println!("Target triple: {}", env!("VERGEN_CARGO_TARGET_TRIPLE"));
     println!("Build profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });

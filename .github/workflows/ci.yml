@@ -1,6 +1,7 @@
+---
 name: Rust build and test
 
-on:
+'on':
   push:
   pull_request:
 
@@ -12,26 +13,87 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
-    - name: Build
-      run: cargo build --verbose
+      - name: Build
+        run: cargo build --verbose
 
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Run tests
+        run: cargo test --verbose
+
+  reproducible-builds:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-repro-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-repro-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Test reproducible builds
+        run: |
+          echo "Testing SOURCE_DATE_EPOCH reproducibility..."
+          SOURCE_DATE_EPOCH=1640995200 cargo run -- --version | \
+            tee version_source_date.txt
+          if grep -q "2022-01-01T00:00:00" version_source_date.txt; then
+            echo "✅ SOURCE_DATE_EPOCH working"
+          else
+            echo "❌ SOURCE_DATE_EPOCH failed"; exit 1
+          fi
+
+          echo "Testing VERGEN_IDEMPOTENT reproducibility..."
+          VERGEN_IDEMPOTENT=1 cargo run -- --version | \
+            tee version_idempotent.txt
+          if ! grep -q "Build timestamp:" version_idempotent.txt && \
+             grep -q "Distribution build" version_idempotent.txt; then
+            echo "✅ VERGEN_IDEMPOTENT working"
+          else
+            echo "❌ VERGEN_IDEMPOTENT failed"; exit 1
+          fi
+
+      - name: Test no-git scenario
+        run: |
+          echo "Testing package maintainer scenario (no git)..."
+          # Safely hide .git directory to simulate source tarball
+          mv .git .git.backup
+          VERGEN_IDEMPOTENT=1 cargo run -- --version | \
+            tee version_no_git.txt
+          # Restore .git directory for GitHub cleanup
+          mv .git.backup .git
+
+          if grep -q "Distribution build" version_no_git.txt && \
+             ! grep -q "Git commit:" version_no_git.txt; then
+            echo "✅ No-git build working"
+          else
+            echo "❌ No-git build failed"; exit 1
+          fi
+          echo "All reproducibility tests passed! 🎉"

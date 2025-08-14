@@ -23,23 +23,29 @@ use crate::ui::chat_loop::run_chat;
 fn print_version_info() {
     println!("chabeau {}", env!("CARGO_PKG_VERSION"));
 
-    let git_describe = env!("VERGEN_GIT_DESCRIBE");
-    let git_sha = env!("VERGEN_GIT_SHA");
-    let git_branch = env!("VERGEN_GIT_BRANCH");
+    // Use option_env! to handle missing git environment variables
+    let git_describe = option_env!("VERGEN_GIT_DESCRIBE").unwrap_or("unknown");
+    let git_sha = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
+    let git_branch = option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown");
+
+    // Check if git information is available
+    let has_git_info = git_describe != "unknown" && !git_describe.starts_with("VERGEN_");
 
     // Determine build type
-    let build_type = match git_describe {
-        "unknown" => "Distribution build",
-        desc if desc.starts_with('v') && !desc.contains('-') && !desc.contains("dirty") => "Release build",
-        _ => "Development build",
+    let build_type = if !has_git_info {
+        "Distribution build"
+    } else if git_describe.starts_with('v') && !git_describe.contains('-') && !git_describe.contains("dirty") {
+        "Release build"
+    } else {
+        "Development build"
     };
     println!("{}", build_type);
 
     // Show git information if available
-    if git_sha != "unknown" {
+    if has_git_info {
         println!("Git commit: {}", &git_sha[..7.min(git_sha.len())]);
 
-        if !git_branch.is_empty() && git_branch != "unknown" {
+        if !git_branch.is_empty() && !git_branch.starts_with("VERGEN_") {
             println!("Git branch: {}", git_branch);
         }
 
@@ -48,7 +54,9 @@ fn print_version_info() {
         }
     }
 
-    println!("Build timestamp: {}", env!("VERGEN_BUILD_TIMESTAMP"));
+    if let Some(timestamp) = option_env!("VERGEN_BUILD_TIMESTAMP") {
+        println!("Build timestamp: {}", timestamp);
+    }
     println!("Rust version: {}", env!("VERGEN_RUSTC_SEMVER"));
     println!("Target triple: {}", env!("VERGEN_CARGO_TARGET_TRIPLE"));
     println!("Build profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });

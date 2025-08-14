@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+## Added
+- Enhanced version information command (`--version`) with build details and git history in `src/cli/mod.rs`
+- Reproducible build support using `SOURCE_DATE_EPOCH` and `VERGEN_IDEMPOTENT` environment variables
+
+## Changed
+- Optimized dependency features to reduce build time and binary size
+
 ## 0.3.0
 
 ### Added

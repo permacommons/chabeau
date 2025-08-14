@@ -27,19 +27,24 @@ fn print_version_info() {
     let git_sha = env!("VERGEN_GIT_SHA");
     let git_branch = env!("VERGEN_GIT_BRANCH");
 
+    // Check if git information is available (vergen sets to "VERGEN_IDEMPOTENT_OUTPUT" when git is not available)
+    let has_git_info = !git_describe.starts_with("VERGEN_") && git_describe != "unknown";
+
     // Determine build type
-    let build_type = match git_describe {
-        "unknown" => "Distribution build",
-        desc if desc.starts_with('v') && !desc.contains('-') && !desc.contains("dirty") => "Release build",
-        _ => "Development build",
+    let build_type = if !has_git_info {
+        "Distribution build"
+    } else if git_describe.starts_with('v') && !git_describe.contains('-') && !git_describe.contains("dirty") {
+        "Release build"
+    } else {
+        "Development build"
     };
     println!("{}", build_type);
 
     // Show git information if available
-    if git_sha != "unknown" {
+    if has_git_info {
         println!("Git commit: {}", &git_sha[..7.min(git_sha.len())]);
 
-        if !git_branch.is_empty() && git_branch != "unknown" {
+        if !git_branch.is_empty() && !git_branch.starts_with("VERGEN_") {
             println!("Git branch: {}", git_branch);
         }
 

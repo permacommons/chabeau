@@ -12,8 +12,8 @@ categories = ["command-line-utilities", "api-bindings"]
 authors = ["Permacommons <info@permacommons.org>"]
 
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+reqwest = { version = "0.12", features = ["json", "stream"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.9.5"

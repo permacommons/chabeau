@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+- Restored TLS support in reqwest client that was broken by dependency optimization
+
 ## 0.3.1
 
 ## Added

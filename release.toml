@@ -1,0 +1,3 @@
+allow-branch = ["release/*"]   # run releases only from release branches
+sign-commit  = true
+sign-tag     = true

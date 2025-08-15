@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+### Fixed
+
+- Fixed API token input handling with proper input saniitization
+
 ## 0.3.2
 
 ### Fixed

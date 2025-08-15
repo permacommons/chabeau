@@ -34,7 +34,10 @@ fn print_version_info() {
     // Determine build type
     let build_type = if !has_git_info {
         "Distribution build"
-    } else if git_describe.starts_with('v') && !git_describe.contains('-') && !git_describe.contains("dirty") {
+    } else if git_describe.starts_with('v')
+        && !git_describe.contains('-')
+        && !git_describe.contains("dirty")
+    {
         "Release build"
     } else {
         "Development build"
@@ -59,7 +62,14 @@ fn print_version_info() {
     }
     println!("Rust version: {}", env!("VERGEN_RUSTC_SEMVER"));
     println!("Target triple: {}", env!("VERGEN_CARGO_TARGET_TRIPLE"));
-    println!("Build profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });
+    println!(
+        "Build profile: {}",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
 
     println!();
     println!("Chabeau is a Permacommons project and free forever.");

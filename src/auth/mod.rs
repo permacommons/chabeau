@@ -1,13 +1,21 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::{suggest_provider_id, Config, CustomProvider};
+use crate::utils::input::sanitize_text_input;
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
+    execute,
 };
 use std::io::{self, Write};
 use std::time::Duration;
+
+// Constants for repeated strings
+const KEYRING_SERVICE: &str = "chabeau";
+const MASKED_INPUT_PROMPT: &str = "Enter your API token (press F2 to reveal last 4 chars): ";
+const INVALID_CHOICE_MSG: &str = "Invalid choice";
+const TOKEN_EMPTY_ERROR: &str = "Token cannot be empty";
 
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -72,7 +80,7 @@ impl AuthManager {
         provider_name: &str,
         token: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", provider_name)?;
+        let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
         entry.set_password(token)?;
         Ok(())
     }
@@ -81,7 +89,7 @@ impl AuthManager {
         &self,
         provider_name: &str,
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let entry = Entry::new("chabeau", provider_name)?;
+        let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
         match entry.get_password() {
             Ok(token) => Ok(Some(token)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -159,10 +167,10 @@ impl AuthManager {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        let choice: usize = input.trim().parse().map_err(|_| "Invalid choice")?;
+        let choice: usize = input.trim().parse().map_err(|_| INVALID_CHOICE_MSG)?;
 
         if choice == 0 || choice > self.providers.len() + 1 {
-            return Err("Invalid choice".into());
+            return Err(INVALID_CHOICE_MSG.into());
         }
 
         if choice <= self.providers.len() {
@@ -187,13 +195,14 @@ impl AuthManager {
         display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!();
-        print!("Enter your {display_name} API token (press F2 to reveal last 4 chars): ");
+        println!("Selected provider: {display_name}");
+        print!("{}", MASKED_INPUT_PROMPT);
         io::stdout().flush()?;
 
         let token = self.read_masked_input()?;
 
         if token.is_empty() {
-            return Err("Token cannot be empty".into());
+            return Err(TOKEN_EMPTY_ERROR.into());
         }
 
         self.store_token(provider_name, &token)?;
@@ -257,13 +266,13 @@ impl AuthManager {
 
         let auth_mode = None; // Default to openai mode for now
 
-        print!("Enter your API token for {display_name} (press F2 to reveal last 4 chars): ");
+        print!("{}", MASKED_INPUT_PROMPT);
         io::stdout().flush()?;
 
         let token = self.read_masked_input()?;
 
         if token.is_empty() {
-            return Err("Token cannot be empty".into());
+            return Err(TOKEN_EMPTY_ERROR.into());
         }
 
         // Create and store the custom provider
@@ -456,30 +465,25 @@ impl AuthManager {
     /// - Ctrl+U to clear entire line
     /// - Ctrl+W to delete last word
     /// - Ctrl+C or Esc to cancel
-    /// - Enter to confirm input
+    /// - Enter or newlines (\n, \r) to confirm input
+    /// - Proper paste handling with sanitization
     fn read_masked_input(&self) -> Result<String, Box<dyn std::error::Error>> {
         enable_raw_mode()?;
+
+        // Enable bracketed paste mode to handle paste events properly
+        let mut stdout = io::stdout();
+        execute!(stdout, event::EnableBracketedPaste)?;
+
         let mut input = String::new();
         let mut show_last_four = false;
+        let mut needs_redraw = true;
 
-        loop {
-            // Clear the line and redraw the prompt with current state
-            print!("\r\x1b[K"); // Clear line
-            if show_last_four && input.len() >= 4 {
-                let masked_part = "*".repeat(input.len() - 4);
-                let visible_part = &input[input.len() - 4..];
-                print!(
-                    "Enter your API token (press F2 to reveal last 4 chars): {}{}",
-                    masked_part, visible_part
-                );
-            } else {
-                let masked = "*".repeat(input.len());
-                print!(
-                    "Enter your API token (press F2 to reveal last 4 chars): {}",
-                    masked
-                );
+        let result = loop {
+            // Only redraw when necessary
+            if needs_redraw {
+                self.display_masked_prompt(&input, show_last_four)?;
+                needs_redraw = false;
             }
-            io::stdout().flush()?;
 
             // Wait for events with a timeout
             if event::poll(Duration::from_millis(100))? {
@@ -487,61 +491,169 @@ impl AuthManager {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         match key.code {
                             KeyCode::Enter => {
-                                disable_raw_mode()?;
-                                println!(); // Move to next line
-                                return Ok(input);
+                                break Ok(input);
                             }
                             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                // Check for newline characters and submit immediately
+                                if c == '\n' || c == '\r' {
+                                    break Ok(input);
+                                }
                                 input.push(c);
                                 show_last_four = false; // Hide reveal when typing
+                                needs_redraw = true;
                             }
-                            KeyCode::Backspace => {
+                            KeyCode::Backspace | KeyCode::Delete => {
                                 if !input.is_empty() {
                                     input.pop();
                                     show_last_four = false; // Hide reveal when editing
-                                }
-                            }
-                            KeyCode::Delete => {
-                                // Delete key - same as backspace for single-line input
-                                if !input.is_empty() {
-                                    input.pop();
-                                    show_last_four = false; // Hide reveal when editing
+                                    needs_redraw = true;
                                 }
                             }
                             KeyCode::F(2) => {
                                 show_last_four = !show_last_four;
+                                needs_redraw = true;
                             }
                             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 // Ctrl+U: Clear entire line
                                 input.clear();
                                 show_last_four = false;
+                                needs_redraw = true;
                             }
                             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 // Ctrl+W: Delete last word
-                                while input.ends_with(' ') {
-                                    input.pop();
-                                }
-                                while !input.is_empty() && !input.ends_with(' ') {
-                                    input.pop();
-                                }
+                                self.delete_last_word(&mut input);
                                 show_last_four = false;
+                                needs_redraw = true;
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                disable_raw_mode()?;
-                                println!(); // Move to next line
-                                return Err("Cancelled by user".into());
+                                break Err("Cancelled by user".into());
                             }
                             KeyCode::Esc => {
-                                disable_raw_mode()?;
-                                println!(); // Move to next line
-                                return Err("Cancelled by user".into());
+                                break Err("Cancelled by user".into());
                             }
                             _ => {}
+                        }
+                    }
+                    Event::Paste(text) => {
+                        // Handle paste events with sanitization
+                        let sanitized_text = sanitize_text_input(&text);
+
+                        // Check if the sanitized text contains newlines - if so, submit immediately
+                        if sanitized_text.contains('\n') {
+                            // Take everything before the first newline as the input
+                            let before_newline = sanitized_text.split('\n').next().unwrap_or("");
+                            input.push_str(before_newline);
+
+                            // Show the masked input before submitting
+                            self.display_masked_prompt(&input, false)?;
+
+                            break Ok(input);
+                        } else {
+                            // No newlines, just add the sanitized text
+                            input.push_str(&sanitized_text);
+                            show_last_four = false; // Hide reveal when pasting
+                            needs_redraw = true;
                         }
                     }
                     _ => {}
                 }
             }
+        };
+
+        // Cleanup: disable bracketed paste mode and raw mode
+        disable_raw_mode()?;
+        execute!(stdout, event::DisableBracketedPaste)?;
+        println!(); // Move to next line
+
+        result
+    }
+
+    /// Display the masked input prompt with optional reveal of last 4 characters
+    fn display_masked_prompt(&self, input: &str, show_last_four: bool) -> Result<(), Box<dyn std::error::Error>> {
+        print!("\r\x1b[K"); // Clear line
+        if show_last_four && input.len() >= 4 {
+            let masked_part = "*".repeat(input.len() - 4);
+            let visible_part = &input[input.len() - 4..];
+            print!("{}{}{}", MASKED_INPUT_PROMPT, masked_part, visible_part);
+        } else {
+            let masked = "*".repeat(input.len());
+            print!("{}{}", MASKED_INPUT_PROMPT, masked);
+        }
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    /// Delete the last word from the input string (Ctrl+W functionality)
+    fn delete_last_word(&self, input: &mut String) {
+        // Remove trailing spaces
+        while input.ends_with(' ') {
+            input.pop();
+        }
+        // Remove the last word
+        while !input.is_empty() && !input.ends_with(' ') {
+            input.pop();
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_auth_manager() -> AuthManager {
+        AuthManager::new()
+    }
+
+    #[test]
+    fn test_delete_last_word_single_word() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::from("hello");
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "");
+    }
+
+    #[test]
+    fn test_delete_last_word_multiple_words() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::from("hello world test");
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "hello world ");
+    }
+
+    #[test]
+    fn test_delete_last_word_trailing_spaces() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::from("hello world   ");
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "hello ");
+    }
+
+    #[test]
+    fn test_delete_last_word_empty_string() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::new();
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "");
+    }
+
+    #[test]
+    fn test_delete_last_word_only_spaces() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::from("   ");
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "");
+    }
+
+    #[test]
+    fn test_delete_last_word_mixed_spaces() {
+        let auth_manager = create_test_auth_manager();
+        let mut input = String::from("hello  world  test  ");
+        auth_manager.delete_last_word(&mut input);
+        assert_eq!(input, "hello  world  ");
+    }
+
+    // Note: We can't easily test the full read_masked_input function without mocking
+    // the terminal input, but we can test the helper functions that contain the logic.
+    // For integration testing of the full masked input functionality, manual testing
+    // or more complex test harnesses would be needed.
 }

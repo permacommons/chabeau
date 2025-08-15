@@ -22,7 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure build instructions - respect reproducible build settings
     let build = if std::env::var_os("VERGEN_IDEMPOTENT").is_some() {
         // For reproducible builds, only include non-temporal information
-        BuildBuilder::default().build_date(false).build_timestamp(false).build()?
+        BuildBuilder::default()
+            .build_date(false)
+            .build_timestamp(false)
+            .build()?
     } else {
         // Normal builds include timestamps (vergen will respect SOURCE_DATE_EPOCH)
         BuildBuilder::all_build()?

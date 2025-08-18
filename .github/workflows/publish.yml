@@ -1,0 +1,53 @@
+name: Publish crate on tag
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for all branches/tags)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is on default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          echo "Default branch: $DEFAULT_BRANCH"
+          git rev-parse "origin/$DEFAULT_BRANCH" >/dev/null
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/$DEFAULT_BRANCH"; then
+            echo "Tag commit is not on $DEFAULT_BRANCH. Refusing to publish."
+            exit 1
+          fi
+
+      - name: Show Rust toolchain
+        run: |
+          rustup --version
+          rustc -V
+          cargo -V
+
+      - name: Verify tag matches crate version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          [ "$TAG_VERSION" = "$CRATE_VERSION" ] || {
+            echo "Tag v$TAG_VERSION does not match Cargo.toml version $CRATE_VERSION"
+            exit 1
+          }
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo publish --locked --dry-run
+          cargo publish --locked

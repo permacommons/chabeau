@@ -1,5 +1,12 @@
 # Changelog
 
+
+## 0.3.4
+
+### Fixed
+
+- Fixed cursor position calculation when text wraps in input fields (`src/core/text_wrapping.rs`)
+
 ## 0.3.3
 
 ### Fixed

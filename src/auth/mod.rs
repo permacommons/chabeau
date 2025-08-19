@@ -5,8 +5,8 @@ use crate::utils::url::normalize_base_url;
 use keyring::Entry;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode},
     execute,
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use std::io::{self, Write};
 use std::time::Duration;
@@ -569,7 +569,11 @@ impl AuthManager {
     }
 
     /// Display the masked input prompt with optional reveal of last 4 characters
-    fn display_masked_prompt(&self, input: &str, show_last_four: bool) -> Result<(), Box<dyn std::error::Error>> {
+    fn display_masked_prompt(
+        &self,
+        input: &str,
+        show_last_four: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         print!("\r\x1b[K"); // Clear line
         if show_last_four && input.len() >= 4 {
             let masked_part = "*".repeat(input.len() - 4);

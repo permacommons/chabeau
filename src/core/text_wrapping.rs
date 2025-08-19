@@ -88,7 +88,7 @@ impl TextWrapper {
                         current_word.clear();
                     }
 
-                    // Add the whitespace character if it fits
+                    // Only add the whitespace if it fits
                     if current_line_len < config.width {
                         result.push(ch);
                         current_line_len += 1;
@@ -190,7 +190,7 @@ impl TextWrapper {
         lines.len().saturating_sub(1)
     }
 
-    /// Calculate cursor position within wrapped text
+    /// Calculate cursor position within wrapped text using a character-by-character mapping
     pub fn calculate_cursor_position_in_wrapped_text(
         text: &str,
         cursor_position: usize,
@@ -198,22 +198,54 @@ impl TextWrapper {
     ) -> (usize, usize) {
         let cursor_position = cursor_position.min(text.chars().count());
 
-        // Get text before cursor
-        let text_before_cursor: String = text.chars().take(cursor_position).collect();
+        if cursor_position == 0 {
+            return (0, 0);
+        }
 
-        // Get the wrapped version of text before cursor
-        let wrapped_before_cursor = Self::wrap_text(&text_before_cursor, config);
+        // Wrap the full text once
+        let wrapped_text = Self::wrap_text(text, config);
+        let wrapped_lines: Vec<&str> = wrapped_text.split('\n').collect();
 
-        // Count lines and find column position in wrapped text
-        let lines: Vec<&str> = wrapped_before_cursor.split('\n').collect();
-        let line = lines.len().saturating_sub(1);
-        let col = if let Some(last_line) = lines.last() {
-            last_line.chars().count()
+        // Create a mapping from original positions to wrapped positions
+        let original_chars: Vec<char> = text.chars().collect();
+        let mut position_map = Vec::new();
+        let mut original_pos = 0;
+
+        // Build the position mapping
+        for (line_idx, line) in wrapped_lines.iter().enumerate() {
+            for (col_idx, _wrapped_char) in line.chars().enumerate() {
+                // Skip any newlines in original text
+                while original_pos < original_chars.len() && original_chars[original_pos] == '\n' {
+                    position_map.push((line_idx, 0)); // Newlines map to start of current line
+                    original_pos += 1;
+                }
+
+                if original_pos < original_chars.len() {
+                    position_map.push((line_idx, col_idx));
+                    original_pos += 1;
+                }
+            }
+
+            // Handle end-of-line position
+            while original_pos < original_chars.len() && original_chars[original_pos] == '\n' {
+                position_map.push((line_idx + 1, 0)); // After newline goes to next line
+                original_pos += 1;
+            }
+        }
+
+        // Add final position for end of text
+        if let Some(last_line) = wrapped_lines.last() {
+            position_map.push((wrapped_lines.len() - 1, last_line.chars().count()));
+        }
+
+        // Return the mapped position, or end of text if beyond range
+        if cursor_position < position_map.len() {
+            position_map[cursor_position]
+        } else if let Some(last_line) = wrapped_lines.last() {
+            (wrapped_lines.len() - 1, last_line.chars().count())
         } else {
-            0
-        };
-
-        (line, col)
+            (0, 0)
+        }
     }
 }
 
@@ -258,11 +290,28 @@ mod tests {
     fn test_cursor_position_calculation() {
         let config = WrapConfig::new(5);
         let text = "hello world";
-        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 6, &config);
+        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 5, &config);
 
-        // With width 5, "hello" (5 chars) fills first line, space wraps to second line
-        // Cursor at position 6 (after "hello ") should be at start of second line
+        // Cursor at position 5 (after "hello ") should be at start of second line
         assert_eq!(line, 1);
         assert_eq!(col, 0); // Start of second line after wrapping
+    }
+
+    #[test]
+    fn test_extra_padding() {
+        // Test to verify that wrapping doesn't add extra whitespace
+        let config = WrapConfig::new(18);
+        let text = "word1 word2 word3 word4";
+        let wrapped = TextWrapper::wrap_text(text, &config);
+
+        // Count spaces in original vs wrapped
+        let original_spaces = text.chars().filter(|&c| c == ' ').count();
+        let wrapped_spaces = wrapped.chars().filter(|&c| c == ' ').count();
+
+        // The wrapped text should not have MORE spaces than the original
+        assert_eq!(
+            wrapped_spaces, original_spaces,
+            "Wrapped text has extra spaces!"
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "chabeau"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "A full-screen terminal chat interface that connects to various AI APIs for real-time conversations"
 license = "CC0-1.0"

@@ -1,11 +1,16 @@
-name: Publish crate on tag
+name: Publish crate when tag lands on main
 
 on:
   push:
-    tags: ['v*']
+    branches: ['main']
 
 permissions:
   contents: read
+
+# Avoid double-publishes if multiple pushes land quickly
+concurrency:
+  group: publish-crate
+  cancel-in-progress: false
 
 jobs:
   check-branch:
@@ -13,37 +18,61 @@ jobs:
     outputs:
       should_publish: ${{ steps.branch.outputs.should_publish }}
       reason: ${{ steps.branch.outputs.reason }}
+      tag: ${{ steps.branch.outputs.tag }}
     steps:
-      - name: Checkout (full history for all branches/tags)
+      - name: Checkout (full history incl. tags)
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - id: branch
-        name: Ensure tag commit is on default branch
+        name: Choose newest publishable tag reachable from main
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         shell: bash
         run: |
           set -euo pipefail
+
           echo "Default branch: $DEFAULT_BRANCH"
           git rev-parse "origin/$DEFAULT_BRANCH" >/dev/null
 
-          if git merge-base --is-ancestor "${GITHUB_SHA}" "origin/$DEFAULT_BRANCH"; then
-            echo "should_publish=true"  >> "$GITHUB_OUTPUT"
-            echo "reason=tag commit is on $DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Branch check::Tag ${GITHUB_REF_NAME} is on ${DEFAULT_BRANCH}; will publish."
-          else
+          # Find highest semver v* tag whose commit is an ancestor of main
+          candidate_tag=""
+          while IFS= read -r t; do
+            if git merge-base --is-ancestor "$(git rev-parse "$t")" "origin/$DEFAULT_BRANCH"; then
+              candidate_tag="$t"
+              break
+            fi
+          done < <(git tag -l 'v*' --sort=-v:refname)
+
+          if [[ -z "${candidate_tag}" ]]; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=tag commit not yet on $DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Branch check::Tag ${GITHUB_REF_NAME} is NOT on ${DEFAULT_BRANCH}; skipping publish."
+            echo "reason=no release tags reachable from $DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Summarize branch decision
+          # Skip if already on crates.io
+          crate_name="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
+          tag_version="${candidate_tag#v}"
+
+          if curl -fsS "https://crates.io/api/v1/crates/${crate_name}" \
+             | jq -er --arg v "$tag_version" '.versions[].num == $v' >/dev/null 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=version ${tag_version} already on crates.io" >> "$GITHUB_OUTPUT"
+            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_publish=true"  >> "$GITHUB_OUTPUT"
+          echo "reason=tag ${candidate_tag} is on ${DEFAULT_BRANCH} and not yet published" >> "$GITHUB_OUTPUT"
+          echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
         run: |
           {
-            echo "### Publish on tag — branch check"
-            echo "- Tag: \`${GITHUB_REF_NAME}\`"
+            echo "### Publish on tag — selection"
+            echo "- Tag: \`${{ steps.branch.outputs.tag || 'n/a' }}\`"
             echo "- Should publish: **${{ steps.branch.outputs.should_publish }}**"
             echo "- Reason: ${{ steps.branch.outputs.reason }}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -53,8 +82,18 @@ jobs:
     if: needs.check-branch.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (need tags)
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check out tagged commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.check-branch.outputs.tag }}"
+          echo "Checking out ${TAG}"
+          git checkout --quiet "$TAG"
 
       - name: Show Rust toolchain
         run: |
@@ -66,12 +105,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ needs.check-branch.outputs.tag }}"
+          TAG_VERSION="${TAG#v}"
           CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           [ "$TAG_VERSION" = "$CRATE_VERSION" ] || {
             echo "Tag v$TAG_VERSION does not match Cargo.toml version $CRATE_VERSION"
             exit 1
           }
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Publish to crates.io
         env:

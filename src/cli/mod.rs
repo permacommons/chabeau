@@ -101,7 +101,9 @@ Controls:\n\
 Commands:\n\
   /help             Show extended help with keyboard shortcuts\n\
   /log <filename>   Enable logging to specified file\n\
-  /log              Toggle logging pause/resume"
+  /log              Toggle logging pause/resume\n\
+  /dump <filename>  Dump conversation to specified file\n\
+  /dump             Dump conversation to chabeau-log-<isodate>.txt"
 )]
 pub struct Args {
     #[command(subcommand)]

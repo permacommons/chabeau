@@ -111,6 +111,8 @@ chabeau set default-provider            # Show current configuration
 - `/help` - Show extended help
 - `/log <filename>` - Enable/switch log file
 - `/log` - Toggle logging pause/resume
+- `/dump <filename>` - Dump conversation to specified file
+- `/dump` - Dump conversation to chabeau-log-<isodate>.txt
 
 ### External Editor
 Set `EDITOR` environment variable:

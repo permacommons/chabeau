@@ -52,18 +52,46 @@ jobs:
             exit 0
           fi
 
-          # Skip if already on crates.io
+          # Skip if already on crates.io — fail CLOSED on network/parse issues
           crate_name="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
           tag_version="${candidate_tag#v}"
 
-          if curl -fsS "https://crates.io/api/v1/crates/${crate_name}" \
-             | jq -er --arg v "$tag_version" '.versions[].num == $v' >/dev/null 2>&1; then
+          check_url="https://crates.io/api/v1/crates/${crate_name}"
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+
+          # Fetch with sensible timeouts/retries; treat any failure as "don't publish"
+          if ! curl -fsS \
+                --connect-timeout 5 \
+                --max-time 15 \
+                --retry 5 \
+                --retry-delay 2 \
+                --retry-all-errors \
+                -H "User-Agent: curl" \
+                -o "$tmp" "$check_url"; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=crates.io check unreachable; skipping publish for now" >> "$GITHUB_OUTPUT"
+            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Ensure the response is valid JSON; otherwise, fail closed
+          if ! jq -e . "$tmp" >/dev/null 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=crates.io response not parseable; skipping publish" >> "$GITHUB_OUTPUT"
+            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If the exact version already exists, skip publishing
+          if jq -e --arg v "$tag_version" 'any(.versions[]?; .num == $v)' "$tmp" >/dev/null 2>&1; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "reason=version ${tag_version} already on crates.io" >> "$GITHUB_OUTPUT"
             echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # Otherwise proceed
           echo "should_publish=true"  >> "$GITHUB_OUTPUT"
           echo "reason=tag ${candidate_tag} is on ${DEFAULT_BRANCH} and not yet published" >> "$GITHUB_OUTPUT"
           echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"

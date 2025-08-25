@@ -1,4 +1,5 @@
 use crate::core::message::Message;
+use chrono::Utc;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -10,15 +11,10 @@ pub struct LoggingState {
 
 impl LoggingState {
     pub fn new(log_file: Option<String>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut logging = LoggingState {
+        let logging = LoggingState {
             file_path: log_file,
             is_active: false,
         };
-
-        // If a log file was provided via command line, enable logging immediately
-        if logging.file_path.is_some() {
-            logging.is_active = true;
-        }
 
         Ok(logging)
     }
@@ -30,6 +26,10 @@ impl LoggingState {
         self.file_path = Some(path.clone());
         self.is_active = true;
 
+        // Log timestamp when starting
+        let timestamp = Utc::now().to_rfc3339();
+        self.log_message(&format!("## Logging started at {}", timestamp))?;
+
         Ok(format!("Logging enabled to: {path}"))
     }
 
@@ -38,8 +38,14 @@ impl LoggingState {
             Some(path) => {
                 self.is_active = !self.is_active;
                 if self.is_active {
+                    // Log timestamp when resuming
+                    let timestamp = Utc::now().to_rfc3339();
+                    self.write_to_log(&format!("## Logging resumed at {}", timestamp))?;
                     Ok(format!("Logging resumed to: {path}"))
                 } else {
+                    // Log timestamp when pausing
+                    let timestamp = Utc::now().to_rfc3339();
+                    self.write_to_log(&format!("## Logging paused at {}", timestamp))?;
                     Ok(format!("Logging paused (file: {path})"))
                 }
             }
@@ -54,6 +60,10 @@ impl LoggingState {
             return Ok(());
         }
 
+        self.write_to_log(content)
+    }
+
+    fn write_to_log(&self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
         let file_path = self.file_path.as_ref().unwrap();
         let mut file = OpenOptions::new()
             .create(true)

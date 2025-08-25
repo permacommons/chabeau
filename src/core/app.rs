@@ -7,6 +7,7 @@ use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
 use crate::utils::url::construct_api_url;
+use chrono::Utc;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
@@ -238,7 +239,14 @@ Please either:
         eprintln!("💡 Press Ctrl+C to quit, Enter to send messages");
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-        let logging = LoggingState::new(log_file)?;
+        let logging = LoggingState::new(log_file.clone())?;
+        // If logging was enabled via command line, log the start timestamp
+        if let Some(_log_path) = log_file {
+            let timestamp = Utc::now().to_rfc3339();
+            if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
+                eprintln!("Warning: Failed to write initial log timestamp: {}", e);
+            }
+        }
 
         Ok(App {
             messages: VecDeque::new(),

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.5
+
+### Added
+- Add `/dump` command to export conversations to files (`src/commands/mod.rs`)
+
+### Changed
+- Include timestamps when starting, pausing, and resuming conversation logs (`src/utils/logging.rs`)
 
 ## 0.3.4
 

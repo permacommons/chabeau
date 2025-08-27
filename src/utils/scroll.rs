@@ -210,26 +210,8 @@ impl ScrollCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test_utils::{create_test_message, create_test_messages};
     use std::collections::VecDeque;
-
-    fn create_test_message(role: &str, content: &str) -> Message {
-        Message {
-            role: role.to_string(),
-            content: content.to_string(),
-        }
-    }
-
-    fn create_test_messages() -> VecDeque<Message> {
-        let mut messages = VecDeque::new();
-        messages.push_back(create_test_message("user", "Hello"));
-        messages.push_back(create_test_message("assistant", "Hi there!"));
-        messages.push_back(create_test_message("user", "How are you?"));
-        messages.push_back(create_test_message(
-            "assistant",
-            "I'm doing well, thank you for asking!",
-        ));
-        messages
-    }
 
     #[test]
     fn test_build_display_lines_basic() {

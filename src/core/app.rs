@@ -797,7 +797,7 @@ Please either:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::test_utils::create_test_app;
+    use crate::utils::test_utils::{create_test_app, create_test_message};
 
     #[test]
     fn test_system_messages_excluded_from_api() {
@@ -805,10 +805,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Add a user message
-        app.messages.push_back(Message {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        });
+        app.messages.push_back(create_test_message("user", "Hello"));
 
         // Add a system message (like from /help command)
         app.add_system_message(
@@ -816,10 +813,8 @@ mod tests {
         );
 
         // Add an assistant message
-        app.messages.push_back(Message {
-            role: "assistant".to_string(),
-            content: "Hi there!".to_string(),
-        });
+        app.messages
+            .push_back(create_test_message("assistant", "Hi there!"));
 
         // Add another system message
         app.add_system_message("Another system message".to_string());

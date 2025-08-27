@@ -1,6 +1,8 @@
 #[cfg(test)]
 use crate::core::app::App;
 #[cfg(test)]
+use crate::core::message::Message;
+#[cfg(test)]
 use crate::utils::logging::LoggingState;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -31,4 +33,25 @@ pub fn create_test_app() -> App {
         retrying_message_index: None,
         input_scroll_offset: 0,
     }
+}
+
+#[cfg(test)]
+pub fn create_test_message(role: &str, content: &str) -> Message {
+    Message {
+        role: role.to_string(),
+        content: content.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub fn create_test_messages() -> VecDeque<Message> {
+    let mut messages = VecDeque::new();
+    messages.push_back(create_test_message("user", "Hello"));
+    messages.push_back(create_test_message("assistant", "Hi there!"));
+    messages.push_back(create_test_message("user", "How are you?"));
+    messages.push_back(create_test_message(
+        "assistant",
+        "I'm doing well, thank you for asking!",
+    ));
+    messages
 }

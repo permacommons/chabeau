@@ -21,6 +21,108 @@ pub struct Config {
     pub custom_providers: Vec<CustomProvider>,
 }
 
+impl Config {
+    pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
+        let config_path = Self::get_config_path();
+        Self::load_from_path(&config_path)
+    }
+
+    pub fn load_from_path(config_path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
+        if config_path.exists() {
+            let contents = fs::read_to_string(config_path)?;
+            let config: Config = toml::from_str(&contents)?;
+            Ok(config)
+        } else {
+            Ok(Config::default())
+        }
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = Self::get_config_path();
+        self.save_to_path(&config_path)
+    }
+
+    pub fn save_to_path(&self, config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let contents = toml::to_string_pretty(self)?;
+        fs::write(config_path, contents)?;
+        Ok(())
+    }
+
+    fn get_config_path() -> PathBuf {
+        let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
+            .expect("Failed to determine config directory");
+        proj_dirs.config_dir().join("config.toml")
+    }
+
+    pub fn print_all(&self) {
+        println!("Current configuration:");
+        match &self.default_provider {
+            Some(provider) => println!("  default-provider: {provider}"),
+            None => println!("  default-provider: (unset)"),
+        }
+        if self.default_models.is_empty() {
+            println!("  default-models: (none set)");
+        } else {
+            println!("  default-models:");
+            for (provider, model) in &self.default_models {
+                println!("    {provider}: {model}");
+            }
+        }
+    }
+
+    pub fn get_default_model(&self, provider: &str) -> Option<&String> {
+        self.default_models.get(provider)
+    }
+
+    pub fn set_default_model(&mut self, provider: String, model: String) {
+        self.default_models.insert(provider, model);
+    }
+
+    pub fn unset_default_model(&mut self, provider: &str) {
+        self.default_models.remove(provider);
+    }
+
+    pub fn add_custom_provider(&mut self, provider: CustomProvider) {
+        self.custom_providers.push(provider);
+    }
+
+    pub fn remove_custom_provider(&mut self, id: &str) {
+        self.custom_providers.retain(|p| p.id != id);
+    }
+
+    pub fn get_custom_provider(&self, id: &str) -> Option<&CustomProvider> {
+        self.custom_providers.iter().find(|p| p.id == id)
+    }
+
+    pub fn list_custom_providers(&self) -> Vec<&CustomProvider> {
+        self.custom_providers.iter().collect()
+    }
+}
+
+impl CustomProvider {
+    pub fn new(id: String, display_name: String, base_url: String, mode: Option<String>) -> Self {
+        Self {
+            id,
+            display_name,
+            base_url,
+            mode,
+        }
+    }
+}
+
+/// Generate a suggested ID from a display name
+/// Converts to lowercase and keeps only alphanumeric characters
+pub fn suggest_provider_id(display_name: &str) -> String {
+    display_name
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,8 +145,10 @@ mod tests {
         let config_path = temp_dir.path().join("test_config.toml");
 
         // Create a config with a default provider
-        let mut config = Config::default();
-        config.default_provider = Some("test-provider".to_string());
+        let config = Config {
+            default_provider: Some("test-provider".to_string()),
+            ..Default::default()
+        };
 
         // Save the config
         config
@@ -67,15 +171,18 @@ mod tests {
         let config_path = temp_dir.path().join("test_config.toml");
 
         // Create a config with a default provider
-        let mut config = Config::default();
-        config.default_provider = Some("test-provider".to_string());
+        let config = Config {
+            default_provider: Some("test-provider".to_string()),
+            ..Default::default()
+        };
 
         // Save the config
         config
             .save_to_path(&config_path)
             .expect("Failed to save config");
 
-        // Unset the default provider
+        // Load config again and unset the default provider
+        let mut config = Config::load_from_path(&config_path).expect("Failed to load config");
         config.default_provider = None;
         config
             .save_to_path(&config_path)
@@ -94,15 +201,18 @@ mod tests {
         let config_path = temp_dir.path().join("test_config.toml");
 
         // Create a config with a default provider
-        let mut config = Config::default();
-        config.default_provider = Some("initial-provider".to_string());
+        let config = Config {
+            default_provider: Some("initial-provider".to_string()),
+            ..Default::default()
+        };
 
         // Save the config
         config
             .save_to_path(&config_path)
             .expect("Failed to save config");
 
-        // Change the default provider
+        // Load config again and change the default provider
+        let mut config = Config::load_from_path(&config_path).expect("Failed to load config");
         config.default_provider = Some("new-provider".to_string());
         config
             .save_to_path(&config_path)
@@ -301,106 +411,4 @@ mod tests {
         assert_eq!(openai_provider.mode, None);
         assert_eq!(anthropic_provider.mode, Some("anthropic".to_string()));
     }
-}
-
-impl Config {
-    pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
-        let config_path = Self::get_config_path();
-        Self::load_from_path(&config_path)
-    }
-
-    pub fn load_from_path(config_path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
-        if config_path.exists() {
-            let contents = fs::read_to_string(config_path)?;
-            let config: Config = toml::from_str(&contents)?;
-            Ok(config)
-        } else {
-            Ok(Config::default())
-        }
-    }
-
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = Self::get_config_path();
-        self.save_to_path(&config_path)
-    }
-
-    pub fn save_to_path(&self, config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let contents = toml::to_string_pretty(self)?;
-        fs::write(config_path, contents)?;
-        Ok(())
-    }
-
-    fn get_config_path() -> PathBuf {
-        let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
-            .expect("Failed to determine config directory");
-        proj_dirs.config_dir().join("config.toml")
-    }
-
-    pub fn print_all(&self) {
-        println!("Current configuration:");
-        match &self.default_provider {
-            Some(provider) => println!("  default-provider: {provider}"),
-            None => println!("  default-provider: (unset)"),
-        }
-        if self.default_models.is_empty() {
-            println!("  default-models: (none set)");
-        } else {
-            println!("  default-models:");
-            for (provider, model) in &self.default_models {
-                println!("    {provider}: {model}");
-            }
-        }
-    }
-
-    pub fn get_default_model(&self, provider: &str) -> Option<&String> {
-        self.default_models.get(provider)
-    }
-
-    pub fn set_default_model(&mut self, provider: String, model: String) {
-        self.default_models.insert(provider, model);
-    }
-
-    pub fn unset_default_model(&mut self, provider: &str) {
-        self.default_models.remove(provider);
-    }
-
-    pub fn add_custom_provider(&mut self, provider: CustomProvider) {
-        self.custom_providers.push(provider);
-    }
-
-    pub fn remove_custom_provider(&mut self, id: &str) {
-        self.custom_providers.retain(|p| p.id != id);
-    }
-
-    pub fn get_custom_provider(&self, id: &str) -> Option<&CustomProvider> {
-        self.custom_providers.iter().find(|p| p.id == id)
-    }
-
-    pub fn list_custom_providers(&self) -> Vec<&CustomProvider> {
-        self.custom_providers.iter().collect()
-    }
-}
-
-impl CustomProvider {
-    pub fn new(id: String, display_name: String, base_url: String, mode: Option<String>) -> Self {
-        Self {
-            id,
-            display_name,
-            base_url,
-            mode,
-        }
-    }
-}
-
-/// Generate a suggested ID from a display name
-/// Converts to lowercase and keeps only alphanumeric characters
-pub fn suggest_provider_id(display_name: &str) -> String {
-    display_name
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect()
 }

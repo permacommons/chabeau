@@ -176,7 +176,7 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::test_utils::create_test_app;
+    use crate::utils::test_utils::{create_test_app, create_test_message};
     use std::fs;
     use std::io::Read;
     use tempfile::tempdir;
@@ -187,18 +187,11 @@ mod tests {
         let mut app = create_test_app();
 
         // Add messages
-        app.messages.push_back(crate::core::message::Message {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        });
-        app.messages.push_back(crate::core::message::Message {
-            role: "assistant".to_string(),
-            content: "Hi there!".to_string(),
-        });
-        app.messages.push_back(crate::core::message::Message {
-            role: "system".to_string(),
-            content: "System message".to_string(),
-        });
+        app.messages.push_back(create_test_message("user", "Hello"));
+        app.messages
+            .push_back(create_test_message("assistant", "Hi there!"));
+        app.messages
+            .push_back(create_test_message("system", "System message"));
 
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();
@@ -229,14 +222,9 @@ mod tests {
         let mut app = create_test_app();
 
         // Add messages
-        app.messages.push_back(crate::core::message::Message {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        });
-        app.messages.push_back(crate::core::message::Message {
-            role: "assistant".to_string(),
-            content: "Hi there!".to_string(),
-        });
+        app.messages.push_back(create_test_message("user", "Hello"));
+        app.messages
+            .push_back(create_test_message("assistant", "Hi there!"));
 
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();
@@ -265,10 +253,8 @@ mod tests {
         let mut app = create_test_app();
 
         // Add a message to test dumping
-        app.messages.push_back(crate::core::message::Message {
-            role: "user".to_string(),
-            content: "Test message".to_string(),
-        });
+        app.messages
+            .push_back(create_test_message("user", "Test message"));
 
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();

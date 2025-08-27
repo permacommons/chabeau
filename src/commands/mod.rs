@@ -176,39 +176,10 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::App;
-    use crate::utils::logging::LoggingState;
-    use std::collections::VecDeque;
+    use crate::utils::test_utils::create_test_app;
     use std::fs;
     use std::io::Read;
     use tempfile::tempdir;
-
-    fn create_test_app() -> App {
-        App {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            input_mode: true,
-            current_response: String::new(),
-            client: reqwest::Client::new(),
-            model: "test-model".to_string(),
-            api_key: "test-key".to_string(),
-            base_url: "https://api.test.com".to_string(),
-            provider_name: "test".to_string(),
-            provider_display_name: "Test".to_string(),
-            scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: std::time::Instant::now(),
-            stream_interrupted: false,
-            logging: LoggingState::new(None).unwrap(),
-            stream_cancel_token: None,
-            current_stream_id: 0,
-            last_retry_time: std::time::Instant::now(),
-            retrying_message_index: None,
-            input_scroll_offset: 0,
-        }
-    }
 
     #[test]
     fn test_dump_conversation() {

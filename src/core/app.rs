@@ -797,35 +797,12 @@ Please either:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
+    use crate::utils::test_utils::create_test_app;
 
     #[test]
     fn test_system_messages_excluded_from_api() {
         // Create a mock app with some messages
-        let mut app = App {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            input_mode: true,
-            current_response: String::new(),
-            client: reqwest::Client::new(),
-            model: "test-model".to_string(),
-            api_key: "test-key".to_string(),
-            base_url: "https://api.test.com".to_string(),
-            provider_name: "test".to_string(),
-            provider_display_name: "Test".to_string(),
-            scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: Instant::now(),
-            stream_interrupted: false,
-            logging: LoggingState::new(None).unwrap(),
-            stream_cancel_token: None,
-            current_stream_id: 0,
-            last_retry_time: Instant::now(),
-            retrying_message_index: None,
-            input_scroll_offset: 0,
-        };
+        let mut app = create_test_app();
 
         // Add a user message
         app.messages.push_back(Message {
@@ -868,30 +845,7 @@ mod tests {
 
     #[test]
     fn test_prepare_retry_excludes_system_messages() {
-        let mut app = App {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            input_mode: true,
-            current_response: String::new(),
-            client: reqwest::Client::new(),
-            model: "test-model".to_string(),
-            api_key: "test-key".to_string(),
-            base_url: "https://api.test.com".to_string(),
-            provider_name: "test".to_string(),
-            provider_display_name: "Test".to_string(),
-            scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: Instant::now(),
-            stream_interrupted: false,
-            logging: LoggingState::new(None).unwrap(),
-            stream_cancel_token: None,
-            current_stream_id: 0,
-            last_retry_time: Instant::now(),
-            retrying_message_index: None,
-            input_scroll_offset: 0,
-        };
+        let mut app = create_test_app();
 
         // Add messages in order: user, system, assistant
         app.messages.push_back(Message {

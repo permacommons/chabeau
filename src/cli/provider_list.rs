@@ -51,25 +51,18 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Show which provider would be used by default
-    if let Some(default_provider) = &config.default_provider {
-        println!("🎯 Default provider: {default_provider} (from config)");
-    } else {
-        match auth_manager.find_first_available_auth() {
-            Some((provider, _)) => {
-                println!(
-                    "🎯 Default provider: {} ({})",
-                    provider.display_name, provider.name
-                );
-            }
-            None => {
-                println!("⚠️  No configured providers found");
-                println!();
-                println!("To configure authentication:");
-                println!("  chabeau auth                    # Interactive setup");
-                println!();
-                println!("Or use environment variables:");
-                println!("  export OPENAI_API_KEY=sk-...   # For OpenAI");
-            }
+    match auth_manager.resolve_authentication(None, &config) {
+        Ok((_, _, provider_id, provider_display_name)) => {
+            println!("🎯 Default provider: {provider_display_name} ({provider_id})");
+        }
+        Err(_) => {
+            println!("⚠️  No configured providers found");
+            println!();
+            println!("To configure authentication:");
+            println!("  chabeau auth                    # Interactive setup");
+            println!();
+            println!("Or use environment variables:");
+            println!("  export OPENAI_API_KEY=sk-...   # For OpenAI");
         }
     }
 

@@ -41,7 +41,7 @@ pub async fn run_chat(
                     eprintln!("💡 Quick fixes:");
                     eprintln!("  • chabeau auth                    # Interactive setup");
                     eprintln!("  • chabeau -p                      # Check provider status");
-                    eprintln!("  • export OPENAI_API_KEY=sk-...   # Use environment variable");
+                    eprintln!("  • export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)");
                     std::process::exit(2); // Authentication error
                 } else {
                     eprintln!("❌ Error: {e}");

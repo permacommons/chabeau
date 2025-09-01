@@ -75,6 +75,138 @@ impl AuthManager {
             .find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
+    /// Resolve authentication information for a provider
+    ///
+    /// This function consolidates the common authentication resolution logic:
+    /// 1. Finding authentication for a specified provider
+    /// 2. Using config default provider if available
+    /// 3. Falling back to first available authentication
+    /// 4. Using environment variables as last resort
+    ///
+    /// Returns: (api_key, base_url, provider_name, provider_display_name)
+    pub fn resolve_authentication(
+        &self,
+        provider: Option<&str>,
+        config: &Config,
+    ) -> Result<(String, String, String, String), Box<dyn std::error::Error>> {
+        // Handle the case where provider is specified but empty (""), meaning use config default
+        if let Some(provider_name) = provider {
+            if provider_name.is_empty() {
+                // User specified -p without a value, use config default if available
+                if let Some(ref default_provider) = config.default_provider {
+                    if let Some((base_url, api_key)) =
+                        self.get_auth_for_provider(default_provider)?
+                    {
+                        let display_name = self
+                            .find_provider_by_name(default_provider)
+                            .map(|p| p.display_name.clone())
+                            .unwrap_or_else(|| default_provider.clone());
+                        return Ok((
+                            api_key,
+                            base_url,
+                            default_provider.to_lowercase(),
+                            display_name,
+                        ));
+                    } else {
+                        return Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into());
+                    }
+                } else {
+                    // Try to find any available authentication
+                    if let Some((provider, api_key)) = self.find_first_available_auth() {
+                        return Ok((
+                            api_key,
+                            provider.base_url,
+                            provider.name.to_lowercase(),
+                            provider.display_name,
+                        ));
+                    } else {
+                        // Fall back to environment variables
+                        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                            "❌ No authentication configured and OPENAI_API_KEY environment variable not set
+
+Please either:
+1. Run 'chabeau auth' to set up authentication, or
+2. Set environment variables:
+   export OPENAI_API_KEY=\"your-api-key-here\"
+   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+                        })?;
+
+                        let base_url = std::env::var("OPENAI_BASE_URL")
+                            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+                        return Ok((
+                            api_key,
+                            base_url,
+                            "openai".to_string(),
+                            "OpenAI".to_string(),
+                        ));
+                    }
+                }
+            } else {
+                // User specified a provider - normalize to lowercase for consistent config lookup
+                let normalized_provider_name = provider_name.to_lowercase();
+                if let Some((base_url, api_key)) =
+                    self.get_auth_for_provider(provider_name)?
+                {
+                    let display_name = self
+                        .find_provider_by_name(provider_name)
+                        .map(|p| p.display_name.clone())
+                        .unwrap_or_else(|| provider_name.to_string());
+                    return Ok((api_key, base_url, normalized_provider_name, display_name));
+                } else {
+                    return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
+                }
+            }
+        } else if let Some(ref provider_name) = config.default_provider {
+            // Config specifies a default provider
+            if let Some((base_url, api_key)) = self.get_auth_for_provider(provider_name)? {
+                let display_name = self
+                    .find_provider_by_name(provider_name)
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_else(|| provider_name.clone());
+                return Ok((
+                    api_key,
+                    base_url,
+                    provider_name.to_lowercase(),
+                    display_name,
+                ));
+            } else {
+                return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
+            }
+        } else {
+            // Try to find any available authentication
+            if let Some((provider, api_key)) = self.find_first_available_auth() {
+                return Ok((
+                    api_key,
+                    provider.base_url,
+                    provider.name.to_lowercase(),
+                    provider.display_name,
+                ));
+            } else {
+                // Fall back to environment variables
+                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    "❌ No authentication configured and OPENAI_API_KEY environment variable not set
+
+Please either:
+1. Run 'chabeau auth' to set up authentication, or
+2. Set environment variables:
+   export OPENAI_API_KEY=\"your-api-key-here\"
+   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+                })?;
+
+                let base_url = std::env::var("OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+                return Ok((
+                    api_key,
+                    base_url,
+                    "openai".to_string(),
+                    "OpenAI".to_string(),
+                ));
+            }
+        }
+    }
+
     pub fn store_token(
         &self,
         provider_name: &str,

@@ -12,44 +12,11 @@ pub async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>>
     let auth_manager = AuthManager::new();
     let config = Config::load()?;
 
-    let (api_key, base_url, provider_name) = if let Some(provider_name) = provider {
-        // User specified a provider
-        if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(&provider_name)? {
-            (api_key, base_url, provider_name.clone())
-        } else {
-            return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
-        }
-    } else if let Some(ref provider_name) = config.default_provider {
-        // Config specifies a default provider
-        if let Some((base_url, api_key)) = auth_manager.get_auth_for_provider(provider_name)? {
-            // Get the proper display name for the provider
-            let display_name =
-                if let Some(provider) = auth_manager.find_provider_by_name(provider_name) {
-                    provider.display_name.clone()
-                } else {
-                    // For custom providers, use the provider name as display name
-                    provider_name.clone()
-                };
-            (api_key, base_url, display_name)
-        } else {
-            return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
-        }
-    } else {
-        // Try to find any available authentication
-        if let Some((provider, api_key)) = auth_manager.find_first_available_auth() {
-            (api_key, provider.base_url, provider.display_name)
-        } else {
-            // Fall back to environment variables
-            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                "❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
-            })?;
-
-            let base_url = std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-
-            (api_key, base_url, "Environment Variables".to_string())
-        }
-    };
+    // Use the shared authentication resolution function
+    let (api_key, base_url, _, provider_name) = auth_manager.resolve_authentication(
+        provider.as_deref(),
+        &config,
+    )?;
 
     println!("🤖 Available Models for {provider_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

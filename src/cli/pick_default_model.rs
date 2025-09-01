@@ -17,7 +17,7 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
     let provider_name = if let Some(provider_name) = provider {
         provider_name
     } else {
-        // Get list of available providers
+        // Get list of available providers that have authentication
         let mut providers = Vec::new();
 
         // Add built-in providers that have authentication
@@ -29,7 +29,7 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
             }
         }
 
-        // Add custom providers
+        // Add custom providers that have authentication
         let custom_providers = auth_manager.list_custom_providers();
         for (id, display_name, _, has_token) in custom_providers {
             if has_token {
@@ -60,21 +60,11 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
         providers[choice - 1].0.clone()
     };
 
-    let (api_key, base_url, display_name) = if let Some((base_url, api_key)) =
-        auth_manager.get_auth_for_provider(&provider_name)?
-    {
-        // Get the proper display name for the provider
-        let display_name =
-            if let Some(provider) = auth_manager.find_provider_by_name(&provider_name) {
-                provider.display_name.clone()
-            } else {
-                // For custom providers, use the provider name as display name
-                provider_name.clone()
-            };
-        (api_key, base_url, display_name)
-    } else {
-        return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
-    };
+    // Use the shared authentication resolution function
+    let (api_key, base_url, _, display_name) = auth_manager.resolve_authentication(
+        Some(&provider_name),
+        &config,
+    )?;
 
     println!("🤖 Available Models for {display_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

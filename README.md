@@ -13,7 +13,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, custom)
+- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
 - Secure API key storage in system keyring with config-based provider management
 - Message retry and external editor support
 - Conversation logging with pause/resume
@@ -27,7 +27,7 @@ cargo install chabeau
 
 ### Setup Authentication
 ```bash
-chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, or custom providers
+chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, or custom providers
 ```
 
 ### Start Chatting
@@ -101,15 +101,19 @@ chabeau set default-provider            # Show current configuration
 | **Ctrl+A** | Move cursor to beginning of input |
 | **Ctrl+E** | Move cursor to end of input |
 | **Left/Right** | Move cursor left/right in input |
+| **Shift+Left/Right** | Move cursor left/right in input (alias) |
+| **Shift+Up/Down** | Move cursor up/down lines in multi-line input |
 | **Up/Down/Mouse** | Scroll chat history |
 | **Ctrl+C** | Quit |
 | **Ctrl+R** | Retry last response |
 | **Ctrl+T** | Open external editor |
 | **Esc** | Interrupt streaming |
+| **Backspace** | Delete characters in input field |
+| **Mouse Wheel** | Scroll through chat history |
 
 ### Chat Commands
-- `/help` - Show extended help
-- `/log <filename>` - Enable/switch log file
+- `/help` - Show extended help with keyboard shortcuts
+- `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume
 - `/dump <filename>` - Dump conversation to specified file
 - `/dump` - Dump conversation to chabeau-log-<isodate>.txt
@@ -167,20 +171,7 @@ Modular design with focused components:
 
 ### Built-in Provider Configuration
 
-Chabeau uses a build-time configuration system for built-in providers. The `builtin_models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes:
-
-```toml
-[[providers]]
-id = "openai"
-display_name = "OpenAI"
-base_url = "https://api.openai.com/v1"
-
-[[providers]]
-id = "anthropic"
-display_name = "Anthropic"
-base_url = "https://api.anthropic.com/v1"
-mode = "anthropic"  # Special authentication mode
-```
+Chabeau uses a build-time configuration system for built-in providers. The `builtin_models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes.
 
 This configuration is embedded into the binary at compile time, eliminating runtime file dependencies while allowing easy modification of supported providers during development.
 

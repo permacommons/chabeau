@@ -22,7 +22,7 @@ ratatui = "0.29"
 clap = { version = "4.0", features = ["derive"] }
 futures-util = "0.3"
 tokio-util = "0.7.15"
-keyring = { version = "3.0", features = ["sync-secret-service", "windows-native"] }
+keyring = { version = "3.0", features = ["sync-secret-service", "windows-native", "apple-native"] }
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.20"
 

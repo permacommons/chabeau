@@ -101,24 +101,24 @@ impl AuthManager {
                             .find_provider_by_name(default_provider)
                             .map(|p| p.display_name.clone())
                             .unwrap_or_else(|| default_provider.clone());
-                        return Ok((
+                        Ok((
                             api_key,
                             base_url,
                             default_provider.to_lowercase(),
                             display_name,
-                        ));
+                        ))
                     } else {
-                        return Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into());
+                        Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into())
                     }
                 } else {
                     // Try to find any available authentication
                     if let Some((provider, api_key)) = self.find_first_available_auth() {
-                        return Ok((
+                        Ok((
                             api_key,
                             provider.base_url,
                             provider.name.to_lowercase(),
                             provider.display_name,
-                        ));
+                        ))
                     } else {
                         // Fall back to environment variables
                         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
@@ -134,27 +134,25 @@ Please either:
                         let base_url = std::env::var("OPENAI_BASE_URL")
                             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
-                        return Ok((
+                        Ok((
                             api_key,
                             base_url,
                             "openai".to_string(),
                             "OpenAI".to_string(),
-                        ));
+                        ))
                     }
                 }
             } else {
                 // User specified a provider - normalize to lowercase for consistent config lookup
                 let normalized_provider_name = provider_name.to_lowercase();
-                if let Some((base_url, api_key)) =
-                    self.get_auth_for_provider(provider_name)?
-                {
+                if let Some((base_url, api_key)) = self.get_auth_for_provider(provider_name)? {
                     let display_name = self
                         .find_provider_by_name(provider_name)
                         .map(|p| p.display_name.clone())
                         .unwrap_or_else(|| provider_name.to_string());
-                    return Ok((api_key, base_url, normalized_provider_name, display_name));
+                    Ok((api_key, base_url, normalized_provider_name, display_name))
                 } else {
-                    return Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
+                    Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into())
                 }
             }
         } else if let Some(ref provider_name) = config.default_provider {
@@ -164,24 +162,24 @@ Please either:
                     .find_provider_by_name(provider_name)
                     .map(|p| p.display_name.clone())
                     .unwrap_or_else(|| provider_name.clone());
-                return Ok((
+                Ok((
                     api_key,
                     base_url,
                     provider_name.to_lowercase(),
                     display_name,
-                ));
+                ))
             } else {
-                return Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into());
+                Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into())
             }
         } else {
             // Try to find any available authentication
             if let Some((provider, api_key)) = self.find_first_available_auth() {
-                return Ok((
+                Ok((
                     api_key,
                     provider.base_url,
                     provider.name.to_lowercase(),
                     provider.display_name,
-                ));
+                ))
             } else {
                 // Fall back to environment variables
                 let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
@@ -197,12 +195,12 @@ Please either:
                 let base_url = std::env::var("OPENAI_BASE_URL")
                     .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
-                return Ok((
+                Ok((
                     api_key,
                     base_url,
                     "openai".to_string(),
                     "OpenAI".to_string(),
-                ));
+                ))
             }
         }
     }

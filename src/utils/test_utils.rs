@@ -32,6 +32,7 @@ pub fn create_test_app() -> App {
         last_retry_time: std::time::Instant::now(),
         retrying_message_index: None,
         input_scroll_offset: 0,
+        textarea: tui_textarea::TextArea::default(),
     }
 }
 

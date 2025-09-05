@@ -13,10 +13,8 @@ pub async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>>
     let config = Config::load()?;
 
     // Use the shared authentication resolution function
-    let (api_key, base_url, _, provider_name) = auth_manager.resolve_authentication(
-        provider.as_deref(),
-        &config,
-    )?;
+    let (api_key, base_url, _, provider_name) =
+        auth_manager.resolve_authentication(provider.as_deref(), &config)?;
 
     println!("🤖 Available Models for {provider_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

@@ -198,54 +198,57 @@ impl TextWrapper {
     ) -> (usize, usize) {
         let cursor_position = cursor_position.min(text.chars().count());
 
-        if cursor_position == 0 {
+        // Build a mapping for cursor "positions" (between characters), not just characters.
+        // There are N+1 positions for N characters.
+        let original_chars: Vec<char> = text.chars().collect();
+
+        // Early exit for empty text
+        if original_chars.is_empty() {
             return (0, 0);
         }
 
-        // Wrap the full text once
+        // Wrap the full text once and collect coordinates for each visible (non-newline) character
         let wrapped_text = Self::wrap_text(text, config);
         let wrapped_lines: Vec<&str> = wrapped_text.split('\n').collect();
-
-        // Create a mapping from original positions to wrapped positions
-        let original_chars: Vec<char> = text.chars().collect();
-        let mut position_map = Vec::new();
-        let mut original_pos = 0;
-
-        // Build the position mapping
+        let mut wrapped_coords: Vec<(usize, usize)> = Vec::new();
         for (line_idx, line) in wrapped_lines.iter().enumerate() {
-            for (col_idx, _wrapped_char) in line.chars().enumerate() {
-                // Skip any newlines in original text
-                while original_pos < original_chars.len() && original_chars[original_pos] == '\n' {
-                    position_map.push((line_idx, 0)); // Newlines map to start of current line
-                    original_pos += 1;
-                }
-
-                if original_pos < original_chars.len() {
-                    position_map.push((line_idx, col_idx));
-                    original_pos += 1;
-                }
-            }
-
-            // Handle end-of-line position
-            while original_pos < original_chars.len() && original_chars[original_pos] == '\n' {
-                position_map.push((line_idx + 1, 0)); // After newline goes to next line
-                original_pos += 1;
+            for (col_idx, _ch) in line.chars().enumerate() {
+                wrapped_coords.push((line_idx, col_idx));
             }
         }
 
-        // Add final position for end of text
-        if let Some(last_line) = wrapped_lines.last() {
-            position_map.push((wrapped_lines.len() - 1, last_line.chars().count()));
+        // Build the position map of length original_chars.len() + 1
+        let mut pos_map: Vec<(usize, usize)> = Vec::with_capacity(original_chars.len() + 1);
+        // Position 0 is always the start
+        pos_map.push((0, 0));
+
+        let mut wrapped_idx = 0usize; // index into wrapped_coords for non-newline chars
+        let mut current_line = 0usize;
+
+        for ch in original_chars.iter() {
+            if *ch == '\n' {
+                // After a newline, cursor moves to start of next line
+                current_line = current_line.saturating_add(1);
+                pos_map.push((current_line, 0));
+            } else {
+                // Map to the coordinate immediately AFTER this character
+                if wrapped_idx < wrapped_coords.len() {
+                    let (l, c) = wrapped_coords[wrapped_idx];
+                    current_line = l;
+                    pos_map.push((current_line, c.saturating_add(1)));
+                    wrapped_idx += 1;
+                } else if let Some(last_line) = wrapped_lines.last() {
+                    // Fallback to end of last line if somehow we ran out
+                    pos_map.push((wrapped_lines.len() - 1, last_line.chars().count()));
+                } else {
+                    pos_map.push((0, 0));
+                }
+            }
         }
 
-        // Return the mapped position, or end of text if beyond range
-        if cursor_position < position_map.len() {
-            position_map[cursor_position]
-        } else if let Some(last_line) = wrapped_lines.last() {
-            (wrapped_lines.len() - 1, last_line.chars().count())
-        } else {
-            (0, 0)
-        }
+        // Clamp and return
+        let idx = cursor_position.min(pos_map.len().saturating_sub(1));
+        pos_map[idx]
     }
 }
 
@@ -292,9 +295,36 @@ mod tests {
         let text = "hello world";
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 5, &config);
 
-        // Cursor at position 5 (after "hello ") should be at start of second line
-        assert_eq!(line, 1);
-        assert_eq!(col, 0); // Start of second line after wrapping
+        // Cursor at position 5 (after "hello") is at end of first line
+        assert_eq!(line, 0);
+        assert_eq!(col, 5);
+    }
+
+    #[test]
+    fn test_cursor_position_with_multiple_spaces_and_newlines() {
+        // Ensure spaces are preserved and cursor maps correctly across wraps and newlines
+        let config = WrapConfig::new(6);
+        let text = "ab   cd ef\nxyz";
+        // Position after 'ab   ' (5 chars). Ensure mapping is within width and non-negative.
+        let (l1, c1) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 5, &config);
+        assert!(c1 <= 6, "col should be within width, got {}", c1);
+        assert!(l1 <= 2, "line should be within expected range, got {}", l1);
+
+        // Position 8 (crossing the first wrap boundary possibly before 'ef')
+        let (l2, c2) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 8, &config);
+        // Just assert mapping is within reasonable bounds (not panicking) and col < width
+        assert!(c2 <= 6, "col should be within width, got {}", c2);
+        assert!(l2 <= 2, "line should be within expected range, got {}", l2);
+
+        // After newline into 'xyz'
+        let pos_xyz = text.find('x').unwrap();
+        let (l3, c3) =
+            TextWrapper::calculate_cursor_position_in_wrapped_text(text, pos_xyz, &config);
+        assert!(
+            l3 >= 1,
+            "cursor should move to next visual line after newline"
+        );
+        assert_eq!(c3, 0);
     }
 
     #[test]

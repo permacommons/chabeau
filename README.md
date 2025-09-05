@@ -13,6 +13,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
+- Robust multi-line input powered by `tui-textarea` (IME-friendly)
 - Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
 - Secure API key storage in system keyring with config-based provider management
 - Message retry and external editor support
@@ -131,8 +132,8 @@ export EDITOR="code --wait" # VS Code with wait
   - **Cyan/Bold**: Your messages
   - **White**: Assistant responses
   - **Gray**: System messages
-- **Input Area**: Message composition (yellow highlight)
-- **Title Bar**: Version, provider, model, logging status
+- **Input Area**: Message composition with soft-wrap and IME support (powered by `tui-textarea`)
+- **Title Bar**: Version, provider, model, logging status, and a pulsing streaming indicator
 
 ## Architecture
 

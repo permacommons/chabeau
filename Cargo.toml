@@ -25,6 +25,7 @@ tokio-util = "0.7.15"
 keyring = { version = "3.0", features = ["sync-secret-service", "windows-native", "apple-native"] }
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.20"
+tui-textarea = "0.7"
 
 [build-dependencies]
 vergen = { version = "9.0", features = ["build", "cargo", "rustc", "si"] }

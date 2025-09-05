@@ -1,17 +1,18 @@
 use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
-use crate::core::constants::INDICATOR_SPACE;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
 use crate::utils::url::construct_api_url;
 use chrono::Utc;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
 use tokio_util::sync::CancellationToken;
+use tui_textarea::TextArea;
 
 pub struct App {
     pub messages: VecDeque<Message>,
@@ -36,10 +37,11 @@ pub struct App {
     pub last_retry_time: Instant,
     pub retrying_message_index: Option<usize>,
     pub input_scroll_offset: u16,
+    pub textarea: TextArea<'static>,
 }
 
 impl App {
-pub async fn new_with_auth(
+    pub async fn new_with_auth(
         model: String,
         log_file: Option<String>,
         provider: Option<String>,
@@ -48,10 +50,8 @@ pub async fn new_with_auth(
         let config = Config::load()?;
 
         // Use the shared authentication resolution function
-        let (api_key, base_url, provider_name, provider_display_name) = auth_manager.resolve_authentication(
-            provider.as_deref(),
-            &config,
-        )?;
+        let (api_key, base_url, provider_name, provider_display_name) =
+            auth_manager.resolve_authentication(provider.as_deref(), &config)?;
 
         // Determine the model to use:
         // 1. If a specific model was requested (not "default"), use that
@@ -87,6 +87,7 @@ pub async fn new_with_auth(
                 last_retry_time: Instant::now(),
                 retrying_message_index: None,
                 input_scroll_offset: 0,
+                textarea: TextArea::default(),
             };
 
             // Try to fetch the newest model
@@ -135,7 +136,7 @@ pub async fn new_with_auth(
             }
         }
 
-        Ok(App {
+        let mut app = App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
@@ -158,7 +159,14 @@ pub async fn new_with_auth(
             last_retry_time: Instant::now(),
             retrying_message_index: None,
             input_scroll_offset: 0,
-        })
+            textarea: TextArea::default(),
+        };
+
+        // Keep textarea state in sync with the string input initially
+        app.set_input_text(String::new());
+        app.configure_textarea_appearance();
+
+        Ok(app)
     }
 
     pub fn build_display_lines(&self) -> Vec<Line<'_>> {
@@ -449,26 +457,28 @@ pub async fn new_with_auth(
 
     /// Calculate how many lines the input text will wrap to using word wrapping
     pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
-        if self.input.is_empty() {
+        if self.get_input_text().is_empty() {
             return 1; // At least one line for the cursor
         }
 
         let config = WrapConfig::new(width as usize);
-        TextWrapper::count_wrapped_lines(&self.input, &config)
+        TextWrapper::count_wrapped_lines(self.get_input_text(), &config)
     }
 
     /// Calculate the input area height based on content
     pub fn calculate_input_area_height(&self, width: u16) -> u16 {
-        if self.input.is_empty() {
+        if self.get_input_text().is_empty() {
             return 1; // Default to 1 line when empty
         }
 
-        let available_width = width.saturating_sub(2 + INDICATOR_SPACE); // Account for borders + indicator space
+        // Account for borders and keep a one-column right margin
+        // Wrap one character earlier to avoid cursor touching the border
+        let available_width = width.saturating_sub(3);
         let wrapped_lines = self.calculate_input_wrapped_lines(available_width);
 
         // Start at 1 line, expand to 2 when we have content that wraps or newlines
         // Then expand up to maximum of 6 lines
-        if wrapped_lines <= 1 && !self.input.contains('\n') {
+        if wrapped_lines <= 1 && !self.get_input_text().contains('\n') {
             1 // Single line, no wrapping, no newlines
         } else {
             (wrapped_lines as u16).clamp(2, 6) // Expand to 2-6 lines
@@ -477,7 +487,9 @@ pub async fn new_with_auth(
 
     /// Update input scroll offset to keep cursor visible
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let available_width = width.saturating_sub(2 + INDICATOR_SPACE); // Account for borders + indicator space
+        // Account for borders and keep a one-column right margin
+        // Wrap one character earlier to avoid cursor touching the border
+        let available_width = width.saturating_sub(3);
         let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {
@@ -502,182 +514,103 @@ pub async fn new_with_auth(
         }
     }
 
+    /// Recompute input layout after editing: height + scroll
+    pub fn recompute_input_layout_after_edit(&mut self, terminal_width: u16) {
+        let input_area_height = self.calculate_input_area_height(terminal_width);
+        self.update_input_scroll(input_area_height, terminal_width);
+    }
+
+    /// Apply a mutation to the textarea, then sync the string state
+    pub fn apply_textarea_edit<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut TextArea<'static>),
+    {
+        f(&mut self.textarea);
+        self.sync_input_from_textarea();
+    }
+
+    /// Apply a mutation to the textarea, then sync and recompute layout
+    pub fn apply_textarea_edit_and_recompute<F>(&mut self, terminal_width: u16, f: F)
+    where
+        F: FnOnce(&mut TextArea<'static>),
+    {
+        self.apply_textarea_edit(f);
+        self.recompute_input_layout_after_edit(terminal_width);
+    }
+
+    /// Calculate available chat height given terminal height and input area height
+    pub fn calculate_available_height(&self, term_height: u16, input_area_height: u16) -> u16 {
+        term_height
+            .saturating_sub(input_area_height + 2) // Dynamic input area + borders
+            .saturating_sub(1) // 1 for title
+    }
+
     /// Calculate which line the cursor is on, accounting for word wrapping
     fn calculate_cursor_line_position(&self, available_width: usize) -> u16 {
         let config = WrapConfig::new(available_width);
-        TextWrapper::calculate_cursor_line(&self.input, self.input_cursor_position, &config) as u16
-    }
-
-    // Input cursor movement methods
-
-    /// Move cursor to the beginning of the input (Ctrl+A)
-    pub fn move_cursor_to_beginning(&mut self) {
-        self.input_cursor_position = 0;
-    }
-
-    /// Move cursor to the end of the input (Ctrl+E)
-    pub fn move_cursor_to_end(&mut self) {
-        self.input_cursor_position = self.input.chars().count();
-    }
-
-    /// Move cursor one position to the left (Left Arrow)
-    pub fn move_cursor_left(&mut self) {
-        if self.input_cursor_position > 0 {
-            self.input_cursor_position -= 1;
-        }
-    }
-
-    /// Move cursor one position to the right (Right Arrow)
-    pub fn move_cursor_right(&mut self) {
-        let max_position = self.input.chars().count();
-        if self.input_cursor_position < max_position {
-            self.input_cursor_position += 1;
-        }
-    }
-
-    /// Move cursor up one line in multi-line input (Alt+Up)
-    pub fn move_cursor_up_line(&mut self, available_width: usize) {
-        let config = WrapConfig::new(available_width);
-        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            &self.input,
+        TextWrapper::calculate_cursor_line(
+            self.get_input_text(),
             self.input_cursor_position,
             &config,
-        );
-
-        if current_line > 0 {
-            // Move to the previous line at the same column position (or end of line if shorter)
-            let target_line = current_line - 1;
-            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
-            self.input_cursor_position = target_position;
-        }
+        ) as u16
     }
 
-    /// Move cursor down one line in multi-line input (Alt+Down)
-    pub fn move_cursor_down_line(&mut self, available_width: usize) {
-        let config = WrapConfig::new(available_width);
-        let (current_line, current_col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            &self.input,
-            self.input_cursor_position,
-            &config,
-        );
-
-        let total_lines = TextWrapper::count_wrapped_lines(&self.input, &config);
-        if current_line < total_lines - 1 {
-            // Move to the next line at the same column position (or end of line if shorter)
-            let target_line = current_line + 1;
-            let target_position = self.find_position_at_line_col(target_line, current_col, &config);
-            self.input_cursor_position = target_position;
-        }
-    }
-
-    /// Helper function to find cursor position at a specific line and column in wrapped text
-    fn find_position_at_line_col(
-        &self,
-        target_line: usize,
-        target_col: usize,
-        config: &WrapConfig,
-    ) -> usize {
-        let wrapped_text = TextWrapper::wrap_text(&self.input, config);
-        let lines: Vec<&str> = wrapped_text.split('\n').collect();
-
-        if target_line >= lines.len() {
-            return self.input.chars().count(); // End of input
-        }
-
-        // Count characters up to the target line
-        let mut char_count = 0;
-        for (line_idx, line) in lines.iter().enumerate() {
-            if line_idx == target_line {
-                // We're at the target line, add the column position (clamped to line length)
-                let line_len = line.chars().count();
-                char_count += target_col.min(line_len);
-                break;
-            } else {
-                // Add all characters from this line plus the newline (if it was an original newline)
-                char_count += line.chars().count();
-
-                // Check if this line break corresponds to an original newline in the input
-                // by comparing with the original text structure
-                if line_idx < lines.len() - 1 {
-                    // Find the corresponding position in original text
-                    let original_chars: Vec<char> = self.input.chars().collect();
-                    if char_count < original_chars.len() && original_chars[char_count] == '\n' {
-                        char_count += 1; // This was an original newline
-                    }
-                    // If it wasn't an original newline, it was a wrap point, so don't add 1
-                }
-            }
-        }
-
-        char_count.min(self.input.chars().count())
-    }
-
-    // Input text manipulation methods
-
-    /// Insert character at cursor position
-    pub fn insert_char_at_cursor(&mut self, c: char) {
-        let char_indices: Vec<_> = self.input.char_indices().collect();
-
-        if self.input_cursor_position >= char_indices.len() {
-            // Cursor is at the end, just append
-            self.input.push(c);
-        } else {
-            // Insert at the cursor position
-            let byte_index = char_indices[self.input_cursor_position].0;
-            self.input.insert(byte_index, c);
-        }
-
-        self.input_cursor_position += 1;
-    }
-
-    /// Insert string at cursor position
-    pub fn insert_str_at_cursor(&mut self, s: &str) {
-        let char_indices: Vec<_> = self.input.char_indices().collect();
-
-        if self.input_cursor_position >= char_indices.len() {
-            // Cursor is at the end, just append
-            self.input.push_str(s);
-        } else {
-            // Insert at the cursor position
-            let byte_index = char_indices[self.input_cursor_position].0;
-            self.input.insert_str(byte_index, s);
-        }
-
-        self.input_cursor_position += s.chars().count();
-    }
-
-    /// Delete character before cursor (backspace)
-    pub fn delete_char_before_cursor(&mut self) -> bool {
-        if self.input_cursor_position == 0 {
-            return false; // Nothing to delete
-        }
-
-        let char_indices: Vec<_> = self.input.char_indices().collect();
-
-        if self.input_cursor_position <= char_indices.len() {
-            let char_to_remove_index = self.input_cursor_position - 1;
-
-            if char_to_remove_index < char_indices.len() {
-                let byte_start = char_indices[char_to_remove_index].0;
-                let byte_end = if char_to_remove_index + 1 < char_indices.len() {
-                    char_indices[char_to_remove_index + 1].0
-                } else {
-                    self.input.len()
-                };
-
-                self.input.drain(byte_start..byte_end);
-                self.input_cursor_position -= 1;
-                return true;
-            }
-        }
-
-        false
-    }
+    // (Replaced by tui-textarea's built-in editing behavior)
 
     /// Clear input and reset cursor
     pub fn clear_input(&mut self) {
-        self.input.clear();
-        self.input_cursor_position = 0;
+        self.set_input_text(String::new());
+    }
+
+    /// Get full input text (textarea is the source of truth; kept in sync with `input`)
+    pub fn get_input_text(&self) -> &str {
+        &self.input
+    }
+
+    /// Set input text into both the string and the textarea
+    pub fn set_input_text(&mut self, text: String) {
+        self.input = text;
+        let lines: Vec<String> = if self.input.is_empty() {
+            Vec::new()
+        } else {
+            self.input.split('\n').map(|s| s.to_string()).collect()
+        };
+        self.textarea = TextArea::from(lines);
+        self.input_cursor_position = self.input.chars().count();
+        self.configure_textarea_appearance();
+    }
+
+    /// Sync `input` from the textarea state. Cursor linear position is best-effort.
+    pub fn sync_input_from_textarea(&mut self) {
+        let lines = self.textarea.lines();
+        self.input = lines.join("\n");
+        // Compute linear cursor position from (row, col) in textarea
+        let (row, col) = self.textarea.cursor();
+        let mut pos = 0usize;
+        for (i, line) in lines.iter().enumerate() {
+            if i < row {
+                pos += line.chars().count();
+                // account for newline separator between lines
+                pos += 1;
+            } else if i == row {
+                let line_len = line.chars().count();
+                pos += col.min(line_len);
+                break;
+            }
+        }
+        // If cursor row is beyond current lines (shouldn't happen), clamp to end
+        if row >= lines.len() {
+            pos = self.input.chars().count();
+        }
+        self.input_cursor_position = pos;
+    }
+
+    fn configure_textarea_appearance(&mut self) {
+        // Ensure no underline is applied to input text or cursor
+        self.textarea.set_style(Style::default());
+        self.textarea.set_cursor_style(Style::default());
+        // Disable special styling of the cursor line (removes underline highlight)
+        self.textarea.set_cursor_line_style(Style::default());
     }
 }
 
@@ -685,6 +618,7 @@ pub async fn new_with_auth(
 mod tests {
     use super::*;
     use crate::utils::test_utils::{create_test_app, create_test_message};
+    use tui_textarea::{CursorMove, Input, Key};
 
     #[test]
     fn test_system_messages_excluded_from_api() {
@@ -757,5 +691,186 @@ mod tests {
         for msg in &api_messages {
             assert_ne!(msg.role, "system");
         }
+    }
+
+    #[test]
+    fn test_sync_cursor_mapping_single_and_multi_line() {
+        let mut app = create_test_app();
+
+        // Single line: move to end
+        app.set_input_text("hello world".to_string());
+        app.textarea.move_cursor(CursorMove::End);
+        app.sync_input_from_textarea();
+        assert_eq!(app.get_input_text(), "hello world");
+        assert_eq!(app.input_cursor_position, 11);
+
+        // Multi-line: jump to (row=1, col=3) => after "wor" on second line
+        app.set_input_text("hello\nworld".to_string());
+        app.textarea.move_cursor(CursorMove::Jump(1, 3));
+        app.sync_input_from_textarea();
+        // 5 (hello) + 1 (\n) + 3 = 9
+        assert_eq!(app.input_cursor_position, 9);
+    }
+
+    #[test]
+    fn test_backspace_at_start_noop() {
+        let mut app = create_test_app();
+        app.set_input_text("abc".to_string());
+        // Move to head of line
+        app.textarea.move_cursor(CursorMove::Head);
+        // Simulate backspace (always single-char via input_without_shortcuts)
+        app.textarea.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
+        app.sync_input_from_textarea();
+        assert_eq!(app.get_input_text(), "abc");
+        assert_eq!(app.input_cursor_position, 0);
+    }
+
+    #[test]
+    fn test_backspace_at_line_start_joins_lines() {
+        let mut app = create_test_app();
+        app.set_input_text("hello\nworld".to_string());
+        // Move to start of second line
+        app.textarea.move_cursor(CursorMove::Jump(1, 0));
+        // Backspace should join lines; use input_without_shortcuts to ensure single-char delete
+        app.textarea.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
+        app.sync_input_from_textarea();
+        assert_eq!(app.get_input_text(), "helloworld");
+        // Cursor should be at end of former first line (index 5)
+        assert_eq!(app.input_cursor_position, 5);
+    }
+
+    #[test]
+    fn test_backspace_with_alt_modifier_deletes_single_char() {
+        let mut app = create_test_app();
+        app.set_input_text("hello world".to_string());
+        app.textarea.move_cursor(CursorMove::End);
+        // Simulate Alt+Backspace; with input_without_shortcuts it should still delete one char
+        app.textarea.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: true,
+            shift: false,
+        });
+        app.sync_input_from_textarea();
+        assert_eq!(app.get_input_text(), "hello worl");
+        assert_eq!(app.input_cursor_position, "hello worl".chars().count());
+    }
+
+    #[test]
+    fn test_update_input_scroll_keeps_cursor_visible() {
+        let mut app = create_test_app();
+        // Long line that wraps at width 10 into multiple lines
+        let text = "one two three four five six seven eight nine ten";
+        app.set_input_text(text.to_string());
+        // Simulate small input area: width=20 total => inner available width accounts in method
+        let width: u16 = 10; // small terminal width to force wrapping (inner ~4)
+        let input_area_height: u16 = 2; // only 2 lines visible
+                                        // Place cursor near end
+        app.input_cursor_position = text.chars().count().saturating_sub(1);
+        app.update_input_scroll(input_area_height, width);
+        // With cursor near end, scroll offset should be > 0 to bring cursor into view
+        assert!(app.input_scroll_offset > 0);
+    }
+
+    #[test]
+    fn test_shift_like_up_down_moves_one_line_on_many_newlines() {
+        let mut app = create_test_app();
+        // Build text with many blank lines
+        let text = "top\n\n\n\n\n\n\n\n\n\nbottom";
+        app.set_input_text(text.to_string());
+        // Jump to bottom line, col=3 (after 'bot')
+        let bottom_row_usize = app.textarea.lines().len().saturating_sub(1);
+        let bottom_row = bottom_row_usize as u16;
+        app.textarea.move_cursor(CursorMove::Jump(bottom_row, 3));
+        app.sync_input_from_textarea();
+        let (row_before, col_before) = app.textarea.cursor();
+        assert_eq!(row_before, bottom_row as usize);
+        assert!(col_before <= app.textarea.lines()[bottom_row_usize].chars().count());
+
+        // Move up exactly one line
+        app.textarea.move_cursor(CursorMove::Up);
+        app.sync_input_from_textarea();
+        let (row_after_up, col_after_up) = app.textarea.cursor();
+        assert_eq!(row_after_up, bottom_row_usize.saturating_sub(1));
+        // Column should clamp reasonably; we just assert it's within line bounds
+        assert!(col_after_up <= app.textarea.lines()[8].chars().count());
+
+        // Move down exactly one line
+        app.textarea.move_cursor(CursorMove::Down);
+        app.sync_input_from_textarea();
+        let (row_after_down, _col_after_down) = app.textarea.cursor();
+        assert_eq!(row_after_down, bottom_row_usize);
+    }
+
+    #[test]
+    fn test_shift_like_left_right_moves_one_char() {
+        let mut app = create_test_app();
+        app.set_input_text("hello".to_string());
+        // Move to end, then back by one, then forward by one
+        app.textarea.move_cursor(CursorMove::End);
+        app.sync_input_from_textarea();
+        let end_pos = app.input_cursor_position;
+        app.textarea.move_cursor(CursorMove::Back);
+        app.sync_input_from_textarea();
+        let back_pos = app.input_cursor_position;
+        assert_eq!(back_pos, end_pos.saturating_sub(1));
+        app.textarea.move_cursor(CursorMove::Forward);
+        app.sync_input_from_textarea();
+        let forward_pos = app.input_cursor_position;
+        assert_eq!(forward_pos, end_pos);
+    }
+
+    #[test]
+    fn test_cursor_mapping_blankline_insert_no_desync() {
+        let mut app = create_test_app();
+        let text = "asdf\n\nasdf\n\nasdf";
+        app.set_input_text(text.to_string());
+        // Jump to blank line 2 (0-based row 3), column 0
+        app.textarea.move_cursor(CursorMove::Jump(3, 0));
+        app.sync_input_from_textarea();
+        // Insert a character on the blank line
+        app.textarea.insert_str("x");
+        app.sync_input_from_textarea();
+
+        // Compute wrapped position using same wrapper logic (no wrapping with wide width)
+        let config = WrapConfig::new(120);
+        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+            &app.get_input_text(),
+            app.input_cursor_position,
+            &config,
+        );
+        // Compare to textarea's cursor row/col
+        let (row, c) = app.textarea.cursor();
+        assert_eq!(line, row);
+        assert_eq!(col, c);
+    }
+
+    #[test]
+    fn test_recompute_input_layout_after_edit_updates_scroll() {
+        let mut app = create_test_app();
+        // Make text long enough to wrap
+        let text = "one two three four five six seven eight nine ten";
+        app.set_input_text(text.to_string());
+        // Place cursor near end
+        app.input_cursor_position = text.chars().count().saturating_sub(1);
+        // Very small terminal width to force heavy wrapping; method accounts for borders and margin
+        let width: u16 = 6;
+        app.recompute_input_layout_after_edit(width);
+        // With cursor near end on a heavily wrapped input, expect some scroll
+        assert!(app.input_scroll_offset > 0);
+        // Changing cursor position to start should reduce or reset scroll
+        app.input_cursor_position = 0;
+        app.recompute_input_layout_after_edit(width);
+        assert_eq!(app.input_scroll_offset, 0);
     }
 }

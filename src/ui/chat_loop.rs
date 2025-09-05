@@ -20,8 +20,14 @@ use ratatui::crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{error::Error, io, sync::Arc, time::Duration};
+use std::{
+    error::Error,
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::{mpsc, Mutex};
+use tui_textarea::{CursorMove, Input as TAInput};
 
 pub async fn run_chat(
     model: String,
@@ -64,23 +70,51 @@ pub async fn run_chat(
     // Special message to signal end of streaming
     const STREAM_END_MARKER: &str = "<<STREAM_END>>";
 
+    // Drawing cadence control
+    let _last_draw = Instant::now();
+    let mut _request_redraw = true;
+    let mut last_input_layout_update = Instant::now();
+    let _last_tick_instant = Instant::now();
+    let _last_input_event: Option<Instant> = None;
+    let _pressed_keys: Vec<(String, Instant)> = Vec::new();
+    // Perf sampling window (1s) and maxima
+    let _window_start = Instant::now();
+    let _max_tick_ms: u128 = 0;
+    let _max_draw_ms: u128 = 0;
+    let _max_input_to_draw_ms: u128 = 0;
+    let _max_queue_drain_ms: u128 = 0;
+    let _max_poll_delay_ms: u128 = 0;
+
+    // Performance logger (enabled when CHABEAU_PERF_LOG=1)
+    // Perf logging disabled
+
     // Main loop
-    let result = loop {
+    let result = 'main_loop: loop {
+        let _tick_start = Instant::now();
         {
             let app_guard = app.lock().await;
             terminal.draw(|f| ui(f, &app_guard))?;
         }
+        // Cache terminal size for this tick
+        let term_size = terminal.size().unwrap_or_default();
+        // Local throttle helper
+        let mut update_if_due = |app_guard: &mut App| {
+            if last_input_layout_update.elapsed() >= Duration::from_millis(16) {
+                app_guard.recompute_input_layout_after_edit(term_size.width);
+                last_input_layout_update = Instant::now();
+            }
+        };
 
         // Handle events
         if event::poll(Duration::from_millis(50))? {
-            let mut should_redraw = false;
-            match event::read()? {
+            let ev = event::read()?;
+            match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     match key.code {
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            break Ok(());
+                            break 'main_loop Ok(());
                         }
                         KeyCode::Char('t')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -421,14 +455,12 @@ pub async fn run_chat(
                             if modifiers.contains(event::KeyModifiers::ALT) {
                                 // Alt+Enter: insert newline in input
                                 let mut app_guard = app.lock().await;
-                                app_guard.insert_char_at_cursor('\n');
-                                // Update input scroll to keep cursor visible
-                                let terminal_size = terminal.size().unwrap_or_default();
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(terminal_size.width);
-                                app_guard
-                                    .update_input_scroll(input_area_height, terminal_size.width);
-                                should_redraw = true;
+                                app_guard.apply_textarea_edit_and_recompute(
+                                    term_size.width,
+                                    |ta| {
+                                        ta.insert_str("\n");
+                                    },
+                                );
                             } else {
                                 let (
                                     should_send_to_api,
@@ -441,11 +473,11 @@ pub async fn run_chat(
                                     stream_id,
                                 ) = {
                                     let mut app_guard = app.lock().await;
-                                    if app_guard.input.trim().is_empty() {
+                                    if app_guard.get_input_text().trim().is_empty() {
                                         continue;
                                     }
 
-                                    let input_text = app_guard.input.clone();
+                                    let input_text = app_guard.get_input_text().to_string();
                                     app_guard.clear_input();
 
                                     // Process input for commands
@@ -453,16 +485,17 @@ pub async fn run_chat(
                                         CommandResult::Continue => {
                                             // Command was processed, don't send to API
                                             // Update scroll position to ensure latest messages are visible
-                                            let terminal_size = terminal.size().unwrap_or_default();
+                                            let term_size = terminal.size().unwrap_or_default();
                                             let input_area_height = app_guard
-                                                .calculate_input_area_height(terminal_size.width);
-                                            let available_height = terminal_size
-                                                .height
-                                                .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                                .saturating_sub(1); // 1 for title
+                                                .calculate_input_area_height(term_size.width);
+                                            let available_height = app_guard
+                                                .calculate_available_height(
+                                                    term_size.height,
+                                                    input_area_height,
+                                                );
                                             app_guard.update_scroll_position(
                                                 available_height,
-                                                terminal_size.width,
+                                                term_size.width,
                                             );
                                             continue;
                                         }
@@ -476,16 +509,16 @@ pub async fn run_chat(
                                             let api_messages = app_guard.add_user_message(message);
 
                                             // Update scroll position to ensure latest messages are visible
-                                            let terminal_size = terminal.size().unwrap_or_default();
                                             let input_area_height = app_guard
-                                                .calculate_input_area_height(terminal_size.width);
-                                            let available_height = terminal_size
-                                                .height
-                                                .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                                .saturating_sub(1); // 1 for title
+                                                .calculate_input_area_height(term_size.width);
+                                            let available_height = app_guard
+                                                .calculate_available_height(
+                                                    term_size.height,
+                                                    input_area_height,
+                                                );
                                             app_guard.update_scroll_position(
                                                 available_height,
-                                                terminal_size.width,
+                                                terminal.size().unwrap_or_default().width,
                                             );
 
                                             (
@@ -593,96 +626,59 @@ pub async fn run_chat(
                         KeyCode::Char('a')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            // Ctrl+A: Move cursor to beginning of input
+                            // Forward to textarea (beginning of line)
                             let mut app_guard = app.lock().await;
-                            app_guard.move_cursor_to_beginning();
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            app_guard.apply_textarea_edit(|ta| {
+                                ta.input(TAInput::from(key));
+                            });
+                            update_if_due(&mut app_guard);
                         }
                         KeyCode::Char('e')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            // Ctrl+E: Move cursor to end of input
+                            // Forward to textarea (end of line)
                             let mut app_guard = app.lock().await;
-                            app_guard.move_cursor_to_end();
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            app_guard.apply_textarea_edit(|ta| {
+                                ta.input(TAInput::from(key));
+                            });
+                            update_if_due(&mut app_guard);
                         }
                         KeyCode::Left => {
-                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-
-                            if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Left: Same as Left Arrow (alias)
-                                app_guard.move_cursor_left();
-                            } else {
-                                // Left Arrow: Move cursor one position left
-                                app_guard.move_cursor_left();
-                            }
-
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            // Move exactly one character left (ignore selection)
+                            app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
+                            update_if_due(&mut app_guard);
                         }
                         KeyCode::Right => {
-                            let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
-
-                            if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Right: Same as Right Arrow (alias)
-                                app_guard.move_cursor_right();
-                            } else {
-                                // Right Arrow: Move cursor one position right
-                                app_guard.move_cursor_right();
-                            }
-
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            // Move exactly one character right (ignore selection)
+                            app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
+                            update_if_due(&mut app_guard);
                         }
-                        KeyCode::Char(c) => {
+                        KeyCode::Char(_) => {
                             let mut app_guard = app.lock().await;
-                            app_guard.insert_char_at_cursor(c);
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            // Let textarea handle text input, including multi-byte chars
+                            app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                                ta.input(TAInput::from(key));
+                            });
                         }
                         KeyCode::Backspace => {
                             let mut app_guard = app.lock().await;
-                            app_guard.delete_char_before_cursor();
-                            // Update input scroll to keep cursor visible
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            app_guard.update_input_scroll(input_area_height, terminal_size.width);
+                            // Use input_without_shortcuts to ensure Backspace always deletes a single char/newline
+                            let input = TAInput::from(key);
+                            app_guard.apply_textarea_edit(|ta| {
+                                ta.input_without_shortcuts(input);
+                            });
+                            update_if_due(&mut app_guard);
                         }
                         KeyCode::Up => {
                             let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
 
                             if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Up: Move cursor up one line in multi-line input
-                                let terminal_size = terminal.size().unwrap_or_default();
-                                let available_width = terminal_size.width.saturating_sub(2 + 4); // Account for borders + indicator space
-                                app_guard.move_cursor_up_line(available_width as usize);
-
-                                // Update input scroll to keep cursor visible
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(terminal_size.width);
-                                app_guard
-                                    .update_input_scroll(input_area_height, terminal_size.width);
+                                // Shift+Up: move cursor up exactly one line (no selection)
+                                app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
+                                update_if_due(&mut app_guard);
                             } else {
                                 // Up Arrow: Scroll chat history up
                                 app_guard.auto_scroll = false;
@@ -694,30 +690,21 @@ pub async fn run_chat(
                             let mut app_guard = app.lock().await;
 
                             if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Down: Move cursor down one line in multi-line input
-                                let terminal_size = terminal.size().unwrap_or_default();
-                                let available_width = terminal_size.width.saturating_sub(2 + 4); // Account for borders + indicator space
-                                app_guard.move_cursor_down_line(available_width as usize);
-
-                                // Update input scroll to keep cursor visible
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(terminal_size.width);
+                                // Shift+Down: move cursor down exactly one line (no selection)
                                 app_guard
-                                    .update_input_scroll(input_area_height, terminal_size.width);
+                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
+                                update_if_due(&mut app_guard);
                             } else {
                                 // Down Arrow: Scroll chat history down
                                 app_guard.auto_scroll = false;
-                                let terminal_size = terminal.size().unwrap_or_default();
                                 let input_area_height =
-                                    app_guard.calculate_input_area_height(terminal_size.width);
-                                let available_height = terminal_size
+                                    app_guard.calculate_input_area_height(term_size.width);
+                                let available_height = term_size
                                     .height
                                     .saturating_sub(input_area_height + 2) // Dynamic input area + borders
                                     .saturating_sub(1); // 1 for title
-                                let max_scroll = app_guard.calculate_max_scroll_offset(
-                                    available_height,
-                                    terminal_size.width,
-                                );
+                                let max_scroll = app_guard
+                                    .calculate_max_scroll_offset(available_height, term_size.width);
                                 app_guard.scroll_offset =
                                     (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
                             }
@@ -740,15 +727,10 @@ pub async fn run_chat(
                             c == '\n' || !c.is_control()
                         })
                         .collect::<String>();
-
-                    app_guard.insert_str_at_cursor(&sanitized_text);
-
-                    // Update input scroll to keep cursor visible
-                    let terminal_size = terminal.size().unwrap_or_default();
-                    let input_area_height =
-                        app_guard.calculate_input_area_height(terminal_size.width);
-                    app_guard.update_input_scroll(input_area_height, terminal_size.width);
-                    should_redraw = true;
+                    app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                        ta.insert_str(&sanitized_text);
+                    });
+                    last_input_layout_update = Instant::now();
                 }
                 Event::Mouse(mouse) => {
                     match mouse.kind {
@@ -762,15 +744,19 @@ pub async fn run_chat(
                             let mut app_guard = app.lock().await;
                             // Disable auto-scroll when user manually scrolls
                             app_guard.auto_scroll = false;
-                            let terminal_size = terminal.size().unwrap_or_default();
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(terminal_size.width);
-                            let available_height = terminal_size
+                            let input_area_height = app_guard.calculate_input_area_height(
+                                terminal.size().unwrap_or_default().width,
+                            );
+                            let available_height = terminal
+                                .size()
+                                .unwrap_or_default()
                                 .height
                                 .saturating_sub(input_area_height + 2) // Dynamic input area + borders
                                 .saturating_sub(1); // 1 for title
-                            let max_scroll = app_guard
-                                .calculate_max_scroll_offset(available_height, terminal_size.width);
+                            let max_scroll = app_guard.calculate_max_scroll_offset(
+                                available_height,
+                                terminal.size().unwrap_or_default().width,
+                            );
                             app_guard.scroll_offset =
                                 (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
                         }
@@ -778,11 +764,6 @@ pub async fn run_chat(
                     }
                 }
                 _ => {}
-            }
-
-            // If we need to redraw immediately (e.g., after Alt+Enter), continue to next loop iteration
-            if should_redraw {
-                continue;
             }
         }
 
@@ -805,13 +786,12 @@ pub async fn run_chat(
                 drop(app_guard);
                 received_any = true;
             } else {
-                let terminal_size = terminal.size().unwrap_or_default();
-                let input_area_height = app_guard.calculate_input_area_height(terminal_size.width);
-                let available_height = terminal_size
+                let input_area_height = app_guard.calculate_input_area_height(term_size.width);
+                let available_height = term_size
                     .height
                     .saturating_sub(input_area_height + 2) // Dynamic input area + borders
                     .saturating_sub(1); // 1 for title
-                app_guard.append_to_response(&content, available_height, terminal_size.width);
+                app_guard.append_to_response(&content, available_height, term_size.width);
                 drop(app_guard);
                 received_any = true;
             }
@@ -819,6 +799,9 @@ pub async fn run_chat(
         if received_any {
             continue; // Force a redraw after processing all updates
         }
+
+        // End of loop tick: log if this frame was slow
+        // end of iteration
     };
 
     // Restore terminal

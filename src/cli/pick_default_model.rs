@@ -61,10 +61,8 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
     };
 
     // Use the shared authentication resolution function
-    let (api_key, base_url, _, display_name) = auth_manager.resolve_authentication(
-        Some(&provider_name),
-        &config,
-    )?;
+    let (api_key, base_url, _, display_name) =
+        auth_manager.resolve_authentication(Some(&provider_name), &config)?;
 
     println!("🤖 Available Models for {display_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

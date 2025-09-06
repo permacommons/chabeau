@@ -6,6 +6,7 @@ pub mod model_list;
 pub mod pick_default_model;
 pub mod pick_default_provider;
 pub mod provider_list;
+pub mod theme_list;
 
 use std::error::Error;
 
@@ -17,6 +18,7 @@ use crate::cli::model_list::list_models;
 use crate::cli::pick_default_model::pick_default_model;
 use crate::cli::pick_default_provider::pick_default_provider;
 use crate::cli::provider_list::list_providers;
+use crate::cli::theme_list::list_themes;
 use crate::core::config::Config;
 use crate::ui::chat_loop::run_chat;
 
@@ -103,7 +105,9 @@ Commands:\n\
   /log <filename>   Enable logging to specified file\n\
   /log              Toggle logging pause/resume\n\
   /dump <filename>  Dump conversation to specified file\n\
-  /dump             Dump conversation to chabeau-log-<isodate>.txt"
+  /dump             Dump conversation to chabeau-log-<isodate>.txt\n\
+  /theme            Open theme picker\n\
+  /theme <id>       Apply theme by id (built-in or custom)"
 )]
 pub struct Args {
     #[command(subcommand)]
@@ -156,6 +160,8 @@ pub enum Commands {
     },
     /// Interactively select and set a default provider
     PickDefaultProvider,
+    /// List available themes (built-in and custom)
+    Themes,
 }
 
 pub fn main() -> Result<(), Box<dyn Error>> {
@@ -203,6 +209,16 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             config.print_all();
                         }
                     }
+                    "theme" => {
+                        if !value.is_empty() {
+                            let theme_name = value.join(" ");
+                            config.theme = Some(theme_name.clone());
+                            config.save()?;
+                            println!("✅ Set theme to: {}", theme_name);
+                        } else {
+                            config.print_all();
+                        }
+                    }
                     "default-model" => {
                         if !value.is_empty() {
                             let val_str = value.join(" ");
@@ -243,6 +259,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     config.default_provider = None;
                     config.save()?;
                     println!("✅ Unset default-provider");
+                }
+                "theme" => {
+                    config.theme = None;
+                    config.save()?;
+                    println!("✅ Unset theme");
                 }
                 "default-model" => {
                     if let Some(provider) = value {
@@ -299,6 +320,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         }
         Commands::PickDefaultProvider => {
             pick_default_provider().await?;
+            Ok(())
+        }
+        Commands::Themes => {
+            list_themes().await?;
             Ok(())
         }
     }

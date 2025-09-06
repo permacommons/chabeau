@@ -1,6 +1,7 @@
 use crate::core::message::Message;
+use crate::ui::theme::Theme;
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
 use std::collections::VecDeque;
@@ -10,13 +11,21 @@ pub struct ScrollCalculator;
 
 impl ScrollCalculator {
     /// Build display lines for all messages
-    pub fn build_display_lines(messages: &VecDeque<Message>) -> Vec<Line<'_>> {
+    pub fn build_display_lines(messages: &VecDeque<Message>) -> Vec<Line<'static>> {
+        // Backwards-compatible default theme
+        let theme = Theme::dark_default();
+        Self::build_display_lines_with_theme(messages, &theme)
+    }
+
+    /// Build display lines using a provided theme
+    pub fn build_display_lines_with_theme(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-
         for msg in messages {
-            Self::add_message_lines(&mut lines, msg);
+            Self::add_message_lines_with_theme(&mut lines, msg, theme);
         }
-
         lines
     }
 
@@ -24,21 +33,23 @@ impl ScrollCalculator {
     pub fn build_display_lines_up_to(
         messages: &VecDeque<Message>,
         max_index: usize,
-    ) -> Vec<Line<'_>> {
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         for (i, msg) in messages.iter().enumerate() {
             if i > max_index {
                 break;
             }
-            Self::add_message_lines(&mut lines, msg);
+            // Use default theme for backward compatibility
+            let theme = Theme::dark_default();
+            Self::add_message_lines_with_theme(&mut lines, msg, &theme);
         }
 
         lines
     }
 
     /// Add lines for a single message to the lines vector
-    fn add_message_lines(lines: &mut Vec<Line<'static>>, msg: &Message) {
+    fn add_message_lines_with_theme(lines: &mut Vec<Line<'static>>, msg: &Message, theme: &Theme) {
         if msg.role == "user" {
             // User messages: cyan with "You:" prefix and proper multiline handling
             let content_lines: Vec<&str> = msg.content.lines().collect();
@@ -47,23 +58,13 @@ impl ScrollCalculator {
                 // Empty content, just show "You: "
                 lines.push(Line::from(vec![Span::styled(
                     "You: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    theme.user_prefix_style,
                 )]));
             } else {
                 // First line gets the "You: " prefix
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        "You: ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        content_lines[0].to_string(),
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::styled("You: ", theme.user_prefix_style),
+                    Span::styled(content_lines[0].to_string(), theme.user_text_style),
                 ]));
 
                 // Subsequent lines are indented to align with the content
@@ -76,10 +77,7 @@ impl ScrollCalculator {
                                 "     ", // 5 spaces to align with content after "You: "
                                 Style::default(),
                             ),
-                            Span::styled(
-                                content_line.to_string(),
-                                Style::default().fg(Color::Cyan),
-                            ),
+                            Span::styled(content_line.to_string(), theme.user_text_style),
                         ]));
                     }
                 }
@@ -93,7 +91,7 @@ impl ScrollCalculator {
                 } else {
                     lines.push(Line::from(Span::styled(
                         content_line.to_string(),
-                        Style::default().fg(Color::DarkGray),
+                        theme.system_text_style,
                     )));
                 }
             }
@@ -107,7 +105,7 @@ impl ScrollCalculator {
                 } else {
                     lines.push(Line::from(Span::styled(
                         content_line.to_string(),
-                        Style::default().fg(Color::White),
+                        theme.assistant_text_style,
                     )));
                 }
             }

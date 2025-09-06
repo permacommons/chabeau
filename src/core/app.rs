@@ -3,11 +3,14 @@ use crate::auth::AuthManager;
 use crate::core::config::Config;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
+use crate::ui::appearance::{detect_preferred_appearance, Appearance};
+use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
+use crate::ui::picker::{PickerItem, PickerState};
+use crate::ui::theme::Theme;
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
 use crate::utils::url::construct_api_url;
 use chrono::Utc;
-use ratatui::style::Style;
 use ratatui::text::Line;
 use reqwest::Client;
 use std::{collections::VecDeque, time::Instant};
@@ -38,6 +41,10 @@ pub struct App {
     pub retrying_message_index: Option<usize>,
     pub input_scroll_offset: u16,
     pub textarea: TextArea<'static>,
+    pub theme: Theme,
+    pub picker: Option<PickerState>,
+    pub theme_before_picker: Option<Theme>,
+    pub theme_id_before_picker: Option<String>,
 }
 
 impl App {
@@ -88,6 +95,13 @@ impl App {
                 retrying_message_index: None,
                 input_scroll_offset: 0,
                 textarea: TextArea::default(),
+                theme: match &config.theme {
+                    Some(name) => Theme::from_name(name),
+                    None => Theme::dark_default(),
+                },
+                picker: None,
+                theme_before_picker: None,
+                theme_id_before_picker: None,
             };
 
             // Try to fetch the newest model
@@ -136,6 +150,25 @@ impl App {
             }
         }
 
+        // Resolve theme: prefer explicit config (custom or built-in). If unset, try
+        // detecting preferred appearance via OS hint and choose a suitable default.
+        let resolved_theme = match &config.theme {
+            Some(name) => {
+                if let Some(ct) = config.get_custom_theme(name) {
+                    Theme::from_spec(&theme_spec_from_custom(ct))
+                } else if let Some(spec) = find_builtin_theme(name) {
+                    Theme::from_spec(&spec)
+                } else {
+                    Theme::from_name(name)
+                }
+            }
+            None => match detect_preferred_appearance() {
+                Some(Appearance::Light) => Theme::light(),
+                Some(Appearance::Dark) => Theme::dark_default(),
+                None => Theme::dark_default(),
+            },
+        };
+
         let mut app = App {
             messages: VecDeque::new(),
             input: String::new(),
@@ -160,6 +193,10 @@ impl App {
             retrying_message_index: None,
             input_scroll_offset: 0,
             textarea: TextArea::default(),
+            theme: resolved_theme,
+            picker: None,
+            theme_before_picker: None,
+            theme_id_before_picker: None,
         };
 
         // Keep textarea state in sync with the string input initially
@@ -169,8 +206,8 @@ impl App {
         Ok(app)
     }
 
-    pub fn build_display_lines(&self) -> Vec<Line<'_>> {
-        ScrollCalculator::build_display_lines(&self.messages)
+    pub fn build_display_lines(&self) -> Vec<Line<'static>> {
+        ScrollCalculator::build_display_lines_with_theme(&self.messages, &self.theme)
     }
 
     pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
@@ -606,11 +643,106 @@ impl App {
     }
 
     fn configure_textarea_appearance(&mut self) {
-        // Ensure no underline is applied to input text or cursor
-        self.textarea.set_style(Style::default());
-        self.textarea.set_cursor_style(Style::default());
-        // Disable special styling of the cursor line (removes underline highlight)
-        self.textarea.set_cursor_line_style(Style::default());
+        // Apply theme styles to textarea, including background for visibility
+        let textarea_style = self
+            .theme
+            .input_text_style
+            .patch(ratatui::style::Style::default().bg(self.theme.background_color));
+        self.textarea.set_style(textarea_style);
+        self.textarea
+            .set_cursor_style(self.theme.input_cursor_style);
+        self.textarea
+            .set_cursor_line_style(self.theme.input_cursor_line_style);
+    }
+
+    /// Open a theme picker modal with built-in and custom themes
+    pub fn open_theme_picker(&mut self) {
+        // Save current theme and configured id for cancel
+        self.theme_before_picker = Some(self.theme.clone());
+        if let Ok(cfg) = Config::load() {
+            self.theme_id_before_picker = cfg.theme.clone();
+        }
+        let mut items: Vec<PickerItem> = Vec::new();
+        // Built-ins
+        for t in crate::ui::builtin_themes::load_builtin_themes() {
+            items.push(PickerItem {
+                id: t.id.clone(),
+                label: t.display_name.clone(),
+            });
+        }
+        // Custom
+        if let Ok(cfg) = Config::load() {
+            for ct in cfg.list_custom_themes() {
+                items.push(PickerItem {
+                    id: ct.id.clone(),
+                    label: format!("{} (custom)", ct.display_name),
+                });
+            }
+        }
+        // Select current theme if present
+        let mut selected = 0usize;
+        if let Ok(cfg) = Config::load() {
+            if let Some(ref id) = cfg.theme {
+                if let Some((idx, _)) = items
+                    .iter()
+                    .enumerate()
+                    .find(|(_, it)| it.id.eq_ignore_ascii_case(id))
+                {
+                    selected = idx;
+                }
+            }
+        }
+        self.picker = Some(PickerState::new("Pick Theme", items, selected));
+    }
+
+    /// Apply theme by id (custom or built-in) and persist in config
+    pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
+        let cfg = Config::load().map_err(|e| e.to_string())?;
+        let theme = if let Some(ct) = cfg.get_custom_theme(id) {
+            Theme::from_spec(&theme_spec_from_custom(ct))
+        } else if let Some(spec) = find_builtin_theme(id) {
+            Theme::from_spec(&spec)
+        } else {
+            return Err(format!("Unknown theme: {}", id));
+        };
+
+        self.theme = theme;
+        self.configure_textarea_appearance();
+
+        let mut cfg = Config::load().map_err(|e| e.to_string())?;
+        cfg.theme = Some(id.to_string());
+        cfg.save().map_err(|e| e.to_string())?;
+        // Clear preview snapshot once committed
+        self.theme_before_picker = None;
+        self.theme_id_before_picker = None;
+        Ok(())
+    }
+
+    /// Apply theme temporarily for preview (does not persist config)
+    pub fn preview_theme_by_id(&mut self, id: &str) {
+        // Try custom then built-in then no-op
+        if let Ok(cfg) = Config::load() {
+            if let Some(ct) = cfg.get_custom_theme(id) {
+                self.theme = Theme::from_spec(&theme_spec_from_custom(ct));
+                self.configure_textarea_appearance();
+                return;
+            }
+        }
+        if let Some(spec) = find_builtin_theme(id) {
+            self.theme = Theme::from_spec(&spec);
+            self.configure_textarea_appearance();
+        }
+    }
+
+    /// Revert theme to the one before opening picker (on cancel)
+    pub fn revert_theme_preview(&mut self) {
+        if let Some(prev) = self.theme_before_picker.clone() {
+            self.theme = prev;
+            self.configure_textarea_appearance();
+        }
+        // Do not modify config
+        self.theme_before_picker = None;
+        self.theme_id_before_picker = None;
     }
 }
 
@@ -845,7 +977,7 @@ mod tests {
         // Compute wrapped position using same wrapper logic (no wrapping with wide width)
         let config = WrapConfig::new(120);
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            &app.get_input_text(),
+            app.get_input_text(),
             app.input_cursor_position,
             &config,
         );

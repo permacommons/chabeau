@@ -12,6 +12,23 @@ pub struct CustomProvider {
     pub mode: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomTheme {
+    pub id: String,
+    pub display_name: String,
+    pub background: Option<String>,
+    pub user_prefix: Option<String>,
+    pub user_text: Option<String>,
+    pub assistant_text: Option<String>,
+    pub system_text: Option<String>,
+    pub title: Option<String>,
+    pub streaming_indicator: Option<String>,
+    pub input_border: Option<String>,
+    pub input_title: Option<String>,
+    pub input_text: Option<String>,
+    pub input_cursor_modifiers: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub default_provider: Option<String>,
@@ -19,6 +36,10 @@ pub struct Config {
     pub default_models: HashMap<String, String>,
     #[serde(default)]
     pub custom_providers: Vec<CustomProvider>,
+    /// UI theme name (e.g., "dark", "light", "dracula")
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub custom_themes: Vec<CustomTheme>,
 }
 
 impl Config {
@@ -63,6 +84,10 @@ impl Config {
             Some(provider) => println!("  default-provider: {provider}"),
             None => println!("  default-provider: (unset)"),
         }
+        match &self.theme {
+            Some(theme) => println!("  theme: {theme}"),
+            None => println!("  theme: (unset)"),
+        }
         if self.default_models.is_empty() {
             println!("  default-models: (none set)");
         } else {
@@ -99,6 +124,24 @@ impl Config {
 
     pub fn list_custom_providers(&self) -> Vec<&CustomProvider> {
         self.custom_providers.iter().collect()
+    }
+
+    // Custom themes management
+    #[allow(dead_code)]
+    pub fn add_custom_theme(&mut self, theme: CustomTheme) {
+        self.custom_themes.push(theme);
+    }
+    #[allow(dead_code)]
+    pub fn remove_custom_theme(&mut self, id: &str) {
+        self.custom_themes.retain(|t| t.id != id);
+    }
+    pub fn get_custom_theme(&self, id: &str) -> Option<&CustomTheme> {
+        self.custom_themes
+            .iter()
+            .find(|t| t.id.eq_ignore_ascii_case(id))
+    }
+    pub fn list_custom_themes(&self) -> Vec<&CustomTheme> {
+        self.custom_themes.iter().collect()
     }
 }
 
@@ -226,6 +269,23 @@ mod tests {
             loaded_config.default_provider,
             Some("new-provider".to_string())
         );
+    }
+
+    #[test]
+    fn test_set_and_load_theme() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("theme_config.toml");
+
+        // Save config with a theme
+        let cfg = Config {
+            theme: Some("light".to_string()),
+            ..Default::default()
+        };
+        cfg.save_to_path(&config_path).expect("save config failed");
+
+        // Load it back
+        let loaded = Config::load_from_path(&config_path).expect("load config failed");
+        assert_eq!(loaded.theme, Some("light".to_string()));
     }
 
     #[test]
@@ -410,5 +470,35 @@ mod tests {
 
         assert_eq!(openai_provider.mode, None);
         assert_eq!(anthropic_provider.mode, Some("anthropic".to_string()));
+    }
+
+    #[test]
+    fn test_custom_theme_save_load() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_theme.toml");
+        let mut cfg = Config::default();
+        cfg.add_custom_theme(CustomTheme {
+            id: "mytheme".to_string(),
+            display_name: "My Theme".to_string(),
+            background: Some("black".to_string()),
+            user_prefix: Some("green,bold".to_string()),
+            user_text: Some("green".to_string()),
+            assistant_text: Some("white".to_string()),
+            system_text: Some("gray".to_string()),
+            title: Some("gray".to_string()),
+            streaming_indicator: Some("white".to_string()),
+            input_border: Some("green".to_string()),
+            input_title: Some("gray".to_string()),
+            input_text: Some("white".to_string()),
+            input_cursor_modifiers: Some("reversed".to_string()),
+        });
+        cfg.save_to_path(&config_path).expect("save failed");
+
+        let loaded = Config::load_from_path(&config_path).expect("load failed");
+        let t = loaded
+            .get_custom_theme("mytheme")
+            .expect("missing custom theme");
+        assert_eq!(t.display_name, "My Theme");
+        assert_eq!(t.background.as_deref(), Some("black"));
     }
 }

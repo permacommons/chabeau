@@ -110,6 +110,71 @@ pub async fn run_chat(
             let ev = event::read()?;
             match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // Always allow Ctrl+C to quit, even when a modal is open
+                    if matches!(key.code, KeyCode::Char('c'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        break 'main_loop Ok(());
+                    }
+                    // If a picker is open, handle navigation/selection first
+                    {
+                        let mut app_guard = app.lock().await;
+                        if let Some(selected_id) = {
+                            if let Some(picker) = &mut app_guard.picker {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        app_guard.revert_theme_preview();
+                                        app_guard.picker = None;
+                                        None
+                                    }
+                                    KeyCode::Up => {
+                                        picker.move_up();
+                                        picker.selected_id().map(|s| s.to_string())
+                                    }
+                                    KeyCode::Down => {
+                                        picker.move_down();
+                                        picker.selected_id().map(|s| s.to_string())
+                                    }
+                                    KeyCode::Char('k') => {
+                                        picker.move_up();
+                                        picker.selected_id().map(|s| s.to_string())
+                                    }
+                                    KeyCode::Char('j') => {
+                                        picker.move_down();
+                                        picker.selected_id().map(|s| s.to_string())
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Some(id) =
+                                            picker.selected_id().map(|s| s.to_string())
+                                        {
+                                            let res = app_guard.apply_theme_by_id(&id);
+                                            match res {
+                                                Ok(_) => app_guard.add_system_message(format!(
+                                                    "Theme set to: {}",
+                                                    id
+                                                )),
+                                                Err(e) => app_guard.add_system_message(format!(
+                                                    "Error applying theme '{}': {}",
+                                                    id, e
+                                                )),
+                                            }
+                                        }
+                                        app_guard.picker = None;
+                                        None
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } {
+                            // Apply preview after releasing mutable borrow of picker
+                            app_guard.preview_theme_by_id(&selected_id);
+                            continue; // handled by picker
+                        } else if app_guard.picker.is_some() {
+                            continue;
+                        }
+                    }
                     match key.code {
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>

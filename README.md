@@ -92,6 +92,22 @@ chabeau set default-provider            # Show current configuration
 
 **Note:** The `set default-model` command now accepts provider and model names without requiring quotes, making it easier to use.
 
+### Themes
+
+Chabeau includes built-in themes to customize the TUI appearance.
+
+ - Set a theme: `chabeau set theme dark` (options: `dark` [default], `light`, `dracula`, `solarized-dark`, `solarized-light`, `high-contrast-dark`, `paper`)
+- List themes: `chabeau themes` (shows built-in and custom, marks current)
+- Unset theme (revert to default): `chabeau unset theme`
+
+Theme affects message colors, title bar, input border/title, and streaming indicator.
+
+Auto-detection: when no theme is set in your config, Chabeau tries to infer a sensible default from the OS preference (e.g., macOS, Windows, GNOME). If no hint is available, it defaults to the dark theme.
+
+Custom themes:
+- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see `src/builtin_themes.toml` for examples).
+- Once added, set them with `chabeau set theme <your-theme-id>`.
+
 ## Interface Controls
 
 | Key | Action |
@@ -114,6 +130,8 @@ chabeau set default-provider            # Show current configuration
 
 ### Chat Commands
 - `/help` - Show extended help with keyboard shortcuts
+- `/theme` - Open theme picker (built-in and custom)
+- `/theme <id>` - Apply a theme by id
 - `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume
 - `/dump <filename>` - Dump conversation to specified file

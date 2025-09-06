@@ -1,0 +1,104 @@
+[[themes]]
+id = "dark"
+display_name = "Dark"
+background = "#000000"
+user_prefix = "#00bcd4,bold"
+user_text = "#00bcd4"
+assistant_text = "#e5e7eb"
+system_text = "#6b7280"
+title = "#9ca3af"
+streaming_indicator = "#ffffff"
+input_border = "#4b5563"
+input_title = "#9ca3af"
+input_text = "#e5e7eb"
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "light"
+display_name = "Light"
+background = "#ffffff"
+user_prefix = "#2563eb,bold"
+user_text = "#2563eb"
+assistant_text = "#111827"
+system_text = "#6b7280"
+title = "#374151"
+streaming_indicator = "#111827"
+input_border = "#111827"
+input_title = "#374151"
+input_text = "#111827"
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "dracula"
+display_name = "Dracula"
+background = "#282a36"
+user_prefix = "#ff79c6,bold"
+user_text = "#ff79c6"
+assistant_text = "#f8f8f2"
+system_text = "#6272a4"
+title = "#bd93f9"
+streaming_indicator = "#bd93f9"
+input_border = "#bd93f9"
+input_title = "#bd93f9"
+input_text = "#f8f8f2"
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "solarized-dark"
+display_name = "Solarized Dark"
+background = "#002b36"          # base03
+user_prefix = "#268bd2,bold"     # blue
+user_text = "#268bd2"
+assistant_text = "#93a1a1"       # base1
+system_text = "#586e75"          # base01
+title = "#2aa198"                # cyan
+streaming_indicator = "#2aa198"
+input_border = "#586e75"         # base01
+input_title = "#586e75"
+input_text = "#eee8d5"           # base2
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "solarized-light"
+display_name = "Solarized Light"
+background = "#fdf6e3"          # base3
+user_prefix = "#268bd2,bold"     # blue
+user_text = "#268bd2"
+assistant_text = "#586e75"       # base01
+system_text = "#657b83"          # base00
+title = "#586e75"                # base01
+streaming_indicator = "#586e75"
+input_border = "#657b83"         # base00
+input_title = "#657b83"
+input_text = "#073642"           # base02
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "high-contrast-dark"
+display_name = "High Contrast Dark"
+background = "#000000"
+user_prefix = "#00e5ff,bold"
+user_text = "#00e5ff"
+assistant_text = "#ffffff"
+system_text = "#9ca3af"
+title = "#facc15"
+streaming_indicator = "#f97316"
+input_border = "#facc15"
+input_title = "#facc15"
+input_text = "#e5e7eb"
+input_cursor_modifiers = "reversed"
+
+[[themes]]
+id = "paper"
+display_name = "Paper"
+background = "#faf6f0"
+user_prefix = "#1f6feb,bold"
+user_text = "#1f6feb"
+assistant_text = "#111827"
+system_text = "#6b7280"
+title = "#374151"
+streaming_indicator = "#111827"
+input_border = "#111827"
+input_title = "#374151"
+input_text = "#1f2937"
+input_cursor_modifiers = "reversed"

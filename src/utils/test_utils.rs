@@ -3,6 +3,8 @@ use crate::core::app::App;
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
+use crate::ui::theme::Theme;
+#[cfg(test)]
 use crate::utils::logging::LoggingState;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -33,6 +35,10 @@ pub fn create_test_app() -> App {
         retrying_message_index: None,
         input_scroll_offset: 0,
         textarea: tui_textarea::TextArea::default(),
+        theme: Theme::dark_default(),
+        picker: None,
+        theme_before_picker: None,
+        theme_id_before_picker: None,
     }
 }
 

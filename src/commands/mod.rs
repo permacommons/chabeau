@@ -34,6 +34,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "",
             "Chat Commands:",
             "  /help             Show this help message",
+            "  /theme            Open theme picker",
+            "  /theme <id>       Apply theme by id (built-in or custom)",
             "  /log <filename>   Enable logging to specified file",
             "  /log              Toggle logging pause/resume",
             "  /dump <filename>  Dump conversation to specified file",
@@ -112,6 +114,29 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             _ => {
                 app.add_system_message("Usage: /dump [filename] - Dump conversation to file, or /dump for default filename".to_string());
                 CommandResult::Continue
+            }
+        }
+    } else if trimmed.starts_with("/theme") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        match parts.len() {
+            1 => {
+                // Open picker
+                app.open_theme_picker();
+                CommandResult::Continue
+            }
+            _ => {
+                // Try to set theme directly by id/name
+                let id = parts[1];
+                match app.apply_theme_by_id(id) {
+                    Ok(_) => {
+                        app.add_system_message(format!("Theme set to: {}", id));
+                        CommandResult::Continue
+                    }
+                    Err(e) => {
+                        app.add_system_message(format!("Error: {}", e));
+                        CommandResult::Continue
+                    }
+                }
             }
         }
     } else {
@@ -298,5 +323,16 @@ mod tests {
         assert_eq!(last_message.role, "system");
         assert!(last_message.content.contains("Error dumping conversation:"));
         assert!(last_message.content.contains("No conversation to dump"));
+    }
+
+    #[test]
+    fn theme_command_opens_picker() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/theme");
+        matches!(res, CommandResult::Continue);
+        assert!(app.picker.is_some());
+        // Picker should have at least the built-ins
+        let picker = app.picker.as_ref().unwrap();
+        assert!(picker.items.len() >= 3);
     }
 }

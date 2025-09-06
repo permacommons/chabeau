@@ -24,10 +24,6 @@ pub fn detect_preferred_appearance() -> Option<Appearance> {
     detect_via_os_hint()
 }
 
-// Note: Terminal background probing via OSC 11 is intentionally disabled to
-// avoid side-effects in some terminals (echoed control sequences or theme
-// changes). We rely solely on OS-level hints here.
-
 /// Detect OS-level app theme preference (best-effort, with conservative fallbacks)
 fn detect_via_os_hint() -> Option<Appearance> {
     #[cfg(target_os = "macos")]

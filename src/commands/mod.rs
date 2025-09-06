@@ -324,4 +324,15 @@ mod tests {
         assert!(last_message.content.contains("Error dumping conversation:"));
         assert!(last_message.content.contains("No conversation to dump"));
     }
+
+    #[test]
+    fn theme_command_opens_picker() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/theme");
+        matches!(res, CommandResult::Continue);
+        assert!(app.picker.is_some());
+        // Picker should have at least the built-ins
+        let picker = app.picker.as_ref().unwrap();
+        assert!(picker.items.len() >= 3);
+    }
 }

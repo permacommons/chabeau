@@ -54,3 +54,27 @@ pub fn theme_spec_from_custom(ct: &CustomTheme) -> ThemeSpec {
         input_cursor_modifiers: ct.input_cursor_modifiers.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_has_expected_builtins() {
+        let themes = load_builtin_themes();
+        let ids: Vec<String> = themes.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.contains(&"dark".to_string()));
+        assert!(ids.contains(&"light".to_string()));
+        assert!(ids.contains(&"dracula".to_string()));
+        assert!(ids.contains(&"solarized-dark".to_string()));
+        assert!(ids.contains(&"solarized-light".to_string()));
+        assert!(ids.contains(&"high-contrast-dark".to_string()));
+        assert!(ids.contains(&"paper".to_string()));
+    }
+
+    #[test]
+    fn find_builtin_theme_works_case_insensitive() {
+        let t = find_builtin_theme("DaRk").expect("should find 'dark'");
+        assert_eq!(t.id, "dark");
+    }
+}

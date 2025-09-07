@@ -1,6 +1,7 @@
 use crate::core::message::Message;
 use crate::ui::markdown::{
-    build_markdown_display_lines, compute_codeblock_ranges, render_message_markdown,
+    build_markdown_display_lines, build_plain_display_lines, compute_codeblock_ranges,
+    render_message_markdown_opts,
 };
 use crate::ui::theme::Theme;
 use ratatui::{text::Line, text::Span};
@@ -25,18 +26,46 @@ impl ScrollCalculator {
         build_markdown_display_lines(messages, theme)
     }
 
+    /// Build display lines using theme and flags
+    pub fn build_display_lines_with_theme_and_flags(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+    ) -> Vec<Line<'static>> {
+        if markdown_enabled {
+            // render each with syntax flag
+            let mut out = Vec::new();
+            for msg in messages {
+                let rendered = render_message_markdown_opts(msg, theme, syntax_enabled);
+                out.extend(rendered.lines);
+            }
+            out
+        } else {
+            build_plain_display_lines(messages, theme)
+        }
+    }
+
     /// Build display lines using a provided theme and optionally highlight a selected message
-    pub fn build_display_lines_with_theme_and_selection(
+    /// Build display lines and optionally highlight a selected user message (flags aware)
+    pub fn build_display_lines_with_theme_and_selection_and_flags(
         messages: &VecDeque<Message>,
         theme: &Theme,
         selected_index: Option<usize>,
         highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
     ) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         for (i, msg) in messages.iter().enumerate() {
-            let mut rendered = render_message_markdown(msg, theme);
+            let mut rendered = if markdown_enabled {
+                render_message_markdown_opts(msg, theme, syntax_enabled)
+            } else {
+                crate::ui::markdown::RenderedMessage {
+                    lines: build_plain_display_lines(&VecDeque::from([msg.clone()]), theme),
+                }
+            };
             if selected_index == Some(i) && msg.role == "user" {
-                // Apply highlight to all non-empty lines of this message block
                 for l in &mut rendered.lines {
                     if !l.to_string().is_empty() {
                         let text = l.to_string();
@@ -50,21 +79,35 @@ impl ScrollCalculator {
     }
 
     /// Build display lines and highlight a selected code block range
-    pub fn build_display_lines_with_codeblock_highlight(
+    /// Codeblock highlight respecting flags (no-op when markdown disabled)
+    pub fn build_display_lines_with_codeblock_highlight_and_flags(
         messages: &VecDeque<Message>,
         theme: &crate::ui::theme::Theme,
         selected_block: Option<usize>,
         highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
     ) -> Vec<Line<'static>> {
-        let mut lines = build_markdown_display_lines(messages, theme);
-        if let Some(idx) = selected_block {
-            let ranges = compute_codeblock_ranges(messages, theme);
-            if let Some((start, len, _content)) = ranges.get(idx).cloned() {
-                for i in start..start + len {
-                    if i < lines.len() {
-                        let text = lines[i].to_string();
-                        let st = theme.md_codeblock_text_style().patch(highlight);
-                        lines[i] = Line::from(Span::styled(text, st));
+        let mut lines = if markdown_enabled {
+            let mut out = Vec::new();
+            for msg in messages {
+                let rendered = render_message_markdown_opts(msg, theme, syntax_enabled);
+                out.extend(rendered.lines);
+            }
+            out
+        } else {
+            build_plain_display_lines(messages, theme)
+        };
+        if markdown_enabled {
+            if let Some(idx) = selected_block {
+                let ranges = compute_codeblock_ranges(messages, theme);
+                if let Some((start, len, _content)) = ranges.get(idx).cloned() {
+                    for i in start..start + len {
+                        if i < lines.len() {
+                            let text = lines[i].to_string();
+                            let st = theme.md_codeblock_text_style().patch(highlight);
+                            lines[i] = Line::from(Span::styled(text, st));
+                        }
                     }
                 }
             }
@@ -103,7 +146,7 @@ impl ScrollCalculator {
             }
             // Use default theme for backward compatibility
             let theme = Theme::dark_default();
-            let rendered = render_message_markdown(msg, &theme);
+            let rendered = render_message_markdown_opts(msg, &theme, true);
             lines.extend(rendered.lines);
         }
 
@@ -472,11 +515,13 @@ mod tests {
         let theme = Theme::dark_default();
 
         let normal = ScrollCalculator::build_display_lines_with_theme(&messages, &theme);
-        let highlighted = ScrollCalculator::build_display_lines_with_theme_and_selection(
+        let highlighted = ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
             &messages,
             &theme,
             Some(2),
             theme.streaming_indicator_style,
+            true,
+            true,
         );
 
         assert_eq!(normal.len(), highlighted.len());

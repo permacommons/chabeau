@@ -14,8 +14,21 @@ pub struct RenderedMessage {
 pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage {
     match msg.role.as_str() {
         "system" => render_system_message(&msg.content, theme),
-        "user" => render_with_parser(true, &msg.content, theme),
-        _ => render_with_parser(false, &msg.content, theme),
+        "user" => render_with_parser(true, &msg.content, theme, true),
+        _ => render_with_parser(false, &msg.content, theme, true),
+    }
+}
+
+/// Render markdown with options to enable/disable syntax highlighting.
+pub fn render_message_markdown_opts(
+    msg: &Message,
+    theme: &Theme,
+    syntax_enabled: bool,
+) -> RenderedMessage {
+    match msg.role.as_str() {
+        "system" => render_system_message(&msg.content, theme),
+        "user" => render_with_parser(true, &msg.content, theme, syntax_enabled),
+        _ => render_with_parser(false, &msg.content, theme, syntax_enabled),
     }
 }
 
@@ -34,7 +47,12 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
     RenderedMessage { lines: out }
 }
 
-fn render_with_parser(is_user: bool, content: &str, theme: &Theme) -> RenderedMessage {
+fn render_with_parser(
+    is_user: bool,
+    content: &str,
+    theme: &Theme,
+    syntax_enabled: bool,
+) -> RenderedMessage {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -170,12 +188,31 @@ fn render_with_parser(is_user: bool, content: &str, theme: &Theme) -> RenderedMe
                     flush_current_line(&mut lines, &mut current_spans);
                 }
                 TagEnd::CodeBlock => {
-                    for l in code_block_lines.drain(..) {
-                        let mut st = theme.md_codeblock_text_style();
-                        if let Some(bg) = theme.md_codeblock_bg_color() {
-                            st = st.bg(bg);
+                    let joined = code_block_lines.join("\n");
+                    if syntax_enabled {
+                        if let Some(mut hl_lines) = crate::utils::syntax::highlight_code_block(
+                            in_code_block.as_deref().unwrap_or(""),
+                            &joined,
+                            theme,
+                        ) {
+                            lines.append(&mut hl_lines);
+                        } else {
+                            for l in joined.split('\n') {
+                                let mut st = theme.md_codeblock_text_style();
+                                if let Some(bg) = theme.md_codeblock_bg_color() {
+                                    st = st.bg(bg);
+                                }
+                                lines.push(Line::from(Span::styled(detab(l), st)));
+                            }
                         }
-                        lines.push(Line::from(Span::styled(detab(&l), st)));
+                    } else {
+                        for l in joined.split('\n') {
+                            let mut st = theme.md_codeblock_text_style();
+                            if let Some(bg) = theme.md_codeblock_bg_color() {
+                                st = st.bg(bg);
+                            }
+                            lines.push(Line::from(Span::styled(detab(l), st)));
+                        }
                     }
                     lines.push(Line::from(""));
                     in_code_block = None;
@@ -492,6 +529,91 @@ pub fn build_markdown_display_lines(
         lines.extend(rendered.lines);
     }
     lines
+}
+
+/// Plain renderer without markdown parsing; keeps prefixes and spacing.
+pub fn build_plain_display_lines(
+    messages: &std::collections::VecDeque<Message>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for msg in messages {
+        match msg.role.as_str() {
+            "system" => {
+                let rm = render_system_message(&msg.content, theme);
+                lines.extend(rm.lines);
+            }
+            "user" => {
+                let mut first = true;
+                for l in msg.content.lines() {
+                    if l.trim().is_empty() {
+                        lines.push(Line::from(""));
+                    } else if first {
+                        lines.push(Line::from(Span::styled(
+                            format!("You: {}", detab(l)),
+                            theme.user_text_style,
+                        )));
+                        first = false;
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            format!("     {}", detab(l)),
+                            theme.user_text_style,
+                        )));
+                    }
+                }
+                if !msg.content.is_empty() {
+                    lines.push(Line::from(""));
+                }
+            }
+            _ => {
+                for l in msg.content.lines() {
+                    if l.trim().is_empty() {
+                        lines.push(Line::from(""));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            detab(l),
+                            theme.md_paragraph_style(),
+                        )));
+                    }
+                }
+                if !msg.content.is_empty() {
+                    lines.push(Line::from(""));
+                }
+            }
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod plain_tests {
+    use super::*;
+    use crate::core::message::Message;
+
+    #[test]
+    fn plain_user_message_prefix_and_indent() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let messages = std::collections::VecDeque::from(vec![Message {
+            role: "user".into(),
+            content: "Line1\nLine2".into(),
+        }]);
+        let lines = build_plain_display_lines(&messages, &theme);
+        assert!(lines[0].to_string().starts_with("You: Line1"));
+        assert!(lines[1].to_string().starts_with("     Line2"));
+        assert_eq!(lines[2].to_string(), "");
+    }
+
+    #[test]
+    fn plain_system_message_spacing() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let messages = std::collections::VecDeque::from(vec![Message {
+            role: "system".into(),
+            content: "Notice".into(),
+        }]);
+        let lines = build_plain_display_lines(&messages, &theme);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].to_string(), "");
+    }
 }
 
 // Theme style selection moved into Theme methods (see src/ui/theme.rs)

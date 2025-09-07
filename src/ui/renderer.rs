@@ -30,25 +30,34 @@ pub fn ui(f: &mut Frame, app: &App) {
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED);
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection(
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
             &app.messages,
             &app.theme,
             app.selected_user_message_index,
             highlight,
+            app.markdown_enabled,
+            app.syntax_enabled,
         )
     } else if app.block_select_mode {
         let highlight = app
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED | Modifier::BOLD);
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight(
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags(
             &app.messages,
             &app.theme,
             app.selected_block_index,
             highlight,
+            app.markdown_enabled,
+            app.syntax_enabled,
         )
     } else {
-        app.build_display_lines()
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &app.messages,
+            &app.theme,
+            app.markdown_enabled,
+            app.syntax_enabled,
+        )
     };
 
     // Calculate scroll position using wrapped line count

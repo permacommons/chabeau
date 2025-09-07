@@ -320,6 +320,18 @@ pub async fn run_chat(
                         && key.modifiers.contains(event::KeyModifiers::CONTROL)
                     {
                         let mut app_guard = app.lock().await;
+                        if !app_guard.markdown_enabled {
+                            app_guard.add_system_message(
+                                "Markdown rendering is disabled. Enable with /markdown on."
+                                    .to_string(),
+                            );
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(term_size.width);
+                            let available_height = app_guard
+                                .calculate_available_height(term_size.height, input_area_height);
+                            app_guard.update_scroll_position(available_height, term_size.width);
+                            continue;
+                        }
                         let blocks = crate::ui::markdown::compute_codeblock_ranges(
                             &app_guard.messages,
                             &app_guard.theme,
@@ -332,10 +344,7 @@ pub async fn run_chat(
                                     let next = if cur == 0 { total - 1 } else { cur - 1 };
                                     app_guard.selected_block_index = Some(next);
                                     if let Some((start, _len, _)) = blocks.get(next) {
-                                        let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme(
-                                            &app_guard.messages,
-                                            &app_guard.theme,
-                                        );
+                                        let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled);
                                         let input_area_height =
                                             app_guard.calculate_input_area_height(term_size.width);
                                         let available_height = term_size
@@ -368,10 +377,7 @@ pub async fn run_chat(
                             let last = blocks.len().saturating_sub(1);
                             app_guard.enter_block_select_mode(last);
                             if let Some((start, _len, _)) = blocks.get(last) {
-                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme(
-                                    &app_guard.messages,
-                                    &app_guard.theme,
-                                );
+                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled);
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(term_size.width);
                                 let available_height = term_size
@@ -570,8 +576,7 @@ pub async fn run_chat(
                         if app_guard.block_select_mode {
                             match key.code {
                                 KeyCode::Esc => {
-                                    app_guard.block_select_mode = false;
-                                    app_guard.selected_block_index = None;
+                                    app_guard.exit_block_select_mode();
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     if let Some(cur) = app_guard.selected_block_index {
@@ -590,10 +595,7 @@ pub async fn run_chat(
                                                     &app_guard.theme,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme(
-                                                    &app_guard.messages,
-                                                    &app_guard.theme,
-                                                );
+                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled);
                                                 let input_area_height = app_guard
                                                     .calculate_input_area_height(term_size.width);
                                                 let available_height = term_size
@@ -635,10 +637,7 @@ pub async fn run_chat(
                                                     &app_guard.theme,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme(
-                                                    &app_guard.messages,
-                                                    &app_guard.theme,
-                                                );
+                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled);
                                                 let input_area_height = app_guard
                                                     .calculate_input_area_height(term_size.width);
                                                 let available_height = term_size

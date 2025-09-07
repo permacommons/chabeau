@@ -53,6 +53,9 @@ pub struct App {
     pub selected_block_index: Option<usize>,
     pub theme_before_picker: Option<Theme>,
     pub theme_id_before_picker: Option<String>,
+    // Rendering toggles
+    pub markdown_enabled: bool,
+    pub syntax_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +124,8 @@ impl App {
                 selected_block_index: None,
                 theme_before_picker: None,
                 theme_id_before_picker: None,
+                markdown_enabled: config.markdown.unwrap_or(true),
+                syntax_enabled: config.syntax.unwrap_or(true),
             };
 
             // Try to fetch the newest model
@@ -222,6 +227,8 @@ impl App {
             selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
+            markdown_enabled: config.markdown.unwrap_or(true),
+            syntax_enabled: config.syntax.unwrap_or(true),
         };
 
         // Keep textarea state in sync with the string input initially
@@ -232,7 +239,12 @@ impl App {
     }
 
     pub fn build_display_lines(&self) -> Vec<Line<'static>> {
-        ScrollCalculator::build_display_lines_with_theme(&self.messages, &self.theme)
+        ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &self.messages,
+            &self.theme,
+            self.markdown_enabled,
+            self.syntax_enabled,
+        )
     }
 
     pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {

@@ -4,7 +4,6 @@ This file contains features and improvements that would be nice to have in futur
 
 ## Features
 
-- Markdown support for assistant output
 - More complete keyboard mapping (Page Up/Dn; Ctrl+D)
 - Tiny copy/paste affordances
 - Better handling of repeating messages like "Generating..."
@@ -19,6 +18,10 @@ This file contains features and improvements that would be nice to have in futur
 - "Rapid refine" - apply a previously created prompt to an output
 - Microphone/speaker support?
 
+### Rendering
+- Configurable syntax highlighting theme (pick a syntect theme or a color preset)
+- Consider auto-detecting language for fenced code blocks without a language tag
+
 ## Tests
 
 - Performance regression tests
@@ -32,6 +35,8 @@ This file contains features and improvements that would be nice to have in futur
 - Unify message line building in `src/utils/scroll.rs`
   - Merge normal and highlighted builders behind a single function with an optional style patch
   - Consider full-row background highlight for selected messages (not just styled spans)
+  - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper)
+  - Consolidate plain vs markdown rendering path selection
 - Centralize help text
   - Create a small `ui/help.rs` with canonical key-hint strings used by CLI long_about, `/help`, and renderer titles
 - Theme token for selection highlight
@@ -47,3 +52,4 @@ This file contains features and improvements that would be nice to have in futur
 - Tests
   - Add unit tests for selection wrap-around and mode transitions (pure helpers)
   - Add integration-style tests for event handling if feasible (simulate key events)
+  - Add tests for `/markdown` and `/syntax` commands by injecting a test config path or IO layer

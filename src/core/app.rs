@@ -47,8 +47,17 @@ pub struct App {
     pub textarea: TextArea<'static>,
     pub theme: Theme,
     pub picker: Option<PickerState>,
+    pub picker_mode: Option<PickerMode>,
+    // Block select mode (inline, like Ctrl+P for user messages)
+    pub block_select_mode: bool,
+    pub selected_block_index: Option<usize>,
     pub theme_before_picker: Option<Theme>,
     pub theme_id_before_picker: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PickerMode {
+    Theme,
 }
 
 impl App {
@@ -107,6 +116,9 @@ impl App {
                     None => Theme::dark_default(),
                 },
                 picker: None,
+                picker_mode: None,
+                block_select_mode: false,
+                selected_block_index: None,
                 theme_before_picker: None,
                 theme_id_before_picker: None,
             };
@@ -205,6 +217,9 @@ impl App {
             textarea: TextArea::default(),
             theme: resolved_theme,
             picker: None,
+            picker_mode: None,
+            block_select_mode: false,
+            selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
         };
@@ -462,6 +477,20 @@ impl App {
         self.in_place_edit_index = None;
     }
 
+    /// Enter block select mode: lock input and set selected block index
+    pub fn enter_block_select_mode(&mut self, index: usize) {
+        self.block_select_mode = true;
+        self.selected_block_index = Some(index);
+        self.input_mode = false; // lock input area
+    }
+
+    /// Exit block select mode and unlock input
+    pub fn exit_block_select_mode(&mut self) {
+        self.block_select_mode = false;
+        self.selected_block_index = None;
+        self.input_mode = true; // unlock input area
+    }
+
     pub fn prepare_retry(
         &mut self,
         available_height: u16,
@@ -676,8 +705,6 @@ impl App {
         ) as u16
     }
 
-    // (Replaced by tui-textarea's built-in editing behavior)
-
     /// Clear input and reset cursor
     pub fn clear_input(&mut self) {
         self.set_input_text(String::new());
@@ -753,6 +780,7 @@ impl App {
 
     /// Open a theme picker modal with built-in and custom themes
     pub fn open_theme_picker(&mut self) {
+        self.picker_mode = Some(PickerMode::Theme);
         // Save current theme and configured id for cancel
         self.theme_before_picker = Some(self.theme.clone());
         if let Ok(cfg) = Config::load() {

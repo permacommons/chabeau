@@ -18,6 +18,8 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Secure API key storage in system keyring with config-based provider management
 - Message retry and external editor support
 - Conversation logging with pause/resume
+ - Markdown rendering in the chat area (headings, lists, quotes, inline/fenced code)
+ - Inline block selection (Ctrl+B) to copy or save fenced code blocks
 
 ## Quick Start
 
@@ -181,11 +183,13 @@ Modular design with focused components:
   - `mod.rs` - UI module declarations
   - `chat_loop.rs` - Main chat event loop and UI rendering
   - `renderer.rs` - Terminal interface rendering
+  - `markdown.rs` - Lightweight Markdown rendering tuned for terminals
 - `utils/` - Utility functions and helpers
   - `mod.rs` - Utility module declarations
   - `editor.rs` - External editor integration
   - `logging.rs` - Chat logging functionality
   - `scroll.rs` - Text wrapping and scroll calculations
+  - `clipboard.rs` - Cross-platform clipboard helper
 - `commands/` - Chat command processing
   - `mod.rs` - Command processing implementation
 

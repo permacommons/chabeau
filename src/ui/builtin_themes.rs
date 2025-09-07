@@ -16,6 +16,21 @@ pub struct ThemeSpec {
     pub input_title: Option<String>,
     pub input_text: Option<String>,
     pub input_cursor_modifiers: Option<String>,
+    // Markdown extensions (all optional)
+    pub md_h1: Option<String>,
+    pub md_h2: Option<String>,
+    pub md_h3: Option<String>,
+    pub md_h4: Option<String>,
+    pub md_h5: Option<String>,
+    pub md_h6: Option<String>,
+    pub md_paragraph: Option<String>,
+    pub md_inline_code: Option<String>,
+    pub md_link: Option<String>,
+    pub md_rule: Option<String>,
+    pub md_blockquote_text: Option<String>,
+    pub md_list_marker: Option<String>,
+    pub md_codeblock_text: Option<String>,
+    pub md_codeblock_bg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +67,20 @@ pub fn theme_spec_from_custom(ct: &CustomTheme) -> ThemeSpec {
         input_title: ct.input_title.clone(),
         input_text: ct.input_text.clone(),
         input_cursor_modifiers: ct.input_cursor_modifiers.clone(),
+        md_h1: None,
+        md_h2: None,
+        md_h3: None,
+        md_h4: None,
+        md_h5: None,
+        md_h6: None,
+        md_paragraph: None,
+        md_inline_code: None,
+        md_link: None,
+        md_rule: None,
+        md_blockquote_text: None,
+        md_list_marker: None,
+        md_codeblock_text: None,
+        md_codeblock_bg: None,
     }
 }
 

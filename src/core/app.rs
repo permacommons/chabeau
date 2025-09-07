@@ -22,6 +22,10 @@ pub struct App {
     pub input: String,
     pub input_cursor_position: usize,
     pub input_mode: bool,
+    // Edit/select modes
+    pub edit_select_mode: bool,
+    pub selected_user_message_index: Option<usize>,
+    pub in_place_edit_index: Option<usize>,
     pub current_response: String,
     pub client: Client,
     pub model: String,
@@ -76,6 +80,9 @@ impl App {
                 input: String::new(),
                 input_cursor_position: 0,
                 input_mode: true,
+                edit_select_mode: false,
+                selected_user_message_index: None,
+                in_place_edit_index: None,
                 current_response: String::new(),
                 client: temp_client.clone(),
                 model: model.clone(),
@@ -174,6 +181,9 @@ impl App {
             input: String::new(),
             input_cursor_position: 0,
             input_mode: true,
+            edit_select_mode: false,
+            selected_user_message_index: None,
+            in_place_edit_index: None,
             current_response: String::new(),
             client: Client::new(),
             model: final_model,
@@ -376,6 +386,80 @@ impl App {
 
         // Clear retry state since response is now complete
         self.retrying_message_index = None;
+    }
+
+    /// Scroll so that the given message index is visible.
+    pub fn scroll_index_into_view(&mut self, index: usize, term_width: u16, term_height: u16) {
+        let input_area_height = self.calculate_input_area_height(term_width);
+        let available_height = self.calculate_available_height(term_height, input_area_height);
+        self.scroll_offset = self.calculate_scroll_to_message(index, term_width, available_height);
+    }
+
+    /// Find the last user-authored message index
+    pub fn last_user_message_index(&self) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    /// Find previous user message index before `from_index` (exclusive)
+    pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
+        if from_index == 0 {
+            return None;
+        }
+        self.messages
+            .iter()
+            .enumerate()
+            .take(from_index)
+            .rev()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    /// Find next user message index after `from_index` (exclusive)
+    pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .skip(from_index + 1)
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    /// Find the first user-authored message index
+    pub fn first_user_message_index(&self) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    /// Enter edit-select mode: lock input and select most recent user message
+    pub fn enter_edit_select_mode(&mut self) {
+        self.edit_select_mode = true;
+        self.input_mode = false; // lock input area
+        self.selected_user_message_index = self.last_user_message_index();
+    }
+
+    /// Exit edit-select mode
+    pub fn exit_edit_select_mode(&mut self) {
+        self.edit_select_mode = false;
+        self.input_mode = true; // unlock input area
+    }
+
+    /// Begin in-place edit of a user message at `index`
+    pub fn start_in_place_edit(&mut self, index: usize) {
+        self.in_place_edit_index = Some(index);
+        self.input_mode = true;
+    }
+
+    /// Cancel in-place edit (does not modify history)
+    pub fn cancel_in_place_edit(&mut self) {
+        self.in_place_edit_index = None;
     }
 
     pub fn prepare_retry(
@@ -613,7 +697,19 @@ impl App {
             self.input.split('\n').map(|s| s.to_string()).collect()
         };
         self.textarea = TextArea::from(lines);
+        // Place both our linear cursor and the textarea cursor at the end of text
         self.input_cursor_position = self.input.chars().count();
+        if !self.input.is_empty() {
+            let last_row = self.textarea.lines().len().saturating_sub(1) as u16;
+            let last_col = self
+                .textarea
+                .lines()
+                .last()
+                .map(|l| l.chars().count() as u16)
+                .unwrap_or(0);
+            self.textarea
+                .move_cursor(tui_textarea::CursorMove::Jump(last_row, last_col));
+        }
         self.configure_textarea_appearance();
     }
 
@@ -1004,5 +1100,56 @@ mod tests {
         app.input_cursor_position = 0;
         app.recompute_input_layout_after_edit(width);
         assert_eq!(app.input_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_last_and_first_user_message_index() {
+        let mut app = create_test_app();
+        // No messages
+        assert_eq!(app.last_user_message_index(), None);
+        assert_eq!(app.first_user_message_index(), None);
+
+        // Add messages: user, assistant, user
+        app.messages.push_back(create_test_message("user", "u1"));
+        app.messages
+            .push_back(create_test_message("assistant", "a1"));
+        app.messages.push_back(create_test_message("user", "u2"));
+
+        assert_eq!(app.first_user_message_index(), Some(0));
+        assert_eq!(app.last_user_message_index(), Some(2));
+    }
+
+    #[test]
+    fn test_prev_next_user_message_index_navigation() {
+        let mut app = create_test_app();
+        // indices: 0 user, 1 assistant, 2 system, 3 user
+        app.messages.push_back(create_test_message("user", "u1"));
+        app.messages
+            .push_back(create_test_message("assistant", "a1"));
+        app.messages.push_back(create_test_message("system", "s1"));
+        app.messages.push_back(create_test_message("user", "u2"));
+
+        // From index 3 (user) prev should be 0 (skipping non-user)
+        assert_eq!(app.prev_user_message_index(3), Some(0));
+        // From index 0 next should be 3 (skipping non-user)
+        assert_eq!(app.next_user_message_index(0), Some(3));
+        // From index 1 prev should be 0
+        assert_eq!(app.prev_user_message_index(1), Some(0));
+        // From index 1 next should be 3
+        assert_eq!(app.next_user_message_index(1), Some(3));
+    }
+
+    #[test]
+    fn test_set_input_text_places_cursor_at_end() {
+        let mut app = create_test_app();
+        let text = String::from("line1\nline2");
+        app.set_input_text(text.clone());
+        // Linear cursor at end
+        assert_eq!(app.input_cursor_position, text.chars().count());
+        // Textarea cursor at end (last row/col)
+        let (row, col) = app.textarea.cursor();
+        let lines = app.textarea.lines();
+        assert_eq!(row, lines.len() - 1);
+        assert_eq!(col, lines.last().unwrap().chars().count());
     }
 }

@@ -95,6 +95,7 @@ Environment Variables (fallback if no auth configured):\n\
 Controls:\n\
   Type              Enter your message in the input field\n\
   Enter             Send the message\n\
+  Ctrl+P            Edit previous messages (select mode)\n\
   Up/Down/Mouse     Scroll through chat history\n\
   Ctrl+C            Quit the application\n\
   Ctrl+R            Retry the last bot response\n\

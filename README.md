@@ -124,7 +124,8 @@ Custom themes:
 | **Ctrl+C** | Quit |
 | **Ctrl+R** | Retry last response |
 | **Ctrl+T** | Open external editor |
-| **Esc** | Interrupt streaming |
+| **Ctrl+P** | Edit previous messages (enter select mode) |
+| **Esc** | Interrupt streaming or exit edit modes |
 | **Backspace** | Delete characters in input field |
 | **Mouse Wheel** | Scroll through chat history |
 
@@ -213,3 +214,12 @@ cargo test --release          # Faster execution
 ## License
 
 CC0 1.0 Universal (Public Domain)
+### Edit Previous Messages (Ctrl+P)
+
+- Press `Ctrl+P` to enter edit-select mode. The most recent user message is highlighted. The input area locks and shows instructions.
+- Navigate between your messages with `Up/Down` or `j/k`.
+- You can also press `Ctrl+P` repeatedly to cycle upward through your messages (wraps at the top).
+- Press `Enter` to delete the selected user message and all messages below it, and put its content into the input area for editing and resending.
+- Press `e` to edit the selected message in place: the input area is populated so you can edit, then press `Enter` to apply changes back to history (no send, no deletion). Use `Ctrl+R` afterwards to retry from that point if desired.
+- Press `Delete` to delete the selected user message and everything below it without populating the input.
+- Press `Esc` to cancel and return to normal typing.

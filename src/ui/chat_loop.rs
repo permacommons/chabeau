@@ -29,6 +29,107 @@ use std::{
 use tokio::sync::{mpsc, Mutex};
 use tui_textarea::{CursorMove, Input as TAInput};
 
+// Module-level stream end marker for helper usage and event loop
+const STREAM_END_MARKER: &str = "<<STREAM_END>>";
+
+struct StreamParams {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+    api_messages: Vec<crate::api::ChatMessage>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    stream_id: u64,
+    tx: tokio::sync::mpsc::UnboundedSender<(String, u64)>,
+}
+
+fn spawn_stream(params: StreamParams) {
+    let StreamParams {
+        client,
+        base_url,
+        api_key,
+        model,
+        api_messages,
+        cancel_token,
+        stream_id,
+        tx,
+    } = params;
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        let request = ChatRequest {
+            model,
+            messages: api_messages,
+            stream: true,
+        };
+
+        tokio::select! {
+            _ = async {
+                let chat_url = construct_api_url(&base_url, "chat/completions");
+                match client
+                    .post(chat_url)
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .header("Content-Type", "application/json")
+                    .json(&request)
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            if let Ok(error_text) = response.text().await {
+                                eprintln!("API request failed: {error_text}");
+                            }
+                            return;
+                        }
+
+                        let mut stream = response.bytes_stream();
+                        let mut buffer = String::new();
+
+                        while let Some(chunk) = stream.next().await {
+                            if cancel_token.is_cancelled() {
+                                return;
+                            }
+
+                            if let Ok(chunk_bytes) = chunk {
+                                let chunk_str = String::from_utf8_lossy(&chunk_bytes);
+                                buffer.push_str(&chunk_str);
+
+                                while let Some(newline_pos) = buffer.find('\n') {
+                                    let line = buffer[..newline_pos].trim().to_string();
+                                    buffer.drain(..=newline_pos);
+
+                                    if let Some(data) = line.strip_prefix("data: ") {
+                                        if data == "[DONE]" {
+                                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                                            return;
+                                        }
+
+                                        match serde_json::from_str::<ChatResponse>(data) {
+                                            Ok(response) => {
+                                                if let Some(choice) = response.choices.first() {
+                                                    if let Some(content) = &choice.delta.content {
+                                                        let _ = tx_clone.send((content.clone(), stream_id));
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Failed to parse JSON: {e} - Data: {data}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error sending message: {e}");
+                    }
+                }
+            } => {}
+            _ = cancel_token.cancelled() => {}
+        }
+    });
+}
+
 pub async fn run_chat(
     model: String,
     log: Option<String>,
@@ -67,8 +168,7 @@ pub async fn run_chat(
     // Channel for streaming updates with stream ID
     let (tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
 
-    // Special message to signal end of streaming
-    const STREAM_END_MARKER: &str = "<<STREAM_END>>";
+    // STREAM_END_MARKER defined at module level
 
     // Drawing cadence control
     let _last_draw = Instant::now();
@@ -175,6 +275,177 @@ pub async fn run_chat(
                             continue;
                         }
                     }
+                    // Global: Ctrl+P to enter edit-select mode (or cycle upward)
+                    if matches!(key.code, KeyCode::Char('p'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        let mut app_guard = app.lock().await;
+                        if app_guard.edit_select_mode {
+                            // Cycle upwards to previous user message (wrap at start)
+                            if let Some(current) = app_guard.selected_user_message_index {
+                                let next_idx = app_guard
+                                    .prev_user_message_index(current)
+                                    .or_else(|| app_guard.last_user_message_index());
+                                app_guard.selected_user_message_index = next_idx;
+                            } else {
+                                app_guard.selected_user_message_index =
+                                    app_guard.last_user_message_index();
+                            }
+                        } else {
+                            // Enter edit-select mode only if we have user messages
+                            if app_guard.last_user_message_index().is_none() {
+                                app_guard
+                                    .add_system_message("No user messages to select.".to_string());
+                                // Ensure the new system message is visible
+                                let input_area_height =
+                                    app_guard.calculate_input_area_height(term_size.width);
+                                let available_height = app_guard.calculate_available_height(
+                                    term_size.height,
+                                    input_area_height,
+                                );
+                                app_guard.update_scroll_position(available_height, term_size.width);
+                                continue;
+                            }
+                            app_guard.enter_edit_select_mode();
+                        }
+                        if let Some(idx) = app_guard.selected_user_message_index {
+                            app_guard.scroll_index_into_view(
+                                idx,
+                                term_size.width,
+                                term_size.height,
+                            );
+                        }
+                        continue;
+                    }
+
+                    // When in edit-select mode, handle navigation and actions
+                    {
+                        let mut app_guard = app.lock().await;
+                        if app_guard.edit_select_mode {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app_guard.exit_edit_select_mode();
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    if let Some(current) = app_guard.selected_user_message_index {
+                                        let prev = app_guard
+                                            .prev_user_message_index(current)
+                                            .or_else(|| app_guard.last_user_message_index());
+                                        if let Some(prev) = prev {
+                                            app_guard.selected_user_message_index = Some(prev);
+                                            app_guard.scroll_index_into_view(
+                                                prev,
+                                                term_size.width,
+                                                term_size.height,
+                                            );
+                                        }
+                                    } else {
+                                        app_guard.selected_user_message_index =
+                                            app_guard.last_user_message_index();
+                                    }
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if let Some(current) = app_guard.selected_user_message_index {
+                                        let next = app_guard
+                                            .next_user_message_index(current)
+                                            .or_else(|| app_guard.first_user_message_index());
+                                        if let Some(next) = next {
+                                            app_guard.selected_user_message_index = Some(next);
+                                            app_guard.scroll_index_into_view(
+                                                next,
+                                                term_size.width,
+                                                term_size.height,
+                                            );
+                                        }
+                                    } else {
+                                        app_guard.selected_user_message_index =
+                                            app_guard.last_user_message_index();
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    // Truncate selected and everything below, put content into input
+                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                        if idx < app_guard.messages.len()
+                                            && app_guard.messages[idx].role == "user"
+                                        {
+                                            let content = app_guard.messages[idx].content.clone();
+                                            // Cancel any active stream
+                                            app_guard.cancel_current_stream();
+                                            // Truncate from selected index (drops selected and below)
+                                            app_guard.messages.truncate(idx);
+                                            // Rewrite log file to reflect truncation
+                                            let _ = app_guard
+                                                .logging
+                                                .rewrite_log_without_last_response(
+                                                    &app_guard.messages,
+                                                );
+                                            // Put content into input for editing
+                                            app_guard.set_input_text(content);
+                                            // Exit selection mode
+                                            app_guard.exit_edit_select_mode();
+                                            // Scroll to bottom of remaining messages
+                                            let input_area_height = app_guard
+                                                .calculate_input_area_height(term_size.width);
+                                            let available_height = app_guard
+                                                .calculate_available_height(
+                                                    term_size.height,
+                                                    input_area_height,
+                                                );
+                                            app_guard.update_scroll_position(
+                                                available_height,
+                                                term_size.width,
+                                            );
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('E') | KeyCode::Char('e') => {
+                                    // Edit in place: populate input with content, do NOT truncate
+                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                        if idx < app_guard.messages.len()
+                                            && app_guard.messages[idx].role == "user"
+                                        {
+                                            let content = app_guard.messages[idx].content.clone();
+                                            app_guard.set_input_text(content);
+                                            app_guard.start_in_place_edit(idx);
+                                            app_guard.exit_edit_select_mode();
+                                        }
+                                    }
+                                }
+                                KeyCode::Delete => {
+                                    // Delete selected and everything below; do not populate input
+                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                        if idx < app_guard.messages.len()
+                                            && app_guard.messages[idx].role == "user"
+                                        {
+                                            // Cancel any active stream
+                                            app_guard.cancel_current_stream();
+                                            app_guard.messages.truncate(idx);
+                                            let _ = app_guard
+                                                .logging
+                                                .rewrite_log_without_last_response(
+                                                    &app_guard.messages,
+                                                );
+                                            app_guard.exit_edit_select_mode();
+                                            // Scroll to bottom of remaining messages
+                                            let input_area_height = app_guard
+                                                .calculate_input_area_height(term_size.width);
+                                            let available_height = app_guard
+                                                .calculate_available_height(
+                                                    term_size.height,
+                                                    input_area_height,
+                                                );
+                                            app_guard.update_scroll_position(
+                                                available_height,
+                                                term_size.width,
+                                            );
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            continue; // handled edit-select mode
+                        }
+                    }
                     match key.code {
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -239,88 +510,16 @@ pub async fn run_chat(
                                         )
                                     };
 
-                                    // Send the message to API
-                                    let tx_clone = tx.clone();
-                                    tokio::spawn(async move {
-                                        let request = ChatRequest {
-                                            model,
-                                            messages: api_messages,
-                                            stream: true,
-                                        };
-
-                                        // Use tokio::select! to race between the HTTP request and cancellation
-                                        tokio::select! {
-                                                _ = async {
-                                                    let chat_url = construct_api_url(&base_url, "chat/completions");
-                                                    match client
-                                                        .post(chat_url)
-                                                        .header("Authorization", format!("Bearer {api_key}"))
-                                                        .header("Content-Type", "application/json")
-                                                        .json(&request)
-                                                        .send()
-                                                        .await
-                                                {
-                                                    Ok(response) => {
-                                                if !response.status().is_success() {
-                                                    if let Ok(error_text) = response.text().await {
-                                                        eprintln!("API request failed: {error_text}");
-                                                    }
-                                                    return;
-                                                }
-
-                                                let mut stream = response.bytes_stream();
-                                                        let mut buffer = String::new();
-
-                                                        while let Some(chunk) = stream.next().await {
-                                                            // Check for cancellation before processing each chunk
-                                                            if cancel_token.is_cancelled() {
-                                                                return;
-                                                            }
-
-                                                            if let Ok(chunk_bytes) = chunk {
-                                                                let chunk_str = String::from_utf8_lossy(&chunk_bytes);
-                                                                buffer.push_str(&chunk_str);
-
-                                                                // Process complete lines from buffer
-                                                                while let Some(newline_pos) = buffer.find('\n') {
-                                                                    let line = buffer[..newline_pos].trim().to_string();
-                                                                    buffer.drain(..=newline_pos);
-
-                                                                    if let Some(data) = line.strip_prefix("data: ") {
-                                                                        if data == "[DONE]" {
-                                                                            // Signal end of streaming
-                                                                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                                                                            return;
-                                                                        }
-
-                                                                        match serde_json::from_str::<ChatResponse>(data) {
-                                                                            Ok(response) => {
-                                                                                if let Some(choice) = response.choices.first() {
-                                                                                    if let Some(content) = &choice.delta.content {
-                                                                                        let _ = tx_clone.send((content.clone(), stream_id));
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                            Err(e) => {
-                                                                                eprintln!("Failed to parse JSON: {e} - Data: {data}");
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!("Error sending message: {e}");
-                                                    }
-                                                }
-                                            } => {
-                                                // HTTP request completed normally
-                                            }
-                                            _ = cancel_token.cancelled() => {
-                                                // Stream was cancelled, clean up
-                                            }
-                                        }
+                                    // Send the message to API (deduplicated helper)
+                                    spawn_stream(StreamParams {
+                                        client,
+                                        base_url,
+                                        api_key,
+                                        model,
+                                        api_messages,
+                                        cancel_token,
+                                        stream_id,
+                                        tx: tx.clone(),
                                     });
                                 }
                                 Ok(None) => {
@@ -508,6 +707,15 @@ pub async fn run_chat(
                         }
                         KeyCode::Esc => {
                             let mut app_guard = app.lock().await;
+                            if app_guard.edit_select_mode {
+                                app_guard.exit_edit_select_mode();
+                                continue;
+                            }
+                            if app_guard.in_place_edit_index.is_some() {
+                                app_guard.cancel_in_place_edit();
+                                app_guard.clear_input();
+                                continue;
+                            }
                             if app_guard.is_streaming {
                                 // Use the new cancellation mechanism
                                 app_guard.cancel_current_stream();
@@ -527,6 +735,27 @@ pub async fn run_chat(
                                     },
                                 );
                             } else {
+                                // If editing in place, apply changes to history instead of sending
+                                {
+                                    let mut app_guard = app.lock().await;
+                                    if let Some(idx) = app_guard.in_place_edit_index.take() {
+                                        // Apply edit to the selected user message
+                                        if idx < app_guard.messages.len()
+                                            && app_guard.messages[idx].role == "user"
+                                        {
+                                            let new_text = app_guard.get_input_text().to_string();
+                                            app_guard.messages[idx].content = new_text;
+                                            // Rewrite log file to reflect in-place edit
+                                            let _ = app_guard
+                                                .logging
+                                                .rewrite_log_without_last_response(
+                                                    &app_guard.messages,
+                                                );
+                                        }
+                                        app_guard.clear_input();
+                                        continue;
+                                    }
+                                }
                                 let (
                                     should_send_to_api,
                                     api_messages,
@@ -604,87 +833,15 @@ pub async fn run_chat(
                                     continue;
                                 }
 
-                                let tx_clone = tx.clone();
-                                tokio::spawn(async move {
-                                    let request = ChatRequest {
-                                        model,
-                                        messages: api_messages,
-                                        stream: true,
-                                    };
-
-                                    // Use tokio::select! to race between the HTTP request and cancellation
-                                    tokio::select! {
-                                        _ = async {
-                                            let chat_url = construct_api_url(&base_url, "chat/completions");
-                                            match client
-                                                .post(chat_url)
-                                                .header("Authorization", format!("Bearer {api_key}"))
-                                                .header("Content-Type", "application/json")
-                                                .json(&request)
-                                                .send()
-                                                .await
-                                            {
-                                                Ok(response) => {
-                                                    if !response.status().is_success() {
-                                                        if let Ok(error_text) = response.text().await {
-                                                            eprintln!("API request failed: {error_text}");
-                                                        }
-                                                        return;
-                                                    }
-
-                                                    let mut stream = response.bytes_stream();
-                                                    let mut buffer = String::new();
-
-                                                    while let Some(chunk) = stream.next().await {
-                                                        // Check for cancellation before processing each chunk
-                                                        if cancel_token.is_cancelled() {
-                                                            return;
-                                                        }
-
-                                                        if let Ok(chunk_bytes) = chunk {
-                                                            let chunk_str = String::from_utf8_lossy(&chunk_bytes);
-                                                            buffer.push_str(&chunk_str);
-
-                                                            // Process complete lines from buffer
-                                                            while let Some(newline_pos) = buffer.find('\n') {
-                                                                let line = buffer[..newline_pos].trim().to_string();
-                                                                buffer.drain(..=newline_pos);
-
-                                                                if let Some(data) = line.strip_prefix("data: ") {
-                                                                    if data == "[DONE]" {
-                                                                        // Signal end of streaming
-                                                                        let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                                                                        return;
-                                                                    }
-
-                                                                    match serde_json::from_str::<ChatResponse>(data) {
-                                                                        Ok(response) => {
-                                                                            if let Some(choice) = response.choices.first() {
-                                                                                if let Some(content) = &choice.delta.content {
-                                                                                    let _ = tx_clone.send((content.clone(), stream_id));
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        Err(e) => {
-                                                                            eprintln!("Failed to parse JSON: {e} - Data: {data}");
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Error sending message: {e}");
-                                                }
-                                            }
-                                        } => {
-                                            // HTTP request completed normally
-                                        }
-                                        _ = cancel_token.cancelled() => {
-                                            // Stream was cancelled, clean up
-                                        }
-                                    }
+                                spawn_stream(StreamParams {
+                                    client,
+                                    base_url,
+                                    api_key,
+                                    model,
+                                    api_messages,
+                                    cancel_token,
+                                    stream_id,
+                                    tx: tx.clone(),
                                 });
                             }
                         }

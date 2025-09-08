@@ -24,8 +24,21 @@ pub fn ui(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    // Use the shared method to build display lines
-    let lines = app.build_display_lines();
+    // Use the shared method to build display lines. When in edit-select mode, highlight selection.
+    let lines = if app.edit_select_mode {
+        let highlight = app
+            .theme
+            .streaming_indicator_style
+            .add_modifier(Modifier::REVERSED);
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection(
+            &app.messages,
+            &app.theme,
+            app.selected_user_message_index,
+            highlight,
+        )
+    } else {
+        app.build_display_lines()
+    };
 
     // Calculate scroll position using wrapped line count
     let available_height = chunks[0].height.saturating_sub(1); // Account for title
@@ -72,10 +85,14 @@ pub fn ui(f: &mut Frame, app: &App) {
         ""
     };
 
-    let base_title = if app.is_streaming {
-        "Type message (Esc to interrupt, Ctrl+R to retry)"
+    let base_title = if app.edit_select_mode {
+        "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+    } else if app.in_place_edit_index.is_some() {
+        "Edit in place: Enter=Apply • Esc=Cancel (no send)"
+    } else if app.is_streaming {
+        "Type a new message (Esc=interrupt • Ctrl+R=retry)"
     } else {
-        "Type message (Alt+Enter for new line, /help for help, Ctrl+C to quit)"
+        "Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)"
     };
     // Build a styled title with theme styling on base title and indicator
     let input_title: Line = if indicator.is_empty() {

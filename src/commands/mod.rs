@@ -27,7 +27,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "  Ctrl+C            Quit the application",
             "  Ctrl+T            Open external editor (requires EDITOR env var)",
             "  Ctrl+R            Retry the last bot response",
-            "  Esc               Interrupt streaming response",
+            "  Ctrl+P            Edit previous messages (select mode)",
+            "  Esc               Interrupt streaming or exit edit modes",
             "  Up/Down           Scroll through chat history",
             "  Mouse Wheel       Scroll through chat history",
             "  Backspace         Delete characters in input field",
@@ -52,7 +53,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "  • Scroll manually to disable auto-scroll to bottom",
             "  • Use /log to save conversations to files",
             "  • Use /dump to save a snapshot of the current conversation",
-            "  • Press Esc to stop a streaming response early",
+            "  • Press Esc to stop streaming or to cancel edit modes",
+            "  • In select mode: Enter=Edit, e=Edit in place, Del=Truncate (wraps at ends)",
         ];
 
         // Create a single system message with proper newlines

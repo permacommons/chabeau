@@ -50,7 +50,6 @@ impl Theme {
         }
     }
 
-
     pub fn light() -> Self {
         // Prefer built-in spec for consistent RGB colors
         if let Some(spec) = crate::ui::builtin_themes::find_builtin_theme("light") {

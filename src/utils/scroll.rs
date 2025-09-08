@@ -29,6 +29,25 @@ impl ScrollCalculator {
         lines
     }
 
+    /// Build display lines using a provided theme and optionally highlight a selected message
+    pub fn build_display_lines_with_theme_and_selection(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        selected_index: Option<usize>,
+        highlight: ratatui::style::Style,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for (i, msg) in messages.iter().enumerate() {
+            let use_highlight = selected_index == Some(i) && msg.role == "user";
+            if use_highlight {
+                Self::add_message_lines_with_theme_and_highlight(&mut lines, msg, theme, highlight);
+            } else {
+                Self::add_message_lines_with_theme(&mut lines, msg, theme);
+            }
+        }
+        lines
+    }
+
     /// Build display lines up to a specific message index (inclusive)
     pub fn build_display_lines_up_to(
         messages: &VecDeque<Message>,
@@ -110,6 +129,72 @@ impl ScrollCalculator {
                 }
             }
             lines.push(Line::from("")); // Empty line for spacing
+        }
+    }
+
+    fn add_message_lines_with_theme_and_highlight(
+        lines: &mut Vec<Line<'static>>,
+        msg: &Message,
+        theme: &Theme,
+        highlight: ratatui::style::Style,
+    ) {
+        if msg.role == "user" {
+            let content_lines: Vec<&str> = msg.content.lines().collect();
+
+            if content_lines.is_empty() {
+                lines.push(Line::from(vec![Span::styled(
+                    "You: ",
+                    theme.user_prefix_style.patch(highlight),
+                )]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("You: ", theme.user_prefix_style.patch(highlight)),
+                    Span::styled(
+                        content_lines[0].to_string(),
+                        theme.user_text_style.patch(highlight),
+                    ),
+                ]));
+
+                for content_line in content_lines.iter().skip(1) {
+                    if content_line.trim().is_empty() {
+                        lines.push(Line::from(Span::styled("", highlight)));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled("     ", highlight),
+                            Span::styled(
+                                content_line.to_string(),
+                                theme.user_text_style.patch(highlight),
+                            ),
+                        ]));
+                    }
+                }
+            }
+            lines.push(Line::from(Span::styled("", highlight))); // spacing line
+        } else if msg.role == "system" {
+            // Keep system messages unhighlighted
+            for content_line in msg.content.lines() {
+                if content_line.trim().is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        content_line.to_string(),
+                        theme.system_text_style,
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+        } else if !msg.content.is_empty() {
+            for content_line in msg.content.lines() {
+                if content_line.trim().is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        content_line.to_string(),
+                        theme.assistant_text_style,
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
         }
     }
 
@@ -208,6 +293,7 @@ impl ScrollCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::Theme;
     use crate::utils::test_utils::{create_test_message, create_test_messages};
     use std::collections::VecDeque;
 
@@ -428,5 +514,24 @@ mod tests {
         let count = ScrollCalculator::calculate_wrapped_line_count(&lines, 80);
         // All should count as single lines due to trimming
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_selection_highlight_builds_same_number_of_lines() {
+        let mut messages = VecDeque::new();
+        messages.push_back(create_test_message("user", "Hello"));
+        messages.push_back(create_test_message("assistant", "Hi there!"));
+        messages.push_back(create_test_message("user", "How are you?"));
+        let theme = Theme::dark_default();
+
+        let normal = ScrollCalculator::build_display_lines_with_theme(&messages, &theme);
+        let highlighted = ScrollCalculator::build_display_lines_with_theme_and_selection(
+            &messages,
+            &theme,
+            Some(2),
+            theme.streaming_indicator_style,
+        );
+
+        assert_eq!(normal.len(), highlighted.len());
     }
 }

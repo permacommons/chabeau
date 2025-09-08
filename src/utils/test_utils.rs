@@ -40,8 +40,13 @@ pub fn create_test_app() -> App {
         textarea: tui_textarea::TextArea::default(),
         theme: Theme::dark_default(),
         picker: None,
+        picker_mode: None,
+        block_select_mode: false,
+        selected_block_index: None,
         theme_before_picker: None,
         theme_id_before_picker: None,
+        markdown_enabled: true,
+        syntax_enabled: true,
     }
 }
 

@@ -30,14 +30,34 @@ pub fn ui(f: &mut Frame, app: &App) {
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED);
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection(
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
             &app.messages,
             &app.theme,
             app.selected_user_message_index,
             highlight,
+            app.markdown_enabled,
+            app.syntax_enabled,
+        )
+    } else if app.block_select_mode {
+        let highlight = app
+            .theme
+            .streaming_indicator_style
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags(
+            &app.messages,
+            &app.theme,
+            app.selected_block_index,
+            highlight,
+            app.markdown_enabled,
+            app.syntax_enabled,
         )
     } else {
-        app.build_display_lines()
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &app.messages,
+            &app.theme,
+            app.markdown_enabled,
+            app.syntax_enabled,
+        )
     };
 
     // Calculate scroll position using wrapped line count
@@ -63,7 +83,7 @@ pub fn ui(f: &mut Frame, app: &App) {
     let messages_paragraph = Paragraph::new(lines)
         .style(Style::default().bg(app.theme.background_color))
         .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
-        .wrap(Wrap { trim: true })
+        .wrap(Wrap { trim: false })
         .scroll((scroll_offset, 0));
 
     f.render_widget(messages_paragraph, chunks[0]);
@@ -87,6 +107,8 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     let base_title = if app.edit_select_mode {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+    } else if app.block_select_mode {
+        "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
     } else if app.in_place_edit_index.is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
     } else if app.is_streaming {

@@ -41,6 +41,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "  /log              Toggle logging pause/resume",
             "  /dump <filename>  Dump conversation to specified file",
             "  /dump             Dump conversation to chabeau-log-<isodate>.txt",
+            "  /markdown [on|off|toggle]   Enable/disable markdown rendering (persisted)",
+            "  /syntax [on|off|toggle]     Enable/disable code syntax highlighting (persisted)",
             "",
             "External Editor Setup:",
             "  export EDITOR=nano          # Use nano",
@@ -141,6 +143,86 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 }
             }
         }
+    } else if trimmed.starts_with("/markdown") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let action = parts.get(1).copied().unwrap_or("");
+        let mut new_state = app.markdown_enabled;
+        match action.to_ascii_lowercase().as_str() {
+            "on" => new_state = true,
+            "off" => new_state = false,
+            "toggle" | "" => new_state = !new_state,
+            _ => {
+                app.add_system_message("Usage: /markdown [on|off|toggle]".to_string());
+                return CommandResult::Continue;
+            }
+        }
+        app.markdown_enabled = new_state;
+        // Persist
+        match crate::core::config::Config::load() {
+            Ok(mut cfg) => {
+                cfg.markdown = Some(new_state);
+                if let Err(e) = cfg.save() {
+                    app.add_system_message(format!(
+                        "Markdown {} (but failed to save: {})",
+                        if new_state { "enabled" } else { "disabled" },
+                        e
+                    ));
+                } else {
+                    app.add_system_message(format!(
+                        "Markdown {} (persisted)",
+                        if new_state { "enabled" } else { "disabled" }
+                    ));
+                }
+            }
+            Err(e) => {
+                app.add_system_message(format!(
+                    "Markdown {} (failed to load config: {})",
+                    if new_state { "enabled" } else { "disabled" },
+                    e
+                ));
+            }
+        }
+        CommandResult::Continue
+    } else if trimmed.starts_with("/syntax") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let action = parts.get(1).copied().unwrap_or("");
+        let mut new_state = app.syntax_enabled;
+        match action.to_ascii_lowercase().as_str() {
+            "on" => new_state = true,
+            "off" => new_state = false,
+            "toggle" | "" => new_state = !new_state,
+            _ => {
+                app.add_system_message("Usage: /syntax [on|off|toggle]".to_string());
+                return CommandResult::Continue;
+            }
+        }
+        app.syntax_enabled = new_state;
+        // Persist
+        match crate::core::config::Config::load() {
+            Ok(mut cfg) => {
+                cfg.syntax = Some(new_state);
+                if let Err(e) = cfg.save() {
+                    app.add_system_message(format!(
+                        "Syntax highlighting {} (but failed to save: {})",
+                        if new_state { "enabled" } else { "disabled" },
+                        e
+                    ));
+                } else {
+                    app.add_system_message(format!(
+                        "Syntax highlighting {} (persisted)",
+                        if new_state { "enabled" } else { "disabled" }
+                    ));
+                }
+            }
+            Err(e) => {
+                app.add_system_message(format!(
+                    "Syntax highlighting {} (failed to load config: {})",
+                    if new_state { "enabled" } else { "disabled" },
+                    e
+                ));
+            }
+        }
+        CommandResult::Continue
     } else {
         // Not a command, process as regular message
         CommandResult::ProcessAsMessage(input.to_string())

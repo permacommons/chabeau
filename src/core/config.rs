@@ -40,6 +40,10 @@ pub struct Config {
     pub theme: Option<String>,
     #[serde(default)]
     pub custom_themes: Vec<CustomTheme>,
+    /// Enable markdown rendering in the chat area
+    pub markdown: Option<bool>,
+    /// Enable syntax highlighting for fenced code blocks when markdown is enabled
+    pub syntax: Option<bool>,
 }
 
 impl Config {
@@ -87,6 +91,14 @@ impl Config {
         match &self.theme {
             Some(theme) => println!("  theme: {theme}"),
             None => println!("  theme: (unset)"),
+        }
+        match self.markdown.unwrap_or(true) {
+            true => println!("  markdown: on"),
+            false => println!("  markdown: off"),
+        }
+        match self.syntax.unwrap_or(true) {
+            true => println!("  syntax: on"),
+            false => println!("  syntax: off"),
         }
         if self.default_models.is_empty() {
             println!("  default-models: (none set)");

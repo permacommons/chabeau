@@ -1,9 +1,10 @@
 use crate::core::message::Message;
-use crate::ui::theme::Theme;
-use ratatui::{
-    style::Style,
-    text::{Line, Span},
+use crate::ui::markdown::{
+    build_markdown_display_lines, build_plain_display_lines, compute_codeblock_ranges,
+    render_message_markdown_opts,
 };
+use crate::ui::theme::Theme;
+use ratatui::{text::Line, text::Span};
 use std::collections::VecDeque;
 
 /// Handles all scroll-related calculations and line building
@@ -22,30 +23,114 @@ impl ScrollCalculator {
         messages: &VecDeque<Message>,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        for msg in messages {
-            Self::add_message_lines_with_theme(&mut lines, msg, theme);
+        build_markdown_display_lines(messages, theme)
+    }
+
+    /// Build display lines using theme and flags
+    pub fn build_display_lines_with_theme_and_flags(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+    ) -> Vec<Line<'static>> {
+        if markdown_enabled {
+            // render each with syntax flag
+            let mut out = Vec::new();
+            for msg in messages {
+                let rendered = render_message_markdown_opts(msg, theme, syntax_enabled);
+                out.extend(rendered.lines);
+            }
+            out
+        } else {
+            build_plain_display_lines(messages, theme)
         }
-        lines
     }
 
     /// Build display lines using a provided theme and optionally highlight a selected message
-    pub fn build_display_lines_with_theme_and_selection(
+    /// Build display lines and optionally highlight a selected user message (flags aware)
+    pub fn build_display_lines_with_theme_and_selection_and_flags(
         messages: &VecDeque<Message>,
         theme: &Theme,
         selected_index: Option<usize>,
         highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
     ) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
+        let mut lines: Vec<Line<'static>> = Vec::new();
         for (i, msg) in messages.iter().enumerate() {
-            let use_highlight = selected_index == Some(i) && msg.role == "user";
-            if use_highlight {
-                Self::add_message_lines_with_theme_and_highlight(&mut lines, msg, theme, highlight);
+            let mut rendered = if markdown_enabled {
+                render_message_markdown_opts(msg, theme, syntax_enabled)
             } else {
-                Self::add_message_lines_with_theme(&mut lines, msg, theme);
+                crate::ui::markdown::RenderedMessage {
+                    lines: build_plain_display_lines(&VecDeque::from([msg.clone()]), theme),
+                }
+            };
+            if selected_index == Some(i) && msg.role == "user" {
+                for l in &mut rendered.lines {
+                    if !l.to_string().is_empty() {
+                        let text = l.to_string();
+                        *l = Line::from(Span::styled(text, theme.user_text_style.patch(highlight)));
+                    }
+                }
+            }
+            lines.extend(rendered.lines);
+        }
+        lines
+    }
+
+    /// Build display lines and highlight a selected code block range
+    /// Codeblock highlight respecting flags (no-op when markdown disabled)
+    pub fn build_display_lines_with_codeblock_highlight_and_flags(
+        messages: &VecDeque<Message>,
+        theme: &crate::ui::theme::Theme,
+        selected_block: Option<usize>,
+        highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+    ) -> Vec<Line<'static>> {
+        let mut lines = if markdown_enabled {
+            let mut out = Vec::new();
+            for msg in messages {
+                let rendered = render_message_markdown_opts(msg, theme, syntax_enabled);
+                out.extend(rendered.lines);
+            }
+            out
+        } else {
+            build_plain_display_lines(messages, theme)
+        };
+        if markdown_enabled {
+            if let Some(idx) = selected_block {
+                let ranges = compute_codeblock_ranges(messages, theme);
+                if let Some((start, len, _content)) = ranges.get(idx).cloned() {
+                    for i in start..start + len {
+                        if i < lines.len() {
+                            let text = lines[i].to_string();
+                            let st = theme.md_codeblock_text_style().patch(highlight);
+                            lines[i] = Line::from(Span::styled(text, st));
+                        }
+                    }
+                }
             }
         }
         lines
+    }
+
+    /// Compute a scroll offset that positions the start of a given logical line index
+    /// within view, taking wrapping and available height into account. The caller should
+    /// clamp the result to the maximum scroll.
+    pub fn scroll_offset_to_line_start(
+        lines: &[Line],
+        terminal_width: u16,
+        available_height: u16,
+        line_index: usize,
+    ) -> u16 {
+        let prefix = &lines[..line_index.min(lines.len())];
+        let wrapped_to_start = Self::calculate_wrapped_line_count(prefix, terminal_width);
+        if wrapped_to_start > available_height.saturating_sub(1) {
+            wrapped_to_start.saturating_sub(1)
+        } else {
+            wrapped_to_start
+        }
     }
 
     /// Build display lines up to a specific message index (inclusive)
@@ -61,141 +146,11 @@ impl ScrollCalculator {
             }
             // Use default theme for backward compatibility
             let theme = Theme::dark_default();
-            Self::add_message_lines_with_theme(&mut lines, msg, &theme);
+            let rendered = render_message_markdown_opts(msg, &theme, true);
+            lines.extend(rendered.lines);
         }
 
         lines
-    }
-
-    /// Add lines for a single message to the lines vector
-    fn add_message_lines_with_theme(lines: &mut Vec<Line<'static>>, msg: &Message, theme: &Theme) {
-        if msg.role == "user" {
-            // User messages: cyan with "You:" prefix and proper multiline handling
-            let content_lines: Vec<&str> = msg.content.lines().collect();
-
-            if content_lines.is_empty() {
-                // Empty content, just show "You: "
-                lines.push(Line::from(vec![Span::styled(
-                    "You: ",
-                    theme.user_prefix_style,
-                )]));
-            } else {
-                // First line gets the "You: " prefix
-                lines.push(Line::from(vec![
-                    Span::styled("You: ", theme.user_prefix_style),
-                    Span::styled(content_lines[0].to_string(), theme.user_text_style),
-                ]));
-
-                // Subsequent lines are indented to align with the content
-                for content_line in content_lines.iter().skip(1) {
-                    if content_line.trim().is_empty() {
-                        lines.push(Line::from(""));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                "     ", // 5 spaces to align with content after "You: "
-                                Style::default(),
-                            ),
-                            Span::styled(content_line.to_string(), theme.user_text_style),
-                        ]));
-                    }
-                }
-            }
-            lines.push(Line::from("")); // Empty line for spacing
-        } else if msg.role == "system" {
-            // System messages: gray/dim color, split content into lines for proper wrapping
-            for content_line in msg.content.lines() {
-                if content_line.trim().is_empty() {
-                    lines.push(Line::from(""));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        content_line.to_string(),
-                        theme.system_text_style,
-                    )));
-                }
-            }
-            lines.push(Line::from("")); // Empty line for spacing
-        } else if !msg.content.is_empty() {
-            // Assistant messages: no prefix, just content in white/default color
-            // Split content into lines for proper wrapping
-            for content_line in msg.content.lines() {
-                if content_line.trim().is_empty() {
-                    lines.push(Line::from(""));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        content_line.to_string(),
-                        theme.assistant_text_style,
-                    )));
-                }
-            }
-            lines.push(Line::from("")); // Empty line for spacing
-        }
-    }
-
-    fn add_message_lines_with_theme_and_highlight(
-        lines: &mut Vec<Line<'static>>,
-        msg: &Message,
-        theme: &Theme,
-        highlight: ratatui::style::Style,
-    ) {
-        if msg.role == "user" {
-            let content_lines: Vec<&str> = msg.content.lines().collect();
-
-            if content_lines.is_empty() {
-                lines.push(Line::from(vec![Span::styled(
-                    "You: ",
-                    theme.user_prefix_style.patch(highlight),
-                )]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled("You: ", theme.user_prefix_style.patch(highlight)),
-                    Span::styled(
-                        content_lines[0].to_string(),
-                        theme.user_text_style.patch(highlight),
-                    ),
-                ]));
-
-                for content_line in content_lines.iter().skip(1) {
-                    if content_line.trim().is_empty() {
-                        lines.push(Line::from(Span::styled("", highlight)));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::styled("     ", highlight),
-                            Span::styled(
-                                content_line.to_string(),
-                                theme.user_text_style.patch(highlight),
-                            ),
-                        ]));
-                    }
-                }
-            }
-            lines.push(Line::from(Span::styled("", highlight))); // spacing line
-        } else if msg.role == "system" {
-            // Keep system messages unhighlighted
-            for content_line in msg.content.lines() {
-                if content_line.trim().is_empty() {
-                    lines.push(Line::from(""));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        content_line.to_string(),
-                        theme.system_text_style,
-                    )));
-                }
-            }
-            lines.push(Line::from(""));
-        } else if !msg.content.is_empty() {
-            for content_line in msg.content.lines() {
-                if content_line.trim().is_empty() {
-                    lines.push(Line::from(""));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        content_line.to_string(),
-                        theme.assistant_text_style,
-                    )));
-                }
-            }
-            lines.push(Line::from(""));
-        }
     }
 
     /// Calculate how many wrapped lines the given lines will take
@@ -204,47 +159,81 @@ impl ScrollCalculator {
 
         for line in lines {
             let line_text = line.to_string();
+            if terminal_width == 0 {
+                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
+                continue;
+            }
             if line_text.is_empty() {
                 total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-            } else {
-                // Trim whitespace to match ratatui's Wrap { trim: true } behavior
-                let trimmed_text = line_text.trim();
-
-                if trimmed_text.is_empty() || terminal_width == 0 {
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                } else {
-                    // Word-based wrapping to match ratatui's behavior
-                    let wrapped_count =
-                        Self::calculate_word_wrapped_lines(trimmed_text, terminal_width);
-                    total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_count);
-                }
+                continue;
             }
+            // Preserve leading whitespace when computing wrap height; treat whitespace-only lines as 1
+            if line_text.chars().all(|c| c.is_whitespace()) {
+                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
+                continue;
+            }
+            let wrapped_count =
+                Self::calculate_word_wrapped_lines_with_leading(&line_text, terminal_width);
+            total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_count);
         }
 
         total_wrapped_lines
     }
 
     /// Calculate how many lines a single text string will wrap to
-    fn calculate_word_wrapped_lines(text: &str, terminal_width: u16) -> u16 {
-        let mut current_line_len = 0;
+    fn calculate_word_wrapped_lines_with_leading(text: &str, terminal_width: u16) -> u16 {
+        let width = terminal_width as usize;
+        let mut current_line_len: usize;
         let mut line_count = 1u16;
 
-        for word in text.split_whitespace() {
-            let word_len = word.chars().count();
-
-            // Start new line if adding this word would exceed width
-            if current_line_len > 0 && current_line_len + 1 + word_len > terminal_width as usize {
-                line_count = line_count.saturating_add(1);
-                current_line_len = word_len;
+        // Count leading spaces explicitly (tabs should be detabbed earlier in markdown)
+        let mut chars = text.chars().peekable();
+        let mut leading_spaces = 0usize;
+        while let Some(&ch) = chars.peek() {
+            if ch == ' ' {
+                leading_spaces += 1;
+                chars.next();
             } else {
-                if current_line_len > 0 {
-                    current_line_len += 1; // Add space
+                break;
+            }
+        }
+        if leading_spaces >= width && width > 0 {
+            // Advance lines for fully consumed widths
+            line_count = line_count.saturating_add((leading_spaces / width) as u16);
+            current_line_len = leading_spaces % width;
+        } else {
+            current_line_len = leading_spaces;
+        }
+
+        // Process the remainder as words separated by whitespace
+        let remainder: String = chars.collect();
+        for word in remainder.split_whitespace() {
+            let word_len = word.chars().count();
+            if current_line_len > 0 {
+                // account for one space between words
+                if current_line_len + 1 + word_len > width {
+                    line_count = line_count.saturating_add(1);
+                    current_line_len = word_len;
+                } else {
+                    current_line_len += 1 + word_len;
                 }
-                current_line_len += word_len;
+            } else {
+                // start of line
+                current_line_len = word_len;
             }
         }
 
-        line_count
+        if line_count == 0 {
+            1
+        } else {
+            line_count
+        }
+    }
+
+    // Wrapper only for tests that reference the original name
+    #[cfg(test)]
+    fn calculate_word_wrapped_lines(text: &str, terminal_width: u16) -> u16 {
+        Self::calculate_word_wrapped_lines_with_leading(text, terminal_width)
     }
 
     /// Calculate scroll offset to show the bottom of all messages
@@ -295,6 +284,7 @@ mod tests {
     use super::*;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{create_test_message, create_test_messages};
+    use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
 
     #[test]
@@ -525,13 +515,33 @@ mod tests {
         let theme = Theme::dark_default();
 
         let normal = ScrollCalculator::build_display_lines_with_theme(&messages, &theme);
-        let highlighted = ScrollCalculator::build_display_lines_with_theme_and_selection(
+        let highlighted = ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
             &messages,
             &theme,
             Some(2),
             theme.streaming_indicator_style,
+            true,
+            true,
         );
 
         assert_eq!(normal.len(), highlighted.len());
+    }
+
+    #[test]
+    fn test_scroll_offset_to_line_start_basic() {
+        // Three lines: short, long, short. Width forces wrapping of the long line.
+        let lines = vec![
+            TLine::from("aaa"),
+            TLine::from("bbb bbb bbb bbb"),
+            TLine::from("ccc"),
+        ];
+        let width = 5u16;
+        let available = 5u16;
+        let off0 = ScrollCalculator::scroll_offset_to_line_start(&lines, width, available, 0);
+        let off1 = ScrollCalculator::scroll_offset_to_line_start(&lines, width, available, 1);
+        let off2 = ScrollCalculator::scroll_offset_to_line_start(&lines, width, available, 2);
+        assert_eq!(off0, 0);
+        assert!(off1 >= 1); // starts after first line
+        assert!(off2 >= off1); // further down the view
     }
 }

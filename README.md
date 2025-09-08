@@ -18,6 +18,9 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Secure API key storage in system keyring with config-based provider management
 - Message retry and external editor support
 - Conversation logging with pause/resume
+- Markdown rendering in the chat area (headings, lists, quotes, inline/fenced code)
+- Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
+- Inline block selection (Ctrl+B) to copy or save fenced code blocks
 
 ## Quick Start
 
@@ -108,6 +111,19 @@ Custom themes:
 - You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see `src/builtin_themes.toml` for examples).
 - Once added, set them with `chabeau set theme <your-theme-id>`.
 
+### Preferences
+
+You can persist UI preferences in your config file (`~/.config/chabeau/config.toml`).
+
+- `markdown = true|false` — Enable/disable Markdown rendering. Default: `true`.
+- `syntax = true|false` — Enable/disable syntax highlighting for fenced code blocks. Default: `true`.
+
+At runtime, use chat commands to toggle and persist:
+- `/markdown on|off|toggle`
+- `/syntax on|off|toggle`
+
+Syntax colors adapt to the active theme (dark/light) and use the theme’s code block background for consistent contrast.
+
 ## Interface Controls
 
 | Key | Action |
@@ -133,6 +149,8 @@ Custom themes:
 - `/help` - Show extended help with keyboard shortcuts
 - `/theme` - Open theme picker (built-in and custom)
 - `/theme <id>` - Apply a theme by id
+- `/markdown [on|off|toggle]` - Enable/disable markdown rendering (persisted)
+- `/syntax [on|off|toggle]` - Enable/disable syntax highlighting (persisted)
 - `/log <filename>` - Enable logging to specified file
 - `/log` - Toggle logging pause/resume
 - `/dump <filename>` - Dump conversation to specified file
@@ -181,11 +199,13 @@ Modular design with focused components:
   - `mod.rs` - UI module declarations
   - `chat_loop.rs` - Main chat event loop and UI rendering
   - `renderer.rs` - Terminal interface rendering
+  - `markdown.rs` - Lightweight Markdown rendering tuned for terminals
 - `utils/` - Utility functions and helpers
   - `mod.rs` - Utility module declarations
   - `editor.rs` - External editor integration
   - `logging.rs` - Chat logging functionality
   - `scroll.rs` - Text wrapping and scroll calculations
+  - `clipboard.rs` - Cross-platform clipboard helper
 - `commands/` - Chat command processing
   - `mod.rs` - Command processing implementation
 

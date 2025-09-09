@@ -56,6 +56,8 @@ pub struct App {
     // Rendering toggles
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
+    // Cached prewrapped chat lines for fast redraws in normal mode
+    pub(crate) prewrap_cache: Option<PrewrapCache>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +128,7 @@ impl App {
                 theme_id_before_picker: None,
                 markdown_enabled: config.markdown.unwrap_or(true),
                 syntax_enabled: config.syntax.unwrap_or(true),
+                prewrap_cache: None,
             };
 
             // Try to fetch the newest model
@@ -229,6 +232,7 @@ impl App {
             theme_id_before_picker: None,
             markdown_enabled: config.markdown.unwrap_or(true),
             syntax_enabled: config.syntax.unwrap_or(true),
+            prewrap_cache: None,
         };
 
         // Keep textarea state in sync with the string input initially
@@ -236,6 +240,95 @@ impl App {
         app.configure_textarea_appearance();
 
         Ok(app)
+    }
+
+    /// Return prewrapped chat lines for current state, caching across frames when safe.
+    /// Cache is used only in normal mode (no selection/highlight) and invalidated when
+    /// width, flags, theme signature, message count, or last message content hash changes.
+    pub fn get_prewrapped_lines_cached(&mut self, width: u16) -> &Vec<Line<'static>> {
+        let theme_sig = compute_theme_signature(&self.theme);
+        let markdown = self.markdown_enabled;
+        let syntax = self.syntax_enabled;
+        let msg_len = self.messages.len();
+        let last_hash = hash_last_message(&self.messages);
+
+        let mut rebuild = true;
+        if let Some(c) = &self.prewrap_cache {
+            if c.width == width
+                && c.markdown_enabled == markdown
+                && c.syntax_enabled == syntax
+                && c.theme_sig == theme_sig
+                && c.messages_len == msg_len
+                && c.last_msg_hash == last_hash
+            {
+                rebuild = false;
+            }
+        }
+
+        if rebuild {
+            let lines =
+                crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
+                    &self.messages,
+                    &self.theme,
+                    markdown,
+                    syntax,
+                );
+            let pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, width);
+            self.prewrap_cache = Some(PrewrapCache {
+                width,
+                markdown_enabled: markdown,
+                syntax_enabled: syntax,
+                theme_sig,
+                messages_len: msg_len,
+                last_msg_hash: last_hash,
+                lines: pre,
+            });
+        }
+
+        // Safe unwrap since we just populated if missing
+        &self.prewrap_cache.as_ref().unwrap().lines
+    }
+
+    #[allow(dead_code)]
+    pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
+        Self {
+            messages: VecDeque::new(),
+            input: String::new(),
+            input_cursor_position: 0,
+            input_mode: true,
+            edit_select_mode: false,
+            selected_user_message_index: None,
+            in_place_edit_index: None,
+            current_response: String::new(),
+            client: reqwest::Client::new(),
+            model: "bench".into(),
+            api_key: String::new(),
+            base_url: String::new(),
+            provider_name: "bench".into(),
+            provider_display_name: "Bench".into(),
+            scroll_offset: 0,
+            auto_scroll: true,
+            is_streaming: false,
+            pulse_start: std::time::Instant::now(),
+            stream_interrupted: false,
+            logging: crate::utils::logging::LoggingState::new(None).unwrap(),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: std::time::Instant::now(),
+            retrying_message_index: None,
+            input_scroll_offset: 0,
+            textarea: tui_textarea::TextArea::default(),
+            theme,
+            picker: None,
+            picker_mode: None,
+            block_select_mode: false,
+            selected_block_index: None,
+            theme_before_picker: None,
+            theme_id_before_picker: None,
+            markdown_enabled,
+            syntax_enabled,
+            prewrap_cache: None,
+        }
     }
 
     pub fn build_display_lines(&self) -> Vec<Line<'static>> {
@@ -888,11 +981,78 @@ impl App {
     }
 }
 
+// Simple cache holder for prewrapped lines
+pub(crate) struct PrewrapCache {
+    width: u16,
+    markdown_enabled: bool,
+    syntax_enabled: bool,
+    theme_sig: u64,
+    messages_len: usize,
+    last_msg_hash: u64,
+    lines: Vec<Line<'static>>,
+}
+
+fn hash_last_message(messages: &VecDeque<Message>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    if let Some(m) = messages.back() {
+        m.role.hash(&mut h);
+        m.content.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn compute_theme_signature(theme: &crate::ui::theme::Theme) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    // Background and codeblock bg are strong signals
+    format!("{:?}", theme.background_color).hash(&mut h);
+    format!("{:?}", theme.md_codeblock_bg_color()).hash(&mut h);
+    // Include a couple of primary styles (fg colors)
+    format!("{:?}", theme.user_text_style).hash(&mut h);
+    format!("{:?}", theme.assistant_text_style).hash(&mut h);
+    h.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
+
+    #[test]
+    fn prewrap_cache_reuse_no_changes() {
+        let mut app = create_test_app();
+        for i in 0..50 {
+            app.messages.push_back(Message {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: "lorem ipsum dolor sit amet consectetur adipiscing elit".into(),
+            });
+        }
+        let w = 100u16;
+        let p1 = app.get_prewrapped_lines_cached(w);
+        assert!(!p1.is_empty());
+        let ptr1 = p1.as_ptr();
+        let p2 = app.get_prewrapped_lines_cached(w);
+        let ptr2 = p2.as_ptr();
+        assert_eq!(ptr1, ptr2, "cache should be reused when nothing changed");
+    }
+
+    #[test]
+    fn prewrap_cache_invalidates_on_width_change() {
+        let mut app = create_test_app();
+        app.messages.push_back(Message {
+            role: "user".into(),
+            content: "hello world".into(),
+        });
+        let p1 = app.get_prewrapped_lines_cached(80);
+        let ptr1 = p1.as_ptr();
+        let p2 = app.get_prewrapped_lines_cached(120);
+        let ptr2 = p2.as_ptr();
+        assert_ne!(ptr1, ptr2, "cache should invalidate on width change");
+    }
 
     #[test]
     fn test_system_messages_excluded_from_api() {

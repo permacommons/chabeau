@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-pub fn ui(f: &mut Frame, app: &App) {
+pub fn ui(f: &mut Frame, app: &mut App) {
     // Paint full-frame background based on theme to ensure readable contrast
     let bg_block = Block::default().style(Style::default().bg(app.theme.background_color));
     f.render_widget(bg_block, f.area());
@@ -24,47 +24,45 @@ pub fn ui(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    // Use the shared method to build display lines. When in edit-select mode, highlight selection.
-    let lines = if app.edit_select_mode {
+    // Use cached prewrapped lines in normal mode for faster redraws.
+    // Otherwise, build lines with selection/highlight and prewrap on the fly.
+    let lines = if !app.edit_select_mode && !app.block_select_mode {
+        app.get_prewrapped_lines_cached(chunks[0].width).clone()
+    } else if app.edit_select_mode {
         let highlight = app
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED);
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
+        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
             &app.messages,
             &app.theme,
             app.selected_user_message_index,
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
-        )
+        );
+        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
     } else if app.block_select_mode {
         let highlight = app
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED | Modifier::BOLD);
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags(
+        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags(
             &app.messages,
             &app.theme,
             app.selected_block_index,
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
-        )
+        );
+        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
     } else {
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
-            &app.messages,
-            &app.theme,
-            app.markdown_enabled,
-            app.syntax_enabled,
-        )
+        unreachable!()
     };
 
-    // Pre-wrap lines to match what we will display, then render without built-in wrap
-    let prewrapped = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, chunks[0].width);
     // Calculate scroll position using the prewrapped lines (exact render)
     let available_height = chunks[0].height.saturating_sub(1); // Account for title
-    let total_wrapped_lines = prewrapped.len() as u16;
+    let total_wrapped_lines = lines.len() as u16;
 
     // Always use the app's scroll_offset, but ensure it's within bounds
     let max_offset = if total_wrapped_lines > available_height {
@@ -83,7 +81,7 @@ pub fn ui(f: &mut Frame, app: &App) {
         app.model,
         app.get_logging_status()
     );
-    let messages_paragraph = Paragraph::new(prewrapped)
+    let messages_paragraph = Paragraph::new(lines)
         .style(Style::default().bg(app.theme.background_color))
         .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
         .scroll((scroll_offset, 0));

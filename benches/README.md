@@ -1,6 +1,6 @@
 # Benchmarks (Criterion 0.7)
 
-This repository keeps Criterion available as a dev-dependency but does not ship any default benches. Use this scaffold to add your own when validating performance-sensitive changes.
+This repository ships a `render_cache` bench to validate the cached prewrapped rendering path. Use this scaffold to add your own when validating performance-sensitive changes.
 
 ## Steps
 
@@ -43,7 +43,7 @@ criterion_group!(benches, bench_example);
 criterion_main!(benches);
 ```
 
-4) Run benches:
+4) Run benches (includes `render_cache`):
 
 ```
 cargo bench
@@ -51,11 +51,10 @@ cargo bench
 
 5) Reports are written under `target/criterion/` (open `report/index.html`).
 
-6) Remove `src/lib.rs` when you are done, unless you intend to keep a library target around. Keeping it may require additional lints/docs and maintenance.
+6) The library target (`src/lib.rs`) is checked in so benches can import internal modules.
 
 ## Notes
 
 - Prefer small, focused benches that isolate the hot paths you changed.
 - Keep benches deterministic (avoid network or filesystem outside the workspace).
 - If benches are useful long-term, consider checking them in and updating README accordingly.
-

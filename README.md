@@ -234,10 +234,11 @@ Chabeau includes lightweight performance checks in the unit test suite and suppo
   - Run with: `cargo test` (warnings print to stderr; tests only fail past the fail thresholds).
 
 - Optional benches (release mode) using Criterion 0.7:
-  - No benches are checked in by default. To add one, create files under `benches/` (e.g., `benches/my_bench.rs`) and use Criterion’s `criterion_group!/criterion_main!`.
+  - A `render_cache` bench is checked in to validate the cached prewrapped rendering path.
   - Run: `cargo bench`
   - Reports: `target/criterion/` (HTML under `report/index.html`).
-  - Notes: If you want to import internal modules in benches, add a `src/lib.rs` that re-exports the necessary modules and import via `use chabeau::...`.
+  - To add new benches, create files under `benches/` (e.g., `benches/my_bench.rs`) and use Criterion’s `criterion_group!/criterion_main!`.
+  - Benches import internal modules via `src/lib.rs` (e.g., `use chabeau::...`).
 
 ### Key Dependencies
 - `tokio` - Async runtime

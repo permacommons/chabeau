@@ -192,8 +192,8 @@ pub async fn run_chat(
     let result = 'main_loop: loop {
         let _tick_start = Instant::now();
         {
-            let app_guard = app.lock().await;
-            terminal.draw(|f| ui(f, &app_guard))?;
+            let mut app_guard = app.lock().await;
+            terminal.draw(|f| ui(f, &mut app_guard))?;
         }
         // Cache terminal size for this tick
         let term_size = terminal.size().unwrap_or_default();

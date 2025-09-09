@@ -20,8 +20,16 @@ fn make_messages(n_pairs: usize, base: &str) -> VecDeque<Message> {
     v
 }
 
-fn redraw_no_cache(messages: &VecDeque<Message>, theme: &Theme, markdown: bool, syntax: bool, width: u16) {
-    let built = ScrollCalculator::build_display_lines_with_theme_and_flags(messages, theme, markdown, syntax);
+fn redraw_no_cache(
+    messages: &VecDeque<Message>,
+    theme: &Theme,
+    markdown: bool,
+    syntax: bool,
+    width: u16,
+) {
+    let built = ScrollCalculator::build_display_lines_with_theme_and_flags(
+        messages, theme, markdown, syntax,
+    );
     let _pre = ScrollCalculator::prewrap_lines(&built, width);
 }
 
@@ -37,12 +45,15 @@ fn bench_render_cache(c: &mut Criterion) {
     let width_small = 80u16;
     let width_large = 120u16;
 
-    for &pairs in &[100usize, 400usize] { // ~200 and ~800 messages
+    for &pairs in &[100usize, 400usize] {
+        // ~200 and ~800 messages
         let messages = make_messages(pairs, base);
         let mut app = App::new_bench(theme.clone(), markdown, syntax);
         app.messages = messages.clone();
 
-        let built = ScrollCalculator::build_display_lines_with_theme_and_flags(&messages, &theme, markdown, syntax);
+        let built = ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &messages, &theme, markdown, syntax,
+        );
         let logical_len = built.len();
 
         let mut group = c.benchmark_group(format!("render_cache_pairs{}", pairs));

@@ -275,14 +275,20 @@ impl App {
             // Fast path: only last message content changed; update tail of cache
             if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
                 let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax).lines
+                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax)
+                        .lines
                 } else {
-                    crate::ui::markdown::build_plain_display_lines(&VecDeque::from([last_msg.clone()]), &self.theme)
+                    crate::ui::markdown::build_plain_display_lines(
+                        &VecDeque::from([last_msg.clone()]),
+                        &self.theme,
+                    )
                 };
-                let last_pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
+                let last_pre =
+                    crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
                 let start = c.last_start;
                 let old_len = c.last_len;
-                let mut new_buf: Vec<Line<'static>> = Vec::with_capacity(c.lines.len() - old_len + last_pre.len());
+                let mut new_buf: Vec<Line<'static>> =
+                    Vec::with_capacity(c.lines.len() - old_len + last_pre.len());
                 new_buf.extend_from_slice(&c.lines[..start]);
                 new_buf.extend_from_slice(&last_pre);
                 c.lines = new_buf;
@@ -306,11 +312,16 @@ impl App {
             // Compute last message prewrapped length to allow fast tail updates
             let (last_start, last_len) = if let Some(last_msg) = self.messages.back() {
                 let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax).lines
+                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax)
+                        .lines
                 } else {
-                    crate::ui::markdown::build_plain_display_lines(&VecDeque::from([last_msg.clone()]), &self.theme)
+                    crate::ui::markdown::build_plain_display_lines(
+                        &VecDeque::from([last_msg.clone()]),
+                        &self.theme,
+                    )
                 };
-                let last_pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
+                let last_pre =
+                    crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
                 let len = last_pre.len();
                 let start = pre.len().saturating_sub(len);
                 (start, len)
@@ -338,6 +349,7 @@ impl App {
         self.prewrap_cache = None;
     }
 
+    // Used by Criterion benches in `benches/`.
     #[allow(dead_code)]
     pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
         Self {

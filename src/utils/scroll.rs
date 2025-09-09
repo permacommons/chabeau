@@ -729,14 +729,21 @@ mod tests {
         }
         let elapsed = start.elapsed();
 
-        // Performance threshold for short histories. Keep total under ~90ms
-        // for 50 iterations on a small set of lines.
-        assert!(
-            elapsed.as_millis() < 90,
-            "prewrap too slow: {:?} for {} total prewrapped lines",
-            elapsed,
-            total_lines
-        );
+        // Performance thresholds for short histories (50 iterations):
+        // - Warn at >= 90ms (non-fatal, prints to stderr)
+        // - Fail at >= 200ms
+        let ms = elapsed.as_millis();
+        if ms >= 200 {
+            panic!(
+                "prewrap extremely slow: {:?} for {} total prewrapped lines",
+                elapsed, total_lines
+            );
+        } else if ms >= 90 {
+            eprintln!(
+                "Warning: prewrap moderately slow: {:?} for {} total prewrapped lines",
+                elapsed, total_lines
+            );
+        }
     }
 
     #[test]

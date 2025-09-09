@@ -35,7 +35,7 @@ impl ScrollCalculator {
             return out;
         }
 
-        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
 
         for line in lines {
             if line.spans.is_empty() {
@@ -47,28 +47,32 @@ impl ScrollCalculator {
             let emit_line = |collector: &mut Vec<Span<'static>>, out: &mut Vec<Line<'static>>| {
                 out.push(Line::from(std::mem::take(collector)));
             };
-            let append_run =
-                |collector: &mut Vec<Span<'static>>, style: ratatui::style::Style, text: &str| {
-                    if text.is_empty() {
+            let append_run = |collector: &mut Vec<Span<'static>>,
+                              style: ratatui::style::Style,
+                              text: &str| {
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(last) = collector.last_mut() {
+                    if last.style == style {
+                        let mut combined = String::with_capacity(last.content.len() + text.len());
+                        combined.push_str(&last.content);
+                        combined.push_str(text);
+                        let st = last.style;
+                        *last = Span::styled(combined, st);
                         return;
                     }
-                    if let Some(last) = collector.last_mut() {
-                        if last.style == style {
-                            let combined = format!("{}{}", last.content, text);
-                            let st = last.style;
-                            *last = Span::styled(combined, st);
-                            return;
-                        }
-                    }
-                    collector.push(Span::styled(text.to_string(), style));
-                };
+                }
+                collector.push(Span::styled(text.to_string(), style));
+            };
 
-            let mut cur_spans: Vec<Span<'static>> = Vec::new();
+            let mut cur_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 4);
             let mut cur_len: usize = 0;
             let mut emitted_any = false;
 
             // Current word accumulated as styled segments
-            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style)> = Vec::new();
+            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style)> =
+                Vec::with_capacity(line.spans.len() + 4);
             let mut word_len: usize = 0;
 
             let flush_word = |cur_spans: &mut Vec<Span<'static>>,
@@ -764,6 +768,47 @@ mod tests {
         } else if ms >= 90 {
             eprintln!(
                 "Warning: prewrap moderately slow: {:?} for {} total prewrapped lines",
+                elapsed, total_lines
+            );
+        }
+    }
+
+    #[test]
+    fn perf_prewrap_large_history() {
+        // Larger synthetic history to exercise scaling
+        let theme = Theme::dark_default();
+        let mut messages: VecDeque<Message> = VecDeque::new();
+        let base = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua";
+        for i in 0..100 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            messages.push_back(create_test_message(role, base));
+            messages.push_back(create_test_message(role, base));
+        }
+
+        let lines = ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &messages, &theme, true, false,
+        );
+
+        let width: u16 = 80;
+        let iters = 20;
+        let start = Instant::now();
+        let mut total_lines = 0usize;
+        for _ in 0..iters {
+            let pre = ScrollCalculator::prewrap_lines(&lines, width);
+            total_lines += pre.len();
+        }
+        let elapsed = start.elapsed();
+
+        // Warn at moderate times, fail at excessive times for larger histories
+        let ms = elapsed.as_millis();
+        if ms >= 1000 {
+            panic!(
+                "prewrap extremely slow (large): {:?} for {} total prewrapped lines",
+                elapsed, total_lines
+            );
+        } else if ms >= 400 {
+            eprintln!(
+                "Warning: prewrap moderately slow (large): {:?} for {} total prewrapped lines",
                 elapsed, total_lines
             );
         }

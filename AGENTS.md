@@ -11,3 +11,8 @@ When contributing, please prioritize these guidelines:
 
 Additional style note for agents:
 - Do not leave breadcrumb comments about past changes (e.g., "removed", "replaced", or historical notes in code). Keep comments focused on current behavior and intent only.
+
+Performance validation for major changes:
+- When you implement performance-sensitive features (rendering, scrolling, parsing, streaming), validate with Criterion benchmarks in addition to unit tests.
+- See `benches/README.md` for a quick scaffold on adding benches locally (and how to export internal modules temporarily via `src/lib.rs`).
+- Keep unit-test perf checks green (`cargo test`). Use benches to quantify improvements and regressions (`cargo bench`).

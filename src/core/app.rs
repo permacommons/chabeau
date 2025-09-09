@@ -239,6 +239,7 @@ impl App {
     }
 
     pub fn build_display_lines(&self) -> Vec<Line<'static>> {
+        // Default display lines without selection/highlight
         ScrollCalculator::build_display_lines_with_theme_and_flags(
             &self.messages,
             &self.theme,
@@ -253,11 +254,13 @@ impl App {
     }
 
     pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
-        ScrollCalculator::calculate_max_scroll_offset(
-            &self.messages,
-            terminal_width,
-            available_height,
-        )
+        let lines = self.build_display_lines();
+        let total = ScrollCalculator::calculate_wrapped_line_count(&lines, terminal_width);
+        if total > available_height {
+            total.saturating_sub(available_height)
+        } else {
+            0
+        }
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {

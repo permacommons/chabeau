@@ -60,9 +60,11 @@ pub fn ui(f: &mut Frame, app: &App) {
         )
     };
 
-    // Calculate scroll position using wrapped line count
+    // Pre-wrap lines to match what we will display, then render without built-in wrap
+    let prewrapped = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, chunks[0].width);
+    // Calculate scroll position using the prewrapped lines (exact render)
     let available_height = chunks[0].height.saturating_sub(1); // Account for title
-    let total_wrapped_lines = app.calculate_wrapped_line_count(chunks[0].width);
+    let total_wrapped_lines = prewrapped.len() as u16;
 
     // Always use the app's scroll_offset, but ensure it's within bounds
     let max_offset = if total_wrapped_lines > available_height {
@@ -70,6 +72,7 @@ pub fn ui(f: &mut Frame, app: &App) {
     } else {
         0
     };
+    // Clamp the user-controlled scroll offset
     let scroll_offset = app.scroll_offset.min(max_offset);
 
     // Create enhanced title with version, provider, model name and logging status
@@ -80,10 +83,9 @@ pub fn ui(f: &mut Frame, app: &App) {
         app.model,
         app.get_logging_status()
     );
-    let messages_paragraph = Paragraph::new(lines)
+    let messages_paragraph = Paragraph::new(prewrapped)
         .style(Style::default().bg(app.theme.background_color))
         .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
-        .wrap(Wrap { trim: false })
         .scroll((scroll_offset, 0));
 
     f.render_widget(messages_paragraph, chunks[0]);

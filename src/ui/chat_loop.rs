@@ -385,11 +385,11 @@ pub async fn run_chat(
                                     .saturating_sub(input_area_height + 2)
                                     .saturating_sub(1);
                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                    &lines,
-                                    term_size.width,
-                                    available_height,
-                                    *start,
-                                );
+                                                    &lines,
+                                                    term_size.width,
+                                                    available_height,
+                                                    *start,
+                                                );
                                 let max_scroll = app_guard
                                     .calculate_max_scroll_offset(available_height, term_size.width);
                                 app_guard.scroll_offset = desired.min(max_scroll);
@@ -645,11 +645,11 @@ pub async fn run_chat(
                                                     .saturating_sub(input_area_height + 2)
                                                     .saturating_sub(1);
                                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
-                                                    term_size.width,
-                                                    available_height,
-                                                    *start,
-                                                );
+                                    &lines,
+                                    term_size.width,
+                                    available_height,
+                                    *start,
+                                );
                                                 let max_scroll = app_guard
                                                     .calculate_max_scroll_offset(
                                                         available_height,

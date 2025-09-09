@@ -11,6 +11,7 @@ pub struct RenderedMessage {
 }
 
 /// Markdown renderer using pulldown-cmark with theming.
+#[cfg(test)]
 pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage {
     match msg.role.as_str() {
         "system" => render_system_message(&msg.content, theme),
@@ -519,6 +520,7 @@ mod tests {
 }
 
 /// Build display lines for all messages using the lightweight markdown renderer.
+#[cfg(test)]
 pub fn build_markdown_display_lines(
     messages: &std::collections::VecDeque<Message>,
     theme: &Theme,

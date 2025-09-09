@@ -1,7 +1,8 @@
 use crate::core::message::Message;
+#[cfg(test)]
+use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::markdown::{
-    build_markdown_display_lines, build_plain_display_lines, compute_codeblock_ranges,
-    render_message_markdown_opts,
+    build_plain_display_lines, compute_codeblock_ranges, render_message_markdown_opts,
 };
 use crate::ui::theme::Theme;
 use ratatui::{text::Line, text::Span};
@@ -11,14 +12,185 @@ use std::collections::VecDeque;
 pub struct ScrollCalculator;
 
 impl ScrollCalculator {
-    /// Build display lines for all messages
+    /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
+    /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
+    /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
+    pub fn prewrap_lines(lines: &[Line], terminal_width: u16) -> Vec<Line<'static>> {
+        let width = terminal_width as usize;
+        // Fast path: zero width, just clone as owned
+        if width == 0 {
+            let mut out = Vec::with_capacity(lines.len());
+            for line in lines {
+                if line.spans.is_empty() {
+                    out.push(Line::from(""));
+                } else {
+                    let spans: Vec<Span<'static>> = line
+                        .spans
+                        .iter()
+                        .map(|s| Span::styled(s.content.to_string(), s.style))
+                        .collect();
+                    out.push(Line::from(spans));
+                }
+            }
+            return out;
+        }
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        for line in lines {
+            if line.spans.is_empty() {
+                out.push(Line::from(""));
+                continue;
+            }
+
+            // Helpers to manage styled span appends
+            let emit_line = |collector: &mut Vec<Span<'static>>, out: &mut Vec<Line<'static>>| {
+                out.push(Line::from(std::mem::take(collector)));
+            };
+            let append_run =
+                |collector: &mut Vec<Span<'static>>, style: ratatui::style::Style, text: &str| {
+                    if text.is_empty() {
+                        return;
+                    }
+                    if let Some(last) = collector.last_mut() {
+                        if last.style == style {
+                            let combined = format!("{}{}", last.content, text);
+                            let st = last.style;
+                            *last = Span::styled(combined, st);
+                            return;
+                        }
+                    }
+                    collector.push(Span::styled(text.to_string(), style));
+                };
+
+            let mut cur_spans: Vec<Span<'static>> = Vec::new();
+            let mut cur_len: usize = 0;
+            let mut emitted_any = false;
+
+            // Current word accumulated as styled segments
+            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style)> = Vec::new();
+            let mut word_len: usize = 0;
+
+            let flush_word = |cur_spans: &mut Vec<Span<'static>>,
+                              out: &mut Vec<Line<'static>>,
+                              cur_len: &mut usize,
+                              emitted_any: &mut bool,
+                              word_segs: &mut Vec<(Vec<char>, ratatui::style::Style)>,
+                              word_len: &mut usize| {
+                if *word_len == 0 {
+                    return;
+                }
+                // Wrap before word if it doesn't fit
+                if *cur_len > 0 && *cur_len + *word_len > width {
+                    emit_line(cur_spans, out);
+                    *emitted_any = true;
+                    *cur_len = 0;
+                }
+                // Place the word, chunking if needed
+                let mut seg_idx = 0usize;
+                let mut seg_pos = 0usize;
+                let mut remaining = *word_len;
+                while remaining > 0 {
+                    let space_left = width.saturating_sub(*cur_len);
+                    let take = remaining.min(space_left.max(1));
+                    let mut to_take = take;
+                    while to_take > 0 && seg_idx < word_segs.len() {
+                        let (seg_chars, seg_style) = &word_segs[seg_idx];
+                        let seg_rem = seg_chars.len().saturating_sub(seg_pos);
+                        let here = to_take.min(seg_rem);
+                        if here > 0 {
+                            let slice: String = seg_chars[seg_pos..seg_pos + here].iter().collect();
+                            append_run(cur_spans, *seg_style, &slice);
+                            *cur_len += here;
+                            to_take -= here;
+                            seg_pos += here;
+                        }
+                        if seg_pos >= seg_chars.len() {
+                            seg_idx += 1;
+                            seg_pos = 0;
+                        }
+                    }
+                    remaining -= take;
+                    if remaining > 0 {
+                        emit_line(cur_spans, out);
+                        *emitted_any = true;
+                        *cur_len = 0;
+                    }
+                }
+                word_segs.clear();
+                *word_len = 0;
+            };
+
+            for s in &line.spans {
+                for ch in s.content.chars() {
+                    if ch == ' ' {
+                        // Place accumulated word before handling space
+                        flush_word(
+                            &mut cur_spans,
+                            &mut out,
+                            &mut cur_len,
+                            &mut emitted_any,
+                            &mut word_segs,
+                            &mut word_len,
+                        );
+
+                        // Add a single space if it fits; otherwise wrap and skip leading space
+                        if cur_len < width {
+                            append_run(&mut cur_spans, s.style, " ");
+                            cur_len += 1;
+                        } else {
+                            emit_line(&mut cur_spans, &mut out);
+                            emitted_any = true;
+                            cur_len = 0;
+                        }
+                    } else {
+                        // Accumulate into current word, merging by style
+                        if let Some((last_text, last_style)) = word_segs.last_mut() {
+                            if *last_style == s.style {
+                                last_text.push(ch);
+                            } else {
+                                word_segs.push((vec![ch], s.style));
+                            }
+                        } else {
+                            word_segs.push((vec![ch], s.style));
+                        }
+                        word_len += 1;
+                    }
+                }
+            }
+
+            // Flush any remaining word and finalize the line
+            flush_word(
+                &mut cur_spans,
+                &mut out,
+                &mut cur_len,
+                &mut emitted_any,
+                &mut word_segs,
+                &mut word_len,
+            );
+
+            if !cur_spans.is_empty() {
+                emit_line(&mut cur_spans, &mut out);
+                emitted_any = true;
+            }
+            if !emitted_any {
+                // Preserve a single empty visual line for whitespace-only inputs
+                out.push(Line::from(""));
+            }
+        }
+
+        out
+    }
+    /// Build display lines for all messages (tests only)
+    #[cfg(test)]
     pub fn build_display_lines(messages: &VecDeque<Message>) -> Vec<Line<'static>> {
         // Backwards-compatible default theme
         let theme = Theme::dark_default();
         Self::build_display_lines_with_theme(messages, &theme)
     }
 
-    /// Build display lines using a provided theme
+    /// Build display lines using a provided theme (tests only)
+    #[cfg(test)]
     pub fn build_display_lines_with_theme(
         messages: &VecDeque<Message>,
         theme: &Theme,
@@ -155,36 +327,21 @@ impl ScrollCalculator {
 
     /// Calculate how many wrapped lines the given lines will take
     pub fn calculate_wrapped_line_count(lines: &[Line], terminal_width: u16) -> u16 {
-        let mut total_wrapped_lines = 0u16;
-
-        for line in lines {
-            let line_text = line.to_string();
-            if terminal_width == 0 {
-                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                continue;
-            }
-            if line_text.is_empty() {
-                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                continue;
-            }
-            // Preserve leading whitespace when computing wrap height; treat whitespace-only lines as 1
-            if line_text.chars().all(|c| c.is_whitespace()) {
-                total_wrapped_lines = total_wrapped_lines.saturating_add(1);
-                continue;
-            }
-            let wrapped_count =
-                Self::calculate_word_wrapped_lines_with_leading(&line_text, terminal_width);
-            total_wrapped_lines = total_wrapped_lines.saturating_add(wrapped_count);
-        }
-
-        total_wrapped_lines
+        let pre = Self::prewrap_lines(lines, terminal_width);
+        pre.len() as u16
     }
 
     /// Calculate how many lines a single text string will wrap to
+    #[cfg(test)]
     fn calculate_word_wrapped_lines_with_leading(text: &str, terminal_width: u16) -> u16 {
         let width = terminal_width as usize;
-        let mut current_line_len: usize;
-        let mut line_count = 1u16;
+        if width == 0 {
+            return 1;
+        }
+
+        // Always at least one visual line
+        let mut line_count: u16 = 1;
+        let mut current_len: usize;
 
         // Count leading spaces explicitly (tabs should be detabbed earlier in markdown)
         let mut chars = text.chars().peekable();
@@ -197,37 +354,49 @@ impl ScrollCalculator {
                 break;
             }
         }
-        if leading_spaces >= width && width > 0 {
-            // Advance lines for fully consumed widths
+        if leading_spaces >= width {
             line_count = line_count.saturating_add((leading_spaces / width) as u16);
-            current_line_len = leading_spaces % width;
+            current_len = leading_spaces % width;
         } else {
-            current_line_len = leading_spaces;
+            current_len = leading_spaces;
         }
 
-        // Process the remainder as words separated by whitespace
+        // Process remainder as words, but break overlong words to avoid undercounting.
         let remainder: String = chars.collect();
         for word in remainder.split_whitespace() {
-            let word_len = word.chars().count();
-            if current_line_len > 0 {
-                // account for one space between words
-                if current_line_len + 1 + word_len > width {
+            let mut word_len = word.chars().count();
+
+            // Insert a single space before the word if not at line start
+            if current_len > 0 {
+                if current_len + 1 > width {
                     line_count = line_count.saturating_add(1);
-                    current_line_len = word_len;
+                    current_len = 0;
                 } else {
-                    current_line_len += 1 + word_len;
+                    current_len += 1;
                 }
-            } else {
-                // start of line
-                current_line_len = word_len;
+            }
+
+            // Place the word, chunking if it exceeds the available width
+            loop {
+                let space_left = width.saturating_sub(current_len);
+                if word_len <= space_left {
+                    current_len += word_len;
+                    break;
+                }
+                if space_left > 0 {
+                    // Fill the current line and wrap
+                    word_len -= space_left;
+                    line_count = line_count.saturating_add(1);
+                    current_len = 0;
+                } else {
+                    // No space left, wrap to new line
+                    line_count = line_count.saturating_add(1);
+                    current_len = 0;
+                }
             }
         }
 
-        if line_count == 0 {
-            1
-        } else {
-            line_count
-        }
+        line_count.max(1)
     }
 
     // Wrapper only for tests that reference the original name
@@ -237,6 +406,7 @@ impl ScrollCalculator {
     }
 
     /// Calculate scroll offset to show the bottom of all messages
+    #[cfg(test)]
     pub fn calculate_scroll_to_bottom(
         messages: &VecDeque<Message>,
         terminal_width: u16,
@@ -270,6 +440,7 @@ impl ScrollCalculator {
     }
 
     /// Calculate maximum scroll offset
+    #[cfg(test)]
     pub fn calculate_max_scroll_offset(
         messages: &VecDeque<Message>,
         terminal_width: u16,
@@ -286,6 +457,7 @@ mod tests {
     use crate::utils::test_utils::{create_test_message, create_test_messages};
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
+    use std::time::Instant;
 
     #[test]
     fn test_build_display_lines_basic() {
@@ -341,12 +513,12 @@ mod tests {
 
     #[test]
     fn test_calculate_word_wrapped_lines_single_word_too_long() {
-        // Single word longer than width should still count as 1 line
+        // Single word longer than width should wrap across multiple lines
         let wrapped = ScrollCalculator::calculate_word_wrapped_lines(
             "supercalifragilisticexpialidocious",
             10,
         );
-        assert_eq!(wrapped, 1);
+        assert!(wrapped > 1);
     }
 
     #[test]
@@ -528,6 +700,46 @@ mod tests {
     }
 
     #[test]
+    fn perf_prewrap_short_history() {
+        // Synthetic short history with styled spans to exercise prewrap mapping
+        let theme = Theme::dark_default();
+        let mut messages: VecDeque<Message> = VecDeque::new();
+
+        // Build ~30 lines alternating user/assistant, with words split into separate spans
+        let base = "lorem ipsum dolor sit amet consectetur adipiscing elit";
+        for i in 0..15 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            messages.push_back(create_test_message(role, base));
+            messages.push_back(create_test_message(role, base));
+        }
+
+        // Render to styled lines (markdown on, syntax off for speed)
+        let lines = ScrollCalculator::build_display_lines_with_theme_and_flags(
+            &messages, &theme, true, false,
+        );
+
+        // Time multiple prewrap passes to smooth out noise
+        let width: u16 = 100;
+        let iters = 50;
+        let start = Instant::now();
+        let mut total_lines = 0usize;
+        for _ in 0..iters {
+            let pre = ScrollCalculator::prewrap_lines(&lines, width);
+            total_lines += pre.len();
+        }
+        let elapsed = start.elapsed();
+
+        // Performance threshold for short histories. Keep total under ~90ms
+        // for 50 iterations on a small set of lines.
+        assert!(
+            elapsed.as_millis() < 90,
+            "prewrap too slow: {:?} for {} total prewrapped lines",
+            elapsed,
+            total_lines
+        );
+    }
+
+    #[test]
     fn test_scroll_offset_to_line_start_basic() {
         // Three lines: short, long, short. Width forces wrapping of the long line.
         let lines = vec![
@@ -543,5 +755,23 @@ mod tests {
         assert_eq!(off0, 0);
         assert!(off1 >= 1); // starts after first line
         assert!(off2 >= off1); // further down the view
+    }
+
+    #[test]
+    fn test_prewrap_paragraph_no_leading_spaces_or_lonely_dot() {
+        let paragraph = "The way language shapes our perception of reality is something that linguists and philosophers have debated for centuries. Do we think in words, or do words simply provide a framework for thoughts that exist beyond language? Some cultures have dozens of words for different types of snow, while others have elaborate systems for describing relationships between family members. These linguistic differences suggest that our vocabulary doesn't just describe our world - it actually influences how we see and understand it.";
+        let width: u16 = 143;
+        let line = TLine::from(paragraph);
+        let pre = ScrollCalculator::prewrap_lines(&[line], width);
+        assert!(!pre.is_empty());
+        for l in pre {
+            let s = l.to_string();
+            assert!(
+                !s.starts_with(' '),
+                "wrapped line starts with space: '{} '",
+                s
+            );
+            assert_ne!(s.trim(), ".", "wrapped line became a lonely '.'");
+        }
     }
 }

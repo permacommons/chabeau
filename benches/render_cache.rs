@@ -60,10 +60,34 @@ fn bench_render_cache(c: &mut Criterion) {
             b.iter(|| redraw_with_cache(&mut app, width_large))
         });
 
+        // Streaming-like scenario: incrementally append to last message
+        let mut messages_stream = messages.clone();
+        if let Some(last) = messages_stream.back_mut() {
+            last.content.push_str(" start");
+        }
+        let mut app_stream = App::new_bench(theme.clone(), markdown, syntax);
+        app_stream.messages = messages_stream.clone();
+
+        group.bench_function(BenchmarkId::new("no_cache_stream", width_small), |b| {
+            b.iter(|| {
+                if let Some(last) = messages_stream.back_mut() {
+                    last.content.push('.');
+                }
+                redraw_no_cache(&messages_stream, &theme, markdown, syntax, width_small)
+            })
+        });
+        group.bench_function(BenchmarkId::new("with_cache_stream", width_small), |b| {
+            b.iter(|| {
+                if let Some(last) = app_stream.messages.back_mut() {
+                    last.content.push('.');
+                }
+                redraw_with_cache(&mut app_stream, width_small)
+            })
+        });
+
         group.finish();
     }
 }
 
 criterion_group!(benches, bench_render_cache);
 criterion_main!(benches);
-

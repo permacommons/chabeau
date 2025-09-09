@@ -252,20 +252,49 @@ impl App {
         let msg_len = self.messages.len();
         let last_hash = hash_last_message(&self.messages);
 
-        let mut rebuild = true;
+        let mut can_reuse = false;
+        let mut only_last_changed = false;
         if let Some(c) = &self.prewrap_cache {
             if c.width == width
                 && c.markdown_enabled == markdown
                 && c.syntax_enabled == syntax
                 && c.theme_sig == theme_sig
                 && c.messages_len == msg_len
-                && c.last_msg_hash == last_hash
             {
-                rebuild = false;
+                if c.last_msg_hash == last_hash {
+                    can_reuse = true;
+                } else {
+                    only_last_changed = true;
+                }
             }
         }
 
-        if rebuild {
+        if can_reuse {
+            // Up-to-date
+        } else if only_last_changed {
+            // Fast path: only last message content changed; update tail of cache
+            if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
+                let last_lines = if markdown {
+                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax).lines
+                } else {
+                    crate::ui::markdown::build_plain_display_lines(&VecDeque::from([last_msg.clone()]), &self.theme)
+                };
+                let last_pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
+                let start = c.last_start;
+                let old_len = c.last_len;
+                let mut new_buf: Vec<Line<'static>> = Vec::with_capacity(c.lines.len() - old_len + last_pre.len());
+                new_buf.extend_from_slice(&c.lines[..start]);
+                new_buf.extend_from_slice(&last_pre);
+                c.lines = new_buf;
+                c.last_len = last_pre.len();
+                c.last_msg_hash = last_hash;
+            } else {
+                // Fallback to full rebuild if something unexpected
+                only_last_changed = false;
+            }
+        }
+
+        if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
             let lines =
                 crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
                     &self.messages,
@@ -274,6 +303,20 @@ impl App {
                     syntax,
                 );
             let pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, width);
+            // Compute last message prewrapped length to allow fast tail updates
+            let (last_start, last_len) = if let Some(last_msg) = self.messages.back() {
+                let last_lines = if markdown {
+                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax).lines
+                } else {
+                    crate::ui::markdown::build_plain_display_lines(&VecDeque::from([last_msg.clone()]), &self.theme)
+                };
+                let last_pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
+                let len = last_pre.len();
+                let start = pre.len().saturating_sub(len);
+                (start, len)
+            } else {
+                (0, 0)
+            };
             self.prewrap_cache = Some(PrewrapCache {
                 width,
                 markdown_enabled: markdown,
@@ -281,12 +324,18 @@ impl App {
                 theme_sig,
                 messages_len: msg_len,
                 last_msg_hash: last_hash,
+                last_start,
+                last_len,
                 lines: pre,
             });
         }
 
         // Safe unwrap since we just populated if missing
         &self.prewrap_cache.as_ref().unwrap().lines
+    }
+
+    pub fn invalidate_prewrap_cache(&mut self) {
+        self.prewrap_cache = None;
     }
 
     #[allow(dead_code)]
@@ -989,6 +1038,8 @@ pub(crate) struct PrewrapCache {
     theme_sig: u64,
     messages_len: usize,
     last_msg_hash: u64,
+    last_start: usize,
+    last_len: usize,
     lines: Vec<Line<'static>>,
 }
 

@@ -398,8 +398,11 @@ impl App {
         terminal_width: u16,
         available_height: u16,
     ) -> u16 {
-        ScrollCalculator::calculate_scroll_to_message(
+        ScrollCalculator::calculate_scroll_to_message_with_flags(
             &self.messages,
+            &self.theme,
+            self.markdown_enabled,
+            self.syntax_enabled,
             message_index,
             terminal_width,
             available_height,

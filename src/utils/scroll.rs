@@ -305,23 +305,29 @@ impl ScrollCalculator {
         }
     }
 
-    /// Build display lines up to a specific message index (inclusive)
-    pub fn build_display_lines_up_to(
+    /// Build display lines up to a specific message index using theme and flags
+    pub fn build_display_lines_up_to_with_flags(
         messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
         max_index: usize,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-
         for (i, msg) in messages.iter().enumerate() {
             if i > max_index {
                 break;
             }
-            // Use default theme for backward compatibility
-            let theme = Theme::dark_default();
-            let rendered = render_message_markdown_opts(msg, &theme, true);
-            lines.extend(rendered.lines);
+            if markdown_enabled {
+                let rendered = render_message_markdown_opts(msg, theme, syntax_enabled);
+                lines.extend(rendered.lines);
+            } else {
+                lines.extend(build_plain_display_lines(
+                    &VecDeque::from([msg.clone()]),
+                    theme,
+                ));
+            }
         }
-
         lines
     }
 
@@ -422,14 +428,23 @@ impl ScrollCalculator {
         }
     }
 
-    /// Calculate scroll offset to show a specific message
-    pub fn calculate_scroll_to_message(
+    /// Calculate scroll offset to show a specific message with exact display flags
+    pub fn calculate_scroll_to_message_with_flags(
         messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
         message_index: usize,
         terminal_width: u16,
         available_height: u16,
     ) -> u16 {
-        let lines = Self::build_display_lines_up_to(messages, message_index);
+        let lines = Self::build_display_lines_up_to_with_flags(
+            messages,
+            theme,
+            markdown_enabled,
+            syntax_enabled,
+            message_index,
+        );
         let wrapped_lines = Self::calculate_wrapped_line_count(&lines, terminal_width);
 
         if wrapped_lines > available_height {
@@ -480,7 +495,10 @@ mod tests {
     #[test]
     fn test_build_display_lines_up_to() {
         let messages = create_test_messages();
-        let lines = ScrollCalculator::build_display_lines_up_to(&messages, 1);
+        let theme = Theme::dark_default();
+        let lines = ScrollCalculator::build_display_lines_up_to_with_flags(
+            &messages, &theme, true, true, 1,
+        );
 
         // Should only include first 2 messages (indices 0 and 1)
         assert_eq!(lines.len(), 4); // 2 messages * 2 lines each
@@ -580,11 +598,16 @@ mod tests {
         let messages = create_test_messages();
 
         // Scroll to first message should be 0
-        let scroll_first = ScrollCalculator::calculate_scroll_to_message(&messages, 0, 80, 10);
+        let theme = Theme::dark_default();
+        let scroll_first = ScrollCalculator::calculate_scroll_to_message_with_flags(
+            &messages, &theme, true, true, 0, 80, 10,
+        );
         assert_eq!(scroll_first, 0);
 
         // Scroll to later message might require scrolling
-        let scroll_later = ScrollCalculator::calculate_scroll_to_message(&messages, 3, 80, 2);
+        let scroll_later = ScrollCalculator::calculate_scroll_to_message_with_flags(
+            &messages, &theme, true, true, 3, 80, 2,
+        );
         assert!(scroll_later > 0);
     }
 

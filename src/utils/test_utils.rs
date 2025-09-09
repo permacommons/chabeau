@@ -47,6 +47,7 @@ pub fn create_test_app() -> App {
         theme_id_before_picker: None,
         markdown_enabled: true,
         syntax_enabled: true,
+        prewrap_cache: None,
     }
 }
 

@@ -44,6 +44,12 @@ pub struct AuthManager {
     config: Config,
 }
 
+impl Default for AuthManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuthManager {
     pub fn new() -> Self {
         // Load config first

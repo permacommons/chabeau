@@ -192,8 +192,8 @@ pub async fn run_chat(
     let result = 'main_loop: loop {
         let _tick_start = Instant::now();
         {
-            let app_guard = app.lock().await;
-            terminal.draw(|f| ui(f, &app_guard))?;
+            let mut app_guard = app.lock().await;
+            terminal.draw(|f| ui(f, &mut app_guard))?;
         }
         // Cache terminal size for this tick
         let term_size = terminal.size().unwrap_or_default();
@@ -385,11 +385,11 @@ pub async fn run_chat(
                                     .saturating_sub(input_area_height + 2)
                                     .saturating_sub(1);
                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                    &lines,
-                                    term_size.width,
-                                    available_height,
-                                    *start,
-                                );
+                                                    &lines,
+                                                    term_size.width,
+                                                    available_height,
+                                                    *start,
+                                                );
                                 let max_scroll = app_guard
                                     .calculate_max_scroll_offset(available_height, term_size.width);
                                 app_guard.scroll_offset = desired.min(max_scroll);
@@ -496,6 +496,7 @@ pub async fn run_chat(
                                             app_guard.cancel_current_stream();
                                             // Truncate from selected index (drops selected and below)
                                             app_guard.messages.truncate(idx);
+                                            app_guard.invalidate_prewrap_cache();
                                             // Rewrite log file to reflect truncation
                                             let _ = app_guard
                                                 .logging
@@ -543,6 +544,7 @@ pub async fn run_chat(
                                             // Cancel any active stream
                                             app_guard.cancel_current_stream();
                                             app_guard.messages.truncate(idx);
+                                            app_guard.invalidate_prewrap_cache();
                                             let _ = app_guard
                                                 .logging
                                                 .rewrite_log_without_last_response(
@@ -645,11 +647,11 @@ pub async fn run_chat(
                                                     .saturating_sub(input_area_height + 2)
                                                     .saturating_sub(1);
                                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
-                                                    term_size.width,
-                                                    available_height,
-                                                    *start,
-                                                );
+                                    &lines,
+                                    term_size.width,
+                                    available_height,
+                                    *start,
+                                );
                                                 let max_scroll = app_guard
                                                     .calculate_max_scroll_offset(
                                                         available_height,
@@ -1037,6 +1039,7 @@ pub async fn run_chat(
                                         {
                                             let new_text = app_guard.get_input_text().to_string();
                                             app_guard.messages[idx].content = new_text;
+                                            app_guard.invalidate_prewrap_cache();
                                             // Rewrite log file to reflect in-place edit
                                             let _ = app_guard
                                                 .logging

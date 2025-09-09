@@ -224,6 +224,22 @@ cargo test scroll::           # Scroll functionality tests
 cargo test --release          # Faster execution
 ```
 
+### Performance
+
+Chabeau includes lightweight performance checks in the unit test suite and supports optional Criterion benches.
+
+- Built-in perf checks (unit tests):
+  - Short history prewrap (50 iters, ~60 lines): warns at ≥ 90ms; fails at ≥ 200ms.
+  - Large history prewrap (20 iters, ~400 lines): warns at ≥ 400ms; fails at ≥ 1000ms.
+  - Run with: `cargo test` (warnings print to stderr; tests only fail past the fail thresholds).
+
+- Optional benches (release mode) using Criterion 0.7:
+  - A `render_cache` bench is checked in to validate the cached prewrapped rendering path.
+  - Run: `cargo bench`
+  - Reports: `target/criterion/` (HTML under `report/index.html`).
+  - To add new benches, create files under `benches/` (e.g., `benches/my_bench.rs`) and use Criterion’s `criterion_group!/criterion_main!`.
+  - Benches import internal modules via `src/lib.rs` (e.g., `use chabeau::...`).
+
 ### Key Dependencies
 - `tokio` - Async runtime
 - `ratatui` - Terminal UI framework

@@ -98,7 +98,6 @@ fn normalize_lang_hint(s: &str) -> String {
     }
 }
 
-#[allow(dead_code)]
 fn parse_tui_color_from_syntect(c: syntect::highlighting::Color) -> TuiColor {
     TuiColor::Rgb(c.r, c.g, c.b)
 }

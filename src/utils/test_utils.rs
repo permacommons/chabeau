@@ -48,6 +48,9 @@ pub fn create_test_app() -> App {
         markdown_enabled: true,
         syntax_enabled: true,
         prewrap_cache: None,
+        status: None,
+        status_set_at: None,
+        file_prompt: None,
     }
 }
 

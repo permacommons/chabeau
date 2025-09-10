@@ -75,9 +75,12 @@ fn spawn_stream(params: StreamParams) {
                 {
                     Ok(response) => {
                         if !response.status().is_success() {
-                            if let Ok(error_text) = response.text().await {
-                                eprintln!("API request failed: {error_text}");
-                            }
+                            let error_text = response
+                                .text()
+                                .await
+                                .unwrap_or_else(|_| "<no body>".to_string());
+                            let _ = tx_clone.send((format!("<<API_ERROR>>{}", error_text), stream_id));
+                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                             return;
                         }
 
@@ -121,13 +124,40 @@ fn spawn_stream(params: StreamParams) {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error sending message: {e}");
+                        let _ = tx_clone.send((format!("<<API_ERROR>>{}", e), stream_id));
+                        let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                     }
                 }
             } => {}
             _ = cancel_token.cancelled() => {}
         }
     });
+}
+
+fn language_to_extension(lang: Option<&str>) -> &'static str {
+    if let Some(l) = lang {
+        let l = l.trim().to_ascii_lowercase();
+        return match l.as_str() {
+            "rs" | "rust" => "rs",
+            "py" | "python" => "py",
+            "sh" | "bash" | "zsh" => "sh",
+            "js" | "javascript" => "js",
+            "ts" | "typescript" => "ts",
+            "json" => "json",
+            "yaml" | "yml" => "yml",
+            "toml" => "toml",
+            "md" | "markdown" => "md",
+            "go" => "go",
+            "java" => "java",
+            "c" => "c",
+            "cpp" | "c++" | "cc" | "cxx" => "cpp",
+            "html" => "html",
+            "css" => "css",
+            "sql" => "sql",
+            _ => "txt",
+        };
+    }
+    "txt"
 }
 
 pub async fn run_chat(
@@ -216,6 +246,14 @@ pub async fn run_chat(
                     {
                         break 'main_loop Ok(());
                     }
+                    // Clear ephemeral status with Ctrl+L
+                    if matches!(key.code, KeyCode::Char('l'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        let mut app_guard = app.lock().await;
+                        app_guard.clear_status();
+                        continue;
+                    }
                     // If a picker is open, handle navigation/selection first
                     {
                         let mut app_guard = app.lock().await;
@@ -282,16 +320,9 @@ pub async fn run_chat(
                                             {
                                                 let res = app_guard.apply_theme_by_id(&id);
                                                 match res {
-                                                    Ok(_) => app_guard.add_system_message(format!(
-                                                        "Theme set to: {}",
-                                                        id
-                                                    )),
-                                                    Err(e) => {
-                                                        app_guard.add_system_message(format!(
-                                                            "Error applying theme '{}': {}",
-                                                            id, e
-                                                        ))
-                                                    }
+                                                    Ok(_) => app_guard
+                                                        .set_status(format!("Theme set: {}", id)),
+                                                    Err(_e) => app_guard.set_status("Theme error"),
                                                 }
                                             }
                                             app_guard.picker = None;
@@ -321,15 +352,7 @@ pub async fn run_chat(
                     {
                         let mut app_guard = app.lock().await;
                         if !app_guard.markdown_enabled {
-                            app_guard.add_system_message(
-                                "Markdown rendering is disabled. Enable with /markdown on."
-                                    .to_string(),
-                            );
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(term_size.width);
-                            let available_height = app_guard
-                                .calculate_available_height(term_size.height, input_area_height);
-                            app_guard.update_scroll_position(available_height, term_size.width);
+                            app_guard.set_status("Markdown disabled (/markdown on)");
                             continue;
                         }
                         let blocks = crate::ui::markdown::compute_codeblock_ranges(
@@ -366,12 +389,7 @@ pub async fn run_chat(
                                 }
                             }
                         } else if blocks.is_empty() {
-                            app_guard.add_system_message("No code blocks found.".to_string());
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(term_size.width);
-                            let available_height = app_guard
-                                .calculate_available_height(term_size.height, input_area_height);
-                            app_guard.update_scroll_position(available_height, term_size.width);
+                            app_guard.set_status("No code blocks");
                         } else {
                             // Enter mode and lock input, select most recent block
                             let last = blocks.len().saturating_sub(1);
@@ -417,16 +435,7 @@ pub async fn run_chat(
                         } else {
                             // Enter edit-select mode only if we have user messages
                             if app_guard.last_user_message_index().is_none() {
-                                app_guard
-                                    .add_system_message("No user messages to select.".to_string());
-                                // Ensure the new system message is visible
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(term_size.width);
-                                let available_height = app_guard.calculate_available_height(
-                                    term_size.height,
-                                    input_area_height,
-                                );
-                                app_guard.update_scroll_position(available_height, term_size.width);
+                                app_guard.set_status("No user messages");
                                 continue;
                             }
                             app_guard.enter_edit_select_mode();
@@ -674,13 +683,8 @@ pub async fn run_chat(
                                             match crate::utils::clipboard::copy_to_clipboard(
                                                 content,
                                             ) {
-                                                Ok(()) => app_guard.add_system_message(
-                                                    "Copied code block to clipboard".to_string(),
-                                                ),
-                                                Err(e) => app_guard.add_system_message(format!(
-                                                    "Clipboard error: {}",
-                                                    e
-                                                )),
+                                                Ok(()) => app_guard.set_status("Copied code block"),
+                                                Err(_e) => app_guard.set_status("Clipboard error"),
                                             }
                                             // Leave block-select mode and scroll to bottom
                                             app_guard.exit_block_select_mode();
@@ -700,27 +704,34 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Char('s') | KeyCode::Char('S') => {
                                     if let Some(cur) = app_guard.selected_block_index {
-                                        let ranges = crate::ui::markdown::compute_codeblock_ranges(
-                                            &app_guard.messages,
-                                            &app_guard.theme,
-                                        );
-                                        if let Some((_start, _len, content)) = ranges.get(cur) {
+                                        let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&app_guard.messages);
+                                        if let Some((content, lang)) = contents.get(cur) {
                                             use chrono::Utc;
                                             use std::fs;
-                                            let ts = Utc::now().format("%Y%m%d-%H%M%S");
-                                            let filename = format!("chabeau-block-{}.txt", ts);
-                                            match fs::write(&filename, content) {
-                                                Ok(()) => app_guard.add_system_message(format!(
-                                                    "Saved code block to {}",
-                                                    filename
-                                                )),
-                                                Err(e) => app_guard.add_system_message(format!(
-                                                    "Error saving code block: {}",
-                                                    e
-                                                )),
+                                            let date = Utc::now().format("%Y-%m-%d");
+                                            let ext = language_to_extension(lang.as_deref());
+                                            let filename =
+                                                format!("chabeau-block-{}.{}", date, ext);
+                                            // If the file exists, open a filename prompt; otherwise save immediately.
+                                            if std::path::Path::new(&filename).exists() {
+                                                app_guard.set_status("File already exists.");
+                                                app_guard.start_file_prompt_save_block(
+                                                    filename,
+                                                    content.clone(),
+                                                );
+                                            } else {
+                                                match fs::write(&filename, content) {
+                                                    Ok(()) => app_guard.set_status(format!(
+                                                        "Saved to {}",
+                                                        filename
+                                                    )),
+                                                    Err(_e) => app_guard
+                                                        .set_status("Error saving code block"),
+                                                }
                                             }
-                                            // Leave block-select mode and scroll to bottom
+                                            // Exit block-select mode (return to regular input)
                                             app_guard.exit_block_select_mode();
+                                            // Scroll to bottom after action
                                             app_guard.auto_scroll = true;
                                             let input_area_height = app_guard
                                                 .calculate_input_area_height(term_size.width);
@@ -833,16 +844,15 @@ pub async fn run_chat(
                                 }
                                 Err(e) => {
                                     let mut app_guard = app.lock().await;
-                                    app_guard.add_system_message(format!("Editor error: {e}"));
-
-                                    // Update scroll position to show the new system message
+                                    app_guard.set_status(format!("Editor error: {}", e));
+                                    // Keep view stable; brief corner status is sufficient
                                     let terminal_size = terminal.size().unwrap_or_default();
                                     let input_area_height =
                                         app_guard.calculate_input_area_height(terminal_size.width);
                                     let available_height = terminal_size
                                         .height
-                                        .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                        .saturating_sub(1); // 1 for title
+                                        .saturating_sub(input_area_height + 2)
+                                        .saturating_sub(1);
                                     app_guard.update_scroll_position(
                                         available_height,
                                         terminal_size.width,
@@ -1001,6 +1011,10 @@ pub async fn run_chat(
                         }
                         KeyCode::Esc => {
                             let mut app_guard = app.lock().await;
+                            if app_guard.file_prompt.is_some() {
+                                app_guard.cancel_file_prompt();
+                                continue;
+                            }
                             if app_guard.edit_select_mode {
                                 app_guard.exit_edit_select_mode();
                                 continue;
@@ -1017,8 +1031,70 @@ pub async fn run_chat(
                         }
                         KeyCode::Enter => {
                             let modifiers = key.modifiers;
-                            // Use Alt+Enter for newlines since Shift+Enter and Ctrl+Enter
-                            // are not reliably detected in all terminals
+                            // Handle filename prompt (Enter: save if new; Alt+Enter: overwrite)
+                            {
+                                let mut app_guard = app.lock().await;
+                                if let Some(prompt) = app_guard.file_prompt.clone() {
+                                    let filename = app_guard.get_input_text().trim().to_string();
+                                    if filename.is_empty() {
+                                        continue;
+                                    }
+                                    let overwrite = modifiers.contains(event::KeyModifiers::ALT);
+                                    match prompt.kind {
+                                        crate::core::app::FilePromptKind::Dump => {
+                                            // Use commands helper to dump
+                                            let res =
+                                                crate::commands::dump_conversation_with_overwrite(
+                                                    &app_guard, &filename, overwrite,
+                                                );
+                                            match res {
+                                                Ok(()) => {
+                                                    app_guard.set_status(format!(
+                                                        "Dumped: {}",
+                                                        filename
+                                                    ));
+                                                    app_guard.cancel_file_prompt();
+                                                }
+                                                Err(e) => {
+                                                    let msg = e.to_string();
+                                                    if msg.contains("already exists") {
+                                                        app_guard
+                                                            .set_status("Log file already exists.");
+                                                    } else {
+                                                        app_guard.set_status(format!(
+                                                            "Dump error: {}",
+                                                            msg
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        crate::core::app::FilePromptKind::SaveCodeBlock => {
+                                            use std::fs;
+                                            let exists = std::path::Path::new(&filename).exists();
+                                            if exists && !overwrite {
+                                                app_guard.set_status("File already exists.");
+                                            } else if let Some(content) = prompt.content {
+                                                match fs::write(&filename, content) {
+                                                    Ok(()) => {
+                                                        app_guard.set_status(format!(
+                                                            "Saved to {}",
+                                                            filename
+                                                        ));
+                                                        app_guard.cancel_file_prompt();
+                                                    }
+                                                    Err(_e) => {
+                                                        app_guard
+                                                            .set_status("Error saving code block");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+                            // Use Alt+Enter for newlines in normal input
                             if modifiers.contains(event::KeyModifiers::ALT) {
                                 // Alt+Enter: insert newline in input
                                 let mut app_guard = app.lock().await;
@@ -1295,6 +1371,21 @@ pub async fn run_chat(
                 // End of streaming - clear the streaming state and finalize response
                 app_guard.finalize_response();
                 app_guard.is_streaming = false;
+                drop(app_guard);
+                received_any = true;
+            } else if let Some(err) = content.strip_prefix("<<API_ERROR>>") {
+                // Display API/network error in the chat area as a system message
+                let error_message = format!("Error: {}", err.trim());
+                app_guard.add_system_message(error_message);
+                // Stop streaming state, since the request failed
+                app_guard.is_streaming = false;
+                // Ensure the new system message is visible
+                let input_area_height = app_guard.calculate_input_area_height(term_size.width);
+                let available_height = term_size
+                    .height
+                    .saturating_sub(input_area_height + 2)
+                    .saturating_sub(1);
+                app_guard.update_scroll_position(available_height, term_size.width);
                 drop(app_guard);
                 received_any = true;
             } else {

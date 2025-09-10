@@ -10,6 +10,7 @@ pub struct Theme {
     pub user_text_style: Style,
     pub assistant_text_style: Style,
     pub system_text_style: Style,
+    pub error_text_style: Style,
 
     // Chrome
     pub title_style: Style,
@@ -54,6 +55,7 @@ impl Theme {
             user_text_style: Style::default().fg(Color::Cyan),
             assistant_text_style: Style::default().fg(Color::White),
             system_text_style: Style::default().fg(Color::DarkGray),
+            error_text_style: Style::default().fg(Color::LightRed),
 
             title_style: Style::default().fg(Color::Gray),
             streaming_indicator_style: Style::default().fg(Color::White),
@@ -94,6 +96,7 @@ impl Theme {
             user_text_style: Style::default().fg(Color::Blue),
             assistant_text_style: Style::default().fg(Color::Black),
             system_text_style: Style::default().fg(Color::Gray),
+            error_text_style: Style::default().fg(Color::Red),
 
             title_style: Style::default().fg(Color::DarkGray),
             streaming_indicator_style: Style::default().fg(Color::Black),
@@ -134,6 +137,7 @@ impl Theme {
             user_text_style: Style::default().fg(Color::Magenta),
             assistant_text_style: Style::default().fg(Color::Gray),
             system_text_style: Style::default().fg(Color::DarkGray),
+            error_text_style: Style::default().fg(Color::LightRed),
 
             title_style: Style::default().fg(Color::LightMagenta),
             streaming_indicator_style: Style::default().fg(Color::LightMagenta),
@@ -281,6 +285,8 @@ impl Theme {
             user_text_style: parse_style(&spec.user_text),
             assistant_text_style: parse_style(&spec.assistant_text),
             system_text_style: parse_style(&spec.system_text),
+            error_text_style: Style::default()
+                .fg(Self::select_error_color_for_bg(background_color)),
 
             title_style: parse_style(&spec.title),
             streaming_indicator_style: parse_style(&spec.streaming_indicator),
@@ -338,6 +344,26 @@ impl Theme {
         // Fallbacks for markdown styles when not provided
         theme = theme.with_md_fallbacks();
         theme
+    }
+
+    // Choose a readable error color for the given background.
+    fn select_error_color_for_bg(bg: Color) -> Color {
+        use Color::*;
+        match bg {
+            // For light backgrounds, prefer deeper red for contrast
+            White => Rgb(200, 45, 0),
+            Rgb(r, g, b) if Self::is_bright(r, g, b) => Rgb(200, 45, 0),
+            // For dark backgrounds, prefer lighter red/orange
+            Black | DarkGray => LightRed,
+            Rgb(_r, _g, _b) => Rgb(255, 100, 100),
+            _ => LightRed,
+        }
+    }
+
+    fn is_bright(r: u8, g: u8, b: u8) -> bool {
+        // Perceptual luminance approximation
+        let lum = 0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32);
+        lum >= 140.0
     }
 
     fn with_md_fallbacks(mut self) -> Self {

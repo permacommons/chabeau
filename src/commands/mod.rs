@@ -12,57 +12,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     let trimmed = input.trim();
 
     if trimmed.starts_with("/help") {
-        // Display extended help information
-        let help_text = vec![
-            "Chabeau - Terminal Chat Interface Help",
-            "",
-            "Keyboard Shortcuts:",
-            "  Enter             Send the message",
-            "  Alt+Enter         Insert newline in input",
-            "  Ctrl+A            Move cursor to beginning of input",
-            "  Ctrl+E            Move cursor to end of input",
-            "  Left/Right        Move cursor left/right in input",
-            "  Shift+Left/Right  Move cursor left/right in input (alias)",
-            "  Shift+Up/Down     Move cursor up/down lines in multi-line input",
-            "  Ctrl+C            Quit the application",
-            "  Ctrl+T            Open external editor (requires EDITOR env var)",
-            "  Ctrl+R            Retry the last bot response",
-            "  Ctrl+P            Edit previous messages (select mode)",
-            "  Esc               Interrupt streaming or exit edit modes",
-            "  Up/Down           Scroll through chat history",
-            "  Mouse Wheel       Scroll through chat history",
-            "  Backspace         Delete characters in input field",
-            "",
-            "Chat Commands:",
-            "  /help             Show this help message",
-            "  /theme            Open theme picker",
-            "  /theme <id>       Apply theme by id (built-in or custom)",
-            "  /log <filename>   Enable logging to specified file",
-            "  /log              Toggle logging pause/resume",
-            "  /dump <filename>  Dump conversation to specified file",
-            "  /dump             Dump conversation to chabeau-log-<isodate>.txt",
-            "  /markdown [on|off|toggle]   Enable/disable markdown rendering (persisted)",
-            "  /syntax [on|off|toggle]     Enable/disable code syntax highlighting (persisted)",
-            "",
-            "External Editor Setup:",
-            "  export EDITOR=nano          # Use nano",
-            "  export EDITOR=vim           # Use vim",
-            "  export EDITOR=code          # Use VS Code",
-            "  export EDITOR=\"code --wait\" # Use VS Code (wait for close)",
-            "",
-            "Tips:",
-            "  • Use Ctrl+T to compose longer messages in your editor",
-            "  • Scroll manually to disable auto-scroll to bottom",
-            "  • Use /log to save conversations to files",
-            "  • Use /dump to save a snapshot of the current conversation",
-            "  • Press Esc to stop streaming or to cancel edit modes",
-            "  • In select mode: Enter=Edit, e=Edit in place, Del=Truncate (wraps at ends)",
-        ];
-
-        // Create a single system message with proper newlines
-        let help_message = help_text.join("\n");
-        app.add_system_message(help_message);
-
+        let help_md = crate::ui::help::builtin_help_md();
+        app.add_system_message(help_md.to_string());
         CommandResult::Continue
     } else if trimmed.starts_with("/log") {
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -72,11 +23,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 // Just "/log" - toggle logging if file is set
                 match app.logging.toggle_logging() {
                     Ok(message) => {
-                        app.add_system_message(message);
+                        app.set_status(message);
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.add_system_message(format!("Error: {e}"));
+                        app.set_status(format!("Log error: {}", e));
                         CommandResult::Continue
                     }
                 }
@@ -86,17 +37,17 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 let filename = parts[1];
                 match app.logging.set_log_file(filename.to_string()) {
                     Ok(message) => {
-                        app.add_system_message(message);
+                        app.set_status(message);
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.add_system_message(format!("Error setting log file: {e}"));
+                        app.set_status(format!("Logfile error: {}", e));
                         CommandResult::Continue
                     }
                 }
             }
             _ => {
-                app.add_system_message("Usage: /log [filename] - Enable logging to file, or /log to toggle pause/resume".to_string());
+                app.set_status("Usage: /log [filename]");
                 CommandResult::Continue
             }
         }
@@ -108,7 +59,19 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 // Just "/dump" - dump to default filename with ISO date
                 let timestamp = Utc::now().format("%Y-%m-%d").to_string();
                 let filename = format!("chabeau-log-{}.txt", timestamp);
-                handle_dump_result(app, dump_conversation(app, &filename), &filename)
+                match dump_conversation(app, &filename) {
+                    Ok(()) => handle_dump_result(app, Ok(()), &filename),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("already exists") {
+                            app.set_status("Log file already exists.");
+                            app.start_file_prompt_dump(filename);
+                            CommandResult::Continue
+                        } else {
+                            handle_dump_result(app, Err(e), &filename)
+                        }
+                    }
+                }
             }
             2 => {
                 // "/dump <filename>" - dump to specified filename
@@ -116,7 +79,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 handle_dump_result(app, dump_conversation(app, filename), filename)
             }
             _ => {
-                app.add_system_message("Usage: /dump [filename] - Dump conversation to file, or /dump for default filename".to_string());
+                app.set_status("Usage: /dump [filename]");
                 CommandResult::Continue
             }
         }
@@ -133,11 +96,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 let id = parts[1];
                 match app.apply_theme_by_id(id) {
                     Ok(_) => {
-                        app.add_system_message(format!("Theme set to: {}", id));
+                        app.set_status(format!("Theme set: {}", id));
                         CommandResult::Continue
                     }
-                    Err(e) => {
-                        app.add_system_message(format!("Error: {}", e));
+                    Err(_e) => {
+                        app.set_status("Theme error");
                         CommandResult::Continue
                     }
                 }
@@ -152,7 +115,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "off" => new_state = false,
             "toggle" | "" => new_state = !new_state,
             _ => {
-                app.add_system_message("Usage: /markdown [on|off|toggle]".to_string());
+                app.set_status("Usage: /markdown [on|off|toggle]");
                 return CommandResult::Continue;
             }
         }
@@ -162,23 +125,22 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             Ok(mut cfg) => {
                 cfg.markdown = Some(new_state);
                 if let Err(e) = cfg.save() {
-                    app.add_system_message(format!(
-                        "Markdown {} (but failed to save: {})",
-                        if new_state { "enabled" } else { "disabled" },
-                        e
+                    let _ = e; // keep detail out of status
+                    app.set_status(format!(
+                        "Markdown {} (unsaved)",
+                        if new_state { "enabled" } else { "disabled" }
                     ));
                 } else {
-                    app.add_system_message(format!(
-                        "Markdown {} (persisted)",
+                    app.set_status(format!(
+                        "Markdown {}",
                         if new_state { "enabled" } else { "disabled" }
                     ));
                 }
             }
-            Err(e) => {
-                app.add_system_message(format!(
-                    "Markdown {} (failed to load config: {})",
-                    if new_state { "enabled" } else { "disabled" },
-                    e
+            Err(_e) => {
+                app.set_status(format!(
+                    "Markdown {}",
+                    if new_state { "enabled" } else { "disabled" }
                 ));
             }
         }
@@ -192,7 +154,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "off" => new_state = false,
             "toggle" | "" => new_state = !new_state,
             _ => {
-                app.add_system_message("Usage: /syntax [on|off|toggle]".to_string());
+                app.set_status("Usage: /syntax [on|off|toggle]");
                 return CommandResult::Continue;
             }
         }
@@ -202,24 +164,17 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             Ok(mut cfg) => {
                 cfg.syntax = Some(new_state);
                 if let Err(e) = cfg.save() {
-                    app.add_system_message(format!(
-                        "Syntax highlighting {} (but failed to save: {})",
-                        if new_state { "enabled" } else { "disabled" },
-                        e
+                    let _ = e;
+                    app.set_status(format!(
+                        "Syntax {} (unsaved)",
+                        if new_state { "on" } else { "off" }
                     ));
                 } else {
-                    app.add_system_message(format!(
-                        "Syntax highlighting {} (persisted)",
-                        if new_state { "enabled" } else { "disabled" }
-                    ));
+                    app.set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
                 }
             }
-            Err(e) => {
-                app.add_system_message(format!(
-                    "Syntax highlighting {} (failed to load config: {})",
-                    if new_state { "enabled" } else { "disabled" },
-                    e
-                ));
+            Err(_e) => {
+                app.set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
             }
         }
         CommandResult::Continue
@@ -229,7 +184,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     }
 }
 
-fn dump_conversation(app: &App, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn dump_conversation_with_overwrite(
+    app: &App,
+    filename: &str,
+    overwrite: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Filter out system messages and check if conversation is empty
     let conversation_messages: Vec<_> = app
         .messages
@@ -242,7 +201,7 @@ fn dump_conversation(app: &App, filename: &str) -> Result<(), Box<dyn std::error
     }
 
     // Check if file already exists
-    if std::path::Path::new(filename).exists() {
+    if !overwrite && std::path::Path::new(filename).exists() {
         return Err(format!(
             "File '{}' already exists. Please specify a different filename with /dump <filename>.",
             filename
@@ -265,6 +224,10 @@ fn dump_conversation(app: &App, filename: &str) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+fn dump_conversation(app: &App, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+    dump_conversation_with_overwrite(app, filename, false)
+}
+
 fn handle_dump_result(
     app: &mut App,
     result: Result<(), Box<dyn std::error::Error>>,
@@ -272,11 +235,11 @@ fn handle_dump_result(
 ) -> CommandResult {
     match result {
         Ok(_) => {
-            app.add_system_message(format!("Conversation dumped to: {}", filename));
+            app.set_status(format!("Dumped: {}", filename));
             CommandResult::Continue
         }
         Err(e) => {
-            app.add_system_message(format!("Error dumping conversation: {}", e));
+            app.set_status(format!("Dump error: {}", e));
             CommandResult::Continue
         }
     }
@@ -376,11 +339,9 @@ mod tests {
         // Should continue (not process as message)
         assert!(matches!(result, CommandResult::Continue));
 
-        // Should have added a system message about the dump
-        assert!(!app.messages.is_empty());
-        let last_message = app.messages.back().unwrap();
-        assert_eq!(last_message.role, "system");
-        assert!(last_message.content.contains("Conversation dumped to:"));
+        // Should set a status about the dump
+        assert!(app.status.is_some());
+        assert!(app.status.as_ref().unwrap().starts_with("Dumped: "));
 
         // Clean up
         fs::remove_file(dump_filename).ok();
@@ -401,12 +362,9 @@ mod tests {
         // Should continue (not process as message)
         assert!(matches!(result, CommandResult::Continue));
 
-        // Should have added a system message with an error
-        assert!(!app.messages.is_empty());
-        let last_message = app.messages.back().unwrap();
-        assert_eq!(last_message.role, "system");
-        assert!(last_message.content.contains("Error dumping conversation:"));
-        assert!(last_message.content.contains("No conversation to dump"));
+        // Should set a status with an error
+        assert!(app.status.is_some());
+        assert!(app.status.as_ref().unwrap().starts_with("Dump error:"));
     }
 
     #[test]

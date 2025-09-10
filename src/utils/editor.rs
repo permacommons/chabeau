@@ -14,7 +14,7 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
     let editor = match std::env::var("EDITOR") {
         Ok(editor) if !editor.trim().is_empty() => editor,
         _ => {
-            app.add_system_message("No EDITOR environment variable set. Please set EDITOR to your preferred text editor (e.g., export EDITOR=nano).".to_string());
+            app.set_status("EDITOR not set. Configure $EDITOR (e.g., nano)");
             return Ok(None);
         }
     };
@@ -50,7 +50,7 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
     )?;
 
     if !status.success() {
-        app.add_system_message(format!("Editor exited with non-zero status: {status}"));
+        app.set_status(format!("Editor exited with status: {}", status));
         return Ok(None);
     }
 
@@ -59,9 +59,7 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
 
     // Check if file has content (not zero bytes and not just whitespace)
     if content.trim().is_empty() {
-        app.add_system_message(
-            "Editor file was empty or contained only whitespace - no message sent.".to_string(),
-        );
+        app.set_status("Editor file empty — no message");
         Ok(None)
     } else {
         // Clear the input and return the content to be sent immediately

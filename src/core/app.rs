@@ -58,6 +58,11 @@ pub struct App {
     pub syntax_enabled: bool,
     // Cached prewrapped chat lines for fast redraws in normal mode
     pub(crate) prewrap_cache: Option<PrewrapCache>,
+    // One-line ephemeral status message (shown in input border)
+    pub status: Option<String>,
+    pub status_set_at: Option<Instant>,
+    // When present, the input area is used to prompt for a filename
+    pub file_prompt: Option<FilePrompt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +134,9 @@ impl App {
                 markdown_enabled: config.markdown.unwrap_or(true),
                 syntax_enabled: config.syntax.unwrap_or(true),
                 prewrap_cache: None,
+                status: None,
+                status_set_at: None,
+                file_prompt: None,
             };
 
             // Try to fetch the newest model
@@ -233,6 +241,9 @@ impl App {
             markdown_enabled: config.markdown.unwrap_or(true),
             syntax_enabled: config.syntax.unwrap_or(true),
             prewrap_cache: None,
+            status: None,
+            status_set_at: None,
+            file_prompt: None,
         };
 
         // Keep textarea state in sync with the string input initially
@@ -389,6 +400,9 @@ impl App {
             markdown_enabled,
             syntax_enabled,
             prewrap_cache: None,
+            status: None,
+            status_set_at: None,
+            file_prompt: None,
         }
     }
 
@@ -418,6 +432,9 @@ impl App {
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
+        // Clear any ephemeral status when the user sends a message
+        self.clear_status();
+
         let user_message = Message {
             role: "user".to_string(),
             content: content.clone(),
@@ -453,6 +470,45 @@ impl App {
             }
         }
         api_messages
+    }
+
+    pub fn set_status<S: Into<String>>(&mut self, s: S) {
+        self.status = Some(s.into());
+        self.status_set_at = Some(Instant::now());
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status = None;
+        self.status_set_at = None;
+    }
+
+    pub fn start_file_prompt_dump(&mut self, filename: String) {
+        self.file_prompt = Some(FilePrompt {
+            kind: FilePromptKind::Dump,
+            content: None,
+        });
+        self.set_input_text(filename);
+        self.input_mode = true;
+        self.in_place_edit_index = None;
+        self.edit_select_mode = false;
+        self.block_select_mode = false;
+    }
+
+    pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
+        self.file_prompt = Some(FilePrompt {
+            kind: FilePromptKind::SaveCodeBlock,
+            content: Some(content),
+        });
+        self.set_input_text(filename);
+        self.input_mode = true;
+        self.in_place_edit_index = None;
+        self.edit_select_mode = false;
+        self.block_select_mode = false;
+    }
+
+    pub fn cancel_file_prompt(&mut self) {
+        self.file_prompt = None;
+        self.clear_input();
     }
 
     pub fn append_to_response(
@@ -1053,6 +1109,18 @@ pub(crate) struct PrewrapCache {
     last_start: usize,
     last_len: usize,
     lines: Vec<Line<'static>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FilePromptKind {
+    Dump,
+    SaveCodeBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilePrompt {
+    pub kind: FilePromptKind,
+    pub content: Option<String>,
 }
 
 fn hash_last_message(messages: &VecDeque<Message>) -> u64 {

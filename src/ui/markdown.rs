@@ -14,9 +14,9 @@ pub struct RenderedMessage {
 #[cfg(test)]
 pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage {
     match msg.role.as_str() {
-        "system" => render_system_message(&msg.content, theme),
-        "user" => render_with_parser(true, &msg.content, theme, true),
-        _ => render_with_parser(false, &msg.content, theme, true),
+        "system" => render_with_parser_role(RoleKind::System, &msg.content, theme, true),
+        "user" => render_with_parser_role(RoleKind::User, &msg.content, theme, true),
+        _ => render_with_parser_role(RoleKind::Assistant, &msg.content, theme, true),
     }
 }
 
@@ -27,9 +27,9 @@ pub fn render_message_markdown_opts(
     syntax_enabled: bool,
 ) -> RenderedMessage {
     match msg.role.as_str() {
-        "system" => render_system_message(&msg.content, theme),
-        "user" => render_with_parser(true, &msg.content, theme, syntax_enabled),
-        _ => render_with_parser(false, &msg.content, theme, syntax_enabled),
+        "system" => render_with_parser_role(RoleKind::System, &msg.content, theme, syntax_enabled),
+        "user" => render_with_parser_role(RoleKind::User, &msg.content, theme, syntax_enabled),
+        _ => render_with_parser_role(RoleKind::Assistant, &msg.content, theme, syntax_enabled),
     }
 }
 
@@ -39,7 +39,13 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
         if l.trim().is_empty() {
             out.push(Line::from(""));
         } else {
-            out.push(Line::from(Span::styled(detab(l), theme.system_text_style)));
+            let text = detab(l);
+            // Heuristic: if line starts with "Error:", render with error style
+            if text.starts_with("Error:") {
+                out.push(Line::from(Span::styled(text, theme.error_text_style)));
+            } else {
+                out.push(Line::from(Span::styled(text, theme.system_text_style)));
+            }
         }
     }
     if !out.is_empty() {
@@ -48,8 +54,23 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
     RenderedMessage { lines: out }
 }
 
-fn render_with_parser(
-    is_user: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleKind {
+    User,
+    Assistant,
+    System,
+}
+
+fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
+    match role {
+        RoleKind::User => theme.user_text_style,
+        RoleKind::Assistant => theme.md_paragraph_style(),
+        RoleKind::System => theme.system_text_style,
+    }
+}
+
+fn render_with_parser_role(
+    role: RoleKind,
     content: &str,
     theme: &Theme,
     syntax_enabled: bool,
@@ -66,7 +87,7 @@ fn render_with_parser(
     // Inline buffer for current line
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     // Style stack for inline formatting
-    let mut style_stack: Vec<Style> = vec![base_text_style(is_user, theme)];
+    let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
 
     // List handling
     let mut list_stack: Vec<ListKind> = Vec::new();
@@ -75,13 +96,14 @@ fn render_with_parser(
     let mut code_block_lines: Vec<String> = Vec::new();
 
     // User prefix handling
-    let mut did_prefix_user = !is_user; // if assistant, skip prefix logic
+    let is_user = role == RoleKind::User;
+    let mut did_prefix_user = role != RoleKind::User; // only user gets prefix
 
     for event in parser {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
-                    if is_user {
+                    if role == RoleKind::User {
                         if !did_prefix_user {
                             current_spans.push(Span::styled("You: ", theme.user_prefix_style));
                             did_prefix_user = true;
@@ -122,7 +144,7 @@ fn render_with_parser(
                             }
                         }
                     };
-                    if is_user && !did_prefix_user {
+                    if role == RoleKind::User && !did_prefix_user {
                         current_spans.push(Span::styled("You: ", theme.user_prefix_style));
                         did_prefix_user = true;
                     }
@@ -231,9 +253,7 @@ fn render_with_parser(
                 } else {
                     current_spans.push(Span::styled(
                         detab(&text),
-                        *style_stack
-                            .last()
-                            .unwrap_or(&base_text_style(is_user, theme)),
+                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
                     ))
                 }
             }
@@ -245,7 +265,7 @@ fn render_with_parser(
                 // Treat soft breaks as new lines
                 flush_current_line(&mut lines, &mut current_spans);
                 // For user messages, indent continuation lines
-                if is_user && did_prefix_user {
+                if role == RoleKind::User && did_prefix_user {
                     current_spans.push(Span::raw("     "));
                 }
             }
@@ -293,8 +313,13 @@ pub fn render_message_with_ranges(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut ranges: Vec<(usize, usize, String)> = Vec::new();
+    let role = if is_user {
+        RoleKind::User
+    } else {
+        RoleKind::Assistant
+    };
     let mut current_spans: Vec<Span<'static>> = Vec::new();
-    let mut style_stack: Vec<Style> = vec![base_text_style(is_user, theme)];
+    let mut style_stack: Vec<Style> = vec![base_text_style_bool(is_user, theme)];
     let mut list_stack: Vec<ListKind> = Vec::new();
     let mut in_code_block: Option<String> = None;
     let mut code_block_lines: Vec<String> = Vec::new();
@@ -343,7 +368,7 @@ pub fn render_message_with_ranges(
                             }
                         }
                     };
-                    if is_user && !did_prefix_user {
+                    if role == RoleKind::User && !did_prefix_user {
                         current_spans.push(Span::styled("You: ", theme.user_prefix_style));
                         did_prefix_user = true;
                     }
@@ -437,7 +462,7 @@ pub fn render_message_with_ranges(
                         detab(&text),
                         *style_stack
                             .last()
-                            .unwrap_or(&base_text_style(is_user, theme)),
+                            .unwrap_or(&base_text_style_bool(is_user, theme)),
                     ))
                 }
             }
@@ -493,6 +518,58 @@ pub fn compute_codeblock_ranges(
             out.push((offset + start, len, content));
         }
         offset += lines.len();
+    }
+    out
+}
+
+/// Provides only content and optional language hint for each code block, in order of appearance.
+pub fn compute_codeblock_contents_with_lang(
+    messages: &VecDeque<crate::core::message::Message>,
+) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for msg in messages {
+        if msg.role == "system" {
+            continue;
+        }
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        let parser = Parser::new_ext(&msg.content, options);
+        let mut in_code_block: Option<String> = None;
+        let mut buf: Vec<String> = Vec::new();
+        for ev in parser {
+            match ev {
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    in_code_block = Some(match kind {
+                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
+                        _ => String::new(),
+                    });
+                    buf.clear();
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    let content = buf.join("\n");
+                    let lang = in_code_block.as_ref().and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s.clone())
+                        }
+                    });
+                    out.push((content, lang));
+                    in_code_block = None;
+                }
+                Event::Text(text) => {
+                    if in_code_block.is_some() {
+                        for l in text.lines() {
+                            buf.push(detab(l));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     out
 }
@@ -626,7 +703,7 @@ enum ListKind {
     Ordered(u64),
 }
 
-fn base_text_style(is_user: bool, theme: &Theme) -> Style {
+fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
     if is_user {
         theme.user_text_style
     } else {

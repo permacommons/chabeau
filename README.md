@@ -141,6 +141,7 @@ Syntax colors adapt to the active theme (dark/light) and use the theme’s code 
 | **Ctrl+R** | Retry last response |
 | **Ctrl+T** | Open external editor |
 | **Ctrl+P** | Edit previous messages (enter select mode) |
+| **Ctrl+L** | Clear status message |
 | **Esc** | Interrupt streaming or exit edit modes |
 | **Backspace** | Delete characters in input field |
 | **Mouse Wheel** | Scroll through chat history |
@@ -171,6 +172,7 @@ export EDITOR="code --wait" # VS Code with wait
   - **Gray**: System messages
 - **Input Area**: Message composition with soft-wrap and IME support (powered by `tui-textarea`)
 - **Title Bar**: Version, provider, model, logging status, and a pulsing streaming indicator
+- **Status Bar**: Short right-aligned messages in the bottom input border (e.g., "Saved to …", "Clipboard error"). Cleared on next send or with `Ctrl+L`.
 
 ## Architecture
 

@@ -109,6 +109,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
     } else if app.block_select_mode {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
+    } else if app.file_prompt.is_some() {
+        "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
     } else if app.in_place_edit_index.is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
     } else if app.is_streaming {
@@ -131,12 +133,88 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ])
     };
 
+    // Prepare optional bottom-right status message, shortened and right-aligned
+    let status_bottom: Option<Line> = if let Some(status) = &app.status {
+        // Limit to available width minus borders and a small margin
+        let input_area_width = chunks[1].width;
+        let inner_width = input_area_width.saturating_sub(2) as usize; // exclude borders
+        if inner_width < 8 {
+            None
+        } else {
+            // Leave one space on both sides of the status text
+            let max_chars = inner_width.saturating_sub(2);
+            let text_raw = if status.chars().count() > max_chars {
+                // Truncate and add ellipsis
+                let mut s = String::new();
+                for (i, ch) in status.chars().enumerate() {
+                    if i + 1 >= max_chars {
+                        break;
+                    }
+                    s.push(ch);
+                }
+                s.push('…');
+                s
+            } else {
+                status.clone()
+            };
+            // Determine if this is an error status to use error color
+            let is_error = {
+                let s = text_raw.to_ascii_lowercase();
+                s.contains("error")
+                    || s.contains("exists")
+                    || s.contains("failed")
+                    || s.contains("denied")
+            };
+            let base_style = if is_error {
+                app.theme.error_text_style
+            } else {
+                app.theme.system_text_style
+            };
+            // Build a brief highlight effect: flash brighter then dim (same timing as success)
+            let style = if let Some(set_at) = app.status_set_at {
+                let ms = set_at.elapsed().as_millis() as u64;
+                if ms < 300 {
+                    // brief highlight: bold the base style
+                    base_style.add_modifier(Modifier::BOLD)
+                } else if ms < 900 {
+                    base_style.add_modifier(Modifier::DIM)
+                } else {
+                    base_style
+                }
+            } else {
+                base_style
+            };
+
+            // Compose a visual border with left filler and right-aligned status text
+            // Account for one leading and one trailing space
+            let status_len = text_raw.chars().count() + 2;
+            let dash_count = inner_width.saturating_sub(status_len);
+            let left_border = if dash_count > 0 {
+                "─".repeat(dash_count)
+            } else {
+                String::new()
+            };
+            let line = Line::from(vec![
+                Span::styled(left_border, app.theme.input_border_style),
+                Span::styled(" ", app.theme.input_border_style),
+                Span::styled(text_raw.clone(), style),
+                Span::styled(" ", app.theme.input_border_style),
+            ]);
+            Some(line)
+        }
+    } else {
+        None
+    };
+
     // Render border/title and the textarea inside
-    let input_block = Block::default()
+    let mut input_block = Block::default()
         .borders(Borders::ALL)
         .style(Style::default().bg(app.theme.background_color))
         .border_style(app.theme.input_border_style)
         .title(input_title);
+    if let Some(bottom) = status_bottom {
+        input_block = input_block.title_bottom(bottom);
+    }
 
     let area = chunks[1];
     let inner = input_block.inner(area);

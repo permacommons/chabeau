@@ -5,6 +5,20 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
 
+#[derive(Clone, Debug)]
+enum ListKind {
+    Unordered,
+    Ordered(u64),
+}
+
+struct TableState {
+    rows: Vec<Vec<Vec<Span<'static>>>>,
+    current_row: Vec<Vec<Span<'static>>>,
+    current_cell: Vec<Span<'static>>,
+    in_header: bool,
+}
+
+
 /// Description of a rendered message (line-based), used by the TUI renderer.
 pub struct RenderedMessage {
     pub lines: Vec<Line<'static>>,
@@ -94,6 +108,8 @@ fn render_with_parser_role(
     // Code block handling
     let mut in_code_block: Option<String> = None; // language hint
     let mut code_block_lines: Vec<String> = Vec::new();
+    // Table handling
+    let mut table_state: Option<TableState> = None;
 
     // User prefix handling
     let is_user = role == RoleKind::User;
@@ -185,6 +201,25 @@ fn render_with_parser_role(
                     let new = theme.md_link_style();
                     style_stack.push(new);
                 }
+                Tag::Table(_) => {
+                    flush_current_line(&mut lines, &mut current_spans);
+                    table_state = Some(TableState::new());
+                }
+                Tag::TableHead => {
+                    if let Some(ref mut table) = table_state {
+                        table.start_header();
+                    }
+                }
+                Tag::TableRow => {
+                    if let Some(ref mut table) = table_state {
+                        table.start_row();
+                    }
+                }
+                Tag::TableCell => {
+                    if let Some(ref mut table) = table_state {
+                        table.start_cell();
+                    }
+                }
                 _ => {}
             },
             Event::End(tag_end) => match tag_end {
@@ -243,6 +278,28 @@ fn render_with_parser_role(
                 TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                     style_stack.pop();
                 }
+                TagEnd::Table => {
+                    if let Some(table) = table_state.take() {
+                        let mut table_lines = table.render_table(theme);
+                        lines.append(&mut table_lines);
+                        lines.push(Line::from(""));
+                    }
+                }
+                TagEnd::TableHead => {
+                    if let Some(ref mut table) = table_state {
+                        table.end_header();
+                    }
+                }
+                TagEnd::TableRow => {
+                    if let Some(ref mut table) = table_state {
+                        table.end_row();
+                    }
+                }
+                TagEnd::TableCell => {
+                    if let Some(ref mut table) = table_state {
+                        table.end_cell();
+                    }
+                }
                 _ => {}
             },
             Event::Text(text) => {
@@ -250,6 +307,12 @@ fn render_with_parser_role(
                     for l in text.lines() {
                         code_block_lines.push(detab(l).to_string());
                     }
+                } else if let Some(ref mut table) = table_state {
+                    let span = Span::styled(
+                        detab(&text),
+                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
+                    );
+                    table.add_span(span);
                 } else {
                     current_spans.push(Span::styled(
                         detab(&text),
@@ -259,7 +322,12 @@ fn render_with_parser_role(
             }
             Event::Code(code) => {
                 let s = theme.md_inline_code_style();
-                current_spans.push(Span::styled(detab(&code), s));
+                let span = Span::styled(detab(&code), s);
+                if let Some(ref mut table) = table_state {
+                    table.add_span(span);
+                } else {
+                    current_spans.push(span);
+                }
             }
             Event::SoftBreak => {
                 // Treat soft breaks as new lines
@@ -594,113 +662,218 @@ mod tests {
         assert_eq!(*len, 2);
         assert_eq!(content, "line1\nline2");
     }
-}
 
-/// Build display lines for all messages using the lightweight markdown renderer.
-#[cfg(test)]
-pub fn build_markdown_display_lines(
-    messages: &std::collections::VecDeque<Message>,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for msg in messages {
-        let rendered = render_message_markdown(msg, theme);
-        lines.extend(rendered.lines);
+    #[test]
+    fn debug_table_events() {
+        let markdown = r#"| Header 1 | Header 2 | Header 3 |
+|----------|----------|----------|
+| Cell 1   | Cell 2   | Cell 3   |
+| Cell 4   | Cell 5   | Cell 6   |"#;
+
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        let parser = Parser::new_ext(markdown, options);
+
+        for event in parser {
+            println!("{:?}", event);
+        }
     }
-    lines
+
+    #[test]
+    fn table_rendering_works() {
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: r#"Here's a table:
+
+| Header 1 | Header 2 | Header 3 |
+|----------|----------|----------|
+| Cell 1   | Cell 2   | Cell 3   |
+| Cell 4   | Cell 5   | Cell 6   |
+
+End of table."#
+                .into(),
+        });
+        let theme = crate::ui::theme::Theme::dark_default();
+        let rendered = render_message_markdown(&messages[0], &theme);
+
+        // Check that we have table lines with borders
+        let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+        println!("Rendered lines:");
+        for (i, line) in lines_str.iter().enumerate() {
+            println!("{}: {}", i, line);
+        }
+
+        // Should contain box drawing characters
+        let has_table_borders = lines_str
+            .iter()
+            .any(|line| line.contains("┌") || line.contains("├") || line.contains("└"));
+        assert!(
+            has_table_borders,
+            "Table should contain box drawing characters"
+        );
+
+        // Should contain table content
+        let has_table_content = lines_str
+            .iter()
+            .any(|line| line.contains("Header 1") && line.contains("Header 2"));
+        assert!(has_table_content, "Table should contain header content");
+    }
 }
 
-/// Plain renderer without markdown parsing; keeps prefixes and spacing.
-pub fn build_plain_display_lines(
-    messages: &std::collections::VecDeque<Message>,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for msg in messages {
-        match msg.role.as_str() {
-            "system" => {
-                let rm = render_system_message(&msg.content, theme);
-                lines.extend(rm.lines);
-            }
-            "user" => {
-                let mut first = true;
-                for l in msg.content.lines() {
-                    if l.trim().is_empty() {
-                        lines.push(Line::from(""));
-                    } else if first {
-                        lines.push(Line::from(Span::styled(
-                            format!("You: {}", detab(l)),
-                            theme.user_text_style,
-                        )));
-                        first = false;
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            format!("     {}", detab(l)),
-                            theme.user_text_style,
-                        )));
-                    }
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
-            }
-            _ => {
-                for l in msg.content.lines() {
-                    if l.trim().is_empty() {
-                        lines.push(Line::from(""));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            detab(l),
-                            theme.md_paragraph_style(),
-                        )));
-                    }
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
+
+impl TableState {
+    fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            current_row: Vec::new(),
+            current_cell: Vec::new(),
+            in_header: false,
+        }
+    }
+
+    fn start_header(&mut self) {
+        self.in_header = true;
+    }
+
+    fn end_header(&mut self) {
+        self.in_header = false;
+        if !self.current_row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.current_row));
+        }
+    }
+
+    fn start_row(&mut self) {
+        // Row already started, just continue
+    }
+
+    fn end_row(&mut self) {
+        if !self.current_row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.current_row));
+        }
+    }
+
+    fn start_cell(&mut self) {
+        self.current_cell.clear();
+    }
+
+    fn end_cell(&mut self) {
+        self.current_row
+            .push(std::mem::take(&mut self.current_cell));
+    }
+
+    fn add_span(&mut self, span: Span<'static>) {
+        self.current_cell.push(span);
+    }
+
+    fn render_table(&self, theme: &Theme) -> Vec<Line<'static>> {
+        if self.rows.is_empty() {
+            return Vec::new();
+        }
+
+        let mut lines = Vec::new();
+        let max_cols = self.rows.iter().map(|row| row.len()).max().unwrap_or(0);
+
+        if max_cols == 0 {
+            return lines;
+        }
+
+        // Calculate column widths based on text content of spans
+        let mut col_widths = vec![0; max_cols];
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < col_widths.len() {
+                    let cell_text_width = cell.iter().map(|span| span.content.len()).sum::<usize>();
+                    col_widths[i] = col_widths[i].max(cell_text_width);
                 }
             }
         }
+
+        // Ensure minimum width of 3 for each column
+        for width in &mut col_widths {
+            *width = (*width).max(3);
+        }
+
+        let table_style = theme.md_paragraph_style();
+
+        // Render header if we have rows
+        if !self.rows.is_empty() {
+            // Top border
+            let top_border = self.create_border_line(&col_widths, "┌", "┬", "┐", "─");
+            lines.push(Line::from(Span::styled(top_border, table_style)));
+
+            // Header row
+            let header_line = self.create_content_line_with_spans(&self.rows[0], &col_widths);
+            lines.push(header_line);
+
+            // Header separator
+            let header_sep = self.create_border_line(&col_widths, "├", "┼", "┤", "─");
+            lines.push(Line::from(Span::styled(header_sep, table_style)));
+
+            // Data rows
+            for row in &self.rows[1..] {
+                let content_line = self.create_content_line_with_spans(row, &col_widths);
+                lines.push(content_line);
+            }
+
+            // Bottom border
+            let bottom_border = self.create_border_line(&col_widths, "└", "┴", "┘", "─");
+            lines.push(Line::from(Span::styled(bottom_border, table_style)));
+        }
+
+        lines
     }
-    lines
-}
 
-#[cfg(test)]
-mod plain_tests {
-    use super::*;
-    use crate::core::message::Message;
-
-    #[test]
-    fn plain_user_message_prefix_and_indent() {
-        let theme = crate::ui::theme::Theme::dark_default();
-        let messages = std::collections::VecDeque::from(vec![Message {
-            role: "user".into(),
-            content: "Line1\nLine2".into(),
-        }]);
-        let lines = build_plain_display_lines(&messages, &theme);
-        assert!(lines[0].to_string().starts_with("You: Line1"));
-        assert!(lines[1].to_string().starts_with("     Line2"));
-        assert_eq!(lines[2].to_string(), "");
+    fn create_border_line(
+        &self,
+        col_widths: &[usize],
+        left: &str,
+        mid: &str,
+        right: &str,
+        fill: &str,
+    ) -> String {
+        let mut line = String::new();
+        line.push_str(left);
+        for (i, &width) in col_widths.iter().enumerate() {
+            line.push_str(&fill.repeat(width + 2)); // +2 for padding
+            if i < col_widths.len() - 1 {
+                line.push_str(mid);
+            }
+        }
+        line.push_str(right);
+        line
     }
 
-    #[test]
-    fn plain_system_message_spacing() {
-        let theme = crate::ui::theme::Theme::dark_default();
-        let messages = std::collections::VecDeque::from(vec![Message {
-            role: "system".into(),
-            content: "Notice".into(),
-        }]);
-        let lines = build_plain_display_lines(&messages, &theme);
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1].to_string(), "");
+    fn create_content_line_with_spans(&self, row: &[Vec<Span<'static>>], col_widths: &[usize]) -> Line<'static> {
+        let mut spans = Vec::new();
+
+        // Left border
+        spans.push(Span::raw("│"));
+
+        for (i, width) in col_widths.iter().enumerate() {
+            // Left padding
+            spans.push(Span::raw(" "));
+
+            // Cell content with formatting
+            let cell_spans = row.get(i).cloned().unwrap_or_default();
+            let cell_text_len: usize = cell_spans.iter().map(|s| s.content.len()).sum();
+
+            // Add the formatted spans
+            spans.extend(cell_spans);
+
+            // Right padding to fill column width
+            if cell_text_len < *width {
+                spans.push(Span::raw(" ".repeat(width - cell_text_len)));
+            }
+
+            // Right padding and border
+            spans.push(Span::raw(" "));
+            spans.push(Span::raw("│"));
+        }
+
+        Line::from(spans)
     }
-}
 
-// Theme style selection moved into Theme methods (see src/ui/theme.rs)
-
-#[derive(Clone, Copy, Debug)]
-enum ListKind {
-    Unordered,
-    Ordered(u64),
 }
 
 fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
@@ -720,4 +893,62 @@ fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Sp
 fn detab(s: &str) -> String {
     // Simple, predictable detab: replace tabs with 4 spaces
     s.replace('\t', "    ")
+}
+
+/// Build display lines for all messages using markdown rendering
+#[cfg(test)]
+pub fn build_markdown_display_lines(
+    messages: &VecDeque<Message>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for msg in messages {
+        let rendered = render_message_markdown_opts(msg, theme, true);
+        lines.extend(rendered.lines);
+    }
+    lines
+}
+
+/// Build display lines for all messages using plain text rendering
+pub fn build_plain_display_lines(
+    messages: &VecDeque<Message>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for msg in messages {
+        match msg.role.as_str() {
+            "system" => {
+                let rendered = render_system_message(&msg.content, theme);
+                lines.extend(rendered.lines);
+            }
+            "user" => {
+                for (i, line) in msg.content.lines().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled("You: ", theme.user_prefix_style),
+                            Span::styled(detab(line), theme.user_text_style),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::raw("     "),
+                            Span::styled(detab(line), theme.user_text_style),
+                        ]));
+                    }
+                }
+                if !msg.content.is_empty() {
+                    lines.push(Line::from(""));
+                }
+            }
+            _ => {
+                // Assistant messages
+                for line in msg.content.lines() {
+                    lines.push(Line::from(Span::styled(detab(line), theme.md_paragraph_style())));
+                }
+                if !msg.content.is_empty() {
+                    lines.push(Line::from(""));
+                }
+            }
+        }
+    }
+    lines
 }

@@ -27,6 +27,7 @@ pub fn create_test_app() -> App {
         provider_name: "test".to_string(),
         provider_display_name: "Test".to_string(),
         scroll_offset: 0,
+        horizontal_scroll_offset: 0,
         auto_scroll: true,
         is_streaming: false,
         pulse_start: std::time::Instant::now(),

@@ -18,7 +18,6 @@ struct TableState {
     in_header: bool,
 }
 
-
 /// Description of a rendered message (line-based), used by the TUI renderer.
 pub struct RenderedMessage {
     pub lines: Vec<Line<'static>>,
@@ -721,7 +720,6 @@ End of table."#
     }
 }
 
-
 impl TableState {
     fn new() -> Self {
         Self {
@@ -844,7 +842,11 @@ impl TableState {
         line
     }
 
-    fn create_content_line_with_spans(&self, row: &[Vec<Span<'static>>], col_widths: &[usize]) -> Line<'static> {
+    fn create_content_line_with_spans(
+        &self,
+        row: &[Vec<Span<'static>>],
+        col_widths: &[usize],
+    ) -> Line<'static> {
         let mut spans = Vec::new();
 
         // Left border
@@ -873,7 +875,6 @@ impl TableState {
 
         Line::from(spans)
     }
-
 }
 
 fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
@@ -942,7 +943,10 @@ pub fn build_plain_display_lines(
             _ => {
                 // Assistant messages
                 for line in msg.content.lines() {
-                    lines.push(Line::from(Span::styled(detab(line), theme.md_paragraph_style())));
+                    lines.push(Line::from(Span::styled(
+                        detab(line),
+                        theme.md_paragraph_style(),
+                    )));
                 }
                 if !msg.content.is_empty() {
                     lines.push(Line::from(""));

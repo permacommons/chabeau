@@ -84,7 +84,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let messages_paragraph = Paragraph::new(lines)
         .style(Style::default().bg(app.theme.background_color))
         .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
-        .scroll((scroll_offset, 0));
+        .scroll((scroll_offset, app.horizontal_scroll_offset));
 
     f.render_widget(messages_paragraph, chunks[0]);
 

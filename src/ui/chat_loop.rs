@@ -1238,15 +1238,29 @@ pub async fn run_chat(
                         }
                         KeyCode::Left => {
                             let mut app_guard = app.lock().await;
-                            // Move exactly one character left (ignore selection)
-                            app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
-                            update_if_due(&mut app_guard);
+                            if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Move exactly one character left (ignore selection)
+                                app_guard
+                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
+                                update_if_due(&mut app_guard);
+                            } else {
+                                // Scroll left
+                                app_guard.horizontal_scroll_offset =
+                                    app_guard.horizontal_scroll_offset.saturating_sub(1);
+                            }
                         }
                         KeyCode::Right => {
                             let mut app_guard = app.lock().await;
-                            // Move exactly one character right (ignore selection)
-                            app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
-                            update_if_due(&mut app_guard);
+                            if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+                                // Move exactly one character right (ignore selection)
+                                app_guard
+                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
+                                update_if_due(&mut app_guard);
+                            } else {
+                                // Scroll right
+                                app_guard.horizontal_scroll_offset =
+                                    app_guard.horizontal_scroll_offset.saturating_add(1);
+                            }
                         }
                         KeyCode::Char(_) => {
                             let mut app_guard = app.lock().await;

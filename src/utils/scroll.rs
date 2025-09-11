@@ -38,6 +38,25 @@ impl ScrollCalculator {
         let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
 
         for line in lines {
+            // Heuristic to avoid wrapping tables: if a line contains box-drawing characters,
+            // pass it through without wrapping. This is imperfect but good enough for now.
+            let is_table_line = line.spans.iter().any(|s| {
+                s.content.contains('│')
+                    || s.content.contains('┌')
+                    || s.content.contains('├')
+                    || s.content.contains('└')
+            });
+
+            if is_table_line {
+                let spans: Vec<Span<'static>> = line
+                    .spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style))
+                    .collect();
+                out.push(Line::from(spans));
+                continue;
+            }
+
             if line.spans.is_empty() {
                 out.push(Line::from(""));
                 continue;

@@ -4,6 +4,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug)]
 enum ListKind {
@@ -12,9 +13,9 @@ enum ListKind {
 }
 
 struct TableState {
-    rows: Vec<Vec<Vec<Span<'static>>>>,
-    current_row: Vec<Vec<Span<'static>>>,
-    current_cell: Vec<Span<'static>>,
+    rows: Vec<Vec<Vec<Vec<Span<'static>>>>>,
+    current_row: Vec<Vec<Vec<Span<'static>>>>,
+    current_cell: Vec<Vec<Span<'static>>>,
     in_header: bool,
 }
 
@@ -346,7 +347,14 @@ fn render_with_parser_role(
             Event::TaskListMarker(_checked) => {
                 current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
             }
-            Event::Html(_) | Event::InlineHtml(_) | Event::FootnoteReference(_) => {
+            Event::Html(html) | Event::InlineHtml(html) => {
+                if let Some(ref mut table) = table_state {
+                    if html.trim() == "<br>" || html.trim() == "<br/>" {
+                        table.new_line_in_cell();
+                    }
+                }
+            }
+            Event::FootnoteReference(_) => {
                 // Ignore advanced/HTML/Math for TUI rendering
             }
         }
@@ -664,10 +672,10 @@ mod tests {
 
     #[test]
     fn debug_table_events() {
-        let markdown = r#"| Header 1 | Header 2 | Header 3 |
+        let markdown = r###"| Header 1 | Header 2 | Header 3 |
 |----------|----------|----------|
 | Cell 1   | Cell 2   | Cell 3   |
-| Cell 4   | Cell 5   | Cell 6   |"#;
+| Cell 4   | Cell 5   | Cell 6   |"###;
 
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
@@ -683,14 +691,14 @@ mod tests {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
             role: "assistant".into(),
-            content: r#"Here's a table:
+            content: r###"Here's a table:
 
 | Header 1 | Header 2 | Header 3 |
 |----------|----------|----------|
 | Cell 1   | Cell 2   | Cell 3   |
 | Cell 4   | Cell 5   | Cell 6   |
 
-End of table."#
+End of table."###
                 .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
@@ -718,6 +726,51 @@ End of table."#
             .any(|line| line.contains("Header 1") && line.contains("Header 2"));
         assert!(has_table_content, "Table should contain header content");
     }
+
+    #[test]
+    fn table_renders_emoji_and_br_correctly() {
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: r"| Header | Data |
+|---|---|
+| Abc | 123 |
+| Def | 456 |
+| Emoji | 🚀<br/>Hi |
+"
+            .into(),
+        });
+        let theme = crate::ui::theme::Theme::dark_default();
+        let rendered = render_message_markdown(&messages[0], &theme);
+        let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+        let expected = vec![
+            "┌────────┬──────┐",
+            "│ Header │ Data │",
+            "├────────┼──────┤",
+            "│ Abc    │ 123  │",
+            "│ Def    │ 456  │",
+            "│ Emoji  │ 🚀   │",
+            "│        │ Hi   │",
+            "└────────┴──────┘",
+        ];
+        let mut rendered_table_lines: Vec<String> = Vec::new();
+        let mut in_table = false;
+        for line in lines_str {
+            if line.contains("┌") {
+                in_table = true;
+            }
+            if in_table {
+                rendered_table_lines.push(line.to_string());
+                if line.contains("└") {
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            rendered_table_lines, expected,
+            "Table with emoji and <br> should be rendered correctly"
+        );
+    }
 }
 
 impl TableState {
@@ -725,7 +778,7 @@ impl TableState {
         Self {
             rows: Vec::new(),
             current_row: Vec::new(),
-            current_cell: Vec::new(),
+            current_cell: vec![Vec::new()],
             in_header: false,
         }
     }
@@ -752,7 +805,7 @@ impl TableState {
     }
 
     fn start_cell(&mut self) {
-        self.current_cell.clear();
+        self.current_cell = vec![Vec::new()];
     }
 
     fn end_cell(&mut self) {
@@ -761,7 +814,14 @@ impl TableState {
     }
 
     fn add_span(&mut self, span: Span<'static>) {
-        self.current_cell.push(span);
+        if self.current_cell.is_empty() {
+            self.current_cell.push(Vec::new());
+        }
+        self.current_cell.last_mut().unwrap().push(span);
+    }
+
+    fn new_line_in_cell(&mut self) {
+        self.current_cell.push(Vec::new());
     }
 
     fn render_table(&self, theme: &Theme) -> Vec<Line<'static>> {
@@ -781,8 +841,13 @@ impl TableState {
         for row in &self.rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < col_widths.len() {
-                    let cell_text_width = cell.iter().map(|span| span.content.len()).sum::<usize>();
-                    col_widths[i] = col_widths[i].max(cell_text_width);
+                    for line in cell {
+                        let cell_text_width = line
+                            .iter()
+                            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                            .sum::<usize>();
+                        col_widths[i] = col_widths[i].max(cell_text_width);
+                    }
                 }
             }
         }
@@ -801,8 +866,13 @@ impl TableState {
             lines.push(Line::from(Span::styled(top_border, table_style)));
 
             // Header row
-            let header_line = self.create_content_line_with_spans(&self.rows[0], &col_widths);
-            lines.push(header_line);
+            let header_row = &self.rows[0];
+            let max_lines_in_header = header_row.iter().map(|cell| cell.len()).max().unwrap_or(1);
+            for line_idx in 0..max_lines_in_header {
+                let header_line =
+                    self.create_content_line_with_spans(header_row, &col_widths, line_idx);
+                lines.push(header_line);
+            }
 
             // Header separator
             let header_sep = self.create_border_line(&col_widths, "├", "┼", "┤", "─");
@@ -810,8 +880,12 @@ impl TableState {
 
             // Data rows
             for row in &self.rows[1..] {
-                let content_line = self.create_content_line_with_spans(row, &col_widths);
-                lines.push(content_line);
+                let max_lines_in_row = row.iter().map(|cell| cell.len()).max().unwrap_or(1);
+                for line_idx in 0..max_lines_in_row {
+                    let content_line =
+                        self.create_content_line_with_spans(row, &col_widths, line_idx);
+                    lines.push(content_line);
+                }
             }
 
             // Bottom border
@@ -844,8 +918,9 @@ impl TableState {
 
     fn create_content_line_with_spans(
         &self,
-        row: &[Vec<Span<'static>>],
+        row: &[Vec<Vec<Span<'static>>>],
         col_widths: &[usize],
+        line_idx: usize,
     ) -> Line<'static> {
         let mut spans = Vec::new();
 
@@ -857,8 +932,15 @@ impl TableState {
             spans.push(Span::raw(" "));
 
             // Cell content with formatting
-            let cell_spans = row.get(i).cloned().unwrap_or_default();
-            let cell_text_len: usize = cell_spans.iter().map(|s| s.content.len()).sum();
+            let cell_spans = row
+                .get(i)
+                .and_then(|cell| cell.get(line_idx))
+                .cloned()
+                .unwrap_or_default();
+            let cell_text_len: usize = cell_spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
 
             // Add the formatted spans
             spans.extend(cell_spans);

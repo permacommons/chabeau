@@ -5,6 +5,14 @@
 pub struct PickerItem {
     pub id: String,
     pub label: String,
+    pub metadata: Option<String>, // For creation date, theme type, etc.
+    pub sort_key: Option<String>, // For sorting by date or name
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SortMode {
+    Date,
+    Name,
 }
 
 #[derive(Debug, Clone)]
@@ -12,6 +20,7 @@ pub struct PickerState {
     pub title: String,
     pub items: Vec<PickerItem>,
     pub selected: usize,
+    pub sort_mode: SortMode,
 }
 
 impl PickerState {
@@ -20,6 +29,7 @@ impl PickerState {
             title: title.into(),
             items,
             selected,
+            sort_mode: SortMode::Date, // Default to date sorting
         }
     }
 
@@ -41,5 +51,28 @@ impl PickerState {
         if !self.items.is_empty() {
             self.selected = (self.selected + 1) % self.items.len();
         }
+    }
+
+    pub fn move_to_start(&mut self) {
+        if !self.items.is_empty() {
+            self.selected = 0;
+        }
+    }
+
+    pub fn move_to_end(&mut self) {
+        if !self.items.is_empty() {
+            self.selected = self.items.len() - 1;
+        }
+    }
+
+    pub fn cycle_sort_mode(&mut self) {
+        self.sort_mode = match self.sort_mode {
+            SortMode::Date => SortMode::Name,
+            SortMode::Name => SortMode::Date,
+        };
+    }
+
+    pub fn get_selected_metadata(&self) -> Option<&str> {
+        self.items.get(self.selected)?.metadata.as_deref()
     }
 }

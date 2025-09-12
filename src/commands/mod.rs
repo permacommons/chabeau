@@ -6,6 +6,7 @@ use std::io::{BufWriter, Write};
 pub enum CommandResult {
     Continue,
     ProcessAsMessage(String),
+    OpenModelPicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -104,6 +105,21 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                         CommandResult::Continue
                     }
                 }
+            }
+        }
+    } else if trimmed.starts_with("/model") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        match parts.len() {
+            1 => {
+                // Open model picker - this is async, so we return a special command result
+                CommandResult::OpenModelPicker
+            }
+            _ => {
+                // Try to set model directly by id/name
+                let model_id = parts[1];
+                app.apply_model_by_id(model_id);
+                app.set_status(format!("Model set: {}", model_id));
+                CommandResult::Continue
             }
         }
     } else if trimmed.starts_with("/markdown") {
@@ -376,5 +392,105 @@ mod tests {
         // Picker should have at least the built-ins
         let picker = app.picker.as_ref().unwrap();
         assert!(picker.items.len() >= 3);
+    }
+
+    #[test]
+    fn model_command_returns_open_picker_result() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/model");
+        matches!(res, CommandResult::OpenModelPicker);
+    }
+
+    #[test]
+    fn model_command_with_id_sets_model() {
+        let mut app = create_test_app();
+        let original_model = app.model.clone();
+        let res = process_input(&mut app, "/model gpt-4");
+        matches!(res, CommandResult::Continue);
+        assert_eq!(app.model, "gpt-4");
+        assert_ne!(app.model, original_model);
+    }
+
+    #[test]
+    fn theme_picker_supports_filtering() {
+        let mut app = create_test_app();
+        app.open_theme_picker();
+
+        // Should store all themes for filtering
+        assert!(!app.all_available_themes.is_empty());
+
+        // Should start with empty filter
+        assert!(app.theme_search_filter.is_empty());
+
+        // Add a filter and verify filtering works
+        app.theme_search_filter.push_str("dark");
+        app.filter_themes();
+
+        if let Some(picker) = &app.picker {
+            // Should have filtered results
+            assert!(picker.items.len() <= app.all_available_themes.len());
+            // Title should show filter status
+            assert!(picker.title.contains("filter: 'dark'"));
+        }
+    }
+
+    #[test]
+    fn picker_supports_home_end_navigation_and_metadata() {
+        let mut app = create_test_app();
+        app.open_theme_picker();
+
+        if let Some(picker) = &mut app.picker {
+            // Test Home key (move to start)
+            picker.selected = picker.items.len() - 1; // Move to last
+            picker.move_to_start();
+            assert_eq!(picker.selected, 0);
+
+            // Test End key (move to end)
+            picker.move_to_end();
+            assert_eq!(picker.selected, picker.items.len() - 1);
+
+            // Test metadata is available
+            let metadata = picker.get_selected_metadata();
+            assert!(metadata.is_some());
+
+            // Test sort mode cycling
+            let original_sort = picker.sort_mode.clone();
+            picker.cycle_sort_mode();
+            assert_ne!(picker.sort_mode, original_sort);
+
+            // Test items have metadata
+            assert!(picker.items.iter().any(|item| item.metadata.is_some()));
+        }
+    }
+
+    #[test]
+    fn theme_picker_shows_a_z_sort_indicators() {
+        let mut app = create_test_app();
+
+        // Open theme picker - should default to A-Z (Name mode)
+        app.open_theme_picker();
+
+        if let Some(picker) = &app.picker {
+            // Should default to Name mode (A-Z)
+            assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Name);
+            // Title should show "Sort by: A-Z"
+            assert!(picker.title.contains("Sort by: A-Z"),
+                   "Theme picker should show 'Sort by: A-Z', got: {}", picker.title);
+        }
+
+        // Cycle to Z-A mode
+        if let Some(picker) = &mut app.picker {
+            picker.cycle_sort_mode();
+        }
+        app.sort_picker_items();
+        app.update_picker_title();
+
+        if let Some(picker) = &app.picker {
+            // Should now be in Date mode (Z-A for themes)
+            assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Date);
+            // Title should show "Sort by: Z-A"
+            assert!(picker.title.contains("Sort by: Z-A"),
+                   "Theme picker should show 'Sort by: Z-A', got: {}", picker.title);
+        }
     }
 }

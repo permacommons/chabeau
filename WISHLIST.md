@@ -7,7 +7,6 @@ This file contains features and improvements that would be nice to have in futur
 - More complete keyboard mapping (Page Up/Dn; Ctrl+D)
 - Tiny copy/paste affordances
 - Better handling of repeating messages like "Generating..."
-- In-TUI model selector
 - In-TUI provider selector
 - In-TUI default picker
 - Tab completion for commands

@@ -16,6 +16,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Robust multi-line input powered by `tui-textarea` (IME-friendly)
 - Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
 - Secure API key storage in system keyring with config-based provider management
+- Interactive theme and model pickers with filtering, sorting, and metadata display
 - Message retry and external editor support
 - Conversation logging with pause/resume
 - Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code)
@@ -148,8 +149,10 @@ Syntax colors adapt to the active theme (dark/light) and use the theme’s code 
 
 ### Chat Commands
 - `/help` - Show extended help with keyboard shortcuts
-- `/theme` - Open theme picker (built-in and custom)
+- `/theme` - Open theme picker with filtering support (built-in and custom)
 - `/theme <id>` - Apply a theme by id
+- `/model` - Open model picker with filtering support
+- `/model <id>` - Switch to specified model
 - `/markdown [on|off|toggle]` - Enable/disable markdown rendering (persisted)
 - `/syntax [on|off|toggle]` - Enable/disable syntax highlighting (persisted)
 - `/log <filename>` - Enable logging to specified file

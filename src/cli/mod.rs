@@ -108,7 +108,9 @@ Commands:\n\
   /dump <filename>  Dump conversation to specified file\n\
   /dump             Dump conversation to chabeau-log-<isodate>.txt\n\
   /theme            Open theme picker\n\
-  /theme <id>       Apply theme by id (built-in or custom)"
+  /theme <id>       Apply theme by id (built-in or custom)\n\
+  /model            Open model picker (with filtering support)\n\
+  /model <id>       Switch to specified model"
 )]
 pub struct Args {
     #[command(subcommand)]

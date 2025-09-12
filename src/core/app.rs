@@ -54,6 +54,13 @@ pub struct App {
     pub selected_block_index: Option<usize>,
     pub theme_before_picker: Option<Theme>,
     pub theme_id_before_picker: Option<String>,
+    // Model picker state
+    pub model_before_picker: Option<String>,
+    pub model_search_filter: String,
+    pub all_available_models: Vec<PickerItem>,
+    // Theme picker state
+    pub theme_search_filter: String,
+    pub all_available_themes: Vec<PickerItem>,
     // Rendering toggles
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
@@ -69,6 +76,7 @@ pub struct App {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerMode {
     Theme,
+    Model,
 }
 
 impl App {
@@ -133,6 +141,11 @@ impl App {
                 selected_block_index: None,
                 theme_before_picker: None,
                 theme_id_before_picker: None,
+                model_before_picker: None,
+                model_search_filter: String::new(),
+                all_available_models: Vec::new(),
+                theme_search_filter: String::new(),
+                all_available_themes: Vec::new(),
                 markdown_enabled: config.markdown.unwrap_or(true),
                 syntax_enabled: config.syntax.unwrap_or(true),
                 prewrap_cache: None,
@@ -241,6 +254,11 @@ impl App {
             selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
+            model_before_picker: None,
+            model_search_filter: String::new(),
+            all_available_models: Vec::new(),
+            theme_search_filter: String::new(),
+            all_available_themes: Vec::new(),
             markdown_enabled: config.markdown.unwrap_or(true),
             syntax_enabled: config.syntax.unwrap_or(true),
             prewrap_cache: None,
@@ -401,6 +419,11 @@ impl App {
             selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
+            model_before_picker: None,
+            model_search_filter: String::new(),
+            all_available_models: Vec::new(),
+            theme_search_filter: String::new(),
+            all_available_themes: Vec::new(),
             markdown_enabled,
             syntax_enabled,
             prewrap_cache: None,
@@ -1015,6 +1038,7 @@ impl App {
         self.picker_mode = Some(PickerMode::Theme);
         // Save current theme and configured id for cancel
         self.theme_before_picker = Some(self.theme.clone());
+        self.theme_search_filter.clear();
         if let Ok(cfg) = Config::load() {
             self.theme_id_before_picker = cfg.theme.clone();
         }
@@ -1024,6 +1048,8 @@ impl App {
             items.push(PickerItem {
                 id: t.id.clone(),
                 label: t.display_name.clone(),
+                metadata: Some("Built-in theme".to_string()),
+                sort_key: Some(t.display_name.clone()),
             });
         }
         // Custom
@@ -1032,9 +1058,15 @@ impl App {
                 items.push(PickerItem {
                     id: ct.id.clone(),
                     label: format!("{} (custom)", ct.display_name),
+                    metadata: Some("Custom theme (config.toml)".to_string()),
+                    sort_key: Some(ct.display_name.clone()),
                 });
             }
         }
+
+        // Store all themes for filtering
+        self.all_available_themes = items.clone();
+
         // Select current theme if present
         let mut selected = 0usize;
         if let Ok(cfg) = Config::load() {
@@ -1048,7 +1080,15 @@ impl App {
                 }
             }
         }
-        self.picker = Some(PickerState::new("Pick Theme", items, selected));
+
+        let mut picker_state = PickerState::new("Pick Theme", items, selected);
+        // Set theme picker to default to alphabetical (A-Z) sorting
+        picker_state.sort_mode = crate::ui::picker::SortMode::Name;
+        self.picker = Some(picker_state);
+
+        // Apply initial sorting and update title
+        self.sort_picker_items();
+        self.update_picker_title();
     }
 
     /// Apply theme by id (custom or built-in) and persist in config
@@ -1099,6 +1139,339 @@ impl App {
         // Do not modify config
         self.theme_before_picker = None;
         self.theme_id_before_picker = None;
+        self.theme_search_filter.clear();
+        self.all_available_themes.clear();
+    }
+
+    /// Open a model picker modal with available models from current provider
+    pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.picker_mode = Some(PickerMode::Model);
+        self.model_before_picker = Some(self.model.clone());
+        self.model_search_filter.clear();
+
+        // Fetch models from current provider
+        let models_response = fetch_models(
+            &self.client,
+            &self.base_url,
+            &self.api_key,
+            &self.provider_name,
+        )
+        .await?;
+
+        if models_response.data.is_empty() {
+            return Err("No models available from this provider".into());
+        }
+
+        let mut models = models_response.data;
+        sort_models(&mut models);
+
+        let items: Vec<PickerItem> = models
+            .into_iter()
+            .map(|model| {
+                let label = if let Some(display_name) = &model.display_name {
+                    if display_name != &model.id && !display_name.is_empty() {
+                        format!("{} ({})", model.id, display_name)
+                    } else {
+                        model.id.clone()
+                    }
+                } else {
+                    model.id.clone()
+                };
+
+                // Extract metadata for display with robust error handling
+                let metadata = if let Some(created) = model.created {
+                    if created > 0 && created < u64::MAX / 1000 {
+                        // Handle both seconds and milliseconds, with overflow protection
+                        let timestamp_secs = if created > 10_000_000_000 {
+                            created / 1000 // Convert milliseconds to seconds
+                        } else {
+                            created
+                        };
+
+                        // Validate timestamp is within reasonable bounds (Unix epoch to ~year 3000)
+                        if timestamp_secs > 0 && timestamp_secs < 32_503_680_000 {
+                            chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp_secs as i64, 0)
+                                .map(|datetime| {
+                                    format!("Created: {}", datetime.format("%Y-%m-%d %H:%M UTC"))
+                                })
+                        } else {
+                            Some(format!("Created: {} (invalid timestamp)", created))
+                        }
+                    } else {
+                        None
+                    }
+                } else if let Some(created_at) = &model.created_at {
+                    if !created_at.is_empty() {
+                        // Basic validation for date string format
+                        if created_at.len() > 4 && (created_at.contains('-') || created_at.contains('/')) {
+                            Some(format!("Created: {}", created_at))
+                        } else {
+                            Some(format!("Created: {} (unrecognized format)", created_at))
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    // Provide fallback metadata for models without creation dates
+                    model.owned_by.as_ref()
+                        .filter(|owner| !owner.is_empty() && *owner != "system")
+                        .map(|owner| format!("Owner: {}", owner))
+                };
+
+                // Sort key for date sorting (use timestamp, fallback to ID)
+                let sort_key = if let Some(created) = model.created {
+                    Some(format!("{:020}", created)) // Zero-padded for proper string sorting
+                } else {
+                    Some(model.id.clone())
+                };
+
+                PickerItem {
+                    id: model.id,
+                    label,
+                    metadata,
+                    sort_key,
+                }
+            })
+            .collect();
+
+        // Store all models for filtering
+        self.all_available_models = items.clone();
+
+        // Find current model in the list
+        let mut selected = 0usize;
+        if let Some((idx, _)) = items.iter().enumerate().find(|(_, it)| it.id == self.model) {
+            selected = idx;
+        }
+
+        self.picker = Some(PickerState::new("Pick Model", items, selected));
+
+        // Apply initial sorting and update title
+        self.sort_picker_items();
+        self.update_picker_title();
+
+        Ok(())
+    }
+
+    /// Generic method to filter picker items based on search term
+    fn filter_picker_items(
+        &mut self,
+        search_filter: &str,
+        all_items: &[PickerItem],
+        base_title: &str,
+        min_items_for_filter_hint: usize,
+    ) {
+        if let Some(picker) = &mut self.picker {
+            let search_term = search_filter.to_lowercase();
+
+            // Filter the full item list
+            let filtered_items: Vec<PickerItem> = if search_term.is_empty() {
+                all_items.to_vec()
+            } else {
+                all_items
+                    .iter()
+                    .filter(|item| {
+                        item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                    })
+                    .cloned()
+                    .collect()
+            };
+
+            // Update picker items
+            picker.items = filtered_items.clone();
+
+            // Reset selection to first item if current selection is out of bounds
+            if picker.selected >= filtered_items.len() {
+                picker.selected = 0;
+            }
+
+            // Re-apply sorting after filtering
+            if self.picker_mode == Some(PickerMode::Theme) {
+                // For themes, interpret Date mode as reverse alphabetical (Z-A)
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => {
+                        // Z-A sorting (reverse alphabetical)
+                        picker.items.sort_by(|a, b| b.label.cmp(&a.label));
+                    }
+                    crate::ui::picker::SortMode::Name => {
+                        // A-Z sorting (normal alphabetical)
+                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                    }
+                }
+            } else {
+                // For models, use timestamp-based sorting
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => {
+                        picker.items.sort_by(|a, b| {
+                            match (&a.sort_key, &b.sort_key) {
+                                (Some(a_key), Some(b_key)) => b_key.cmp(a_key), // Reverse for newest first
+                                (Some(_), None) => std::cmp::Ordering::Less,
+                                (None, Some(_)) => std::cmp::Ordering::Greater,
+                                (None, None) => a.label.cmp(&b.label),
+                            }
+                        });
+                    }
+                    crate::ui::picker::SortMode::Name => {
+                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                    }
+                }
+            }
+
+            // Update the title to show filtered count and sort mode
+            let sort_text = if self.picker_mode == Some(PickerMode::Theme) {
+                // For themes, show A-Z or Z-A instead of name/date
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Name => "A-Z",
+                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order for themes
+                }
+            } else {
+                // For models, keep date/name as sort indicators
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => "date",
+                    crate::ui::picker::SortMode::Name => "name",
+                }
+            };
+
+            picker.title = if search_term.is_empty() {
+                if all_items.len() > min_items_for_filter_hint {
+                    format!(
+                        "{} ({} available - Sort by: {} - type to filter)",
+                        base_title,
+                        all_items.len(),
+                        sort_text
+                    )
+                } else {
+                    format!("{} (Sort by: {})", base_title, sort_text)
+                }
+            } else {
+                format!(
+                    "{} (filter: '{}' - {} matches - Sort by: {})",
+                    base_title,
+                    search_filter,
+                    filtered_items.len(),
+                    sort_text
+                )
+            };
+        }
+    }
+
+    /// Filter models based on search term and update picker
+    pub fn filter_models(&mut self) {
+        if self.picker_mode == Some(PickerMode::Model) {
+            let search_filter = self.model_search_filter.clone();
+            let all_items = self.all_available_models.clone();
+            self.filter_picker_items(&search_filter, &all_items, "Pick Model", 20);
+        }
+    }
+
+    /// Filter themes based on search term and update picker
+    pub fn filter_themes(&mut self) {
+        if self.picker_mode == Some(PickerMode::Theme) {
+            let search_filter = self.theme_search_filter.clone();
+            let all_items = self.all_available_themes.clone();
+            self.filter_picker_items(&search_filter, &all_items, "Pick Theme", 10);
+        }
+    }
+
+    /// Sort picker items based on current sort mode
+    pub fn sort_picker_items(&mut self) {
+        if let Some(picker) = &mut self.picker {
+            if self.picker_mode == Some(PickerMode::Theme) {
+                // For themes, interpret Date mode as reverse alphabetical (Z-A)
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => {
+                        // Z-A sorting (reverse alphabetical)
+                        picker.items.sort_by(|a, b| b.label.cmp(&a.label));
+                    }
+                    crate::ui::picker::SortMode::Name => {
+                        // A-Z sorting (normal alphabetical)
+                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                    }
+                }
+            } else {
+                // For models, use timestamp-based sorting
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => {
+                        // Sort by sort_key (timestamp or creation date), newest first
+                        picker.items.sort_by(|a, b| {
+                            match (&a.sort_key, &b.sort_key) {
+                                (Some(a_key), Some(b_key)) => b_key.cmp(a_key), // Reverse for newest first
+                                (Some(_), None) => std::cmp::Ordering::Less,
+                                (None, Some(_)) => std::cmp::Ordering::Greater,
+                                (None, None) => a.label.cmp(&b.label),
+                            }
+                        });
+                    }
+                    crate::ui::picker::SortMode::Name => {
+                        // Sort by label alphabetically
+                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                    }
+                }
+            }
+
+            // Reset selection to first item after sorting
+            if picker.selected >= picker.items.len() {
+                picker.selected = 0;
+            }
+        }
+    }
+
+    /// Update picker title to show sort mode
+    pub fn update_picker_title(&mut self) {
+        if let Some(picker) = &mut self.picker {
+            // Determine sort text based on mode and picker type
+            let sort_text = if self.picker_mode == Some(PickerMode::Theme) {
+                // For themes, show A-Z or Z-A instead of name/date
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Name => "A-Z",
+                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order for themes
+                }
+            } else {
+                // For models, keep date/name as sort indicators
+                match picker.sort_mode {
+                    crate::ui::picker::SortMode::Date => "date",
+                    crate::ui::picker::SortMode::Name => "name",
+                }
+            };
+
+            let base_title = if self.picker_mode == Some(PickerMode::Model) {
+                "Pick Model"
+            } else {
+                "Pick Theme"
+            };
+
+            // Update title with sort information
+            let item_count = if self.picker_mode == Some(PickerMode::Model) {
+                self.all_available_models.len()
+            } else {
+                self.all_available_themes.len()
+            };
+
+            picker.title = if item_count > 10 {
+                format!(
+                    "{} ({} available - Sort by: {} - type to filter)",
+                    base_title, item_count, sort_text
+                )
+            } else {
+                format!("{} (Sort by: {})", base_title, sort_text)
+            };
+        }
+    }
+
+    /// Apply model by id and persist in current session (not config)
+    pub fn apply_model_by_id(&mut self, model_id: &str) {
+        self.model = model_id.to_string();
+        self.model_before_picker = None;
+    }
+
+    /// Revert model to the one before opening picker (on cancel)
+    pub fn revert_model_preview(&mut self) {
+        if let Some(prev) = self.model_before_picker.clone() {
+            self.model = prev;
+        }
+        self.model_before_picker = None;
+        self.model_search_filter.clear();
+        self.all_available_models.clear();
     }
 }
 

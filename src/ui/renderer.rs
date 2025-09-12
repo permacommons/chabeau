@@ -267,14 +267,19 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .title(Span::styled(&picker.title, app.theme.title_style));
         let content_area = modal_block.inner(area); // create padding space inside borders
         f.render_widget(modal_block, area);
-        // Split space to show list + 1-line help
+        // Split space to show list + metadata footer + help
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Min(1),    // List area
+                Constraint::Length(1), // Metadata footer
+                Constraint::Length(1), // Help area
+            ])
             .split(content_area);
         // Add an extra inset for whitespace inside list area
         let list_area = inset_rect(chunks[0], 1, 1);
-        let help_area = chunks[1];
+        let metadata_area = chunks[1];
+        let help_area = chunks[2];
 
         // Items styled to match theme; we render inside inner content area to create whitespace
         let items: Vec<ListItem> = picker
@@ -299,8 +304,36 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         f.render_stateful_widget(list, list_area, &mut make_list_state(picker.selected));
 
+        // Render metadata footer for selected item
+        let metadata_text = picker
+            .get_selected_metadata()
+            .unwrap_or("No metadata available");
+        let metadata = Paragraph::new(Span::styled(
+            metadata_text,
+            app.theme
+                .system_text_style
+                .add_modifier(ratatui::style::Modifier::DIM),
+        ));
+        f.render_widget(metadata, metadata_area);
+
         // Render in-modal help aligned with theme
-        let help_text = "↑/↓ to navigate • Enter to apply • Esc to cancel";
+        let help_text = match app.picker_mode {
+            Some(crate::core::app::PickerMode::Model) => {
+                if app.model_search_filter.is_empty() {
+                    "↑/↓/Home/End to navigate • F2 to sort • type to filter • Enter to apply • Esc to cancel"
+                } else {
+                    "↑/↓/Home/End to navigate • Backspace to clear • F2 to sort • Enter to apply • Esc to cancel"
+                }
+            }
+            Some(crate::core::app::PickerMode::Theme) => {
+                if app.theme_search_filter.is_empty() {
+                    "↑/↓/Home/End to navigate • F2 to sort • type to filter • Enter to apply • Esc to cancel"
+                } else {
+                    "↑/↓/Home/End to navigate • Backspace to clear • F2 to sort • Enter to apply • Esc to cancel"
+                }
+            }
+            _ => "↑/↓ to navigate • Enter to apply • Esc to cancel",
+        };
         let help = Paragraph::new(Span::styled(help_text, app.theme.system_text_style));
         f.render_widget(help, help_area);
     }

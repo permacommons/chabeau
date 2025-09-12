@@ -17,8 +17,10 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 
 ## Commands
 
-- `/theme` — Pick a theme (built-in or custom). Persisted to config.
+- `/theme` — Pick a theme (built-in or custom) with filtering and sorting. Persisted to config.
 - `/theme <id>` — Apply a theme by id
+- `/model` — Pick a model from current provider with filtering, sorting, and metadata
+- `/model <id>` — Switch to specified model
 - `/markdown` — Toggle Markdown rendering. Persisted to config.
 - `/syntax` — Toggle code syntax highlighting. Persisted to config.
 - `/log <filename>` — Enable logging to file; `/log` toggles pause/resume
@@ -26,7 +28,6 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 
 ## Tips
 
-- Picking models in the TUI is not supported yet. Drop to the command-line to do so.
 - Use `/log` to start logging from where you are.
 - `/dump` creates a one-off snapshot of the _entire_ conversation so far.
 - Use Ctrl+B to copy (`c`) or save (`s`) code blocks.

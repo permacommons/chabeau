@@ -266,6 +266,10 @@ pub async fn run_chat(
                                             == Some(crate::core::app::PickerMode::Theme)
                                         {
                                             app_guard.revert_theme_preview();
+                                        } else if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Model)
+                                        {
+                                            app_guard.revert_model_preview();
                                         }
                                         app_guard.picker = None;
                                         app_guard.picker_mode = None;
@@ -311,6 +315,34 @@ pub async fn run_chat(
                                             None
                                         }
                                     }
+                                    KeyCode::Home => {
+                                        picker.move_to_start();
+                                        if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Theme)
+                                        {
+                                            picker.selected_id().map(|s| s.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    KeyCode::End => {
+                                        picker.move_to_end();
+                                        if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Theme)
+                                        {
+                                            picker.selected_id().map(|s| s.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    KeyCode::F(2) => {
+                                        picker.cycle_sort_mode();
+                                        // Re-sort and update title
+                                        let _ = picker; // Release borrow
+                                        app_guard.sort_picker_items();
+                                        app_guard.update_picker_title();
+                                        None
+                                    }
                                     KeyCode::Enter => {
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
@@ -327,10 +359,57 @@ pub async fn run_chat(
                                             }
                                             app_guard.picker = None;
                                             app_guard.picker_mode = None;
+                                        } else if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Model)
+                                        {
+                                            if let Some(id) =
+                                                picker.selected_id().map(|s| s.to_string())
+                                            {
+                                                app_guard.apply_model_by_id(&id);
+                                                app_guard.set_status(format!("Model set: {}", id));
+                                            }
+                                            app_guard.picker = None;
+                                            app_guard.picker_mode = None;
                                         }
                                         None
                                     }
-                                    // No block actions in theme picker mode
+                                    KeyCode::Backspace => {
+                                        if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Model)
+                                            && !app_guard.model_search_filter.is_empty()
+                                        {
+                                            app_guard.model_search_filter.pop();
+                                            app_guard.filter_models();
+                                        } else if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Theme)
+                                            && !app_guard.theme_search_filter.is_empty()
+                                        {
+                                            app_guard.theme_search_filter.pop();
+                                            app_guard.filter_themes();
+                                        }
+                                        None
+                                    }
+                                    KeyCode::Char(c) => {
+                                        if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Model)
+                                        {
+                                            // Add character to filter for model picker
+                                            if !c.is_control() {
+                                                app_guard.model_search_filter.push(c);
+                                                app_guard.filter_models();
+                                            }
+                                        } else if current_picker_mode
+                                            == Some(crate::core::app::PickerMode::Theme)
+                                        {
+                                            // Add character to filter for theme picker
+                                            if !c.is_control() {
+                                                app_guard.theme_search_filter.push(c);
+                                                app_guard.filter_themes();
+                                            }
+                                        }
+                                        None
+                                    }
+                                    // No block actions in picker modes
                                     _ => None,
                                 }
                             } else {
@@ -1162,6 +1241,21 @@ pub async fn run_chat(
                                                 available_height,
                                                 term_size.width,
                                             );
+                                            continue;
+                                        }
+                                        CommandResult::OpenModelPicker => {
+                                            // Open model picker asynchronously
+                                            match app_guard.open_model_picker().await {
+                                                Ok(_) => {
+                                                    app_guard.set_status("Model picker opened (↑/↓ to navigate, type to filter)");
+                                                }
+                                                Err(e) => {
+                                                    app_guard.set_status(format!(
+                                                        "Model picker error: {}",
+                                                        e
+                                                    ));
+                                                }
+                                            }
                                             continue;
                                         }
                                         CommandResult::ProcessAsMessage(message) => {

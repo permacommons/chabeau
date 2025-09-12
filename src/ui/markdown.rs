@@ -262,9 +262,15 @@ fn render_with_parser_role_and_width_policy(
                         .add_modifier(Modifier::DIM);
                     style_stack.push(new);
                 }
-                Tag::Link { .. } => {
+                Tag::Link { dest_url, .. } => {
                     let new = theme.md_link_style();
                     style_stack.push(new);
+                    let open = format!("\x1b]8;;{}\x1b\\", dest_url);
+                    if let Some(ref mut table) = table_state {
+                        table.add_span(Span::raw(open));
+                    } else {
+                        current_spans.push(Span::raw(open));
+                    }
                 }
                 Tag::Table(_) => {
                     flush_current_line(&mut lines, &mut current_spans);
@@ -359,7 +365,15 @@ fn render_with_parser_role_and_width_policy(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
+                    style_stack.pop();
+                }
+                TagEnd::Link => {
+                    if let Some(ref mut table) = table_state {
+                        table.add_span(Span::raw("\x1b]8;;\x1b\\"));
+                    } else {
+                        current_spans.push(Span::raw("\x1b]8;;\x1b\\"));
+                    }
                     style_stack.pop();
                 }
                 TagEnd::Table => {
@@ -570,7 +584,11 @@ pub fn render_message_with_ranges(
                         .unwrap_or_default()
                         .add_modifier(Modifier::DIM),
                 ),
-                Tag::Link { .. } => style_stack.push(theme.md_link_style()),
+                Tag::Link { dest_url, .. } => {
+                    style_stack.push(theme.md_link_style());
+                    let open = format!("\x1b]8;;{}\x1b\\", dest_url);
+                    current_spans.push(Span::raw(open));
+                }
                 _ => {}
             },
             Event::End(tag_end) => match tag_end {
@@ -615,7 +633,11 @@ pub fn render_message_with_ranges(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
+                    style_stack.pop();
+                }
+                TagEnd::Link => {
+                    current_spans.push(Span::raw("\x1b]8;;\x1b\\"));
                     style_stack.pop();
                 }
                 _ => {}
@@ -3483,6 +3505,25 @@ pub fn build_markdown_display_lines(
         lines.extend(rendered.lines);
     }
     lines
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    use crate::core::message::Message;
+
+    #[test]
+    fn renders_clickable_links() {
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: "a [link](https://example.com)".to_string(),
+        };
+        let theme = Theme::dark_default();
+        let rendered = render_message_markdown(&msg, &theme);
+        let line = rendered.lines.first().expect("line");
+        let combined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(combined.contains("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"));
+    }
 }
 
 /// Build display lines for all messages using plain text rendering

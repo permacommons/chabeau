@@ -47,6 +47,8 @@ pub struct App {
     pub input_scroll_offset: u16,
     pub textarea: TextArea<'static>,
     pub theme: Theme,
+    // Currently active theme id for this session (may differ from default in config)
+    pub current_theme_id: Option<String>,
     pub picker: Option<PickerState>,
     pub picker_mode: Option<PickerMode>,
     // Block select mode (inline, like Ctrl+P for user messages)
@@ -58,6 +60,8 @@ pub struct App {
     pub model_before_picker: Option<String>,
     pub model_search_filter: String,
     pub all_available_models: Vec<PickerItem>,
+    // Whether the current model picker has any date metadata
+    pub model_picker_has_dates: bool,
     // Theme picker state
     pub theme_search_filter: String,
     pub all_available_themes: Vec<PickerItem>,
@@ -67,7 +71,7 @@ pub struct App {
     pub all_available_providers: Vec<PickerItem>,
     // Track when we're in a provider->model transition flow
     pub in_provider_model_transition: bool,
-    pub provider_model_transition_state: Option<(String, String, String, String)>, // (prev_provider_name, prev_provider_display, prev_model, prev_api_key)
+    pub provider_model_transition_state: Option<(String, String, String, String, String)>, // (prev_provider_name, prev_provider_display, prev_model, prev_api_key, prev_base_url)
     // Rendering toggles
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
@@ -88,6 +92,22 @@ pub enum PickerMode {
 }
 
 impl App {
+    /// Returns true if current picker should use alphabetical sorting (A–Z / Z–A)
+    fn picker_prefers_alphabetical(&self) -> bool {
+        self.picker_mode == Some(PickerMode::Theme)
+            || self.picker_mode == Some(PickerMode::Provider)
+            || (self.picker_mode == Some(PickerMode::Model) && !self.model_picker_has_dates)
+    }
+
+    /// Returns the default sort mode for the active picker
+    fn default_sort_mode_for_current_picker(&self) -> crate::ui::picker::SortMode {
+        if self.picker_prefers_alphabetical() {
+            crate::ui::picker::SortMode::Name // A–Z by default
+        } else {
+            // For models with dates, default to Date (newest first)
+            crate::ui::picker::SortMode::Date
+        }
+    }
     pub async fn new_with_auth(
         model: String,
         log_file: Option<String>,
@@ -143,6 +163,7 @@ impl App {
                     Some(name) => Theme::from_name(name),
                     None => Theme::dark_default(),
                 },
+                current_theme_id: config.theme.clone(),
                 picker: None,
                 picker_mode: None,
                 block_select_mode: false,
@@ -152,6 +173,7 @@ impl App {
                 model_before_picker: None,
                 model_search_filter: String::new(),
                 all_available_models: Vec::new(),
+                model_picker_has_dates: false,
                 theme_search_filter: String::new(),
                 all_available_themes: Vec::new(),
                 provider_before_picker: None,
@@ -261,6 +283,7 @@ impl App {
             input_scroll_offset: 0,
             textarea: TextArea::default(),
             theme: resolved_theme,
+            current_theme_id: config.theme.clone(),
             picker: None,
             picker_mode: None,
             block_select_mode: false,
@@ -270,6 +293,7 @@ impl App {
             model_before_picker: None,
             model_search_filter: String::new(),
             all_available_models: Vec::new(),
+            model_picker_has_dates: false,
             theme_search_filter: String::new(),
             all_available_themes: Vec::new(),
             provider_before_picker: None,
@@ -449,6 +473,7 @@ impl App {
             input_scroll_offset: 0,
             textarea: tui_textarea::TextArea::default(),
             theme,
+            current_theme_id: None,
             picker: None,
             picker_mode: None,
             block_select_mode: false,
@@ -458,6 +483,7 @@ impl App {
             model_before_picker: None,
             model_search_filter: String::new(),
             all_available_models: Vec::new(),
+            model_picker_has_dates: false,
             theme_search_filter: String::new(),
             all_available_themes: Vec::new(),
             provider_before_picker: None,
@@ -1087,21 +1113,51 @@ impl App {
         self.theme_id_before_picker = cfg.theme.clone();
 
         let mut items: Vec<PickerItem> = Vec::new();
+        let default_theme_id = cfg.theme.clone();
         // Built-ins
         for t in crate::ui::builtin_themes::load_builtin_themes() {
+            let is_default = default_theme_id
+                .as_ref()
+                .map(|dt| dt.eq_ignore_ascii_case(&t.id))
+                .unwrap_or(false);
+            let label = if is_default {
+                format!("{}*", t.display_name)
+            } else {
+                t.display_name.clone()
+            };
+            let metadata = if is_default {
+                Some("Built-in theme (default from config)".to_string())
+            } else {
+                Some("Built-in theme".to_string())
+            };
             items.push(PickerItem {
                 id: t.id.clone(),
-                label: t.display_name.clone(),
-                metadata: Some("Built-in theme".to_string()),
+                label,
+                metadata,
                 sort_key: Some(t.display_name.clone()),
             });
         }
         // Custom
         for ct in cfg.list_custom_themes() {
+            let is_default = default_theme_id
+                .as_ref()
+                .map(|dt| dt.eq_ignore_ascii_case(&ct.id))
+                .unwrap_or(false);
+            let base_label = format!("{} (custom)", ct.display_name);
+            let label = if is_default {
+                format!("{}*", base_label)
+            } else {
+                base_label
+            };
+            let metadata = if is_default {
+                Some("Custom theme (config.toml) (default from config)".to_string())
+            } else {
+                Some("Custom theme (config.toml)".to_string())
+            };
             items.push(PickerItem {
                 id: ct.id.clone(),
-                label: format!("{} (custom)", ct.display_name),
-                metadata: Some("Custom theme (config.toml)".to_string()),
+                label,
+                metadata,
                 sort_key: Some(ct.display_name.clone()),
             });
         }
@@ -1109,26 +1165,48 @@ impl App {
         // Store all themes for filtering
         self.all_available_themes = items.clone();
 
-        // Select current theme if present
+        // Select the currently active theme if present (session theme may differ from default)
         let mut selected = 0usize;
-        if let Some(ref id) = cfg.theme {
+        let active_theme_id = self
+            .current_theme_id
+            .as_ref()
+            .or(cfg.theme.as_ref())
+            .cloned();
+        if let Some(id) = active_theme_id {
             if let Some((idx, _)) = items
                 .iter()
                 .enumerate()
-                .find(|(_, it)| it.id.eq_ignore_ascii_case(id))
+                .find(|(_, it)| it.id.eq_ignore_ascii_case(&id))
             {
                 selected = idx;
             }
         }
 
         let mut picker_state = PickerState::new("Pick Theme", items, selected);
-        // Set theme picker to default to alphabetical (A-Z) sorting
-        picker_state.sort_mode = crate::ui::picker::SortMode::Name;
+        // Default to alphabetical for themes
+        picker_state.sort_mode = self.default_sort_mode_for_current_picker();
         self.picker = Some(picker_state);
 
         // Apply initial sorting and update title
         self.sort_picker_items();
         self.update_picker_title();
+
+        // Find active theme in the list after sorting and set selection
+        let post_active_id = self
+            .current_theme_id
+            .as_ref()
+            .or(cfg.theme.as_ref())
+            .cloned();
+        if let (Some(theme_id), Some(picker)) = (post_active_id, &mut self.picker) {
+            if let Some((idx, _)) = picker
+                .items
+                .iter()
+                .enumerate()
+                .find(|(_, it)| it.id.eq_ignore_ascii_case(&theme_id))
+            {
+                picker.selected = idx;
+            }
+        }
     }
 
     /// Apply theme by id (custom or built-in) and persist in config
@@ -1143,6 +1221,7 @@ impl App {
         };
 
         self.theme = theme;
+        self.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
 
         let mut cfg = Config::load_test_safe();
@@ -1188,6 +1267,10 @@ impl App {
         self.model_before_picker = Some(self.model.clone());
         self.model_search_filter.clear();
 
+        // Load config to detect default model for current provider
+        let cfg = Config::load_test_safe();
+        let default_model_for_provider = cfg.get_default_model(&self.provider_name).cloned();
+
         // Fetch models from current provider
         let models_response = fetch_models(
             &self.client,
@@ -1204,10 +1287,20 @@ impl App {
         let mut models = models_response.data;
         sort_models(&mut models);
 
+        // Determine if provider supplies usable creation dates for any model
+        // Consider a date present if numeric `created` > 0 exists or `created_at` resembles a date
+        self.model_picker_has_dates = models.iter().any(|m| {
+            m.created.map(|v| v > 0).unwrap_or(false)
+                || m.created_at
+                    .as_ref()
+                    .map(|s| s.len() > 4 && (s.contains('-') || s.contains('/')))
+                    .unwrap_or(false)
+        });
+
         let items: Vec<PickerItem> = models
             .into_iter()
             .map(|model| {
-                let label = if let Some(display_name) = &model.display_name {
+                let mut label = if let Some(display_name) = &model.display_name {
                     if display_name != &model.id && !display_name.is_empty() {
                         format!("{} ({})", model.id, display_name)
                     } else {
@@ -1216,6 +1309,13 @@ impl App {
                 } else {
                     model.id.clone()
                 };
+
+                // Mark default model for this provider with an asterisk
+                if let Some(ref def) = default_model_for_provider {
+                    if def.eq_ignore_ascii_case(&model.id) {
+                        label.push('*');
+                    }
+                }
 
                 // Extract metadata for display with robust error handling
                 let metadata = if let Some(created) = model.created {
@@ -1264,11 +1364,14 @@ impl App {
                         .map(|owner| format!("Owner: {}", owner))
                 };
 
-                // Sort key for date sorting (use timestamp, fallback to ID)
-                let sort_key = if let Some(created) = model.created {
-                    Some(format!("{:020}", created)) // Zero-padded for proper string sorting
+                // Sort key for date sorting only when dates are available
+                let sort_key = if self.model_picker_has_dates {
+                    model
+                        .created
+                        .filter(|&created| created > 0)
+                        .map(|created| format!("{:020}", created))
                 } else {
-                    Some(model.id.clone())
+                    None
                 };
 
                 PickerItem {
@@ -1280,6 +1383,9 @@ impl App {
             })
             .collect();
 
+        // Re-evaluate date availability based on built items (their sort_key)
+        self.model_picker_has_dates = items.iter().any(|it| it.sort_key.is_some());
+
         // Store all models for filtering
         self.all_available_models = items.clone();
 
@@ -1289,7 +1395,10 @@ impl App {
             selected = idx;
         }
 
-        self.picker = Some(PickerState::new("Pick Model", items, selected));
+        // Initialize picker; default to A–Z when no dates are available
+        let mut picker_state = PickerState::new("Pick Model", items, selected);
+        picker_state.sort_mode = self.default_sort_mode_for_current_picker();
+        self.picker = Some(picker_state);
 
         // Apply initial sorting and update title
         self.sort_picker_items();
@@ -1306,6 +1415,7 @@ impl App {
         base_title: &str,
         min_items_for_filter_hint: usize,
     ) {
+        let prefers_alpha = self.picker_prefers_alphabetical();
         if let Some(picker) = &mut self.picker {
             let search_term = search_filter.to_lowercase();
 
@@ -1332,9 +1442,7 @@ impl App {
             }
 
             // Re-apply sorting after filtering
-            if self.picker_mode == Some(PickerMode::Theme)
-                || self.picker_mode == Some(PickerMode::Provider)
-            {
+            if prefers_alpha {
                 // For themes and providers, use alphabetical sorting
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Date => {
@@ -1366,9 +1474,7 @@ impl App {
             }
 
             // Update the title to show filtered count and sort mode
-            let sort_text = if self.picker_mode == Some(PickerMode::Theme)
-                || self.picker_mode == Some(PickerMode::Provider)
-            {
+            let sort_text = if prefers_alpha {
                 // For themes and providers, show A-Z or Z-A instead of name/date
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Name => "A-Z",
@@ -1434,10 +1540,9 @@ impl App {
 
     /// Sort picker items based on current sort mode
     pub fn sort_picker_items(&mut self) {
+        let prefers_alpha = self.picker_prefers_alphabetical();
         if let Some(picker) = &mut self.picker {
-            if self.picker_mode == Some(PickerMode::Theme)
-                || self.picker_mode == Some(PickerMode::Provider)
-            {
+            if prefers_alpha {
                 // For themes and providers, use alphabetical sorting
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Date => {
@@ -1459,7 +1564,8 @@ impl App {
                                 (Some(a_key), Some(b_key)) => b_key.cmp(a_key), // Reverse for newest first
                                 (Some(_), None) => std::cmp::Ordering::Less,
                                 (None, Some(_)) => std::cmp::Ordering::Greater,
-                                (None, None) => a.label.cmp(&b.label),
+                                // If both missing, reverse alphabetical to distinguish from Name mode
+                                (None, None) => b.label.cmp(&a.label),
                             }
                         });
                     }
@@ -1479,11 +1585,10 @@ impl App {
 
     /// Update picker title to show sort mode
     pub fn update_picker_title(&mut self) {
+        let prefers_alpha = self.picker_prefers_alphabetical();
         if let Some(picker) = &mut self.picker {
             // Determine sort text based on mode and picker type
-            let sort_text = if self.picker_mode == Some(PickerMode::Theme)
-                || self.picker_mode == Some(PickerMode::Provider)
-            {
+            let sort_text = if prefers_alpha {
                 // For themes and providers, show A-Z or Z-A instead of name/date
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Name => "A-Z",
@@ -1529,6 +1634,8 @@ impl App {
     pub fn apply_model_by_id(&mut self, model_id: &str) {
         self.model = model_id.to_string();
         self.model_before_picker = None;
+        // Reset model picker aux state
+        self.model_picker_has_dates = false;
         // Complete provider->model transition if we were in one
         if self.in_provider_model_transition {
             self.complete_provider_model_transition();
@@ -1694,6 +1801,7 @@ impl App {
                             self.provider_display_name.clone(),
                             self.model.clone(),
                             self.api_key.clone(),
+                            self.base_url.clone(),
                         ));
 
                         // Apply the new provider
@@ -1749,14 +1857,19 @@ impl App {
 
     /// Revert provider and model to previous state during provider->model transition cancellation
     pub fn revert_provider_model_transition(&mut self) {
-        if let Some((prev_provider_name, prev_provider_display, prev_model, prev_api_key)) =
-            self.provider_model_transition_state.take()
+        if let Some((
+            prev_provider_name,
+            prev_provider_display,
+            prev_model,
+            prev_api_key,
+            prev_base_url,
+        )) = self.provider_model_transition_state.take()
         {
             self.provider_name = prev_provider_name;
             self.provider_display_name = prev_provider_display;
             self.model = prev_model;
             self.api_key = prev_api_key;
-            // Note: We don't revert base_url as it should stay consistent with the API key/provider
+            self.base_url = prev_base_url;
         }
         self.in_provider_model_transition = false;
         self.provider_model_transition_state = None;
@@ -1793,6 +1906,7 @@ impl App {
         };
 
         self.theme = theme;
+        self.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
         // Clear preview snapshot but don't persist to config
         self.theme_before_picker = None;
@@ -1879,6 +1993,116 @@ mod tests {
     use super::*;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
+
+    #[test]
+    fn theme_picker_highlights_active_theme_over_default() {
+        let mut app = create_test_app();
+        // Simulate active theme is light, while default (config) remains None in tests
+        app.current_theme_id = Some("light".to_string());
+
+        // Open the theme picker
+        app.open_theme_picker();
+
+        // After sorting and selection alignment, ensure selected item has id "light"
+        if let Some(picker) = &app.picker {
+            let idx = picker.selected;
+            let selected_id = &picker.items[idx].id;
+            assert_eq!(selected_id, "light");
+        } else {
+            panic!("picker not opened");
+        }
+    }
+
+    #[test]
+    fn model_picker_title_uses_az_when_no_dates() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Model);
+        app.model_picker_has_dates = false;
+        // Build a model picker with no sort_key (no dates)
+        let items = vec![
+            PickerItem {
+                id: "a-model".into(),
+                label: "a-model".into(),
+                metadata: None,
+                sort_key: None,
+            },
+            PickerItem {
+                id: "z-model".into(),
+                label: "z-model".into(),
+                metadata: None,
+                sort_key: None,
+            },
+        ];
+        let mut picker = PickerState::new("Pick Model", items, 0);
+        // Should default to A-Z in no-date scenarios
+        picker.sort_mode = crate::ui::picker::SortMode::Name;
+        app.picker = Some(picker);
+        app.update_picker_title();
+        let picker = app.picker.as_ref().unwrap();
+        assert!(picker.title.contains("Sort by: A-Z"));
+    }
+
+    #[test]
+    fn provider_model_cancel_reverts_base_url_and_state() {
+        let mut app = create_test_app();
+        // Set current state to some new provider context
+        app.provider_name = "newprov".into();
+        app.provider_display_name = "NewProv".into();
+        app.model = "new-model".into();
+        app.api_key = "new-key".into();
+        app.base_url = "https://api.newprov.test/v1".into();
+
+        // Simulate saved previous state for transition
+        app.in_provider_model_transition = true;
+        app.provider_model_transition_state = Some((
+            "oldprov".into(),
+            "OldProv".into(),
+            "old-model".into(),
+            "old-key".into(),
+            "https://api.oldprov.test/v1".into(),
+        ));
+
+        // Cancelling model picker should revert provider/model/api_key/base_url
+        app.revert_model_preview();
+
+        assert_eq!(app.provider_name, "oldprov");
+        assert_eq!(app.provider_display_name, "OldProv");
+        assert_eq!(app.model, "old-model");
+        assert_eq!(app.api_key, "old-key");
+        assert_eq!(app.base_url, "https://api.oldprov.test/v1");
+        assert!(!app.in_provider_model_transition);
+        assert!(app.provider_model_transition_state.is_none());
+    }
+
+    #[test]
+    fn default_sort_mode_helper_behaviour() {
+        let mut app = create_test_app();
+        // Theme picker prefers alphabetical → Name
+        app.picker_mode = Some(PickerMode::Theme);
+        assert!(matches!(
+            app.default_sort_mode_for_current_picker(),
+            crate::ui::picker::SortMode::Name
+        ));
+        // Provider picker prefers alphabetical → Name
+        app.picker_mode = Some(PickerMode::Provider);
+        assert!(matches!(
+            app.default_sort_mode_for_current_picker(),
+            crate::ui::picker::SortMode::Name
+        ));
+        // Model picker with dates → Date
+        app.picker_mode = Some(PickerMode::Model);
+        app.model_picker_has_dates = true;
+        assert!(matches!(
+            app.default_sort_mode_for_current_picker(),
+            crate::ui::picker::SortMode::Date
+        ));
+        // Model picker without dates → Name
+        app.model_picker_has_dates = false;
+        assert!(matches!(
+            app.default_sort_mode_for_current_picker(),
+            crate::ui::picker::SortMode::Name
+        ));
+    }
 
     #[test]
     fn prewrap_cache_reuse_no_changes() {

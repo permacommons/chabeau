@@ -52,6 +52,18 @@ impl Config {
         Self::load_from_path(&config_path)
     }
 
+    /// Load config, but return default config when in test mode to avoid side effects
+    #[cfg(test)]
+    pub fn load_test_safe() -> Config {
+        Config::default()
+    }
+
+    /// Load config, but return default config when in test mode to avoid side effects
+    #[cfg(not(test))]
+    pub fn load_test_safe() -> Config {
+        Self::load().unwrap_or_default()
+    }
+
     pub fn load_from_path(config_path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
         if config_path.exists() {
             let contents = fs::read_to_string(config_path)?;
@@ -65,6 +77,18 @@ impl Config {
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let config_path = Self::get_config_path();
         self.save_to_path(&config_path)
+    }
+
+    /// Save config, but do nothing when in test mode to avoid side effects
+    #[cfg(test)]
+    pub fn save_test_safe(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(()) // No-op in tests
+    }
+
+    /// Save config normally when not in test mode
+    #[cfg(not(test))]
+    pub fn save_test_safe(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.save()
     }
 
     pub fn save_to_path(&self, config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {

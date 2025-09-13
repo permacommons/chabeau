@@ -61,6 +61,13 @@ pub struct App {
     // Theme picker state
     pub theme_search_filter: String,
     pub all_available_themes: Vec<PickerItem>,
+    // Provider picker state
+    pub provider_before_picker: Option<(String, String)>, // (provider_name, display_name)
+    pub provider_search_filter: String,
+    pub all_available_providers: Vec<PickerItem>,
+    // Track when we're in a provider->model transition flow
+    pub in_provider_model_transition: bool,
+    pub provider_model_transition_state: Option<(String, String, String, String)>, // (prev_provider_name, prev_provider_display, prev_model, prev_api_key)
     // Rendering toggles
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
@@ -77,6 +84,7 @@ pub struct App {
 pub enum PickerMode {
     Theme,
     Model,
+    Provider,
 }
 
 impl App {
@@ -146,6 +154,11 @@ impl App {
                 all_available_models: Vec::new(),
                 theme_search_filter: String::new(),
                 all_available_themes: Vec::new(),
+                provider_before_picker: None,
+                provider_search_filter: String::new(),
+                all_available_providers: Vec::new(),
+                in_provider_model_transition: false,
+                provider_model_transition_state: None,
                 markdown_enabled: config.markdown.unwrap_or(true),
                 syntax_enabled: config.syntax.unwrap_or(true),
                 prewrap_cache: None,
@@ -259,6 +272,11 @@ impl App {
             all_available_models: Vec::new(),
             theme_search_filter: String::new(),
             all_available_themes: Vec::new(),
+            provider_before_picker: None,
+            provider_search_filter: String::new(),
+            all_available_providers: Vec::new(),
+            in_provider_model_transition: false,
+            provider_model_transition_state: None,
             markdown_enabled: config.markdown.unwrap_or(true),
             syntax_enabled: config.syntax.unwrap_or(true),
             prewrap_cache: None,
@@ -442,6 +460,11 @@ impl App {
             all_available_models: Vec::new(),
             theme_search_filter: String::new(),
             all_available_themes: Vec::new(),
+            provider_before_picker: None,
+            provider_search_filter: String::new(),
+            all_available_providers: Vec::new(),
+            in_provider_model_transition: false,
+            provider_model_transition_state: None,
             markdown_enabled,
             syntax_enabled,
             prewrap_cache: None,
@@ -1060,9 +1083,9 @@ impl App {
         // Save current theme and configured id for cancel
         self.theme_before_picker = Some(self.theme.clone());
         self.theme_search_filter.clear();
-        if let Ok(cfg) = Config::load() {
-            self.theme_id_before_picker = cfg.theme.clone();
-        }
+        let cfg = Config::load_test_safe();
+        self.theme_id_before_picker = cfg.theme.clone();
+
         let mut items: Vec<PickerItem> = Vec::new();
         // Built-ins
         for t in crate::ui::builtin_themes::load_builtin_themes() {
@@ -1074,15 +1097,13 @@ impl App {
             });
         }
         // Custom
-        if let Ok(cfg) = Config::load() {
-            for ct in cfg.list_custom_themes() {
-                items.push(PickerItem {
-                    id: ct.id.clone(),
-                    label: format!("{} (custom)", ct.display_name),
-                    metadata: Some("Custom theme (config.toml)".to_string()),
-                    sort_key: Some(ct.display_name.clone()),
-                });
-            }
+        for ct in cfg.list_custom_themes() {
+            items.push(PickerItem {
+                id: ct.id.clone(),
+                label: format!("{} (custom)", ct.display_name),
+                metadata: Some("Custom theme (config.toml)".to_string()),
+                sort_key: Some(ct.display_name.clone()),
+            });
         }
 
         // Store all themes for filtering
@@ -1090,15 +1111,13 @@ impl App {
 
         // Select current theme if present
         let mut selected = 0usize;
-        if let Ok(cfg) = Config::load() {
-            if let Some(ref id) = cfg.theme {
-                if let Some((idx, _)) = items
-                    .iter()
-                    .enumerate()
-                    .find(|(_, it)| it.id.eq_ignore_ascii_case(id))
-                {
-                    selected = idx;
-                }
+        if let Some(ref id) = cfg.theme {
+            if let Some((idx, _)) = items
+                .iter()
+                .enumerate()
+                .find(|(_, it)| it.id.eq_ignore_ascii_case(id))
+            {
+                selected = idx;
             }
         }
 
@@ -1114,7 +1133,7 @@ impl App {
 
     /// Apply theme by id (custom or built-in) and persist in config
     pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
-        let cfg = Config::load().map_err(|e| e.to_string())?;
+        let cfg = Config::load_test_safe();
         let theme = if let Some(ct) = cfg.get_custom_theme(id) {
             Theme::from_spec(&theme_spec_from_custom(ct))
         } else if let Some(spec) = find_builtin_theme(id) {
@@ -1126,9 +1145,9 @@ impl App {
         self.theme = theme;
         self.configure_textarea_appearance();
 
-        let mut cfg = Config::load().map_err(|e| e.to_string())?;
+        let mut cfg = Config::load_test_safe();
         cfg.theme = Some(id.to_string());
-        cfg.save().map_err(|e| e.to_string())?;
+        cfg.save_test_safe().map_err(|e| e.to_string())?;
         // Clear preview snapshot once committed
         self.theme_before_picker = None;
         self.theme_id_before_picker = None;
@@ -1138,12 +1157,11 @@ impl App {
     /// Apply theme temporarily for preview (does not persist config)
     pub fn preview_theme_by_id(&mut self, id: &str) {
         // Try custom then built-in then no-op
-        if let Ok(cfg) = Config::load() {
-            if let Some(ct) = cfg.get_custom_theme(id) {
-                self.theme = Theme::from_spec(&theme_spec_from_custom(ct));
-                self.configure_textarea_appearance();
-                return;
-            }
+        let cfg = Config::load_test_safe();
+        if let Some(ct) = cfg.get_custom_theme(id) {
+            self.theme = Theme::from_spec(&theme_spec_from_custom(ct));
+            self.configure_textarea_appearance();
+            return;
         }
         if let Some(spec) = find_builtin_theme(id) {
             self.theme = Theme::from_spec(&spec);
@@ -1314,8 +1332,10 @@ impl App {
             }
 
             // Re-apply sorting after filtering
-            if self.picker_mode == Some(PickerMode::Theme) {
-                // For themes, interpret Date mode as reverse alphabetical (Z-A)
+            if self.picker_mode == Some(PickerMode::Theme)
+                || self.picker_mode == Some(PickerMode::Provider)
+            {
+                // For themes and providers, use alphabetical sorting
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Date => {
                         // Z-A sorting (reverse alphabetical)
@@ -1346,11 +1366,13 @@ impl App {
             }
 
             // Update the title to show filtered count and sort mode
-            let sort_text = if self.picker_mode == Some(PickerMode::Theme) {
-                // For themes, show A-Z or Z-A instead of name/date
+            let sort_text = if self.picker_mode == Some(PickerMode::Theme)
+                || self.picker_mode == Some(PickerMode::Provider)
+            {
+                // For themes and providers, show A-Z or Z-A instead of name/date
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Name => "A-Z",
-                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order for themes
+                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order
                 }
             } else {
                 // For models, keep date/name as sort indicators
@@ -1401,11 +1423,22 @@ impl App {
         }
     }
 
+    /// Filter providers based on search term and update picker
+    pub fn filter_providers(&mut self) {
+        if self.picker_mode == Some(PickerMode::Provider) {
+            let search_filter = self.provider_search_filter.clone();
+            let all_items = self.all_available_providers.clone();
+            self.filter_picker_items(&search_filter, &all_items, "Pick Provider", 10);
+        }
+    }
+
     /// Sort picker items based on current sort mode
     pub fn sort_picker_items(&mut self) {
         if let Some(picker) = &mut self.picker {
-            if self.picker_mode == Some(PickerMode::Theme) {
-                // For themes, interpret Date mode as reverse alphabetical (Z-A)
+            if self.picker_mode == Some(PickerMode::Theme)
+                || self.picker_mode == Some(PickerMode::Provider)
+            {
+                // For themes and providers, use alphabetical sorting
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Date => {
                         // Z-A sorting (reverse alphabetical)
@@ -1448,11 +1481,13 @@ impl App {
     pub fn update_picker_title(&mut self) {
         if let Some(picker) = &mut self.picker {
             // Determine sort text based on mode and picker type
-            let sort_text = if self.picker_mode == Some(PickerMode::Theme) {
-                // For themes, show A-Z or Z-A instead of name/date
+            let sort_text = if self.picker_mode == Some(PickerMode::Theme)
+                || self.picker_mode == Some(PickerMode::Provider)
+            {
+                // For themes and providers, show A-Z or Z-A instead of name/date
                 match picker.sort_mode {
                     crate::ui::picker::SortMode::Name => "A-Z",
-                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order for themes
+                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order
                 }
             } else {
                 // For models, keep date/name as sort indicators
@@ -1464,6 +1499,8 @@ impl App {
 
             let base_title = if self.picker_mode == Some(PickerMode::Model) {
                 "Pick Model"
+            } else if self.picker_mode == Some(PickerMode::Provider) {
+                "Pick Provider"
             } else {
                 "Pick Theme"
             };
@@ -1471,6 +1508,8 @@ impl App {
             // Update title with sort information
             let item_count = if self.picker_mode == Some(PickerMode::Model) {
                 self.all_available_models.len()
+            } else if self.picker_mode == Some(PickerMode::Provider) {
+                self.all_available_providers.len()
             } else {
                 self.all_available_themes.len()
             };
@@ -1490,6 +1529,10 @@ impl App {
     pub fn apply_model_by_id(&mut self, model_id: &str) {
         self.model = model_id.to_string();
         self.model_before_picker = None;
+        // Complete provider->model transition if we were in one
+        if self.in_provider_model_transition {
+            self.complete_provider_model_transition();
+        }
     }
 
     /// Revert model to the one before opening picker (on cancel)
@@ -1500,6 +1543,285 @@ impl App {
         self.model_before_picker = None;
         self.model_search_filter.clear();
         self.all_available_models.clear();
+        // Check if we're in a provider->model transition and need to revert
+        if self.in_provider_model_transition {
+            self.revert_provider_model_transition();
+        }
+    }
+
+    /// Open a provider picker modal with available providers
+    pub fn open_provider_picker(&mut self) {
+        use crate::auth::AuthManager;
+        use crate::core::builtin_providers::load_builtin_providers;
+
+        self.picker_mode = Some(PickerMode::Provider);
+        // Save current provider for cancel
+        self.provider_before_picker = Some((
+            self.provider_name.clone(),
+            self.provider_display_name.clone(),
+        ));
+        self.provider_search_filter.clear();
+
+        let auth_manager = AuthManager::new();
+        let cfg = Config::load_test_safe();
+        let default_provider = cfg.default_provider.clone();
+        let mut items: Vec<PickerItem> = Vec::new();
+
+        // Add built-in providers that have authentication
+        let builtin_providers = load_builtin_providers();
+        for builtin_provider in builtin_providers {
+            if let Ok(Some(_)) = auth_manager.get_token(&builtin_provider.id) {
+                let is_default = default_provider
+                    .as_ref()
+                    .map(|dp| dp.eq_ignore_ascii_case(&builtin_provider.id))
+                    .unwrap_or(false);
+                let label = if is_default {
+                    format!("{}*", builtin_provider.display_name)
+                } else {
+                    builtin_provider.display_name.clone()
+                };
+                let metadata = if is_default {
+                    Some(format!(
+                        "Built-in provider ({}) (default from config)",
+                        builtin_provider.base_url
+                    ))
+                } else {
+                    Some(format!("Built-in provider ({})", builtin_provider.base_url))
+                };
+                items.push(PickerItem {
+                    id: builtin_provider.id.clone(),
+                    label,
+                    metadata,
+                    sort_key: Some(builtin_provider.display_name.clone()),
+                });
+            }
+        }
+
+        // Add custom providers that have authentication
+        let custom_providers = auth_manager.list_custom_providers();
+        for (id, display_name, base_url, has_token) in custom_providers {
+            if has_token {
+                let is_default = default_provider
+                    .as_ref()
+                    .map(|dp| dp.eq_ignore_ascii_case(&id))
+                    .unwrap_or(false);
+                let label = if is_default {
+                    format!("{} (custom)*", display_name)
+                } else {
+                    format!("{} (custom)", display_name)
+                };
+                let metadata = if is_default {
+                    Some(format!(
+                        "Custom provider ({}) (default from config)",
+                        base_url
+                    ))
+                } else {
+                    Some(format!("Custom provider ({})", base_url))
+                };
+                items.push(PickerItem {
+                    id,
+                    label,
+                    metadata,
+                    sort_key: Some(display_name),
+                });
+            }
+        }
+
+        if items.is_empty() {
+            // No providers available, show error
+            self.set_status(
+                "No configured providers found. Run 'chabeau auth' to set up authentication.",
+            );
+            return;
+        }
+
+        // Store all providers for filtering
+        self.all_available_providers = items.clone();
+
+        let mut picker_state = PickerState::new("Pick Provider", items, 0);
+        // Set provider picker to default to alphabetical (A-Z) sorting
+        picker_state.sort_mode = crate::ui::picker::SortMode::Name;
+        self.picker = Some(picker_state);
+
+        // Apply initial sorting and update title
+        self.sort_picker_items();
+        self.update_picker_title();
+
+        // Find current provider in the list after sorting
+        if let Some(picker) = &mut self.picker {
+            if let Some((idx, _)) = picker
+                .items
+                .iter()
+                .enumerate()
+                .find(|(_, it)| it.id == self.provider_name)
+            {
+                picker.selected = idx;
+            }
+        }
+    }
+
+    /// Apply provider by id and update auth configuration (session-only)
+    ///
+    /// Returns a tuple with (Result, bool), where:
+    /// - Result<(), String> indicates success or failure of the provider change
+    /// - bool indicates whether a model picker should be opened after changing provider
+    pub fn apply_provider_by_id(&mut self, provider_id: &str) -> (Result<(), String>, bool) {
+        use crate::auth::AuthManager;
+
+        let auth_manager = AuthManager::new();
+        let config = Config::load_test_safe();
+
+        // Use the shared authentication resolution function to get provider info
+        match auth_manager.resolve_authentication(Some(provider_id), &config) {
+            Ok((api_key, base_url, provider_name, provider_display_name)) => {
+                // Check if there's a default model for this provider
+                let open_model_picker =
+                    if let Some(default_model) = config.get_default_model(&provider_name) {
+                        // Apply the default model immediately
+                        self.api_key = api_key;
+                        self.base_url = base_url;
+                        self.provider_name = provider_name.clone();
+                        self.provider_display_name = provider_display_name;
+                        self.provider_before_picker = None;
+                        self.model = default_model.clone();
+                        false // No need to open model picker
+                    } else {
+                        // No default model found, need to save state before changing provider
+                        // so we can revert if model picker is cancelled
+                        self.in_provider_model_transition = true;
+                        self.provider_model_transition_state = Some((
+                            self.provider_name.clone(),
+                            self.provider_display_name.clone(),
+                            self.model.clone(),
+                            self.api_key.clone(),
+                        ));
+
+                        // Apply the new provider
+                        self.api_key = api_key;
+                        self.base_url = base_url;
+                        self.provider_name = provider_name.clone();
+                        self.provider_display_name = provider_display_name;
+                        self.provider_before_picker = None;
+                        true // Need to open model picker
+                    };
+
+                (Ok(()), open_model_picker)
+            }
+            Err(e) => (Err(e.to_string()), false),
+        }
+    }
+
+    /// Apply provider by id and persist as default provider in config
+    ///
+    /// Returns a tuple with (Result, bool), where:
+    /// - Result<(), String> indicates success or failure of the provider change
+    /// - bool indicates whether a model picker should be opened after changing provider
+    pub fn apply_provider_by_id_persistent(
+        &mut self,
+        provider_id: &str,
+    ) -> (Result<(), String>, bool) {
+        // First apply the provider change
+        let (result, open_model_picker) = self.apply_provider_by_id(provider_id);
+        if let Err(e) = result {
+            return (Err(e), false);
+        }
+
+        // Then persist to config
+        let mut config = Config::load_test_safe();
+        config.default_provider = Some(provider_id.to_string());
+        match config.save_test_safe() {
+            Ok(_) => (Ok(()), open_model_picker),
+            Err(e) => (Err(e.to_string()), false),
+        }
+    }
+
+    /// Revert provider to the one before opening picker (on cancel)
+    pub fn revert_provider_preview(&mut self) {
+        if let Some((prev_name, prev_display)) = self.provider_before_picker.clone() {
+            self.provider_name = prev_name;
+            self.provider_display_name = prev_display;
+            // Note: We don't revert api_key and base_url as they should stay consistent with provider
+        }
+        self.provider_before_picker = None;
+        self.provider_search_filter.clear();
+        self.all_available_providers.clear();
+    }
+
+    /// Revert provider and model to previous state during provider->model transition cancellation
+    pub fn revert_provider_model_transition(&mut self) {
+        if let Some((prev_provider_name, prev_provider_display, prev_model, prev_api_key)) =
+            self.provider_model_transition_state.take()
+        {
+            self.provider_name = prev_provider_name;
+            self.provider_display_name = prev_provider_display;
+            self.model = prev_model;
+            self.api_key = prev_api_key;
+            // Note: We don't revert base_url as it should stay consistent with the API key/provider
+        }
+        self.in_provider_model_transition = false;
+        self.provider_model_transition_state = None;
+    }
+
+    /// Clear provider->model transition state when model is successfully selected
+    pub fn complete_provider_model_transition(&mut self) {
+        self.in_provider_model_transition = false;
+        self.provider_model_transition_state = None;
+    }
+
+    /// Apply model by id and persist as default model for current provider in config
+    pub fn apply_model_by_id_persistent(&mut self, model_id: &str) -> Result<(), String> {
+        // First apply the model change (this will complete the transition)
+        self.apply_model_by_id(model_id);
+
+        // Then persist to config
+        let mut config = Config::load_test_safe();
+        config.set_default_model(self.provider_name.clone(), model_id.to_string());
+        config.save_test_safe().map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    /// Apply theme by id for session only (does not persist to config)
+    pub fn apply_theme_by_id_session_only(&mut self, id: &str) -> Result<(), String> {
+        let cfg = Config::load_test_safe();
+        let theme = if let Some(ct) = cfg.get_custom_theme(id) {
+            Theme::from_spec(&theme_spec_from_custom(ct))
+        } else if let Some(spec) = find_builtin_theme(id) {
+            Theme::from_spec(&spec)
+        } else {
+            return Err(format!("Unknown theme: {}", id));
+        };
+
+        self.theme = theme;
+        self.configure_textarea_appearance();
+        // Clear preview snapshot but don't persist to config
+        self.theme_before_picker = None;
+        self.theme_id_before_picker = None;
+        Ok(())
+    }
+
+    /// Unset the default model for a specific provider
+    pub fn unset_default_model(&mut self, provider: &str) -> Result<(), String> {
+        let mut config = Config::load_test_safe();
+        config.unset_default_model(provider);
+        config.save_test_safe().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Unset the default theme
+    pub fn unset_default_theme(&mut self) -> Result<(), String> {
+        let mut config = Config::load_test_safe();
+        config.theme = None;
+        config.save_test_safe().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Unset the default provider
+    pub fn unset_default_provider(&mut self) -> Result<(), String> {
+        let mut config = Config::load_test_safe();
+        config.default_provider = None;
+        config.save_test_safe().map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

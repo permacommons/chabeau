@@ -1,7 +1,7 @@
 // Reserved for future styling options for picker lists
 // use ratatui::style::{Color, Modifier, Style};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PickerItem {
     pub id: String,
     pub label: String,
@@ -15,7 +15,7 @@ pub enum SortMode {
     Name,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PickerState {
     pub title: String,
     pub items: Vec<PickerItem>,
@@ -35,6 +35,10 @@ impl PickerState {
 
     pub fn selected_id(&self) -> Option<&str> {
         self.items.get(self.selected).map(|i| i.id.as_str())
+    }
+
+    pub fn get_selected_item(&self) -> Option<&PickerItem> {
+        self.items.get(self.selected)
     }
 
     pub fn move_up(&mut self) {

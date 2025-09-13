@@ -7,6 +7,7 @@ pub enum CommandResult {
     Continue,
     ProcessAsMessage(String),
     OpenModelPicker,
+    OpenProviderPicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -120,6 +121,34 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 app.apply_model_by_id(model_id);
                 app.set_status(format!("Model set: {}", model_id));
                 CommandResult::Continue
+            }
+        }
+    } else if trimmed.starts_with("/provider") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        match parts.len() {
+            1 => {
+                // Open provider picker
+                CommandResult::OpenProviderPicker
+            }
+            _ => {
+                // Try to set provider directly by id/name
+                let provider_id = parts[1];
+                let (result, should_open_model_picker) = app.apply_provider_by_id(provider_id);
+                match result {
+                    Ok(_) => {
+                        app.set_status(format!("Provider set: {}", provider_id));
+                        if should_open_model_picker {
+                            // Return special command to trigger model picker
+                            CommandResult::OpenModelPicker
+                        } else {
+                            CommandResult::Continue
+                        }
+                    }
+                    Err(e) => {
+                        app.set_status(format!("Provider error: {}", e));
+                        CommandResult::Continue
+                    }
+                }
             }
         }
     } else if trimmed.starts_with("/markdown") {

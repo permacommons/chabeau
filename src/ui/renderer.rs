@@ -111,6 +111,20 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
     } else if app.block_select_mode {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
+    } else if app.picker.is_some() {
+        // Show specific prompt for picker mode with global shortcuts
+        match app.picker_mode {
+            Some(crate::core::app::PickerMode::Model) => {
+                "Select a model (Esc=cancel • Ctrl+C=quit)"
+            }
+            Some(crate::core::app::PickerMode::Provider) => {
+                "Select a provider (Esc=cancel • Ctrl+C=quit)"
+            }
+            Some(crate::core::app::PickerMode::Theme) => {
+                "Select a theme (Esc=cancel • Ctrl+C=quit)"
+            }
+            _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
+        }
     } else if app.file_prompt.is_some() {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
     } else if app.in_place_edit_index.is_some() {
@@ -166,6 +180,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     || s.contains("exists")
                     || s.contains("failed")
                     || s.contains("denied")
+                    || s.contains("cancelled")
             };
             let base_style = if is_error {
                 app.theme.error_text_style
@@ -238,7 +253,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     f.render_widget(paragraph, inner);
 
     // Set cursor based on wrapped text and linear cursor position
-    if app.input_mode && available_width > 0 {
+    // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
+    if app.input_mode && available_width > 0 && app.picker.is_none() {
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             app.get_input_text(),
             app.input_cursor_position,
@@ -269,13 +285,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .title(Span::styled(&picker.title, app.theme.title_style));
         let content_area = modal_block.inner(area); // create padding space inside borders
         f.render_widget(modal_block, area);
-        // Split space to show list + metadata footer + help
+        // Split space to show list + metadata footer + help (2 lines)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(1),    // List area
                 Constraint::Length(1), // Metadata footer
-                Constraint::Length(1), // Help area
+                Constraint::Length(2), // Help area (2 lines)
             ])
             .split(content_area);
         // Add an extra inset for whitespace inside list area
@@ -318,27 +334,46 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ));
         f.render_widget(metadata, metadata_area);
 
-        // Render in-modal help aligned with theme
-        let help_text = match app.picker_mode {
-            Some(crate::core::app::PickerMode::Model) => {
-                if app.model_search_filter.is_empty() {
-                    "↑/↓/Home/End to navigate • F2 to sort • type to filter • Enter to apply • Esc to cancel"
-                } else {
-                    "↑/↓/Home/End to navigate • Backspace to clear • F2 to sort • Enter to apply • Esc to cancel"
-                }
-            }
-            Some(crate::core::app::PickerMode::Theme) => {
-                if app.theme_search_filter.is_empty() {
-                    "↑/↓/Home/End to navigate • F2 to sort • type to filter • Enter to apply • Esc to cancel"
-                } else {
-                    "↑/↓/Home/End to navigate • Backspace to clear • F2 to sort • Enter to apply • Esc to cancel"
-                }
-            }
-            _ => "↑/↓ to navigate • Enter to apply • Esc to cancel",
-        };
-        let help = Paragraph::new(Span::styled(help_text, app.theme.system_text_style));
+        // Generate help text for picker
+        let help_text = generate_picker_help_text(app);
+        let help = Paragraph::new(help_text.as_str()).style(app.theme.system_text_style);
         f.render_widget(help, help_area);
     }
+}
+
+/// Generate help text for picker dialogs with appropriate shortcuts
+fn generate_picker_help_text(app: &App) -> String {
+    // Check if current selection is a default (has asterisk)
+    let selected_is_default = if let Some(picker) = &app.picker {
+        picker
+            .get_selected_item()
+            .map(|item| item.label.ends_with('*'))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let del_help = if selected_is_default {
+        " • Del=Remove default"
+    } else {
+        ""
+    };
+
+    // Get the search filter for the current picker mode
+    let search_filter = match app.picker_mode {
+        Some(crate::core::app::PickerMode::Model) => &app.model_search_filter,
+        Some(crate::core::app::PickerMode::Theme) => &app.theme_search_filter,
+        Some(crate::core::app::PickerMode::Provider) => &app.provider_search_filter,
+        _ => &String::new(),
+    };
+
+    let first_line = if search_filter.is_empty() {
+        format!("↑/↓=Navigate • F2=Sort • Type=Filter{}", del_help)
+    } else {
+        format!("↑/↓=Navigate • Backspace=Clear • F2=Sort{}", del_help)
+    };
+
+    format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
 }
 
 fn make_list_state(selected: usize) -> ratatui::widgets::ListState {
@@ -385,5 +420,115 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
         y: ny,
         width: nw,
         height: nh,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::app::{App, PickerMode};
+    use crate::ui::picker::PickerState;
+    use crate::ui::theme::Theme;
+
+    fn create_test_app() -> App {
+        App::new_bench(Theme::dark_default(), true, false)
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_model_no_filter_no_default() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Model);
+        app.model_search_filter = String::new();
+        // Create picker with non-default item
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "test-model".to_string(),
+            label: "Test Model".to_string(),
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+        assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_model_with_filter() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Model);
+        app.model_search_filter = "gpt".to_string();
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "test-model".to_string(),
+            label: "Test Model".to_string(),
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F2=Sort"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+        assert!(!help_text.contains("Type=Filter"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_with_default_selected() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Provider);
+        app.provider_search_filter = String::new();
+        // Create picker with default item (has asterisk)
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "default-provider".to_string(),
+            label: "Default Provider*".to_string(), // Note: asterisk goes in label, not id
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("Del=Remove default"));
+        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_theme_picker() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Theme);
+        app.theme_search_filter = String::new();
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "dark".to_string(),
+            label: "Dark Theme".to_string(),
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+        assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_no_picker() {
+        let app = create_test_app();
+        // No picker set
+
+        let help_text = generate_picker_help_text(&app);
+
+        // Should still generate basic help text
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+        assert!(!help_text.contains("Del=Remove default"));
     }
 }

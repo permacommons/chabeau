@@ -15,12 +15,24 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 - Up/Down/Mouse: Scroll history
 - Shift+Cursor Keys: Move cursor in input
 
+## Picker Navigation
+
+- Enter: Apply selection (session only)
+- Alt+Enter: Apply selection and save to config
+- Esc: Cancel picker
+- ↑/↓ or j/k: Navigate options
+- Home/End: Jump to first/last option
+- F2: Toggle sort mode
+- Type: Filter options
+
 ## Commands
 
-- `/theme` — Pick a theme (built-in or custom) with filtering and sorting. Persisted to config.
-- `/theme <id>` — Apply a theme by id
+- `/theme` — Pick a theme (built-in or custom) with filtering and sorting
+- `/theme <id>` — Apply a theme by id (persisted to config)
 - `/model` — Pick a model from current provider with filtering, sorting, and metadata
-- `/model <id>` — Switch to specified model
+- `/model <id>` — Switch to specified model (session only)
+- `/provider` — Pick a provider with filtering and sorting
+- `/provider <id>` — Switch to specified provider (session only)
 - `/markdown` — Toggle Markdown rendering. Persisted to config.
 - `/syntax` — Toggle code syntax highlighting. Persisted to config.
 - `/log <filename>` — Enable logging to file; `/log` toggles pause/resume

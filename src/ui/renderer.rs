@@ -33,13 +33,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED);
-        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags(
+        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
             &app.messages,
             &app.theme,
             app.selected_user_message_index,
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
+            Some(chunks[0].width as usize),
         );
         crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
     } else if app.block_select_mode {
@@ -47,13 +48,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .theme
             .streaming_indicator_style
             .add_modifier(Modifier::REVERSED | Modifier::BOLD);
-        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags(
+        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
             &app.messages,
             &app.theme,
             app.selected_block_index,
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
+            Some(chunks[0].width as usize),
         );
         crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
     } else {

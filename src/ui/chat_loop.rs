@@ -626,10 +626,14 @@ pub async fn run_chat(
                             app_guard.set_status("Markdown disabled (/markdown on)");
                             continue;
                         }
-                        let blocks = crate::ui::markdown::compute_codeblock_ranges(
-                            &app_guard.messages,
-                            &app_guard.theme,
-                        );
+                        let blocks =
+                            crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+                                &app_guard.messages,
+                                &app_guard.theme,
+                                Some(term_size.width as usize),
+                                crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                app_guard.syntax_enabled,
+                            );
                         if app_guard.block_select_mode {
                             // Cycle upward like Ctrl+P
                             if let Some(cur) = app_guard.selected_block_index {
@@ -862,9 +866,12 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     if let Some(cur) = app_guard.selected_block_index {
-                                        let total = crate::ui::markdown::compute_codeblock_ranges(
+                                        let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
+                                            Some(term_size.width as usize),
+                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                            app_guard.syntax_enabled,
                                         )
                                         .len();
                                         if total > 0 {
@@ -872,9 +879,12 @@ pub async fn run_chat(
                                             app_guard.selected_block_index = Some(next);
                                             // Scroll to block start
                                             let ranges =
-                                                crate::ui::markdown::compute_codeblock_ranges(
+                                                crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                                     &app_guard.messages,
                                                     &app_guard.theme,
+                                                    Some(term_size.width as usize),
+                                                    crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                                    app_guard.syntax_enabled,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
                                                 let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
@@ -904,9 +914,12 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     if let Some(cur) = app_guard.selected_block_index {
-                                        let total = crate::ui::markdown::compute_codeblock_ranges(
+                                        let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
+                                            Some(term_size.width as usize),
+                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                            app_guard.syntax_enabled,
                                         )
                                         .len();
                                         if total > 0 {
@@ -914,9 +927,12 @@ pub async fn run_chat(
                                             app_guard.selected_block_index = Some(next);
                                             // Scroll to block start
                                             let ranges =
-                                                crate::ui::markdown::compute_codeblock_ranges(
+                                                crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                                     &app_guard.messages,
                                                     &app_guard.theme,
+                                                    Some(term_size.width as usize),
+                                                    crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                                    app_guard.syntax_enabled,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
                                                 let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
@@ -946,9 +962,12 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Char('c') | KeyCode::Char('C') => {
                                     if let Some(cur) = app_guard.selected_block_index {
-                                        let ranges = crate::ui::markdown::compute_codeblock_ranges(
+                                        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
+                                            Some(term_size.width as usize),
+                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
+                                            app_guard.syntax_enabled,
                                         );
                                         if let Some((_start, _len, content)) = ranges.get(cur) {
                                             match crate::utils::clipboard::copy_to_clipboard(

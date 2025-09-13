@@ -1,7 +1,6 @@
 use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
-use crate::ui::markdown::compute_codeblock_ranges;
 use crate::ui::theme::Theme;
 use ratatui::{text::Line, text::Span};
 use std::collections::VecDeque;
@@ -315,7 +314,13 @@ impl ScrollCalculator {
         };
         if markdown_enabled {
             if let Some(idx) = selected_block {
-                let ranges = compute_codeblock_ranges(messages, theme);
+                let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+                    messages,
+                    theme,
+                    terminal_width,
+                    crate::ui::layout::TableOverflowPolicy::WrapCells,
+                    syntax_enabled,
+                );
                 if let Some((start, len, _content)) = ranges.get(idx).cloned() {
                     for i in start..start + len {
                         if i < lines.len() {
@@ -1044,6 +1049,113 @@ mod tests {
                 s
             );
             assert_ne!(s.trim(), ".", "wrapped line became a lonely '.'");
+        }
+    }
+
+    #[test]
+    fn highlight_is_correct_after_wrapped_paragraph() {
+        let theme = Theme::dark_default();
+        let mut messages: VecDeque<Message> = VecDeque::new();
+        let long_para = "This is a very long line that should wrap multiple times given a small terminal width so that the visual line count before the code block increases significantly.";
+        let content = format!("{}\n\n```\ncode1\ncode2\n```", long_para);
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content,
+        });
+
+        let highlight =
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED);
+
+        let lines =
+            ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
+                &messages,
+                &theme,
+                Some(0), // select first block
+                highlight,
+                true,     // markdown enabled
+                false,    // syntax disabled for deterministic line counts
+                Some(20), // small width to force wrapping
+            );
+
+        let expected_style = theme.md_codeblock_text_style().patch(
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
+        );
+
+        // Determine expected highlighted range via width-aware ranges
+        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+            &messages,
+            &theme,
+            Some(20usize),
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            false,
+        );
+        assert_eq!(ranges.len(), 1, "Should have one code block");
+        let (start, len, _content) = ranges[0].clone();
+        for idx in start..start + len {
+            let line = &lines[idx];
+            // All spans in the code line should have the patched style
+            for sp in &line.spans {
+                assert_eq!(sp.style, expected_style, "Code line should be highlighted");
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_is_correct_after_table() {
+        let theme = Theme::dark_default();
+        let mut messages: VecDeque<Message> = VecDeque::new();
+        // Message 0: a table that will be rendered before the code block
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: r#"| A | B |\n|---|---|\n| 1 | 2 |\n"#.to_string(),
+        });
+        // Message 1: a code block to highlight
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: "```\nalpha\nbeta\n```\n".to_string(),
+        });
+
+        let highlight = ratatui::style::Style::default()
+            .add_modifier(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD);
+
+        let lines =
+            ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
+                &messages,
+                &theme,
+                Some(0), // select first block
+                highlight,
+                true,  // markdown enabled
+                false, // syntax disabled for determinism
+                Some(60),
+            );
+
+        // Sanity: parser should find one code block
+        let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&messages);
+        assert_eq!(contents.len(), 1, "Parser should detect one code block");
+
+        let expected_style = theme.md_codeblock_text_style().patch(
+            ratatui::style::Style::default()
+                .add_modifier(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD),
+        );
+
+        // Determine expected highlighted range via width-aware ranges
+        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+            &messages,
+            &theme,
+            Some(60usize),
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            false,
+        );
+        assert_eq!(ranges.len(), 1, "Should have one code block");
+        let (start, len, _content) = ranges[0].clone();
+        for idx in start..start + len {
+            let line = &lines[idx];
+            for sp in &line.spans {
+                assert_eq!(
+                    sp.style, expected_style,
+                    "Code line should be highlighted after table"
+                );
+            }
         }
     }
 }

@@ -76,13 +76,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let scroll_offset = app.scroll_offset.min(max_offset);
 
     // Create enhanced title with version, provider, model name and logging status
-    let title_text = format!(
-        "Chabeau v{} - {} ({}) • Logging: {}",
-        env!("CARGO_PKG_VERSION"),
-        app.provider_display_name,
-        app.model,
-        app.get_logging_status()
-    );
+    let title_text = build_main_title(app);
     let messages_paragraph = Paragraph::new(lines)
         .style(Style::default().bg(app.theme.background_color))
         .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
@@ -341,6 +335,21 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
+fn build_main_title(app: &App) -> String {
+    let model_display = if app.in_provider_model_transition {
+        "no model selected".to_string()
+    } else {
+        app.model.clone()
+    };
+    format!(
+        "Chabeau v{} - {} ({}) • Logging: {}",
+        env!("CARGO_PKG_VERSION"),
+        app.provider_display_name,
+        model_display,
+        app.get_logging_status()
+    )
+}
+
 /// Generate help text for picker dialogs with appropriate shortcuts
 fn generate_picker_help_text(app: &App) -> String {
     // Check if current selection is a default (has asterisk)
@@ -435,6 +444,30 @@ mod tests {
     }
 
     #[test]
+    fn title_shows_no_model_selected_during_transition() {
+        let mut app = create_test_app();
+        app.provider_display_name = "Cerebras".to_string();
+        app.model = "foo-model".to_string();
+        app.in_provider_model_transition = true;
+
+        let title = build_main_title(&app);
+        assert!(title.contains("(no model selected)"));
+        assert!(!title.contains("foo-model"));
+    }
+
+    #[test]
+    fn title_shows_model_when_not_in_transition() {
+        let mut app = create_test_app();
+        app.provider_display_name = "Cerebras".to_string();
+        app.model = "foo-model".to_string();
+        app.in_provider_model_transition = false;
+
+        let title = build_main_title(&app);
+        assert!(title.contains("foo-model"));
+        assert!(!title.contains("(no model selected)"));
+    }
+
+    #[test]
     fn test_generate_picker_help_text_model_no_filter_no_default() {
         let mut app = create_test_app();
         app.picker_mode = Some(PickerMode::Model);
@@ -500,6 +533,28 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_picker_help_text_model_with_default_selected() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Model);
+        app.model_search_filter = String::new();
+        // Create picker with default item (has asterisk)
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "default-model".to_string(),
+            label: "Default Model*".to_string(),
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("Del=Remove default"));
+        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+    }
+
+    #[test]
     fn test_generate_picker_help_text_theme_picker() {
         let mut app = create_test_app();
         app.picker_mode = Some(PickerMode::Theme);
@@ -518,6 +573,26 @@ mod tests {
         assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_theme_with_default_selected() {
+        let mut app = create_test_app();
+        app.picker_mode = Some(PickerMode::Theme);
+        app.theme_search_filter = String::new();
+        // Default theme: asterisk on label
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "dark".to_string(),
+            label: "Dark Theme*".to_string(),
+            metadata: None,
+            sort_key: None,
+        }];
+        let picker = PickerState::new("Test".to_string(), items, 0);
+        app.picker = Some(picker);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("Del=Remove default"));
     }
 
     #[test]

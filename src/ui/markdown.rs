@@ -850,7 +850,10 @@ pub fn compute_codeblock_contents_with_lang(
 
 mod tests {
     #![allow(unused_imports)]
-    use super::{compute_codeblock_ranges, render_message_markdown_opts_with_width, render_message_markdown_with_policy, TableState};
+    use super::{
+        compute_codeblock_ranges, render_message_markdown_opts_with_width,
+        render_message_markdown_with_policy, TableState,
+    };
     use crate::core::message::Message;
     use pulldown_cmark::{Options, Parser};
     use ratatui::text::Span;
@@ -1613,7 +1616,6 @@ End of table."###
         assert!(all_content.contains("café"));
         assert!(all_content.contains("internationalization"));
     }
-
 
     #[test]
     fn table_preserves_words_with_available_space() {

@@ -48,3 +48,5 @@ Items are removed when completed.
   - Add unit tests for selection wrap-around and mode transitions (pure helpers) — [OPEN]
   - Add integration-style tests for event handling if feasible (simulate key events) — [OPEN]
   - Add tests for `/markdown` and `/syntax` commands by injecting a test config path or IO layer — [OPEN]
+  - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
+  - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]

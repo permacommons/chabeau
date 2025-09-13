@@ -474,8 +474,11 @@ mod tests {
             // Should default to Name mode (A-Z)
             assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Name);
             // Title should show "Sort by: A-Z"
-            assert!(picker.title.contains("Sort by: A-Z"),
-                   "Theme picker should show 'Sort by: A-Z', got: {}", picker.title);
+            assert!(
+                picker.title.contains("Sort by: A-Z"),
+                "Theme picker should show 'Sort by: A-Z', got: {}",
+                picker.title
+            );
         }
 
         // Cycle to Z-A mode
@@ -489,8 +492,11 @@ mod tests {
             // Should now be in Date mode (Z-A for themes)
             assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Date);
             // Title should show "Sort by: Z-A"
-            assert!(picker.title.contains("Sort by: Z-A"),
-                   "Theme picker should show 'Sort by: Z-A', got: {}", picker.title);
+            assert!(
+                picker.title.contains("Sort by: Z-A"),
+                "Theme picker should show 'Sort by: Z-A', got: {}",
+                picker.title
+            );
         }
     }
 }

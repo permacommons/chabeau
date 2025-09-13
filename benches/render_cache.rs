@@ -27,8 +27,8 @@ fn redraw_no_cache(
     syntax: bool,
     width: u16,
 ) {
-    let built = ScrollCalculator::build_display_lines_with_theme_and_flags(
-        messages, theme, markdown, syntax,
+    let built = ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
+        messages, theme, markdown, syntax, None,
     );
     let _pre = ScrollCalculator::prewrap_lines(&built, width);
 }
@@ -51,8 +51,8 @@ fn bench_render_cache(c: &mut Criterion) {
         let mut app = App::new_bench(theme.clone(), markdown, syntax);
         app.messages = messages.clone();
 
-        let built = ScrollCalculator::build_display_lines_with_theme_and_flags(
-            &messages, &theme, markdown, syntax,
+        let built = ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
+            &messages, &theme, markdown, syntax, None,
         );
         let logical_len = built.len();
 

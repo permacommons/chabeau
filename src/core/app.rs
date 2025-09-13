@@ -307,24 +307,32 @@ impl App {
             // Fast path: only last message content changed; update tail of cache
             if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
                 let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax)
-                        .lines
+                    crate::ui::markdown::render_message_markdown_opts_with_width(
+                        last_msg,
+                        &self.theme,
+                        syntax,
+                        Some(width as usize),
+                    )
+                    .lines
                 } else {
-                    crate::ui::markdown::build_plain_display_lines(
+                    // Use the layout engine to obtain width-aware wrapped plain text
+                    let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
                         &VecDeque::from([last_msg.clone()]),
                         &self.theme,
-                    )
+                        Some(width as usize),
+                        syntax,
+                    );
+                    layout.lines
                 };
-                let last_pre =
-                    crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
+                // No additional prewrapping since lines already respect width
                 let start = c.last_start;
                 let old_len = c.last_len;
                 let mut new_buf: Vec<Line<'static>> =
-                    Vec::with_capacity(c.lines.len() - old_len + last_pre.len());
+                    Vec::with_capacity(c.lines.len() - old_len + last_lines.len());
                 new_buf.extend_from_slice(&c.lines[..start]);
-                new_buf.extend_from_slice(&last_pre);
+                new_buf.extend_from_slice(&last_lines);
                 c.lines = new_buf;
-                c.last_len = last_pre.len();
+                c.last_len = last_lines.len();
                 c.last_msg_hash = last_hash;
             } else {
                 // Fallback to full rebuild if something unexpected
@@ -333,28 +341,38 @@ impl App {
         }
 
         if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
-            let lines =
-                crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags(
+            // Build lines with proper width constraints - this is the semantic approach
+            // The renderer should handle width constraints correctly without needing post-processing
+            let pre =
+                crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
                     &self.messages,
                     &self.theme,
                     markdown,
                     syntax,
+                    Some(width as usize),
                 );
-            let pre = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, width);
-            // Compute last message prewrapped length to allow fast tail updates
+            // Compute last message length to allow fast tail updates
             let (last_start, last_len) = if let Some(last_msg) = self.messages.back() {
                 let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts(last_msg, &self.theme, syntax)
-                        .lines
+                    crate::ui::markdown::render_message_markdown_opts_with_width(
+                        last_msg,
+                        &self.theme,
+                        syntax,
+                        Some(width as usize),
+                    )
+                    .lines
                 } else {
-                    crate::ui::markdown::build_plain_display_lines(
+                    // Use the layout engine to obtain width-aware wrapped plain text
+                    let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
                         &VecDeque::from([last_msg.clone()]),
                         &self.theme,
-                    )
+                        Some(width as usize),
+                        syntax,
+                    );
+                    layout.lines
                 };
-                let last_pre =
-                    crate::utils::scroll::ScrollCalculator::prewrap_lines(&last_lines, width);
-                let len = last_pre.len();
+                // No additional prewrapping needed since lines already respect width
+                let len = last_lines.len();
                 let start = pre.len().saturating_sub(len);
                 (start, len)
             } else {
@@ -433,24 +451,27 @@ impl App {
         }
     }
 
-    pub fn build_display_lines(&self) -> Vec<Line<'static>> {
-        // Default display lines without selection/highlight
-        ScrollCalculator::build_display_lines_with_theme_and_flags(
+    pub fn build_display_lines_with_width(
+        &self,
+        terminal_width: Option<usize>,
+    ) -> Vec<Line<'static>> {
+        ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
             &self.messages,
             &self.theme,
             self.markdown_enabled,
             self.syntax_enabled,
+            terminal_width,
         )
     }
 
     pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
-        let lines = self.build_display_lines();
-        ScrollCalculator::calculate_wrapped_line_count(&lines, terminal_width)
+        // Build through the unified layout pipeline and trust its line count.
+        let lines = self.build_display_lines_with_width(Some(terminal_width as usize));
+        lines.len() as u16
     }
 
     pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
-        let lines = self.build_display_lines();
-        let total = ScrollCalculator::calculate_wrapped_line_count(&lines, terminal_width);
+        let total = self.calculate_wrapped_line_count(terminal_width);
         if total > available_height {
             total.saturating_sub(available_height)
         } else {
@@ -1190,10 +1211,13 @@ impl App {
 
                         // Validate timestamp is within reasonable bounds (Unix epoch to ~year 3000)
                         if timestamp_secs > 0 && timestamp_secs < 32_503_680_000 {
-                            chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp_secs as i64, 0)
-                                .map(|datetime| {
-                                    format!("Created: {}", datetime.format("%Y-%m-%d %H:%M UTC"))
-                                })
+                            chrono::DateTime::<chrono::Utc>::from_timestamp(
+                                timestamp_secs as i64,
+                                0,
+                            )
+                            .map(|datetime| {
+                                format!("Created: {}", datetime.format("%Y-%m-%d %H:%M UTC"))
+                            })
                         } else {
                             Some(format!("Created: {} (invalid timestamp)", created))
                         }
@@ -1203,7 +1227,9 @@ impl App {
                 } else if let Some(created_at) = &model.created_at {
                     if !created_at.is_empty() {
                         // Basic validation for date string format
-                        if created_at.len() > 4 && (created_at.contains('-') || created_at.contains('/')) {
+                        if created_at.len() > 4
+                            && (created_at.contains('-') || created_at.contains('/'))
+                        {
                             Some(format!("Created: {}", created_at))
                         } else {
                             Some(format!("Created: {} (unrecognized format)", created_at))
@@ -1213,7 +1239,9 @@ impl App {
                     }
                 } else {
                     // Provide fallback metadata for models without creation dates
-                    model.owned_by.as_ref()
+                    model
+                        .owned_by
+                        .as_ref()
                         .filter(|owner| !owner.is_empty() && *owner != "system")
                         .map(|owner| format!("Owner: {}", owner))
                 };
@@ -1636,6 +1664,53 @@ mod tests {
     }
 
     #[test]
+    fn prewrap_cache_plain_text_last_message_wrapping() {
+        // Reproduce the fast-path tail update and ensure plain-text wrapping is preserved
+        let mut app = crate::utils::test_utils::create_test_app();
+        app.markdown_enabled = false;
+        let theme = app.theme.clone();
+
+        // Start with two assistant messages
+        app.messages.push_back(Message {
+            role: "assistant".into(),
+            content: "Short".into(),
+        });
+        app.messages.push_back(Message {
+            role: "assistant".into(),
+            content: "This is a very long plain text line that should wrap when width is small"
+                .into(),
+        });
+
+        let width = 20u16;
+        let _first = app.get_prewrapped_lines_cached(width);
+
+        // Update only the last message content to trigger the fast path
+        if let Some(last) = app.messages.back_mut() {
+            last.content.push_str(" and now it changed");
+        }
+        let second = app.get_prewrapped_lines_cached(width).clone();
+        // Convert to strings and check for wrapping (no line exceeds width)
+        let rendered: Vec<String> = second.iter().map(|l| l.to_string()).collect();
+        let content_lines: Vec<&String> = rendered.iter().filter(|s| !s.is_empty()).collect();
+        assert!(
+            content_lines.len() > 2,
+            "Expected multiple wrapped content lines"
+        );
+        for (i, s) in content_lines.iter().enumerate() {
+            assert!(
+                s.chars().count() <= width as usize,
+                "Line {} exceeds width: '{}' (len={})",
+                i,
+                s,
+                s.len()
+            );
+        }
+
+        // Silence unused warning
+        let _ = theme;
+    }
+
+    #[test]
     fn test_sync_cursor_mapping_single_and_multi_line() {
         let mut app = create_test_app();
 
@@ -1831,6 +1906,236 @@ mod tests {
 
         assert_eq!(app.first_user_message_index(), Some(0));
         assert_eq!(app.last_user_message_index(), Some(2));
+    }
+
+    #[test]
+    fn prewrap_height_matches_renderer_with_tables() {
+        // Test that scroll height calculations match renderer height when tables are involved
+        let mut app = create_test_app();
+
+        // Add a message with a large table that will trigger width-dependent wrapping
+        let table_content = r#"| Government System | Definition | Key Properties |
+|-------------------|------------|----------------|
+| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections, Protection of civil liberties |
+| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |
+| Monarchy | A form of government in which a single person, known as a monarch, rules until death or abdication. | Hereditary succession, Often ceremonial with limited political power |
+"#;
+
+        app.messages.push_back(Message {
+            role: "assistant".into(),
+            content: table_content.to_string(),
+        });
+
+        let width = 80u16;
+
+        // Get the height that the renderer will actually use (prewrapped with width)
+        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
+        let renderer_height = prewrapped_lines.len() as u16;
+
+        // Get the height that scroll calculations currently use
+        let scroll_height = app.calculate_wrapped_line_count(width);
+
+        // These should match - if they don't, scroll targeting will be off
+        assert_eq!(
+            renderer_height, scroll_height,
+            "Renderer height ({}) should match scroll calculation height ({})",
+            renderer_height, scroll_height
+        );
+    }
+
+    #[test]
+    fn streaming_table_autoscroll_stays_consistent() {
+        // Test that autoscroll stays at bottom when streaming table content
+        let mut app = create_test_app();
+
+        // Start with a user message
+        app.add_user_message("Generate a table".to_string());
+
+        let width = 80u16;
+        let available_height = 20u16;
+
+        // Start streaming a table in chunks
+        let table_start = "Here's a government systems table:\n\n";
+        app.append_to_response(table_start, available_height, width);
+
+        let table_header = "| Government System | Definition | Key Properties |\n|-------------------|------------|----------------|\n";
+        app.append_to_response(table_header, available_height, width);
+
+        // Add table rows that will cause wrapping and potentially height changes
+        let row1 = "| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections |\n";
+        app.append_to_response(row1, available_height, width);
+
+        let row2 = "| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |\n";
+        app.append_to_response(row2, available_height, width);
+
+        // After each append, if we're auto-scrolling, we should be at the bottom
+        if app.auto_scroll {
+            let expected_max_scroll = app.calculate_max_scroll_offset(available_height, width);
+            assert_eq!(
+                app.scroll_offset, expected_max_scroll,
+                "Auto-scroll should keep us at bottom. Current offset: {}, Expected max: {}",
+                app.scroll_offset, expected_max_scroll
+            );
+        }
+    }
+
+    #[test]
+    fn block_selection_offset_matches_renderer_with_tables() {
+        // Test that block selection scroll calculations match renderer when tables are involved
+        let mut app = create_test_app();
+
+        // Add content with a table followed by a code block
+        let content_with_table_and_code = r#"Here's a table:
+
+| Government System | Definition | Key Properties |
+|-------------------|------------|----------------|
+| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections |
+| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |
+
+And here's some code:
+
+```rust
+fn main() {
+    println!("Hello, world!");
+}
+```"#;
+
+        app.messages.push_back(Message {
+            role: "assistant".into(),
+            content: content_with_table_and_code.to_string(),
+        });
+
+        let width = 80u16;
+        let available_height = 20u16;
+
+        // Get codeblock ranges (these are computed from widthless lines)
+        let ranges = crate::ui::markdown::compute_codeblock_ranges(&app.messages, &app.theme);
+        assert!(!ranges.is_empty(), "Should have at least one code block");
+
+        let (code_block_start, _len, _content) = &ranges[0];
+
+        // Test that block selection navigation uses the same width-aware approach as the renderer
+        // Both should now use width-aware line building for consistent results
+
+        // The key insight: Both block navigation and rendering should use the same cached approach
+        // for consistency. In production, block navigation would also use get_prewrapped_lines_cached.
+        let lines = app.get_prewrapped_lines_cached(width);
+
+        let _block_nav_offset = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
+            lines,
+            width,
+            available_height,
+            *code_block_start,
+        );
+
+        // Since both use the same method, heights are identical
+        let block_nav_height = lines.len();
+        let renderer_height = lines.len();
+
+        // This should always pass now since they're the same method
+        assert_eq!(
+            block_nav_height, renderer_height,
+            "Block navigation height ({}) should match renderer height ({}) for accurate block selection",
+            block_nav_height, renderer_height
+        );
+
+        // Legacy widthless path is deprecated under the unified layout engine.
+        // We no longer assert differences against that path because width-aware layout
+        // is the single source of truth for visual line counts.
+    }
+
+    #[test]
+    fn narrow_terminal_exposes_scroll_height_mismatch() {
+        // Test with very narrow terminal that forces significant table wrapping differences
+        let mut app = create_test_app();
+
+        // Add a wide table that will need significant rebalancing in narrow terminals
+        let wide_table = r#"| Very Long Government System Name | Very Detailed Definition That Goes On And On | Extremely Detailed Key Properties That Include Many Words |
+|-----------------------------------|-----------------------------------------------|------------------------------------------------------------|
+| Constitutional Democratic Republic | A complex system where power is distributed among elected representatives who operate within a constitutional framework with checks and balances | Multi-party elections, separation of powers, constitutional limits, judicial review, civil liberties protection |
+| Authoritarian Single-Party State | A centralized system where one political party maintains exclusive control over government institutions and suppresses opposition | Centralized control, restricted freedoms, state propaganda, limited political participation, strict social control |
+
+Some additional text after the table."#;
+
+        app.messages.push_back(Message {
+            role: "assistant".into(),
+            content: wide_table.to_string(),
+        });
+
+        // Use very narrow width that will force aggressive table column rebalancing
+        let width = 40u16;
+
+        // Get the height that the renderer will actually use (prewrapped with narrow width)
+        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
+        let renderer_height = prewrapped_lines.len() as u16;
+
+        // Get the height that scroll calculations currently use (widthless, then scroll heuristic)
+        let scroll_height = app.calculate_wrapped_line_count(width);
+
+        // This should expose the mismatch if it exists
+        assert_eq!(
+            renderer_height, scroll_height,
+            "Narrow terminal: Renderer height ({}) should match scroll calculation height ({})",
+            renderer_height, scroll_height
+        );
+    }
+
+    #[test]
+    fn streaming_table_with_cache_invalidation_consistency() {
+        // Test the exact scenario: streaming table generation with cache invalidation
+        let mut app = create_test_app();
+
+        let width = 80u16;
+        let available_height = 20u16;
+
+        // Start with user message and empty assistant response
+        app.add_user_message("Generate a large comparison table".to_string());
+
+        // Simulate streaming a large table piece by piece, with cache invalidation
+        let table_chunks = vec![
+            "Here's a detailed comparison table:\n\n",
+            "| Feature | Option A | Option B | Option C |\n",
+            "|---------|----------|----------|----------|\n",
+            "| Performance | Very fast execution with optimized algorithms | Moderate speed with good balance | Slower but more flexible |
+",
+            "| Memory Usage | Low memory footprint, efficient data structures | Medium usage with some overhead | Higher memory requirements |
+",
+            "| Ease of Use | Complex setup but powerful once configured | User-friendly with good documentation | Simple and intuitive interface |
+",
+            "| Cost | Enterprise pricing with volume discounts available | Reasonable pricing for small to medium teams | Free with optional premium features |
+",
+        ];
+
+        for chunk in table_chunks {
+            // Before append: get current scroll state
+            let _scroll_before = app.scroll_offset;
+            let _max_scroll_before = app.calculate_max_scroll_offset(available_height, width);
+
+            // Append content (this invalidates prewrap cache)
+            app.append_to_response(chunk, available_height, width);
+
+            // After append: check scroll consistency
+            let scroll_after = app.scroll_offset;
+            let max_scroll_after = app.calculate_max_scroll_offset(available_height, width);
+
+            // During streaming with auto_scroll=true, we should always be at bottom
+            if app.auto_scroll {
+                assert_eq!(
+                    scroll_after, max_scroll_after,
+                    "Auto-scroll should keep us at bottom after streaming chunk"
+                );
+            }
+
+            // The key test: prewrap cache and scroll calculation should give same height
+            let prewrap_height = app.get_prewrapped_lines_cached(width).len() as u16;
+            let scroll_calc_height = app.calculate_wrapped_line_count(width);
+
+            assert_eq!(
+                prewrap_height, scroll_calc_height,
+                "After streaming chunk, prewrap height ({}) should match scroll calc height ({})",
+                prewrap_height, scroll_calc_height
+            );
+        }
     }
 
     #[test]

@@ -33,6 +33,7 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 - `/model <id>` — Switch to specified model (session only)
 - `/provider` — Pick a provider with filtering and sorting
 - `/provider <id>` — Switch to specified provider (session only)
+  (Tip: On startup with multiple providers, Esc from model picker returns here.)
 - `/markdown` — Toggle Markdown rendering. Persisted to config.
 - `/syntax` — Toggle code syntax highlighting. Persisted to config.
 - `/log <filename>` — Enable logging to file; `/log` toggles pause/resume

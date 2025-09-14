@@ -336,15 +336,20 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 }
 
 fn build_main_title(app: &App) -> String {
-    let model_display = if app.in_provider_model_transition {
+    let model_display = if app.in_provider_model_transition || app.model.is_empty() {
         "no model selected".to_string()
     } else {
         app.model.clone()
     };
+    let provider_display = if app.provider_display_name.trim().is_empty() {
+        "(no provider selected)".to_string()
+    } else {
+        app.provider_display_name.clone()
+    };
     format!(
         "Chabeau v{} - {} ({}) • Logging: {}",
         env!("CARGO_PKG_VERSION"),
-        app.provider_display_name,
+        provider_display,
         model_display,
         app.get_logging_status()
     )
@@ -382,7 +387,13 @@ fn generate_picker_help_text(app: &App) -> String {
         format!("↑/↓=Navigate • Backspace=Clear • F2=Sort{}", del_help)
     };
 
-    format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
+    // Suppress persistent save option during env-only startup model selection
+    let show_persist = !(app.startup_env_only && app.picker_mode == Some(crate::core::app::PickerMode::Model));
+    if show_persist {
+        format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
+    } else {
+        format!("{}\nEnter=This session", first_line)
+    }
 }
 
 fn make_list_state(selected: usize) -> ratatui::widgets::ListState {

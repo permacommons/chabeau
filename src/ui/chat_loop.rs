@@ -10,6 +10,9 @@ use crate::core::app::App;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
 use crate::utils::url::construct_api_url;
+use crate::{
+    auth::AuthManager, core::builtin_providers::load_builtin_providers, core::config::Config,
+};
 use futures_util::StreamExt;
 use ratatui::crossterm::{
     event::{
@@ -173,29 +176,132 @@ pub async fn run_chat(
     model: String,
     log: Option<String>,
     provider: Option<String>,
+    env_only: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // Create app with authentication - model selection logic is now handled in App::new_with_auth
-    let app = Arc::new(Mutex::new(
-        match App::new_with_auth(model, log, provider).await {
-            Ok(app) => app,
-            Err(e) => {
-                // Check if this is an authentication error
-                let error_msg = e.to_string();
-                if error_msg.contains("No authentication") || error_msg.contains("OPENAI_API_KEY") {
-                    eprintln!("{error_msg}");
-                    eprintln!();
-                    eprintln!("💡 Quick fixes:");
-                    eprintln!("  • chabeau auth                    # Interactive setup");
-                    eprintln!("  • chabeau -p                      # Check provider status");
-                    eprintln!("  • export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)");
-                    std::process::exit(2); // Authentication error
-                } else {
-                    eprintln!("❌ Error: {e}");
-                    std::process::exit(1); // General error
-                }
+    // Startup provider selection policy per spec
+    let config = Config::load()?;
+    let auth_manager = AuthManager::new();
+
+    // Collect providers that have tokens (ignored when env_only=true)
+    let mut token_providers: Vec<String> = Vec::new();
+    if !env_only {
+        for bp in load_builtin_providers() {
+            if auth_manager.get_token(&bp.id).unwrap_or(None).is_some() {
+                token_providers.push(bp.id);
             }
-        },
-    ));
+        }
+        for (id, _display, _url, has_token) in auth_manager.list_custom_providers() {
+            if has_token {
+                token_providers.push(id);
+            }
+        }
+    }
+    // Environment variable counts as OpenAI auth (not token-backed)
+    let has_env_openai = std::env::var("OPENAI_API_KEY").is_ok();
+
+    // Decide startup path
+    let mut selected_provider: Option<String> = None;
+    let mut open_provider_picker = false;
+    let total_available = token_providers.len() + if has_env_openai { 1 } else { 0 };
+    let multiple_providers_available = total_available > 1;
+
+    // Respect -p when provided (ignored in env-only mode)
+    if !env_only {
+        if let Some(p) = provider.clone() {
+            if !p.is_empty() {
+                selected_provider = Some(p);
+            }
+        }
+    }
+
+    if selected_provider.is_none() {
+        if env_only {
+            // Force env path: verify OPENAI_API_KEY exists
+            if !has_env_openai {
+                eprintln!("❌ --env used but OPENAI_API_KEY is not set");
+                std::process::exit(2);
+            }
+            // Let authentication fallback handle provider naming via env
+            // Do not open provider picker in env-only mode
+        }
+        if let Some(default_p) = &config.default_provider {
+            selected_provider = Some(default_p.clone());
+        } else if token_providers.len() == 1 {
+            // Exactly one configured provider → select it automatically, even if env is present
+            selected_provider = token_providers.first().cloned();
+        } else if total_available > 1 {
+            open_provider_picker = true;
+        } else if has_env_openai {
+            // Env-only OpenAI: pass None to let authentication fall back to env vars
+            selected_provider = None;
+        } else {
+            // No auth available, show guidance and exit
+            eprintln!("❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional");
+            std::process::exit(2);
+        }
+    }
+
+    // Create app accordingly
+    let app = if open_provider_picker {
+        let app = Arc::new(Mutex::new(
+            App::new_uninitialized(log.clone()).await.expect("init app"),
+        ));
+        {
+            let mut app_guard = app.lock().await;
+            app_guard.startup_requires_provider = true;
+            app_guard.startup_multiple_providers_available = multiple_providers_available;
+            app_guard.open_provider_picker();
+        }
+        app
+    } else {
+        let app = Arc::new(Mutex::new(
+            match App::new_with_auth(model.clone(), log.clone(), selected_provider, env_only).await {
+                Ok(app) => app,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("No authentication")
+                        || error_msg.contains("OPENAI_API_KEY")
+                    {
+                        eprintln!("{error_msg}");
+                        eprintln!();
+                        eprintln!("💡 Quick fixes:");
+                        eprintln!("  • chabeau auth                    # Interactive setup");
+                        eprintln!("  • chabeau -p                      # Check provider status");
+                        eprintln!("  • export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)");
+                        std::process::exit(2);
+                    } else {
+                        eprintln!("❌ Error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            },
+        ));
+        // If no model is configured, open the model picker at startup
+        let mut need_model_picker = false;
+        {
+            let app_guard = app.lock().await;
+            if app_guard.model.is_empty() {
+                need_model_picker = true;
+            }
+        }
+        if need_model_picker {
+            let mut app_guard = app.lock().await;
+            app_guard.startup_requires_model = true;
+            app_guard.startup_multiple_providers_available = multiple_providers_available;
+            // If we have env-only auth (no token providers), disable persisting defaults
+            let env_only = has_env_openai && token_providers.is_empty();
+            app_guard.startup_env_only = env_only;
+            if let Err(e) = app_guard.open_model_picker().await {
+                app_guard.set_status(format!("Model picker error: {}", e));
+            }
+        }
+        app
+    };
+
+    // Sign-off line (no noisy startup banners)
+    println!(
+        "Chabeau is in the public domain, forever. Contribute: https://github.com/permacommons/chabeau"
+    );
 
     // Setup terminal only after successful app creation
     enable_raw_mode()?;
@@ -232,6 +338,9 @@ pub async fn run_chat(
         let _tick_start = Instant::now();
         {
             let mut app_guard = app.lock().await;
+            if app_guard.exit_requested {
+                break 'main_loop Ok(());
+            }
             terminal.draw(|f| ui(f, &mut app_guard))?;
         }
         // Cache terminal size for this tick
@@ -272,26 +381,59 @@ pub async fn run_chat(
                             if let Some(picker) = &mut app_guard.picker {
                                 match key.code {
                                     KeyCode::Esc => {
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            app_guard.revert_theme_preview();
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Model)
-                                        {
-                                            app_guard.revert_model_preview();
-                                            // Check if we're in a provider->model transition and need to revert
-                                            if app_guard.in_provider_model_transition {
-                                                app_guard.revert_provider_model_transition();
-                                                app_guard.set_status("Selection cancelled");
+                                        match current_picker_mode {
+                                            Some(crate::core::app::PickerMode::Theme) => {
+                                                app_guard.revert_theme_preview();
+                                                app_guard.picker = None;
+                                                app_guard.picker_mode = None;
                                             }
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Provider)
-                                        {
-                                            app_guard.revert_provider_preview();
+                                            Some(crate::core::app::PickerMode::Model) => {
+                                                if app_guard.startup_requires_model {
+                                                    // Startup mandatory model selection
+                                                    app_guard.picker = None;
+                                                    app_guard.picker_mode = None;
+                                                    if app_guard
+                                                        .startup_multiple_providers_available
+                                                    {
+                                                        // Go back to provider picker per spec
+                                                        app_guard.startup_requires_model = false;
+                                                        app_guard.startup_requires_provider = true;
+                                                        // Clear provider selection in title bar during startup bounce-back
+                                                        app_guard.provider_name.clear();
+                                                        app_guard.provider_display_name =
+                                                            "(no provider selected)".to_string();
+                                                        app_guard.api_key.clear();
+                                                        app_guard.base_url.clear();
+                                                        app_guard.open_provider_picker();
+                                                    } else {
+                                                        // Exit app if no alternative provider
+                                                        app_guard.exit_requested = true;
+                                                    }
+                                                } else {
+                                                    app_guard.revert_model_preview();
+                                                    if app_guard.in_provider_model_transition {
+                                                        app_guard
+                                                            .revert_provider_model_transition();
+                                                        app_guard.set_status("Selection cancelled");
+                                                    }
+                                                    app_guard.picker = None;
+                                                    app_guard.picker_mode = None;
+                                                }
+                                            }
+                                            Some(crate::core::app::PickerMode::Provider) => {
+                                                if app_guard.startup_requires_provider {
+                                                    // Startup mandatory provider selection: exit if cancelled
+                                                    app_guard.picker = None;
+                                                    app_guard.picker_mode = None;
+                                                    app_guard.exit_requested = true;
+                                                } else {
+                                                    app_guard.revert_provider_preview();
+                                                    app_guard.picker = None;
+                                                    app_guard.picker_mode = None;
+                                                }
+                                            }
+                                            _ => {}
                                         }
-                                        app_guard.picker = None;
-                                        app_guard.picker_mode = None;
                                         None
                                     }
                                     KeyCode::Up => {
@@ -397,7 +539,8 @@ pub async fn run_chat(
                                             if let Some(id) =
                                                 picker.selected_id().map(|s| s.to_string())
                                             {
-                                                let res = if is_persistent {
+                                                let persist = is_persistent && !app_guard.startup_env_only;
+                                                let res = if persist {
                                                     app_guard.apply_model_by_id_persistent(&id)
                                                 } else {
                                                     app_guard.apply_model_by_id(&id);
@@ -408,13 +551,18 @@ pub async fn run_chat(
                                                         app_guard.set_status(format!(
                                                             "Model set: {}{}",
                                                             id,
-                                                            status_suffix(is_persistent)
+                                                            status_suffix(persist)
                                                         ));
                                                         // Complete provider->model transition if we were in one
                                                         if app_guard.in_provider_model_transition {
                                                             app_guard
                                                                 .complete_provider_model_transition(
                                                                 );
+                                                        }
+                                                        // Clear startup gating for model if we were in startup flow
+                                                        if app_guard.startup_requires_model {
+                                                            app_guard.startup_requires_model =
+                                                                false;
                                                         }
                                                     }
                                                     Err(e) => app_guard
@@ -451,6 +599,15 @@ pub async fn run_chat(
 
                                                         // If we should open model picker, open it asynchronously
                                                         if should_open_model_picker {
+                                                            // If we are in startup flow, mark that model is now required
+                                                            if app_guard.startup_requires_provider {
+                                                                app_guard
+                                                                    .startup_requires_provider =
+                                                                    false;
+                                                                app_guard.startup_requires_model =
+                                                                    true;
+                                                                // Preserve multi-provider availability for Esc back navigation
+                                                            }
                                                             // Store the app reference for async task
                                                             let app_clone = app.clone();
                                                             tokio::spawn(async move {
@@ -468,6 +625,13 @@ pub async fn run_chat(
                                                                     }
                                                                 }
                                                             });
+                                                        } else if app_guard
+                                                            .startup_requires_provider
+                                                        {
+                                                            // If startup required provider but model not needed, clear gating
+                                                            app_guard.startup_requires_provider =
+                                                                false;
+                                                            // Keep multi-provider flag unchanged
                                                         }
                                                     }
                                                     Err(e) => {

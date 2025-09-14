@@ -154,117 +154,6 @@ fn render_with_parser_role_and_width_policy(
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessage {
-    // Local helper to wrap generic paragraph spans to width, preserving styles.
-    fn wrap_spans_to_width_generic(
-        spans: &[Span<'static>],
-        max_width: usize,
-    ) -> Vec<Vec<Span<'static>>> {
-        const MAX_UNBREAKABLE_LENGTH: usize = 30;
-        if spans.is_empty() {
-            return vec![Vec::new()];
-        }
-        let mut wrapped_lines = Vec::new();
-        let mut current_line: Vec<Span<'static>> = Vec::new();
-        let mut current_width = 0usize;
-        // Break incoming spans into owned (text, style) parts
-        let mut parts: Vec<(String, Style)> = spans
-            .iter()
-            .map(|s| (s.content.to_string(), s.style))
-            .collect();
-        for (mut text, style) in parts.drain(..) {
-            while !text.is_empty() {
-                let mut chars_to_fit = 0usize;
-                let mut width_so_far = 0usize;
-                let mut last_break_pos: Option<(usize, usize)> = None;
-                for (char_pos, ch) in text.char_indices() {
-                    let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                    if current_width + width_so_far + cw <= max_width {
-                        width_so_far += cw;
-                        chars_to_fit = char_pos + ch.len_utf8();
-                        if ch.is_whitespace() {
-                            last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                if chars_to_fit == 0 {
-                    // Nothing fits on this line
-                    if !current_line.is_empty() {
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                        continue;
-                    } else {
-                        // Consider unbreakable word
-                        let next_word_end = text.find(char::is_whitespace).unwrap_or(text.len());
-                        let next_word = &text[..next_word_end];
-                        let ww = UnicodeWidthStr::width(next_word);
-                        if ww <= MAX_UNBREAKABLE_LENGTH {
-                            current_line.push(Span::styled(next_word.to_string(), style));
-                            current_width += ww;
-                            if next_word_end < text.len() {
-                                text = text[next_word_end..].to_string();
-                            } else {
-                                break;
-                            }
-                        } else {
-                            // Hard break the very long token
-                            let mut forced_width = 0usize;
-                            let mut forced_end = text.len();
-                            for (char_pos, ch) in text.char_indices() {
-                                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                                if forced_width + cw > max_width {
-                                    forced_end = char_pos;
-                                    break;
-                                }
-                                forced_width += cw;
-                            }
-                            if forced_end > 0 {
-                                let chunk = text[..forced_end].to_string();
-                                current_line.push(Span::styled(chunk, style));
-                                current_width = forced_width;
-                                text = text[forced_end..].to_string();
-                                if !text.is_empty() {
-                                    wrapped_lines.push(std::mem::take(&mut current_line));
-                                    current_width = 0;
-                                }
-                            } else {
-                                current_line.push(Span::styled(text.clone(), style));
-                                current_width += UnicodeWidthStr::width(text.as_str());
-                                break;
-                            }
-                        }
-                    }
-                } else if chars_to_fit >= text.len() {
-                    // Everything fits
-                    current_line.push(Span::styled(text.clone(), style));
-                    current_width += width_so_far;
-                    break;
-                } else {
-                    // Partial fit: break at last_break_pos if present
-                    let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
-                    let left = text[..break_pos].trim_end();
-                    if !left.is_empty() {
-                        current_line.push(Span::styled(left.to_string(), style));
-                        current_width += UnicodeWidthStr::width(left);
-                    }
-                    text = text[break_pos..].trim_start().to_string();
-                    if !text.is_empty() {
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                    }
-                }
-            }
-        }
-        if !current_line.is_empty() {
-            wrapped_lines.push(current_line);
-        }
-        if wrapped_lines.is_empty() {
-            vec![Vec::new()]
-        } else {
-            wrapped_lines
-        }
-    }
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -402,7 +291,7 @@ fn render_with_parser_role_and_width_policy(
                 TagEnd::Paragraph => {
                     if let Some(w) = terminal_width {
                         if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -815,111 +704,6 @@ fn render_message_with_ranges_with_width_and_policy(
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
 ) -> (Vec<Line<'static>>, Vec<(usize, usize, String)>) {
-    // Local helper: identical wrapping to display path
-    fn wrap_spans_to_width_generic(
-        spans: &[Span<'static>],
-        max_width: usize,
-    ) -> Vec<Vec<Span<'static>>> {
-        const MAX_UNBREAKABLE_LENGTH: usize = 30;
-        if spans.is_empty() {
-            return vec![Vec::new()];
-        }
-        let mut wrapped_lines = Vec::new();
-        let mut current_line: Vec<Span<'static>> = Vec::new();
-        let mut current_width = 0usize;
-        let mut parts: Vec<(String, Style)> = spans
-            .iter()
-            .map(|s| (s.content.to_string(), s.style))
-            .collect();
-        for (mut text, style) in parts.drain(..) {
-            while !text.is_empty() {
-                let mut chars_to_fit = 0usize;
-                let mut width_so_far = 0usize;
-                let mut last_break_pos: Option<(usize, usize)> = None;
-                for (char_pos, ch) in text.char_indices() {
-                    let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                    if current_width + width_so_far + cw <= max_width {
-                        width_so_far += cw;
-                        chars_to_fit = char_pos + ch.len_utf8();
-                        if ch.is_whitespace() {
-                            last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                if chars_to_fit == 0 {
-                    if !current_line.is_empty() {
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                        continue;
-                    } else {
-                        let next_word_end = text.find(char::is_whitespace).unwrap_or(text.len());
-                        let next_word = &text[..next_word_end];
-                        let ww = UnicodeWidthStr::width(next_word);
-                        if ww <= MAX_UNBREAKABLE_LENGTH {
-                            current_line.push(Span::styled(next_word.to_string(), style));
-                            current_width += ww;
-                            if next_word_end < text.len() {
-                                text = text[next_word_end..].to_string();
-                            } else {
-                                break;
-                            }
-                        } else {
-                            let mut forced_width = 0usize;
-                            let mut forced_end = text.len();
-                            for (char_pos, ch) in text.char_indices() {
-                                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                                if forced_width + cw > max_width {
-                                    forced_end = char_pos;
-                                    break;
-                                }
-                                forced_width += cw;
-                            }
-                            if forced_end > 0 {
-                                let chunk = text[..forced_end].to_string();
-                                current_line.push(Span::styled(chunk, style));
-                                current_width = forced_width;
-                                text = text[forced_end..].to_string();
-                                if !text.is_empty() {
-                                    wrapped_lines.push(std::mem::take(&mut current_line));
-                                    current_width = 0;
-                                }
-                            } else {
-                                current_line.push(Span::styled(text.clone(), style));
-                                current_width += UnicodeWidthStr::width(text.as_str());
-                                break;
-                            }
-                        }
-                    }
-                } else if chars_to_fit >= text.len() {
-                    current_line.push(Span::styled(text.clone(), style));
-                    current_width += width_so_far;
-                    break;
-                } else {
-                    let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
-                    let left = text[..break_pos].trim_end();
-                    if !left.is_empty() {
-                        current_line.push(Span::styled(left.to_string(), style));
-                        current_width += UnicodeWidthStr::width(left);
-                    }
-                    text = text[break_pos..].trim_start().to_string();
-                    if !text.is_empty() {
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                    }
-                }
-            }
-        }
-        if !current_line.is_empty() {
-            wrapped_lines.push(current_line);
-        }
-        if wrapped_lines.is_empty() {
-            vec![Vec::new()]
-        } else {
-            wrapped_lines
-        }
-    }
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -958,7 +742,7 @@ fn render_message_with_ranges_with_width_and_policy(
                     // Flush existing and start heading style
                     if let Some(w) = terminal_width {
                         if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -993,7 +777,7 @@ fn render_message_with_ranges_with_width_and_policy(
                 Tag::Item => {
                     if !current_spans.is_empty() {
                         if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -1061,7 +845,7 @@ fn render_message_with_ranges_with_width_and_policy(
                 Tag::Table(_) => {
                     if !current_spans.is_empty() {
                         if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -1102,7 +886,7 @@ fn render_message_with_ranges_with_width_and_policy(
                 TagEnd::Paragraph => {
                     if let Some(w) = terminal_width {
                         if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -1146,7 +930,7 @@ fn render_message_with_ranges_with_width_and_policy(
                 TagEnd::Item => {
                     if !current_spans.is_empty() {
                         if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                             for (i, segs) in wrapped.into_iter().enumerate() {
                                 if i == 0 {
                                     lines.push(Line::from(segs));
@@ -1262,7 +1046,7 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::SoftBreak => {
                 if let Some(w) = terminal_width {
                     if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                         for (i, segs) in wrapped.into_iter().enumerate() {
                             if i == 0 {
                                 lines.push(Line::from(segs));
@@ -1287,7 +1071,7 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::HardBreak => {
                 if let Some(w) = terminal_width {
                     if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                         for (i, segs) in wrapped.into_iter().enumerate() {
                             if i == 0 {
                                 lines.push(Line::from(segs));
@@ -1309,7 +1093,7 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::Rule => {
                 if let Some(w) = terminal_width {
                     if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
                         for segs in wrapped.into_iter() {
                             lines.push(Line::from(segs));
                         }
@@ -1336,7 +1120,7 @@ fn render_message_with_ranges_with_width_and_policy(
 
     if !current_spans.is_empty() {
         if let Some(w) = terminal_width {
-            let wrapped = wrap_spans_to_width_generic(&current_spans, w);
+            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
             for (i, segs) in wrapped.into_iter().enumerate() {
                 if i == 0 {
                     lines.push(Line::from(segs));
@@ -1473,6 +1257,7 @@ mod tests {
     };
     use crate::core::message::Message;
     use pulldown_cmark::{Options, Parser};
+    use ratatui::style::Modifier;
     use ratatui::text::Span;
     use std::collections::VecDeque;
     use unicode_width::UnicodeWidthStr;
@@ -2161,6 +1946,112 @@ End of table."###
     }
 
     #[test]
+    fn test_styled_words_wrap_at_boundaries_in_table() {
+        // Focused regression: styled words in table cells should wrap at word
+        // boundaries (including hyphen breaks), not inside the styled words.
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: r#"| Feature | Benefits |
+|---------|----------|
+| X | **Dramatically** _improved_ decision-making capabilities with ***real-time*** analytics |
+"#.into(),
+        });
+
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        // Use a modest width to force wrapping within the Benefits cell
+        let rendered =
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Collect only table content lines (skip borders/separators)
+        let content_lines: Vec<&String> = lines
+            .iter()
+            .filter(|line| {
+                line.contains("│")
+                    && !line.contains("┌")
+                    && !line.contains("├")
+                    && !line.contains("└")
+                    && !line.contains("─")
+            })
+            .collect();
+
+        // Join for simpler substring checks
+        let all_content = content_lines
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>()
+            .join(" ");
+
+        // 1) Space between styled words must be preserved across spans
+        assert!(
+            all_content.contains("Dramatically improved"),
+            "Space around styled words should be preserved: {}",
+            all_content
+        );
+
+        // 2) Hyphenated word may wrap after the hyphen, but not mid-segment
+        // Accept either kept together or split at the hyphen with a space inserted by wrapping
+        let hyphen_ok = all_content.contains("decision-making")
+            || all_content.contains("decision- making");
+        assert!(hyphen_ok, "Hyphen should be a soft break point: {}", all_content);
+
+        // 3) No truncation
+        for line in &lines {
+            assert!(!line.contains("…"), "No truncation expected: '{}'", line);
+        }
+    }
+
+    #[test]
+    fn cell_wraps_at_space_across_spans() {
+        // Ensure wrapping prefers spaces even when they occur across styled spans
+        let theme = crate::ui::theme::Theme::dark_default();
+        let ts = TableState::new();
+
+        let bold = theme.md_paragraph_style().add_modifier(Modifier::BOLD);
+        let spans = vec![
+            Span::styled("foo", bold),
+            Span::raw(" "),
+            Span::styled("bar", bold),
+        ];
+
+        // Width fits "foo" exactly; space + "bar" should go to next line
+        let lines =
+            ts.wrap_spans_to_width(&spans, 3, crate::ui::layout::TableOverflowPolicy::WrapCells);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0], "foo");
+        assert_eq!(rendered[1], "bar");
+    }
+
+    #[test]
+    fn cell_wraps_after_hyphen() {
+        // Ensure hyphen is treated as a soft break opportunity
+        let theme = crate::ui::theme::Theme::dark_default();
+        let ts = TableState::new();
+        let style = theme.md_paragraph_style();
+        let spans = vec![Span::styled("decision-making", style)];
+
+        // Allow exactly "decision-" on first line
+        let lines = ts.wrap_spans_to_width(
+            &spans,
+            10,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0], "decision-");
+        assert_eq!(rendered[1], "making");
+    }
+
+    #[test]
     fn test_table_wrapping_with_mixed_content() {
         // Test wrapping behavior with mixed short and long content
         let mut messages = VecDeque::new();
@@ -2670,141 +2561,347 @@ impl TableState {
         self.current_row.clear();
     }
 
-    /// Wrap spans to fit within specified width while preserving all text and styles
-    /// This is the surgical fix for whitespace preservation and proper wrapping
+    /// Wraps spans to a width while preserving all text and styles.
+    /// Breaks at spaces and selected punctuation across span boundaries
+    /// (hyphens, en/em dashes, slash). If no break point exists, splits
+    /// by character as a last resort.
     fn wrap_spans_to_width(
         &self,
         spans: &[Span<'static>],
         max_width: usize,
         _table_policy: crate::ui::layout::TableOverflowPolicy,
     ) -> Vec<Vec<Span<'static>>> {
-        const _MAX_UNBREAKABLE_LENGTH: usize = 30;
-
-        if max_width < 8 {
-            // For very narrow cells, still try to wrap but allow expansion if needed
-        }
-
-        // First, extract all text and styles - we need owned strings to avoid borrow issues
-        let mut text_parts: Vec<(String, ratatui::style::Style)> = Vec::new();
-        for span in spans {
-            text_parts.push((span.content.to_string(), span.style));
-        }
-
-        if text_parts.is_empty() {
+        if spans.is_empty() {
             return vec![Vec::new()];
         }
 
-        // Now wrap the text while preserving styles
-        let mut wrapped_lines = Vec::new();
-        let mut current_line = Vec::new();
-        let mut current_width = 0;
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum TokKind {
+            Space,
+            BreakChar, // '-', '–', '—', '/'
+            Word,
+        }
 
-        for (text, style) in text_parts {
-            let mut remaining_text = text;
+        #[derive(Clone)]
+        struct Tok {
+            text: String,
+            style: Style,
+            kind: TokKind,
+            width: usize,
+        }
 
-            while !remaining_text.is_empty() {
-                // Try to fit as much as possible on current line
-                let mut chars_to_fit = 0;
-                let mut width_so_far = 0;
-                let mut last_break_pos = None;
+        fn ch_width(ch: char) -> usize {
+            UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]))
+        }
 
-                for (char_pos, ch) in remaining_text.char_indices() {
-                    let char_width = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
+        fn str_width(s: &str) -> usize {
+            UnicodeWidthStr::width(s)
+        }
 
-                    if current_width + width_so_far + char_width <= max_width {
-                        width_so_far += char_width;
-                        chars_to_fit = char_pos + ch.len_utf8();
+        fn is_break_char(ch: char) -> bool {
+            // ASCII hyphen, Unicode hyphen (U+2010), en dash, em dash, slash
+            matches!(ch, '-' | '‐' | '–' | '—' | '/')
+        }
 
-                        // Mark break opportunities (whitespace)
-                        if ch.is_whitespace() {
-                            last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
+        // Tokenize a span into Space / BreakChar / Word tokens preserving style
+        fn tokenize(text: &str, style: Style) -> Vec<Tok> {
+            let mut toks: Vec<Tok> = Vec::new();
+            let mut buf = String::new();
+            let mut mode: Option<TokKind> = None;
+            for ch in text.chars() {
+                let kind = if ch.is_whitespace() {
+                    TokKind::Space
+                } else if is_break_char(ch) {
+                    TokKind::BreakChar
+                } else {
+                    TokKind::Word
+                };
+                match (mode, kind) {
+                    (Some(TokKind::Space), TokKind::Space) => buf.push(ch),
+                    (Some(TokKind::Word), TokKind::Word) => buf.push(ch),
+                    // Any change (including BreakChar which are single-char tokens)
+                    (Some(prev), k) if prev != k => {
+                        if !buf.is_empty() {
+                            let w = str_width(&buf);
+                            toks.push(Tok {
+                                text: std::mem::take(&mut buf),
+                                style,
+                                kind: prev,
+                                width: w,
+                            });
                         }
-                    } else {
+                        if k == TokKind::BreakChar {
+                            let s = ch.to_string();
+                            toks.push(Tok {
+                                width: ch_width(ch),
+                                text: s,
+                                style,
+                                kind: TokKind::BreakChar,
+                            });
+                            mode = None;
+                        } else {
+                            buf.push(ch);
+                            mode = Some(k);
+                        }
+                    }
+                    (None, TokKind::BreakChar) => {
+                        let s = ch.to_string();
+                        toks.push(Tok {
+                            width: ch_width(ch),
+                            text: s,
+                            style,
+                            kind: TokKind::BreakChar,
+                        });
+                        mode = None;
+                    }
+                    (None, k) => {
+                        buf.push(ch);
+                        mode = Some(k);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            if !buf.is_empty() {
+                let k = mode.unwrap_or(TokKind::Word);
+                let w = str_width(&buf);
+                toks.push(Tok {
+                    text: buf,
+                    style,
+                    kind: k,
+                    width: w,
+                });
+            }
+            toks
+        }
+
+        // Prepare token stream
+        let mut all_toks: Vec<Tok> = Vec::new();
+        for s in spans {
+            // Fast path for empty
+            if s.content.is_empty() {
+                continue;
+            }
+            let mut toks = tokenize(s.content.as_ref(), s.style);
+            all_toks.append(&mut toks);
+        }
+
+        if all_toks.is_empty() {
+            return vec![Vec::new()];
+        }
+
+        // Wrap using greedy algorithm with last-break tracking across tokens
+        let mut out_lines: Vec<Vec<Span<'static>>> = Vec::new();
+        let mut cur: Vec<Tok> = Vec::new();
+        let mut cur_width: usize = 0;
+        let mut last_break_idx: Option<usize> = None; // boundary AFTER this token index
+
+        let mut i = 0usize;
+        while i < all_toks.len() {
+            let tok = all_toks[i].clone();
+            let w = tok.width;
+
+            let fits = cur_width + w <= max_width;
+            if fits {
+                // Add token
+                if matches!(tok.kind, TokKind::Space) {
+                    // Collapse multiple leading spaces on empty line (do not count as width)
+                    if cur.is_empty() {
+                        // Skip leading spaces at line start
+                        i += 1;
+                        continue;
+                    }
+                }
+                cur_width += w;
+                if matches!(tok.kind, TokKind::Space | TokKind::BreakChar) {
+                    last_break_idx = Some(cur.len() + 1); // after this token
+                }
+                cur.push(tok);
+                i += 1;
+                continue;
+            }
+
+            // Overflow handling
+            if let Some(br) = last_break_idx {
+                // Build line up to break (trim trailing spaces)
+                let mut left = cur[..br.min(cur.len())].to_vec();
+                while left
+                    .last()
+                    .map(|t| t.kind == TokKind::Space)
+                    .unwrap_or(false)
+                {
+                    let last = left.pop().unwrap();
+                    cur_width = cur_width.saturating_sub(last.width);
+                }
+
+                // Emit left
+                if left.is_empty() {
+                    // Nothing meaningful to emit, force split below
+                } else {
+                    let spans_line: Vec<Span<'static>> = left
+                        .into_iter()
+                        .map(|t| Span::styled(t.text, t.style))
+                        .collect();
+                    out_lines.push(spans_line);
+                }
+
+                // Start new line with remainder tokens in cur after break plus current tok
+                let mut right: Vec<Tok> = cur[br.min(cur.len())..].to_vec();
+                // Drop leading spaces on the new line
+                while right
+                    .first()
+                    .map(|t| t.kind == TokKind::Space)
+                    .unwrap_or(false)
+                {
+                    let first = right.remove(0);
+                    let _ = first;
+                }
+                // Reset state
+                cur = right;
+                cur_width = cur.iter().map(|t| t.width).sum();
+                last_break_idx = None;
+                // Retry current token on the fresh line without advancing i
+                continue;
+            }
+
+            // No recorded break op
+            // If the overflowing token is whitespace, flush current line (if any) and drop it
+            if matches!(tok.kind, TokKind::Space) {
+                if !cur.is_empty() {
+                    let line_spans: Vec<Span<'static>> = cur
+                        .drain(..)
+                        .map(|t| Span::styled(t.text, t.style))
+                        .collect();
+                    out_lines.push(line_spans);
+                }
+                cur_width = 0;
+                last_break_idx = None;
+                i += 1; // skip the space
+                continue;
+            }
+
+            // No recorded break op: forced split of current non-space token
+            // Find how many chars of tok.text fit into remaining space
+            let mut acc = 0usize;
+            let mut cut = 0usize; // byte index
+            for (pos, ch) in tok.text.char_indices() {
+                let cw = ch_width(ch);
+                if cur_width + acc + cw > max_width {
+                    break;
+                }
+                acc += cw;
+                cut = pos + ch.len_utf8();
+            }
+
+            if cut == 0 {
+                // Nothing fits on this line, flush current (if any). If token is space, drop it.
+                if !cur.is_empty() {
+                    let line_spans: Vec<Span<'static>> = cur
+                        .drain(..)
+                        .map(|t| Span::styled(t.text, t.style))
+                        .collect();
+                    out_lines.push(line_spans);
+                }
+                cur_width = 0;
+                last_break_idx = None;
+                if matches!(tok.kind, TokKind::Space) {
+                    i += 1; // drop space
+                    continue;
+                }
+                // Now on empty line, try to split token to width
+                let mut acc2 = 0usize;
+                let mut cut2 = 0usize;
+                for (pos, ch) in tok.text.char_indices() {
+                    let cw = ch_width(ch);
+                    if acc2 + cw > max_width {
                         break;
                     }
+                    acc2 += cw;
+                    cut2 = pos + ch.len_utf8();
                 }
-
-                if chars_to_fit == 0 {
-                    // Nothing fits on current line
-                    if !current_line.is_empty() {
-                        // Start new line
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                        continue;
-                    } else {
-                        // Even empty line can't fit - check if it's an unbreakable word
-                        let next_word_end = remaining_text
-                            .find(char::is_whitespace)
-                            .unwrap_or(remaining_text.len());
-                        let next_word = &remaining_text[..next_word_end];
-                        let _word_width = UnicodeWidthStr::width(next_word);
-
-                        if false {
-                            // no-op branch eliminated: PreferOverflow policy removed
-                        } else {
-                            // Force break long unbreakable content
-                            let mut forced_width = 0;
-                            let mut forced_end = remaining_text.len();
-                            for (char_pos, ch) in remaining_text.char_indices() {
-                                let char_width =
-                                    UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                                if forced_width + char_width > max_width {
-                                    forced_end = char_pos;
-                                    break;
-                                }
-                                forced_width += char_width;
-                            }
-
-                            if forced_end > 0 {
-                                let chunk = remaining_text[..forced_end].to_string();
-                                current_line.push(Span::styled(chunk, style));
-                                current_width = forced_width;
-                                remaining_text = remaining_text[forced_end..].to_string();
-
-                                if !remaining_text.is_empty() {
-                                    wrapped_lines.push(std::mem::take(&mut current_line));
-                                    current_width = 0;
-                                }
-                            } else {
-                                // Single char doesn't fit - add anyway
-                                current_line.push(Span::styled(remaining_text.clone(), style));
-                                current_width += UnicodeWidthStr::width(remaining_text.as_str());
-                                break;
-                            }
-                        }
-                    }
-                } else if chars_to_fit >= remaining_text.len() {
-                    // Everything fits
-                    current_line.push(Span::styled(remaining_text.clone(), style));
-                    current_width += width_so_far;
-                    break;
+                if cut2 == 0 {
+                    // Degenerate case (max_width == 0), avoid infinite loop
+                    // Place token as-is to move forward
+                    cur_width = tok.width;
+                    cur.push(tok);
+                    i += 1;
                 } else {
-                    // Partial fit - break at word boundary if possible
-                    let (break_pos, _break_width) =
-                        last_break_pos.unwrap_or((chars_to_fit, width_so_far));
-
-                    let line_text = remaining_text[..break_pos].trim_end();
-                    current_line.push(Span::styled(line_text.to_string(), style));
-                    current_width += UnicodeWidthStr::width(line_text);
-
-                    remaining_text = remaining_text[break_pos..].trim_start().to_string();
-
-                    if !remaining_text.is_empty() {
-                        wrapped_lines.push(std::mem::take(&mut current_line));
-                        current_width = 0;
-                    }
+                    let left_text = tok.text[..cut2].to_string();
+                    let right_text = tok.text[cut2..].to_string();
+                    let left_tok = Tok {
+                        width: str_width(&left_text),
+                        text: left_text,
+                        style: tok.style,
+                        kind: TokKind::Word,
+                    };
+                    let right_tok = Tok {
+                        width: str_width(&right_text),
+                        text: right_text,
+                        style: tok.style,
+                        kind: TokKind::Word,
+                    };
+                    cur.push(left_tok);
+                    // Emit line immediately
+                    let line_spans: Vec<Span<'static>> = cur
+                        .drain(..)
+                        .map(|t| Span::styled(t.text, t.style))
+                        .collect();
+                    out_lines.push(line_spans);
+                    cur_width = 0;
+                    last_break_idx = None;
+                    // Place remainder for next iteration by replacing current token with right_tok
+                    all_toks[i] = right_tok;
                 }
+            } else {
+                // Split current token into left (fits) and right (remaining)
+                let left_text = tok.text[..cut].to_string();
+                let right_text = tok.text[cut..].to_string();
+                let left_tok = Tok {
+                    width: str_width(&left_text),
+                    text: left_text,
+                    style: tok.style,
+                    kind: TokKind::Word,
+                };
+                let right_tok = Tok {
+                    width: str_width(&right_text),
+                    text: right_text,
+                    style: tok.style,
+                    kind: TokKind::Word,
+                };
+                cur.push(left_tok);
+                // Emit line
+                let line_spans: Vec<Span<'static>> = cur
+                    .drain(..)
+                    .map(|t| Span::styled(t.text, t.style))
+                    .collect();
+                out_lines.push(line_spans);
+                cur_width = 0;
+                last_break_idx = None;
+                // Replace current token with remainder and retry without advancing i
+                all_toks[i] = right_tok;
             }
         }
 
-        if !current_line.is_empty() {
-            wrapped_lines.push(current_line);
+        // Flush last line (trim trailing spaces)
+        while cur
+            .last()
+            .map(|t| t.kind == TokKind::Space)
+            .unwrap_or(false)
+        {
+            let last = cur.pop().unwrap();
+            cur_width = cur_width.saturating_sub(last.width);
+        }
+        if !cur.is_empty() {
+            out_lines.push(
+                cur.into_iter()
+                    .map(|t| Span::styled(t.text, t.style))
+                    .collect(),
+            );
         }
 
-        if wrapped_lines.is_empty() {
+        if out_lines.is_empty() {
             vec![Vec::new()]
         } else {
-            wrapped_lines
+            out_lines
         }
     }
 
@@ -3257,6 +3354,117 @@ fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Sp
 fn detab(s: &str) -> String {
     // Simple, predictable detab: replace tabs with 4 spaces
     s.replace('\t', "    ")
+}
+
+// Shared helper: wrap generic paragraph spans (non-table) to width, preserving styles.
+// Used by both the main renderer and width-aware range computation to ensure consistency.
+fn wrap_spans_to_width_generic_shared(
+    spans: &[Span<'static>],
+    max_width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    const MAX_UNBREAKABLE_LENGTH: usize = 30;
+    if spans.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut wrapped_lines = Vec::new();
+    let mut current_line: Vec<Span<'static>> = Vec::new();
+    let mut current_width = 0usize;
+    // Break incoming spans into owned (text, style) parts
+    let mut parts: Vec<(String, Style)> = spans
+        .iter()
+        .map(|s| (s.content.to_string(), s.style))
+        .collect();
+    for (mut text, style) in parts.drain(..) {
+        while !text.is_empty() {
+            let mut chars_to_fit = 0usize;
+            let mut width_so_far = 0usize;
+            let mut last_break_pos: Option<(usize, usize)> = None;
+            for (char_pos, ch) in text.char_indices() {
+                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
+                if current_width + width_so_far + cw <= max_width {
+                    width_so_far += cw;
+                    chars_to_fit = char_pos + ch.len_utf8();
+                    if ch.is_whitespace() {
+                        last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
+                    }
+                } else {
+                    break;
+                }
+            }
+            if chars_to_fit == 0 {
+                // Nothing fits on this line
+                if !current_line.is_empty() {
+                    wrapped_lines.push(std::mem::take(&mut current_line));
+                    current_width = 0;
+                    continue;
+                } else {
+                    // Consider unbreakable word
+                    let next_word_end = text.find(char::is_whitespace).unwrap_or(text.len());
+                    let next_word = &text[..next_word_end];
+                    let ww = UnicodeWidthStr::width(next_word);
+                    if ww <= MAX_UNBREAKABLE_LENGTH {
+                        current_line.push(Span::styled(next_word.to_string(), style));
+                        current_width += ww;
+                        if next_word_end < text.len() {
+                            text = text[next_word_end..].to_string();
+                        } else {
+                            break;
+                        }
+                    } else {
+                        // Hard break the very long token
+                        let mut forced_width = 0usize;
+                        let mut forced_end = text.len();
+                        for (char_pos, ch) in text.char_indices() {
+                            let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
+                            if forced_width + cw > max_width {
+                                forced_end = char_pos;
+                                break;
+                            }
+                            forced_width += cw;
+                        }
+                        if forced_end > 0 {
+                            let chunk = text[..forced_end].to_string();
+                            current_line.push(Span::styled(chunk, style));
+                            current_width = forced_width;
+                            text = text[forced_end..].to_string();
+                            if !text.is_empty() {
+                                wrapped_lines.push(std::mem::take(&mut current_line));
+                                current_width = 0;
+                            }
+                        } else {
+                            current_line.push(Span::styled(text.clone(), style));
+                            current_width += UnicodeWidthStr::width(text.as_str());
+                            break;
+                        }
+                    }
+                }
+            } else if chars_to_fit >= text.len() {
+                current_line.push(Span::styled(text.clone(), style));
+                current_width += width_so_far;
+                break;
+            } else {
+                let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
+                let left = text[..break_pos].trim_end();
+                if !left.is_empty() {
+                    current_line.push(Span::styled(left.to_string(), style));
+                    current_width += UnicodeWidthStr::width(left);
+                }
+                text = text[break_pos..].trim_start().to_string();
+                if !text.is_empty() {
+                    wrapped_lines.push(std::mem::take(&mut current_line));
+                    current_width = 0;
+                }
+            }
+        }
+    }
+    if !current_line.is_empty() {
+        wrapped_lines.push(current_line);
+    }
+    if wrapped_lines.is_empty() {
+        vec![Vec::new()]
+    } else {
+        wrapped_lines
+    }
 }
 
 /// Build display lines for all messages using markdown rendering

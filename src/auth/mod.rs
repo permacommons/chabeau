@@ -198,15 +198,18 @@ Please either:
    export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
                 })?;
 
-                let base_url = std::env::var("OPENAI_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+                let default_base = "https://api.openai.com/v1".to_string();
+                let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
+                let (prov, display) = if base_url == default_base {
+                    ("openai".to_string(), "OpenAI".to_string())
+                } else {
+                    (
+                        "openai-compatible".to_string(),
+                        "OpenAI-compatible".to_string(),
+                    )
+                };
 
-                Ok((
-                    api_key,
-                    base_url,
-                    "openai".to_string(),
-                    "OpenAI".to_string(),
-                ))
+                Ok((api_key, base_url, prov, display))
             }
         }
     }
@@ -739,6 +742,7 @@ Please either:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     fn create_test_auth_manager() -> AuthManager {
         AuthManager::new()
@@ -790,6 +794,38 @@ mod tests {
         let mut input = String::from("hello  world  test  ");
         auth_manager.delete_last_word(&mut input);
         assert_eq!(input, "hello  world  ");
+    }
+
+    #[test]
+    fn env_fallback_sets_openai_provider_for_default_base() {
+        // Ensure no default provider in config and no keyring; set env key only
+        let _ = env::remove_var("OPENAI_BASE_URL");
+        env::set_var("OPENAI_API_KEY", "sk-test");
+        let am = AuthManager::new();
+        let cfg = Config::default();
+        let (_key, base, prov, display) = am
+            .resolve_authentication(None, &cfg)
+            .expect("env fallback should work");
+        assert_eq!(base, "https://api.openai.com/v1");
+        assert_eq!(prov, "openai");
+        assert_eq!(display, "OpenAI");
+        env::remove_var("OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn env_fallback_sets_openai_compatible_for_custom_base() {
+        env::set_var("OPENAI_API_KEY", "sk-test");
+        env::set_var("OPENAI_BASE_URL", "https://example.com/v1");
+        let am = AuthManager::new();
+        let cfg = Config::default();
+        let (_key, base, prov, display) = am
+            .resolve_authentication(None, &cfg)
+            .expect("env fallback should work");
+        assert_eq!(base, "https://example.com/v1");
+        assert_eq!(prov, "openai-compatible");
+        assert_eq!(display, "OpenAI-compatible");
+        env::remove_var("OPENAI_API_KEY");
+        env::remove_var("OPENAI_BASE_URL");
     }
 
     // Note: We can't easily test the full read_masked_input function without mocking

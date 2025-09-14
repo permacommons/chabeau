@@ -82,6 +82,12 @@ pub struct App {
     pub status_set_at: Option<Instant>,
     // When present, the input area is used to prompt for a filename
     pub file_prompt: Option<FilePrompt>,
+    // Startup gating flags for initial selection flows
+    pub startup_requires_provider: bool,
+    pub startup_requires_model: bool,
+    pub startup_multiple_providers_available: bool,
+    pub exit_requested: bool,
+    pub startup_env_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,119 +118,43 @@ impl App {
         model: String,
         log_file: Option<String>,
         provider: Option<String>,
+        env_only: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let auth_manager = AuthManager::new();
         let config = Config::load()?;
 
-        // Use the shared authentication resolution function
-        let (api_key, base_url, provider_name, provider_display_name) =
-            auth_manager.resolve_authentication(provider.as_deref(), &config)?;
+        // Resolve authentication: if env_only, force env vars; otherwise use shared resolution
+        let (api_key, base_url, provider_name, provider_display_name) = if env_only {
+            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                "❌ --env used but OPENAI_API_KEY environment variable not set"
+            })?;
+            let default_base = "https://api.openai.com/v1".to_string();
+            let base_url =
+                std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
+            let (prov, display) = if base_url == default_base {
+                ("openai".to_string(), "OpenAI".to_string())
+            } else {
+                ("openai-compatible".to_string(), "OpenAI-compatible".to_string())
+            };
+            (api_key, base_url, prov, display)
+        } else {
+            auth_manager.resolve_authentication(provider.as_deref(), &config)?
+        };
 
         // Determine the model to use:
         // 1. If a specific model was requested (not "default"), use that
         // 2. If a default model is set for this provider in config, use that
-        // 3. Otherwise, fetch and use the newest available model
+        // 3. Otherwise, leave it unset and let the UI open the model picker
         let final_model = if model != "default" {
             model
         } else if let Some(default_model) = config.get_default_model(&provider_name) {
             default_model.clone()
         } else {
-            // Try to fetch the newest model directly since we're already in an async context
-            let temp_client = Client::new();
-            let temp_app = App {
-                messages: VecDeque::new(),
-                input: String::new(),
-                input_cursor_position: 0,
-                input_mode: true,
-                edit_select_mode: false,
-                selected_user_message_index: None,
-                in_place_edit_index: None,
-                current_response: String::new(),
-                client: temp_client.clone(),
-                model: model.clone(),
-                api_key: api_key.clone(),
-                base_url: base_url.clone(),
-                provider_name: provider_name.to_string(),
-                provider_display_name: provider_display_name.clone(),
-                scroll_offset: 0,
-                horizontal_scroll_offset: 0,
-                auto_scroll: true,
-                is_streaming: false,
-                pulse_start: Instant::now(),
-                stream_interrupted: false,
-                logging: LoggingState::new(None)?,
-                stream_cancel_token: None,
-                current_stream_id: 0,
-                last_retry_time: Instant::now(),
-                retrying_message_index: None,
-                input_scroll_offset: 0,
-                textarea: TextArea::default(),
-                theme: match &config.theme {
-                    Some(name) => Theme::from_name(name),
-                    None => Theme::dark_default(),
-                },
-                current_theme_id: config.theme.clone(),
-                picker: None,
-                picker_mode: None,
-                block_select_mode: false,
-                selected_block_index: None,
-                theme_before_picker: None,
-                theme_id_before_picker: None,
-                model_before_picker: None,
-                model_search_filter: String::new(),
-                all_available_models: Vec::new(),
-                model_picker_has_dates: false,
-                theme_search_filter: String::new(),
-                all_available_themes: Vec::new(),
-                provider_before_picker: None,
-                provider_search_filter: String::new(),
-                all_available_providers: Vec::new(),
-                in_provider_model_transition: false,
-                provider_model_transition_state: None,
-                markdown_enabled: config.markdown.unwrap_or(true),
-                syntax_enabled: config.syntax.unwrap_or(true),
-                prewrap_cache: None,
-                status: None,
-                status_set_at: None,
-                file_prompt: None,
-            };
-
-            // Try to fetch the newest model
-            match temp_app.fetch_newest_model().await {
-                Ok(Some(newest_model)) => {
-                    eprintln!("🔄 Using newest available model: {newest_model}");
-                    newest_model
-                }
-                Ok(None) => {
-                    return Err(
-                        "No models found for this provider. Please specify a model explicitly."
-                            .into(),
-                    );
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to fetch models from API: {e}. Please specify a model explicitly."
-                    )
-                    .into());
-                }
-            }
+            String::new()
         };
 
-        // Print configuration info
-        eprintln!("🚀 Starting Chabeau - Terminal Chat Interface");
-        eprintln!("🔐 Provider: {provider_name}");
-        eprintln!("📡 Using model: {final_model}");
-
-        // Note: We use the OpenAI API format for all providers including Anthropic
-        // This is known to work well with Anthropic's models
-        let api_endpoint = construct_api_url(&base_url, "chat/completions");
-        eprintln!("🌐 API endpoint: {api_endpoint}");
-
-        if let Some(ref log_path) = log_file {
-            eprintln!("📝 Logging to: {log_path}");
-        }
-        eprintln!("💡 Press Ctrl+C to quit, Enter to send messages");
-        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // Build API endpoint for internal use (no noisy startup prints)
+        let _api_endpoint = construct_api_url(&base_url, "chat/completions");
 
         let logging = LoggingState::new(log_file.clone())?;
         // If logging was enabled via command line, log the start timestamp
@@ -307,12 +237,116 @@ impl App {
             status: None,
             status_set_at: None,
             file_prompt: None,
+            startup_requires_provider: false,
+            startup_requires_model: false,
+            startup_multiple_providers_available: false,
+            exit_requested: false,
+            startup_env_only: false,
         };
 
         // Keep textarea state in sync with the string input initially
         app.set_input_text(String::new());
         app.configure_textarea_appearance();
 
+        Ok(app)
+    }
+
+    /// Create an app without a selected provider or model. Used when multiple providers
+    /// are available but none is configured as default; the UI will open the provider picker.
+    pub async fn new_uninitialized(
+        log_file: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = Config::load()?;
+
+        // Quiet startup; no noisy prints here
+
+        let logging = LoggingState::new(log_file.clone())?;
+        if let Some(_log_path) = log_file {
+            let timestamp = Utc::now().to_rfc3339();
+            if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
+                eprintln!("Warning: Failed to write initial log timestamp: {}", e);
+            }
+        }
+
+        let resolved_theme = match &config.theme {
+            Some(name) => {
+                if let Some(ct) = config.get_custom_theme(name) {
+                    Theme::from_spec(&theme_spec_from_custom(ct))
+                } else if let Some(spec) = find_builtin_theme(name) {
+                    Theme::from_spec(&spec)
+                } else {
+                    Theme::from_name(name)
+                }
+            }
+            None => match detect_preferred_appearance() {
+                Some(Appearance::Light) => Theme::light(),
+                Some(Appearance::Dark) => Theme::dark_default(),
+                None => Theme::dark_default(),
+            },
+        };
+
+        let mut app = App {
+            messages: VecDeque::new(),
+            input: String::new(),
+            input_cursor_position: 0,
+            input_mode: true,
+            edit_select_mode: false,
+            selected_user_message_index: None,
+            in_place_edit_index: None,
+            current_response: String::new(),
+            client: Client::new(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            provider_name: String::new(),
+            provider_display_name: "(no provider selected)".to_string(),
+            scroll_offset: 0,
+            horizontal_scroll_offset: 0,
+            auto_scroll: true,
+            is_streaming: false,
+            pulse_start: Instant::now(),
+            stream_interrupted: false,
+            logging,
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            input_scroll_offset: 0,
+            textarea: TextArea::default(),
+            theme: resolved_theme,
+            current_theme_id: config.theme.clone(),
+            picker: None,
+            picker_mode: None,
+            block_select_mode: false,
+            selected_block_index: None,
+            theme_before_picker: None,
+            theme_id_before_picker: None,
+            model_before_picker: None,
+            model_search_filter: String::new(),
+            all_available_models: Vec::new(),
+            model_picker_has_dates: false,
+            theme_search_filter: String::new(),
+            all_available_themes: Vec::new(),
+            provider_before_picker: None,
+            provider_search_filter: String::new(),
+            all_available_providers: Vec::new(),
+            in_provider_model_transition: false,
+            provider_model_transition_state: None,
+            markdown_enabled: config.markdown.unwrap_or(true),
+            syntax_enabled: config.syntax.unwrap_or(true),
+            prewrap_cache: None,
+            status: None,
+            status_set_at: None,
+            file_prompt: None,
+            startup_requires_provider: true,
+            startup_requires_model: false,
+            startup_multiple_providers_available: false,
+            exit_requested: false,
+            startup_env_only: false,
+        };
+
+        app.set_input_text(String::new());
+        app.configure_textarea_appearance();
         Ok(app)
     }
 
@@ -497,6 +531,11 @@ impl App {
             status: None,
             status_set_at: None,
             file_prompt: None,
+            startup_requires_provider: false,
+            startup_requires_model: false,
+            startup_multiple_providers_available: false,
+            exit_requested: false,
+            startup_env_only: false,
         }
     }
 
@@ -910,25 +949,7 @@ impl App {
         Some(api_messages)
     }
 
-    pub async fn fetch_newest_model(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        // We need to create a new client here because we're in a different context
-        let client = reqwest::Client::new();
-
-        // Use the shared function to fetch models
-        let models_response =
-            fetch_models(&client, &self.base_url, &self.api_key, &self.provider_name).await?;
-
-        if models_response.data.is_empty() {
-            return Ok(None);
-        }
-
-        // Sort models using the shared function
-        let mut models = models_response.data;
-        sort_models(&mut models);
-
-        // Return the ID of the first (newest) model
-        Ok(models.first().map(|m| m.id.clone()))
-    }
+    // fetch_newest_model was removed in favor of explicit model selection via the TUI picker
 
     /// Calculate how many lines the input text will wrap to using word wrapping
     pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {

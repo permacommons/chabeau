@@ -78,43 +78,35 @@ fn print_version_info() {
     println!("See https://permacommons.org/ for more information.");
 }
 
+// Unified help text used for both short and long help
+const HELP_ABOUT: &str = "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
+Authentication:\n\
+  Use 'chabeau auth' to set up credentials (OpenAI, OpenRouter, Poe, Anthropic, custom).\n\n\
+For one-off use, you can set environment variables (used only if no providers are configured, or with --env):\n\
+  OPENAI_API_KEY    API key\n\
+  OPENAI_BASE_URL   Base URL (default: https://api.openai.com/v1)\n\n\
+Then run 'chabeau --env' (or just 'chabeau' if you have no configured providers).\n\n\
+To select providers (e.g., Anthropic, OpenAI) and their models:\n\
+  • If only one provider is configured, Chabeau will use it.\n\
+  • Otherwise, it will ask you to select the provider.\n\
+  • It will then give you a choice of models.\n\n\
+  Tips:\n\
+  • To make a choice the default, select it with [Alt+Enter], or use the CLI commands below.\n\
+  • Inside the TUI, type '/help' for keys and commands.\n\
+  • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n";
+
 #[derive(Parser)]
 #[command(name = "chabeau")]
-#[command(about = "A terminal-based chat interface using OpenAI API")]
-#[command(disable_version_flag = true)]
-#[command(
-    long_about = "Chabeau is a full-screen terminal chat interface that connects to various AI APIs \
-for real-time conversations. It supports streaming responses and provides a clean, \
-responsive interface with color-coded messages.\n\n\
-Authentication:\n\
-  Use 'chabeau auth' to set up API credentials securely in your system keyring.\n\
-  Supports OpenAI, OpenRouter, Poe, Anthropic, and custom providers.\n\n\
-Environment Variables (fallback if no auth configured):\n\
-  OPENAI_API_KEY    Your OpenAI API key\n\
-  OPENAI_BASE_URL   Custom API base URL (optional, defaults to https://api.openai.com/v1)\n\n\
-Controls:\n\
-  Type              Enter your message in the input field\n\
-  Enter             Send the message\n\
-  Ctrl+P            Edit previous messages (select mode)\n\
-  Up/Down/Mouse     Scroll through chat history\n\
-  Ctrl+C            Quit the application\n\
-  Ctrl+R            Retry the last bot response\n\
-  Ctrl+T            Open external editor (requires EDITOR env var)\n\
-  Backspace         Delete characters in the input field\n\n\
-Commands:\n\
-  /help             Show extended help with keyboard shortcuts\n\
-  /log <filename>   Enable logging to specified file\n\
-  /log              Toggle logging pause/resume\n\
-  /dump <filename>  Dump conversation to specified file\n\
-  /dump             Dump conversation to chabeau-log-<isodate>.txt\n\
-  /theme            Open theme picker\n\
-  /theme <id>       Apply theme by id (built-in or custom)\n\
-  /model            Open model picker (with filtering support)\n\
-  /model <id>       Switch to specified model"
-)]
+#[command(about = HELP_ABOUT)]
+#[command(disable_version_flag = true, disable_help_flag = true)]
+#[command(long_about = HELP_ABOUT)]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
+
+    /// Print this help
+    #[arg(short = 'h', long = "help", action = clap::ArgAction::Help, help = "Print this help")]
+    pub help: Option<bool>,
 
     /// Model to use for chat, or list available models if no model specified
     #[arg(short = 'm', long, global = true, value_name = "MODEL", num_args = 0..=1, default_missing_value = "")]
@@ -128,6 +120,10 @@ pub struct Args {
     #[arg(short = 'p', long, global = true, value_name = "PROVIDER", num_args = 0..=1, default_missing_value = "")]
     pub provider: Option<String>,
 
+    /// Use environment variables for auth (ignore keyring/config)
+    #[arg(long = "env", global = true, action = clap::ArgAction::SetTrue)]
+    pub env_only: bool,
+
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
     pub version: bool,
@@ -139,8 +135,6 @@ pub enum Commands {
     Auth,
     /// Remove authentication for API providers
     Deauth,
-    /// Start the chat interface (default)
-    Chat,
     /// Set configuration values, or show current configuration if no arguments are provided.
     Set {
         /// Configuration key to set. If no key is provided, the current configuration is shown.
@@ -182,8 +176,8 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    match args.command.unwrap_or(Commands::Chat) {
-        Commands::Auth => {
+    match args.command {
+        Some(Commands::Auth) => {
             let mut auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_auth() {
                 eprintln!("❌ Authentication failed: {e}");
@@ -191,7 +185,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Commands::Deauth => {
+        Some(Commands::Deauth) => {
             let mut auth_manager = AuthManager::new();
             if let Err(e) = auth_manager.interactive_deauth(args.provider) {
                 eprintln!("❌ Deauthentication failed: {e}");
@@ -199,7 +193,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Commands::Set { key, value } => {
+        Some(Commands::Set { key, value }) => {
             let mut config = Config::load()?;
             if let Some(key) = key {
                 match key.as_str() {
@@ -255,7 +249,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Commands::Unset { key, value } => {
+        Some(Commands::Unset { key, value }) => {
             let mut config = Config::load()?;
             match key.as_str() {
                 "default-provider" => {
@@ -285,7 +279,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Commands::Chat => {
+        None => {
             // Check if -p was provided without a provider name (empty string)
             match args.provider.as_deref() {
                 Some("") => {
@@ -307,25 +301,37 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         }
                         Some(model) => {
                             // -m was provided with a value, use it for chat
-                            run_chat(model.to_string(), args.log, provider_for_operations).await
+                            run_chat(
+                                model.to_string(),
+                                args.log,
+                                provider_for_operations,
+                                args.env_only,
+                            )
+                            .await
                         }
                         None => {
                             // -m was not provided, use default model for chat
-                            run_chat("default".to_string(), args.log, provider_for_operations).await
+                            run_chat(
+                                "default".to_string(),
+                                args.log,
+                                provider_for_operations,
+                                args.env_only,
+                            )
+                            .await
                         }
                     }
                 }
             }
         }
-        Commands::PickDefaultModel { provider } => {
+        Some(Commands::PickDefaultModel { provider }) => {
             pick_default_model(provider).await?;
             Ok(())
         }
-        Commands::PickDefaultProvider => {
+        Some(Commands::PickDefaultProvider) => {
             pick_default_provider().await?;
             Ok(())
         }
-        Commands::Themes => {
+        Some(Commands::Themes) => {
             list_themes().await?;
             Ok(())
         }

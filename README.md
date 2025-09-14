@@ -13,9 +13,9 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Robust multi-line input powered by `tui-textarea` (IME-friendly)
-- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
 - Secure API key storage in system keyring with config-based provider management
+- Multi-line input (IME-friendly)
+- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
 - Interactive theme and model pickers with filtering, sorting, and metadata display
 - Message retry and external editor support
 - Conversation logging with pause/resume
@@ -37,16 +37,23 @@ chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Veni
 
 ### Start Chatting
 ```bash
-chabeau         # Uses default provider and model (automatically selects newest model if no default configured)
+chabeau         # Uses defaults; opens pickers when needed
 ```
 
-**Note:** Chabeau will use your configured default provider and model if set. If no default model is configured for your provider, Chabeau will automatically fetch and use the newest available model from that provider. If you haven't configured a default provider, Chabeau will use the first available authenticated provider.
+Inside the TUI, use `/provider` and `/model` to switch.
+
+## How does auto-selection work?
+
+We try to do what makes the most sense:
+
+- Provider: If you've picked a default provider, Chabeau uses it. If not, but exactly one provider has auth (keyring or environment), Chabeau uses that one. If multiple providers are available and none is default, Chabeau launches the TUI and opens the provider picker. If no providers are configured, it will prompt you to configure auth and exit.
+- Model: If the chosen provider has no default model configured, Chabeau launches into the model picker. The newest model (when metadata is available) is highlighted. Cancelling this picker at startup exits the app; if multiple providers are available, cancelling returns to the provider picker instead.
 
 ## Usage
 
 ### Basic Commands
 ```bash
-chabeau                              # Start chat with defaults
+chabeau                              # Start chat with defaults (pickers on demand)
 chabeau --provider openai            # Use specific provider
 chabeau --model gpt-3.5-turbo        # Use specific model
 chabeau --log conversation.log       # Enable logging
@@ -66,23 +73,33 @@ chabeau deauth                       # Remove authentication (interactive)
 chabeau deauth --provider openai     # Remove specific provider
 ```
 
-### Environment Variables (Fallback)
-If no authentication is configured:
+### Environment Variables (--env or fallback)
+Environment variables are used only if no providers are configured, or when you pass `--env`.
+
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
+chabeau --env     # Force using env vars even if providers are configured
 ```
+
+Environment variable values can make their way into shell histories or other places they shouldn't, 
+so using the keyring is generally advisable.
 
 ### Configuration
 
-Chabeau supports configuring default providers and models for a smoother experience:
+Chabeau supports configuring default providers and models for a smoother experience. 
+The easiest way to do so is via the `/model` and `/provider` commands in the TUI,
+which open interactive pickers. Use Alt+Enter to persist a choice to the config.
+
+You can also do it on the command line:
 
 ```bash
 chabeau set default-provider openai     # Set default provider
 chabeau set default-model openai gpt-4o # Set default model for a provider
 ```
 
-You can also use the interactive selectors:
+There are even simplified interactive selectors:
+
 ```bash
 chabeau pick-default-provider            # Interactive provider selection
 chabeau pick-default-model               # Interactive model selection
@@ -94,22 +111,21 @@ View current configuration:
 chabeau set default-provider            # Show current configuration
 ```
 
-**Note:** The `set default-model` command now accepts provider and model names without requiring quotes, making it easier to use.
-
 ### Themes
 
 Chabeau includes built-in themes to customize the TUI appearance.
 
- - Set a theme: `chabeau set theme dark` (options: `dark` [default], `light`, `dracula`, `solarized-dark`, `solarized-light`, `high-contrast-dark`, `paper`)
-- List themes: `chabeau themes` (shows built-in and custom, marks current)
-- Unset theme (revert to default): `chabeau unset theme`
 
-Theme affects message colors, title bar, input border/title, and streaming indicator.
+- Use `/theme` in the TUI to pick a theme, and use Alt+Enter to persist it to the config.
+- You can also use the commmand line to set a default theme, e.g.:
+  - Set a theme: `chabeau set theme dark`
+  - List themes: `chabeau themes` (shows built-in and custom, marks current)
+- Unset theme (revert to default): `chabeau unset theme`
 
 Auto-detection: when no theme is set in your config, Chabeau tries to infer a sensible default from the OS preference (e.g., macOS, Windows, GNOME). If no hint is available, it defaults to the dark theme.
 
 Custom themes:
-- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see `src/builtin_themes.toml` for examples).
+- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see [src/builtin_themes.toml](src/builtin_themes.toml) for examples).
 - Once added, set them with `chabeau set theme <your-theme-id>`.
 
 ### Preferences
@@ -127,38 +143,14 @@ Syntax colors adapt to the active theme (dark/light) and use the theme’s code 
 
 ## Interface Controls
 
-| Key | Action |
-|-----|--------|
-| **Type** | Enter message |
-| **Enter** | Send message |
-| **Alt+Enter** | Insert newline in input |
-| **Ctrl+A** | Move cursor to beginning of input |
-| **Ctrl+E** | Move cursor to end of input |
-| **Left/Right** | Move cursor left/right in input |
-| **Shift+Left/Right** | Move cursor left/right in input (alias) |
-| **Shift+Up/Down** | Move cursor up/down lines in multi-line input |
-| **Up/Down/Mouse** | Scroll chat history |
-| **Ctrl+C** | Quit |
-| **Ctrl+R** | Retry last response |
-| **Ctrl+T** | Open external editor |
-| **Ctrl+P** | Edit previous messages (enter select mode) |
-| **Ctrl+L** | Clear status message |
-| **Esc** | Interrupt streaming or exit edit modes |
-| **Backspace** | Delete characters in input field |
-| **Mouse Wheel** | Scroll through chat history |
+See [the built-in help](src/ui/builtin_help.md) for a full list of keyboard controls and commands.
 
-### Chat Commands
-- `/help` - Show extended help with keyboard shortcuts
-- `/theme` - Open theme picker with filtering support (built-in and custom)
-- `/theme <id>` - Apply a theme by id
-- `/model` - Open model picker with filtering support
-- `/model <id>` - Switch to specified model
-- `/markdown [on|off|toggle]` - Enable/disable markdown rendering (persisted)
-- `/syntax [on|off|toggle]` - Enable/disable syntax highlighting (persisted)
-- `/log <filename>` - Enable logging to specified file
-- `/log` - Toggle logging pause/resume
-- `/dump <filename>` - Dump conversation to specified file
-- `/dump` - Dump conversation to chabeau-log-<isodate>.txt
+Most should be intuitive. A couple of choices may be a bit jarring at first:
+
+- Alt+Enter to start a new line: We've found this to be most reliable across terminals.
+- Shift+Cursor to move around in input: This is so the cursor keys can be used at any time to scroll in the output area.
+
+Fedeback and suggestions are always welcome!
 
 ### External Editor
 Set `EDITOR` environment variable:
@@ -166,16 +158,6 @@ Set `EDITOR` environment variable:
 export EDITOR=nano          # or vim, code, etc.
 export EDITOR="code --wait" # VS Code with wait
 ```
-
-## Interface Layout
-
-- **Chat Area**: Color-coded conversation history
-  - **Cyan/Bold**: Your messages
-  - **White**: Assistant responses
-  - **Gray**: System messages
-- **Input Area**: Message composition with soft-wrap and IME support (powered by `tui-textarea`)
-- **Title Bar**: Version, provider, model, logging status, and a pulsing streaming indicator
-- **Status Bar**: Short right-aligned messages in the bottom input border (e.g., "Saved to …", "Clipboard error"). Cleared on next send or with `Ctrl+L`.
 
 ## Architecture
 

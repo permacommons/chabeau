@@ -64,6 +64,11 @@ pub fn create_test_app() -> App {
         status: None,
         status_set_at: None,
         file_prompt: None,
+        startup_requires_provider: false,
+        startup_requires_model: false,
+        startup_multiple_providers_available: false,
+        exit_requested: false,
+        startup_env_only: false,
     }
 }
 

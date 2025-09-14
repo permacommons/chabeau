@@ -14,6 +14,7 @@ use crate::{
     auth::AuthManager, core::builtin_providers::load_builtin_providers, core::config::Config,
 };
 use futures_util::StreamExt;
+use memchr::memchr;
 use ratatui::crossterm::{
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
@@ -88,7 +89,7 @@ fn spawn_stream(params: StreamParams) {
                         }
 
                         let mut stream = response.bytes_stream();
-                        let mut buffer = String::new();
+                        let mut buffer: Vec<u8> = Vec::new();
 
                         while let Some(chunk) = stream.next().await {
                             if cancel_token.is_cancelled() {
@@ -96,14 +97,19 @@ fn spawn_stream(params: StreamParams) {
                             }
 
                             if let Ok(chunk_bytes) = chunk {
-                                let chunk_str = String::from_utf8_lossy(&chunk_bytes);
-                                buffer.push_str(&chunk_str);
+                                buffer.extend_from_slice(&chunk_bytes);
 
-                                while let Some(newline_pos) = buffer.find('\n') {
-                                    let line = buffer[..newline_pos].trim().to_string();
-                                    buffer.drain(..=newline_pos);
+                                while let Some(newline_pos) = memchr(b'\n', &buffer) {
+                                    let line_str = match std::str::from_utf8(&buffer[..newline_pos]) {
+                                        Ok(s) => s.trim(),
+                                        Err(e) => {
+                                            eprintln!("Invalid UTF-8 in stream: {e}");
+                                            buffer.drain(..=newline_pos);
+                                            continue;
+                                        }
+                                    };
 
-                                    if let Some(data) = line.strip_prefix("data: ") {
+                                    if let Some(data) = line_str.strip_prefix("data: ") {
                                         if data == "[DONE]" {
                                             let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                                             return;
@@ -122,6 +128,7 @@ fn spawn_stream(params: StreamParams) {
                                             }
                                         }
                                     }
+                                    buffer.drain(..=newline_pos);
                                 }
                             }
                         }

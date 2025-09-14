@@ -267,6 +267,7 @@ dependencies = [
  "directories",
  "futures-util",
  "keyring",
+ "memchr",
  "pulldown-cmark",
  "ratatui",
  "reqwest",

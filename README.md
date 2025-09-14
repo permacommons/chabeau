@@ -13,6 +13,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
+- Efficient byte-level parsing for smooth streaming output
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly)
 - Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)

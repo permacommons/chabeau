@@ -228,7 +228,10 @@ Please either:
                 let (prov, display) = if base_url == default_base {
                     ("openai".to_string(), "OpenAI".to_string())
                 } else {
-                    ("openai-compatible".to_string(), "OpenAI-compatible".to_string())
+                    (
+                        "openai-compatible".to_string(),
+                        "OpenAI-compatible".to_string(),
+                    )
                 };
 
                 return Ok((api_key, base_url, prov, display));
@@ -253,7 +256,8 @@ Please either:
                 })?;
 
                 let default_base = "https://api.openai.com/v1".to_string();
-                let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
+                let base_url =
+                    std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
                 let (prov, display) = if base_url == default_base {
                     ("openai".to_string(), "OpenAI".to_string())
                 } else {

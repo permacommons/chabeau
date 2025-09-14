@@ -388,7 +388,8 @@ fn generate_picker_help_text(app: &App) -> String {
     };
 
     // Suppress persistent save option during env-only startup model selection
-    let show_persist = !(app.startup_env_only && app.picker_mode == Some(crate::core::app::PickerMode::Model));
+    let show_persist =
+        !(app.startup_env_only && app.picker_mode == Some(crate::core::app::PickerMode::Model));
     if show_persist {
         format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
     } else {

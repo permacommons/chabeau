@@ -125,16 +125,18 @@ impl App {
 
         // Resolve authentication: if env_only, force env vars; otherwise use shared resolution
         let (api_key, base_url, provider_name, provider_display_name) = if env_only {
-            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                "❌ --env used but OPENAI_API_KEY environment variable not set"
-            })?;
+            let api_key = std::env::var("OPENAI_API_KEY")
+                .map_err(|_| "❌ --env used but OPENAI_API_KEY environment variable not set")?;
             let default_base = "https://api.openai.com/v1".to_string();
             let base_url =
                 std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
             let (prov, display) = if base_url == default_base {
                 ("openai".to_string(), "OpenAI".to_string())
             } else {
-                ("openai-compatible".to_string(), "OpenAI-compatible".to_string())
+                (
+                    "openai-compatible".to_string(),
+                    "OpenAI-compatible".to_string(),
+                )
             };
             (api_key, base_url, prov, display)
         } else {

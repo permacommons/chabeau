@@ -2886,8 +2886,12 @@ impl TableState {
             let header_row = &wrapped_rows[0];
             let max_lines_in_header = header_row.iter().map(|cell| cell.len()).max().unwrap_or(1);
             for line_idx in 0..max_lines_in_header {
-                let header_line =
-                    self.create_content_line_with_spans(header_row, &col_widths, line_idx);
+                let header_line = self.create_content_line_with_spans(
+                    header_row,
+                    &col_widths,
+                    line_idx,
+                    table_style,
+                );
                 lines.push(header_line);
             }
 
@@ -2899,8 +2903,12 @@ impl TableState {
             for row in &wrapped_rows[1..] {
                 let max_lines_in_row = row.iter().map(|cell| cell.len()).max().unwrap_or(1);
                 for line_idx in 0..max_lines_in_row {
-                    let content_line =
-                        self.create_content_line_with_spans(row, &col_widths, line_idx);
+                    let content_line = self.create_content_line_with_spans(
+                        row,
+                        &col_widths,
+                        line_idx,
+                        table_style,
+                    );
                     lines.push(content_line);
                 }
             }
@@ -2971,11 +2979,12 @@ impl TableState {
         row: &[Vec<Vec<Span<'static>>>],
         col_widths: &[usize],
         line_idx: usize,
+        style: Style,
     ) -> Line<'static> {
         let mut spans = Vec::new();
 
         // Left border
-        spans.push(Span::raw("│"));
+        spans.push(Span::styled("│", style));
 
         for (i, width) in col_widths.iter().enumerate() {
             // Left padding
@@ -3050,7 +3059,7 @@ impl TableState {
 
             // Right padding and border
             spans.push(Span::raw(" "));
-            spans.push(Span::raw("│"));
+            spans.push(Span::styled("│", style));
         }
 
         Line::from(spans)

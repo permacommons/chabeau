@@ -255,7 +255,8 @@ pub async fn run_chat(
         app
     } else {
         let app = Arc::new(Mutex::new(
-            match App::new_with_auth(model.clone(), log.clone(), selected_provider, env_only).await {
+            match App::new_with_auth(model.clone(), log.clone(), selected_provider, env_only).await
+            {
                 Ok(app) => app,
                 Err(e) => {
                     let error_msg = e.to_string();
@@ -539,7 +540,8 @@ pub async fn run_chat(
                                             if let Some(id) =
                                                 picker.selected_id().map(|s| s.to_string())
                                             {
-                                                let persist = is_persistent && !app_guard.startup_env_only;
+                                                let persist =
+                                                    is_persistent && !app_guard.startup_env_only;
                                                 let res = if persist {
                                                     app_guard.apply_model_by_id_persistent(&id)
                                                 } else {

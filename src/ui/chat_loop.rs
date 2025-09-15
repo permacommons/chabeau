@@ -310,6 +310,7 @@ pub async fn run_chat(
     println!(
         "Chabeau is in the public domain, forever. Contribute: https://github.com/permacommons/chabeau"
     );
+    // Color depth print removed; use CHABEAU_COLOR and README tips when debugging
 
     // Setup terminal only after successful app creation
     enable_raw_mode()?;

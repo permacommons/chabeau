@@ -186,6 +186,10 @@ impl App {
             },
         };
 
+        // Quantize theme colors for current terminal depth
+        let resolved_theme =
+            crate::utils::color::quantize_theme_for_current_terminal(resolved_theme);
+
         let mut app = App {
             messages: VecDeque::new(),
             input: String::new(),
@@ -286,6 +290,10 @@ impl App {
                 None => Theme::dark_default(),
             },
         };
+
+        // Quantize theme colors for current terminal depth
+        let resolved_theme =
+            crate::utils::color::quantize_theme_for_current_terminal(resolved_theme);
 
         let mut app = App {
             messages: VecDeque::new(),
@@ -1270,8 +1278,8 @@ impl App {
         } else {
             return Err(format!("Unknown theme: {}", id));
         };
-
-        self.theme = theme;
+        // Quantize to terminal color depth
+        self.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
         self.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
 
@@ -1289,12 +1297,15 @@ impl App {
         // Try custom then built-in then no-op
         let cfg = Config::load_test_safe();
         if let Some(ct) = cfg.get_custom_theme(id) {
-            self.theme = Theme::from_spec(&theme_spec_from_custom(ct));
+            self.theme = crate::utils::color::quantize_theme_for_current_terminal(
+                Theme::from_spec(&theme_spec_from_custom(ct)),
+            );
             self.configure_textarea_appearance();
             return;
         }
         if let Some(spec) = find_builtin_theme(id) {
-            self.theme = Theme::from_spec(&spec);
+            self.theme =
+                crate::utils::color::quantize_theme_for_current_terminal(Theme::from_spec(&spec));
             self.configure_textarea_appearance();
         }
     }
@@ -1955,8 +1966,8 @@ impl App {
         } else {
             return Err(format!("Unknown theme: {}", id));
         };
-
-        self.theme = theme;
+        // Quantize to terminal color depth
+        self.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
         self.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
         // Clear preview snapshot but don't persist to config

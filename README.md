@@ -142,6 +142,16 @@ At runtime, use chat commands to toggle and persist:
 
 Syntax colors adapt to the active theme (dark/light) and use the theme’s code block background for consistent contrast.
 
+### Color Support
+
+Chabeau detects terminal color depth and adapts themes accordingly:
+
+- Truecolor: if `COLORTERM` contains `truecolor`/`24bit`, Chabeau uses 24‑bit RGB.
+- 256 colors: if `TERM` contains `256color`, RGB colors are quantized to the xterm‑256 palette.
+- ANSI 16: otherwise, colors are mapped to the nearest 16 ANSI colors.
+
+You can force a mode with `CHABEAU_COLOR=truecolor|256|16` if needed.
+
 ## Interface Controls
 
 See [the built-in help](src/ui/builtin_help.md) for a full list of keyboard controls and commands.

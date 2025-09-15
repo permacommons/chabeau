@@ -99,7 +99,10 @@ fn normalize_lang_hint(s: &str) -> String {
 }
 
 fn parse_tui_color_from_syntect(c: syntect::highlighting::Color) -> TuiColor {
-    TuiColor::Rgb(c.r, c.g, c.b)
+    let rgb = TuiColor::Rgb(c.r, c.g, c.b);
+    // Quantize syntax colors to terminal depth so code blocks match theme rendering
+    let depth = crate::utils::color::detect_color_depth();
+    crate::utils::color::quantize_color(rgb, depth)
 }
 
 // Helper to choose a syntect theme name based on background brightness.

@@ -7,12 +7,15 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 - Enter: Send message
 - Alt+Enter: New line in input
 - Ctrl+R: Retry last response
+- Ctrl+D: Exit when input is empty; otherwise behaves like [Del]
 - Ctrl+P: Edit previous messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message
 - Ctrl+T: Open in external editor (requires `$EDITOR` to be set)
 - Esc: Interrupt streaming / cancel modes
 - Up/Down/Mouse: Scroll history
+- PageUp/PageDown: Scroll one page in history
+- Home/End: Jump to top/bottom of history
 - Shift+Cursor Keys: Move cursor in input
 
 ## Picker Navigation

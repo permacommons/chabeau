@@ -569,6 +569,34 @@ impl App {
         }
     }
 
+    /// Scroll to the very top of the output area and disable auto-scroll.
+    pub fn scroll_to_top(&mut self) {
+        self.auto_scroll = false;
+        self.scroll_offset = 0;
+    }
+
+    /// Scroll to the very bottom of the output area and enable auto-scroll.
+    pub fn scroll_to_bottom_view(&mut self, available_height: u16, terminal_width: u16) {
+        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
+        self.scroll_offset = max_scroll;
+        self.auto_scroll = true;
+    }
+
+    /// Page up by one full output area (minus one line overlap). Disables auto-scroll.
+    pub fn page_up(&mut self, available_height: u16) {
+        self.auto_scroll = false;
+        let step = available_height.saturating_sub(1);
+        self.scroll_offset = self.scroll_offset.saturating_sub(step);
+    }
+
+    /// Page down by one full output area (minus one line overlap). Disables auto-scroll.
+    pub fn page_down(&mut self, available_height: u16, terminal_width: u16) {
+        self.auto_scroll = false;
+        let step = available_height.saturating_sub(1);
+        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
+        self.scroll_offset = (self.scroll_offset.saturating_add(step)).min(max_scroll);
+    }
+
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
         // Clear any ephemeral status when the user sends a message
         self.clear_status();
@@ -2705,6 +2733,53 @@ Some additional text after the table."#;
                 prewrap_height, scroll_calc_height
             );
         }
+    }
+
+    #[test]
+    fn test_page_up_down_and_home_end_behavior() {
+        let mut app = create_test_app();
+        // Create enough messages to require scrolling
+        for _ in 0..50 {
+            app.messages
+                .push_back(create_test_message("assistant", "line content"));
+        }
+
+        let width: u16 = 80;
+        let input_area_height = 3u16; // pretend a small input area
+        let term_height = 24u16;
+        let available_height = app.calculate_available_height(term_height, input_area_height);
+
+        // Sanity: have some scrollable height
+        let max_scroll = app.calculate_max_scroll_offset(available_height, width);
+        assert!(max_scroll > 0);
+
+        // Start in the middle
+        let step = available_height.saturating_sub(1);
+        app.scroll_offset = (step * 2).min(max_scroll);
+
+        // Page up reduces by step, not below 0
+        let before = app.scroll_offset;
+        app.page_up(available_height);
+        let after_up = app.scroll_offset;
+        assert_eq!(after_up, before.saturating_sub(step));
+        assert!(!app.auto_scroll);
+
+        // Page down increases by step, clamped to max
+        app.page_down(available_height, width);
+        let after_down = app.scroll_offset;
+        assert!(after_down >= after_up);
+        assert!(after_down <= max_scroll);
+        assert!(!app.auto_scroll);
+
+        // Home goes to top and disables auto-scroll
+        app.scroll_to_top();
+        assert_eq!(app.scroll_offset, 0);
+        assert!(!app.auto_scroll);
+
+        // End goes to bottom and enables auto-scroll
+        app.scroll_to_bottom_view(available_height, width);
+        assert_eq!(app.scroll_offset, max_scroll);
+        assert!(app.auto_scroll);
     }
 
     #[test]

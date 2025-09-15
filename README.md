@@ -151,7 +151,7 @@ Most should be intuitive. A couple of choices may be a bit jarring at first:
 - Alt+Enter to start a new line: We've found this to be most reliable across terminals.
 - Shift+Cursor to move around in input: This is so the cursor keys can be used at any time to scroll in the output area.
 
-Fedeback and suggestions are always welcome!
+Feedback and suggestions are always welcome!
 
 ### External Editor
 Set `EDITOR` environment variable:

@@ -31,7 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex};
-use tui_textarea::{CursorMove, Input as TAInput};
+use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 
 // Module-level stream end marker for helper usage and event loop
 const STREAM_END_MARKER: &str = "<<STREAM_END>>";
@@ -1215,10 +1215,65 @@ pub async fn run_chat(
                         }
                     }
                     match key.code {
+                        KeyCode::Home => {
+                            let mut app_guard = app.lock().await;
+                            app_guard.scroll_to_top();
+                        }
+                        KeyCode::End => {
+                            let mut app_guard = app.lock().await;
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(term_size.width);
+                            let available_height = term_size
+                                .height
+                                .saturating_sub(input_area_height + 2)
+                                .saturating_sub(1);
+                            app_guard.scroll_to_bottom_view(available_height, term_size.width);
+                        }
+                        KeyCode::PageUp => {
+                            let mut app_guard = app.lock().await;
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(term_size.width);
+                            let available_height = term_size
+                                .height
+                                .saturating_sub(input_area_height + 2)
+                                .saturating_sub(1);
+                            app_guard.page_up(available_height);
+                        }
+                        KeyCode::PageDown => {
+                            let mut app_guard = app.lock().await;
+                            let input_area_height =
+                                app_guard.calculate_input_area_height(term_size.width);
+                            let available_height = term_size
+                                .height
+                                .saturating_sub(input_area_height + 2)
+                                .saturating_sub(1);
+                            app_guard.page_down(available_height, term_size.width);
+                        }
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             break 'main_loop Ok(());
+                        }
+                        KeyCode::Char('d')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            // Ctrl+D: exit if input is empty, else delete forward
+                            let mut app_guard = app.lock().await;
+                            if app_guard.get_input_text().is_empty() {
+                                break 'main_loop Ok(());
+                            } else {
+                                app_guard.apply_textarea_edit_and_recompute(
+                                    term_size.width,
+                                    |ta| {
+                                        ta.input_without_shortcuts(TAInput {
+                                            key: TAKey::Delete,
+                                            ctrl: false,
+                                            alt: false,
+                                            shift: false,
+                                        });
+                                    },
+                                );
+                            }
                         }
                         KeyCode::Char('t')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -1751,6 +1806,18 @@ pub async fn run_chat(
                             // Let textarea handle text input, including multi-byte chars
                             app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
                                 ta.input(TAInput::from(key));
+                            });
+                        }
+                        KeyCode::Delete => {
+                            let mut app_guard = app.lock().await;
+                            // Forward delete in input area
+                            app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                                ta.input_without_shortcuts(TAInput {
+                                    key: TAKey::Delete,
+                                    ctrl: false,
+                                    alt: false,
+                                    shift: false,
+                                });
                             });
                         }
                         KeyCode::Backspace => {

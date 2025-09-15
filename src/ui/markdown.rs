@@ -704,7 +704,6 @@ fn render_message_with_ranges_with_width_and_policy(
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
 ) -> (Vec<Line<'static>>, Vec<(usize, usize, String)>) {
-
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -1955,7 +1954,8 @@ End of table."###
             content: r#"| Feature | Benefits |
 |---------|----------|
 | X | **Dramatically** _improved_ decision-making capabilities with ***real-time*** analytics |
-"#.into(),
+"#
+            .into(),
         });
 
         let theme = crate::ui::theme::Theme::dark_default();
@@ -1993,9 +1993,13 @@ End of table."###
 
         // 2) Hyphenated word may wrap after the hyphen, but not mid-segment
         // Accept either kept together or split at the hyphen with a space inserted by wrapping
-        let hyphen_ok = all_content.contains("decision-making")
-            || all_content.contains("decision- making");
-        assert!(hyphen_ok, "Hyphen should be a soft break point: {}", all_content);
+        let hyphen_ok =
+            all_content.contains("decision-making") || all_content.contains("decision- making");
+        assert!(
+            hyphen_ok,
+            "Hyphen should be a soft break point: {}",
+            all_content
+        );
 
         // 3) No truncation
         for line in &lines {

@@ -88,6 +88,8 @@ pub struct App {
     pub startup_multiple_providers_available: bool,
     pub exit_requested: bool,
     pub startup_env_only: bool,
+    // Compose mode: Enter inserts newline; Alt+Enter sends; persists until toggled
+    pub compose_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +250,7 @@ impl App {
             startup_multiple_providers_available: false,
             exit_requested: false,
             startup_env_only: false,
+            compose_mode: false,
         };
 
         // Keep textarea state in sync with the string input initially
@@ -353,6 +356,7 @@ impl App {
             startup_multiple_providers_available: false,
             exit_requested: false,
             startup_env_only: false,
+            compose_mode: false,
         };
 
         app.set_input_text(String::new());
@@ -546,6 +550,7 @@ impl App {
             startup_multiple_providers_available: false,
             exit_requested: false,
             startup_env_only: false,
+            compose_mode: false,
         }
     }
 

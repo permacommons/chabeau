@@ -5,7 +5,8 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 ## Keys
 
 - Enter: Send message
-- Alt+Enter: New line in input
+- Alt+Enter or Ctrl+J: New line in input
+- F4: Toggle compose mode (Enter=new line, Alt+Enter=send)
 - Ctrl+R: Retry last response
 - Ctrl+D: Exit when input is empty; otherwise behaves like [Del]
 - Ctrl+P: Edit previous messages (select mode)
@@ -21,11 +22,11 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 ## Picker Navigation
 
 - Enter: Apply selection (session only)
-- Alt+Enter: Apply selection and save to config
+- Alt+Enter or Ctrl+J: Apply selection and save to config
 - Esc: Cancel picker
 - ↑/↓ or j/k: Navigate options
 - Home/End: Jump to first/last option
-- F2: Toggle sort mode
+- F6: Toggle sort mode
 - Type: Filter options
 
 ## Commands

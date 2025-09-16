@@ -365,7 +365,7 @@ pub async fn run_chat(
         // Handle events
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
-            match ev {
+                    match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Always allow Ctrl+C to quit, even when a modal is open
                     if matches!(key.code, KeyCode::Char('c'))
@@ -379,6 +379,12 @@ pub async fn run_chat(
                     {
                         let mut app_guard = app.lock().await;
                         app_guard.clear_status();
+                        continue;
+                    }
+                    // Toggle compose mode with F4
+                    if matches!(key.code, KeyCode::F(4)) {
+                        let mut app_guard = app.lock().await;
+                        app_guard.compose_mode = !app_guard.compose_mode;
                         continue;
                     }
                     // If a picker is open, handle navigation/selection first
@@ -475,7 +481,7 @@ pub async fn run_chat(
                                             None
                                         }
                                     }
-                                    KeyCode::Char('j') => {
+                                    KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                                         picker.move_down();
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
@@ -505,7 +511,7 @@ pub async fn run_chat(
                                             None
                                         }
                                     }
-                                    KeyCode::F(2) => {
+                                    KeyCode::F(6) => {
                                         picker.cycle_sort_mode();
                                         // Re-sort and update title
                                         let _ = picker; // Release borrow
@@ -513,11 +519,19 @@ pub async fn run_chat(
                                         app_guard.update_picker_title();
                                         None
                                     }
-                                    KeyCode::Enter => {
-                                        // Check for Alt+Enter for persistent changes
-                                        let is_persistent =
-                                            key.modifiers.contains(event::KeyModifiers::ALT);
-
+                                    // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
+                                    KeyCode::Enter
+                                    | KeyCode::Char('j')
+                                        if key.code == KeyCode::Enter
+                                            || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                    {
+                                        let is_persistent = if key.code == KeyCode::Enter {
+                                            key.modifiers.contains(event::KeyModifiers::ALT)
+                                        } else {
+                                            true
+                                        };
+                                        // Common apply path
+                                        // Theme
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
                                         {
@@ -530,18 +544,17 @@ pub async fn run_chat(
                                                     app_guard.apply_theme_by_id_session_only(&id)
                                                 };
                                                 match res {
-                                                    Ok(_) => {
-                                                        app_guard.set_status(format!(
-                                                            "Theme set: {}{}",
-                                                            id,
-                                                            status_suffix(is_persistent)
-                                                        ));
-                                                    }
+                                                    Ok(_) => app_guard.set_status(format!(
+                                                        "Theme set: {}{}",
+                                                        id,
+                                                        status_suffix(is_persistent)
+                                                    )),
                                                     Err(_e) => app_guard.set_status("Theme error"),
                                                 }
                                             }
                                             app_guard.picker = None;
                                             app_guard.picker_mode = None;
+                                            Some("__picker_handled__".to_string())
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Model)
                                         {
@@ -563,24 +576,22 @@ pub async fn run_chat(
                                                             id,
                                                             status_suffix(persist)
                                                         ));
-                                                        // Complete provider->model transition if we were in one
                                                         if app_guard.in_provider_model_transition {
-                                                            app_guard
-                                                                .complete_provider_model_transition(
-                                                                );
+                                                            app_guard.complete_provider_model_transition();
                                                         }
-                                                        // Clear startup gating for model if we were in startup flow
                                                         if app_guard.startup_requires_model {
-                                                            app_guard.startup_requires_model =
-                                                                false;
+                                                            app_guard.startup_requires_model = false;
                                                         }
                                                     }
-                                                    Err(e) => app_guard
-                                                        .set_status(format!("Model error: {}", e)),
+                                                    Err(e) => app_guard.set_status(format!(
+                                                        "Model error: {}",
+                                                        e
+                                                    )),
                                                 }
                                             }
                                             app_guard.picker = None;
                                             app_guard.picker_mode = None;
+                                            Some("__picker_handled__".to_string())
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Provider)
                                         {
@@ -594,7 +605,6 @@ pub async fn run_chat(
                                                     } else {
                                                         app_guard.apply_provider_by_id(&id)
                                                     };
-
                                                 match res {
                                                     Ok(_) => {
                                                         app_guard.set_status(format!(
@@ -602,46 +612,20 @@ pub async fn run_chat(
                                                             id,
                                                             status_suffix(is_persistent)
                                                         ));
-
-                                                        // Close current picker first
                                                         app_guard.picker = None;
                                                         app_guard.picker_mode = None;
-
-                                                        // If we should open model picker, open it asynchronously
                                                         if should_open_model_picker {
-                                                            // If we are in startup flow, mark that model is now required
                                                             if app_guard.startup_requires_provider {
-                                                                app_guard
-                                                                    .startup_requires_provider =
+                                                                app_guard.startup_requires_provider =
                                                                     false;
-                                                                app_guard.startup_requires_model =
-                                                                    true;
-                                                                // Preserve multi-provider availability for Esc back navigation
+                                                                app_guard.startup_requires_model = true;
                                                             }
-                                                            // Store the app reference for async task
                                                             let app_clone = app.clone();
                                                             tokio::spawn(async move {
                                                                 let mut app_guard =
                                                                     app_clone.lock().await;
-                                                                match app_guard
-                                                                    .open_model_picker()
-                                                                    .await
-                                                                {
-                                                                    Ok(_) => {
-                                                                        app_guard.set_status("Select a model for the new provider");
-                                                                    }
-                                                                    Err(e) => {
-                                                                        app_guard.set_status(format!("Could not open model picker: {}", e));
-                                                                    }
-                                                                }
+                                                                let _ = app_guard.open_model_picker().await;
                                                             });
-                                                        } else if app_guard
-                                                            .startup_requires_provider
-                                                        {
-                                                            // If startup required provider but model not needed, clear gating
-                                                            app_guard.startup_requires_provider =
-                                                                false;
-                                                            // Keep multi-provider flag unchanged
                                                         }
                                                     }
                                                     Err(e) => {
@@ -649,19 +633,113 @@ pub async fn run_chat(
                                                             "Provider error: {}",
                                                             e
                                                         ));
-                                                        // Close picker on error too
                                                         app_guard.picker = None;
                                                         app_guard.picker_mode = None;
                                                     }
                                                 }
-                                            } else {
-                                                // Close picker if no ID selected
+                                            }
+                                            Some("__picker_handled__".to_string())
+                                        } else {
+                                            Some("__picker_handled__".to_string())
+                                        }
+                                    }
+                                    // Ctrl+J: persist selection to config (documented only in /help)
+                                    KeyCode::Char('j')
+                                        if key
+                                            .modifiers
+                                            .contains(event::KeyModifiers::CONTROL) =>
+                                    {
+                                        match current_picker_mode {
+                                            Some(crate::core::app::PickerMode::Theme) => {
+                                                if let Some(id) =
+                                                    picker.selected_id().map(|s| s.to_string())
+                                                {
+                                                    match app_guard.apply_theme_by_id(&id) {
+                                                        Ok(_) => app_guard.set_status(format!(
+                                                            "Theme set: {}{}",
+                                                            id,
+                                                            status_suffix(true)
+                                                        )),
+                                                        Err(_e) => app_guard
+                                                            .set_status("Theme error"),
+                                                    }
+                                                }
                                                 app_guard.picker = None;
                                                 app_guard.picker_mode = None;
+                                                Some("__picker_handled__".to_string())
                                             }
+                                            Some(crate::core::app::PickerMode::Model) => {
+                                                if let Some(id) =
+                                                    picker.selected_id().map(|s| s.to_string())
+                                                {
+                                                    let persist = !app_guard.startup_env_only;
+                                                    let res = if persist {
+                                                        app_guard.apply_model_by_id_persistent(&id)
+                                                    } else {
+                                                        app_guard.apply_model_by_id(&id);
+                                                        Ok(())
+                                                    };
+                                                    match res {
+                                                        Ok(_) => {
+                                                            app_guard.set_status(format!(
+                                                                "Model set: {}{}",
+                                                                id,
+                                                                status_suffix(persist)
+                                                            ));
+                                                            if app_guard.in_provider_model_transition {
+                                                                app_guard
+                                                                    .complete_provider_model_transition(
+                                                                    );
+                                                            }
+                                                            if app_guard.startup_requires_model {
+                                                                app_guard.startup_requires_model =
+                                                                    false;
+                                                            }
+                                                        }
+                                                        Err(e) => app_guard.set_status(format!(
+                                                            "Model error: {}",
+                                                            e
+                                                        )),
+                                                    }
+                                                }
+                                                app_guard.picker = None;
+                                                app_guard.picker_mode = None;
+                                                Some("__picker_handled__".to_string())
+                                            }
+                                            Some(crate::core::app::PickerMode::Provider) => {
+                                                if let Some(id) =
+                                                    picker.selected_id().map(|s| s.to_string())
+                                                {
+                                                    let (res, should_open_model_picker) = app_guard
+                                                        .apply_provider_by_id_persistent(&id);
+                                                    match res {
+                                                        Ok(_) => {
+                                                            app_guard.set_status(format!(
+                                                                "Provider set: {}{}",
+                                                                id,
+                                                                status_suffix(true)
+                                                            ));
+                                                            app_guard.picker = None;
+                                                            app_guard.picker_mode = None;
+                                                            if should_open_model_picker {
+                                                                let app_clone = app.clone();
+                                                                tokio::spawn(async move {
+                                                                    let mut app_guard =
+                                                                        app_clone.lock().await;
+                                                                    let _ = app_guard.open_model_picker().await;
+                                                                });
+                                                            }
+                                                        }
+                                                        Err(e) => app_guard.set_status(format!(
+                                                            "Provider error: {}",
+                                                            e
+                                                        )),
+                                                    }
+                                                }
+                                                Some("__picker_handled__".to_string())
+                                            }
+                                            _ => Some("__picker_handled__".to_string()),
                                         }
-                                        // Signal that we handled the Enter key to prevent further processing
-                                        Some("__picker_handled__".to_string())
                                     }
                                     KeyCode::Delete => {
                                         // Del key to unset defaults - only works if current selection is a default (has *)
@@ -1613,17 +1691,27 @@ pub async fn run_chat(
                                     continue;
                                 }
                             }
-                            // Use Alt+Enter for newlines in normal input
-                            if modifiers.contains(event::KeyModifiers::ALT) {
-                                // Alt+Enter: insert newline in input
-                                let mut app_guard = app.lock().await;
-                                app_guard.apply_textarea_edit_and_recompute(
-                                    term_size.width,
-                                    |ta| {
-                                        ta.insert_str("\n");
-                                    },
-                                );
-                            } else {
+                            // Compose/newline logic:
+                            // - Compose mode: Enter inserts newline; Alt+Enter sends
+                            // - Normal mode: Alt+Enter inserts newline; Enter sends
+                            {
+                                let app_guard = app.lock().await;
+                                let compose = app_guard.compose_mode;
+                                let alt = modifiers.contains(event::KeyModifiers::ALT);
+                                drop(app_guard);
+                                let should_insert_newline = if compose { !alt } else { alt };
+                                if should_insert_newline {
+                                    let mut app_guard = app.lock().await;
+                                    app_guard.apply_textarea_edit_and_recompute(
+                                        term_size.width,
+                                        |ta| {
+                                            ta.insert_str("\n");
+                                        },
+                                    );
+                                    continue;
+                                }
+                            }
+                            {
                                 // If editing in place, apply changes to history instead of sending
                                 {
                                     let mut app_guard = app.lock().await;
@@ -1756,6 +1844,110 @@ pub async fn run_chat(
                                 });
                             }
                         }
+                        // Ctrl+J: newline in normal mode; send in compose mode
+                        KeyCode::Char('j')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            let send_now = {
+                                let app_guard = app.lock().await;
+                                app_guard.compose_mode && app_guard.file_prompt.is_none()
+                            };
+                            if !send_now {
+                                let mut app_guard = app.lock().await;
+                                app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                                    ta.insert_str("\n");
+                                });
+                                last_input_layout_update = Instant::now();
+                                continue;
+                            }
+                            // Send path (same as Enter send)
+                            let (
+                                should_send_to_api,
+                                api_messages,
+                                client,
+                                model,
+                                api_key,
+                                base_url,
+                                cancel_token,
+                                stream_id,
+                            ) = {
+                                let mut app_guard = app.lock().await;
+                                if app_guard.get_input_text().trim().is_empty() {
+                                    continue;
+                                }
+
+                                let input_text = app_guard.get_input_text().to_string();
+                                app_guard.clear_input();
+
+                                match process_input(&mut app_guard, &input_text) {
+                                    CommandResult::Continue => {
+                                        let term_size = terminal.size().unwrap_or_default();
+                                        let input_area_height = app_guard
+                                            .calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard.calculate_available_height(
+                                            term_size.height,
+                                            input_area_height,
+                                        );
+                                        app_guard.update_scroll_position(
+                                            available_height,
+                                            term_size.width,
+                                        );
+                                        continue;
+                                    }
+                                    CommandResult::OpenModelPicker => {
+                                        match app_guard.open_model_picker().await {
+                                            Ok(_) => {}
+                                            Err(e) => app_guard
+                                                .set_status(format!("Model picker error: {}", e)),
+                                        }
+                                        continue;
+                                    }
+                                    CommandResult::OpenProviderPicker => {
+                                        app_guard.open_provider_picker();
+                                        continue;
+                                    }
+                                    CommandResult::ProcessAsMessage(message) => {
+                                        app_guard.auto_scroll = true;
+                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let api_messages = app_guard.add_user_message(message);
+                                        let input_area_height = app_guard
+                                            .calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard.calculate_available_height(
+                                            term_size.height,
+                                            input_area_height,
+                                        );
+                                        app_guard.update_scroll_position(
+                                            available_height,
+                                            terminal.size().unwrap_or_default().width,
+                                        );
+
+                                        (
+                                            true,
+                                            api_messages,
+                                            app_guard.client.clone(),
+                                            app_guard.model.clone(),
+                                            app_guard.api_key.clone(),
+                                            app_guard.base_url.clone(),
+                                            cancel_token,
+                                            stream_id,
+                                        )
+                                    }
+                                }
+                            };
+                            if !should_send_to_api {
+                                continue;
+                            }
+                            spawn_stream(StreamParams {
+                                client,
+                                base_url,
+                                api_key,
+                                model,
+                                api_messages,
+                                cancel_token,
+                                stream_id,
+                                tx: tx.clone(),
+                            });
+                        }
                         KeyCode::Char('a')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
@@ -1778,7 +1970,9 @@ pub async fn run_chat(
                         }
                         KeyCode::Left => {
                             let mut app_guard = app.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+                            let compose = app_guard.compose_mode;
+                            let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                            if (compose && !shift) || (!compose && shift) {
                                 // Move exactly one character left (ignore selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
@@ -1791,7 +1985,9 @@ pub async fn run_chat(
                         }
                         KeyCode::Right => {
                             let mut app_guard = app.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+                            let compose = app_guard.compose_mode;
+                            let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                            if (compose && !shift) || (!compose && shift) {
                                 // Move exactly one character right (ignore selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
@@ -1833,13 +2029,15 @@ pub async fn run_chat(
                         KeyCode::Up => {
                             let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
+                            let compose = app_guard.compose_mode;
+                            let shift = modifiers.contains(event::KeyModifiers::SHIFT);
 
-                            if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Up: move cursor up exactly one line (no selection)
+                            if (compose && !shift) || (!compose && shift) {
+                                // Move cursor up exactly one line (no selection)
                                 app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
                                 update_if_due(&mut app_guard);
                             } else {
-                                // Up Arrow: Scroll chat history up
+                                // Scroll chat history up
                                 app_guard.auto_scroll = false;
                                 app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
                             }
@@ -1847,14 +2045,16 @@ pub async fn run_chat(
                         KeyCode::Down => {
                             let modifiers = key.modifiers;
                             let mut app_guard = app.lock().await;
+                            let compose = app_guard.compose_mode;
+                            let shift = modifiers.contains(event::KeyModifiers::SHIFT);
 
-                            if modifiers.contains(event::KeyModifiers::SHIFT) {
-                                // Shift+Down: move cursor down exactly one line (no selection)
+                            if (compose && !shift) || (!compose && shift) {
+                                // Move cursor down exactly one line (no selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
                                 update_if_due(&mut app_guard);
                             } else {
-                                // Down Arrow: Scroll chat history down
+                                // Scroll chat history down
                                 app_guard.auto_scroll = false;
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(term_size.width);

@@ -20,7 +20,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Interactive theme and model pickers with filtering, sorting, and metadata display
 - Message retry and external editor support
 - Conversation logging with pause/resume
-- Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code)
+- Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code) with clickable links
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
 

@@ -69,6 +69,7 @@ pub fn create_test_app() -> App {
         startup_multiple_providers_available: false,
         exit_requested: false,
         startup_env_only: false,
+        compose_mode: false,
     }
 }
 

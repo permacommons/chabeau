@@ -123,6 +123,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
     } else if app.in_place_edit_index.is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
+    } else if app.compose_mode {
+        "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
     } else if app.is_streaming {
         "Type a new message (Esc=interrupt • Ctrl+R=retry)"
     } else {
@@ -382,9 +384,9 @@ fn generate_picker_help_text(app: &App) -> String {
     };
 
     let first_line = if search_filter.is_empty() {
-        format!("↑/↓=Navigate • F2=Sort • Type=Filter{}", del_help)
+        format!("↑/↓=Navigate • F6=Sort • Type=Filter{}", del_help)
     } else {
-        format!("↑/↓=Navigate • Backspace=Clear • F2=Sort{}", del_help)
+        format!("↑/↓=Navigate • Backspace=Clear • F6=Sort{}", del_help)
     };
 
     // Suppress persistent save option during env-only startup model selection
@@ -496,7 +498,7 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -517,7 +519,7 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F2=Sort"));
+        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Type=Filter"));
     }
@@ -540,7 +542,7 @@ mod tests {
         let help_text = generate_picker_help_text(&app);
 
         assert!(help_text.contains("Del=Remove default"));
-        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Del=Remove default"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
 
@@ -562,7 +564,7 @@ mod tests {
         let help_text = generate_picker_help_text(&app);
 
         assert!(help_text.contains("Del=Remove default"));
-        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Del=Remove default"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
 
@@ -582,7 +584,7 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F2=Sort • Type=Filter"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }

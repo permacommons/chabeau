@@ -401,6 +401,7 @@ impl App {
                         last_msg,
                         &self.theme,
                         syntax,
+                        true,
                         Some(width as usize),
                     )
                     .lines
@@ -448,6 +449,7 @@ impl App {
                         last_msg,
                         &self.theme,
                         syntax,
+                        true,
                         Some(width as usize),
                     )
                     .lines

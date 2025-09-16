@@ -17,6 +17,7 @@ pub enum TableOverflowPolicy {
 pub struct LayoutConfig {
     pub width: Option<usize>,
     pub markdown_enabled: bool,
+    pub render_links: bool,
     pub syntax_enabled: bool,
     pub table_overflow_policy: TableOverflowPolicy,
 }
@@ -26,6 +27,7 @@ impl Default for LayoutConfig {
         Self {
             width: None,
             markdown_enabled: true,
+            render_links: true,
             syntax_enabled: true,
             table_overflow_policy: TableOverflowPolicy::WrapCells,
         }
@@ -53,6 +55,7 @@ impl LayoutEngine {
         let cfg = LayoutConfig {
             width,
             markdown_enabled: false,
+            render_links: false,
             syntax_enabled,
             table_overflow_policy: TableOverflowPolicy::WrapCells,
         };
@@ -75,6 +78,7 @@ impl LayoutEngine {
                     msg,
                     theme,
                     cfg.syntax_enabled,
+                    cfg.render_links,
                     cfg.width,
                     cfg.table_overflow_policy,
                 );

@@ -365,7 +365,7 @@ pub async fn run_chat(
         // Handle events
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
-                    match ev {
+            match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Always allow Ctrl+C to quit, even when a modal is open
                     if matches!(key.code, KeyCode::Char('c'))
@@ -481,7 +481,11 @@ pub async fn run_chat(
                                             None
                                         }
                                     }
-                                    KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                    KeyCode::Char('j')
+                                        if !key
+                                            .modifiers
+                                            .contains(event::KeyModifiers::CONTROL) =>
+                                    {
                                         picker.move_down();
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
@@ -520,10 +524,11 @@ pub async fn run_chat(
                                         None
                                     }
                                     // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
-                                    KeyCode::Enter
-                                    | KeyCode::Char('j')
+                                    KeyCode::Enter | KeyCode::Char('j')
                                         if key.code == KeyCode::Enter
-                                            || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                            || key
+                                                .modifiers
+                                                .contains(event::KeyModifiers::CONTROL) =>
                                     {
                                         let is_persistent = if key.code == KeyCode::Enter {
                                             key.modifiers.contains(event::KeyModifiers::ALT)
@@ -577,16 +582,17 @@ pub async fn run_chat(
                                                             status_suffix(persist)
                                                         ));
                                                         if app_guard.in_provider_model_transition {
-                                                            app_guard.complete_provider_model_transition();
+                                                            app_guard
+                                                                .complete_provider_model_transition(
+                                                                );
                                                         }
                                                         if app_guard.startup_requires_model {
-                                                            app_guard.startup_requires_model = false;
+                                                            app_guard.startup_requires_model =
+                                                                false;
                                                         }
                                                     }
-                                                    Err(e) => app_guard.set_status(format!(
-                                                        "Model error: {}",
-                                                        e
-                                                    )),
+                                                    Err(e) => app_guard
+                                                        .set_status(format!("Model error: {}", e)),
                                                 }
                                             }
                                             app_guard.picker = None;
@@ -616,15 +622,19 @@ pub async fn run_chat(
                                                         app_guard.picker_mode = None;
                                                         if should_open_model_picker {
                                                             if app_guard.startup_requires_provider {
-                                                                app_guard.startup_requires_provider =
+                                                                app_guard
+                                                                    .startup_requires_provider =
                                                                     false;
-                                                                app_guard.startup_requires_model = true;
+                                                                app_guard.startup_requires_model =
+                                                                    true;
                                                             }
                                                             let app_clone = app.clone();
                                                             tokio::spawn(async move {
                                                                 let mut app_guard =
                                                                     app_clone.lock().await;
-                                                                let _ = app_guard.open_model_picker().await;
+                                                                let _ = app_guard
+                                                                    .open_model_picker()
+                                                                    .await;
                                                             });
                                                         }
                                                     }
@@ -645,9 +655,7 @@ pub async fn run_chat(
                                     }
                                     // Ctrl+J: persist selection to config (documented only in /help)
                                     KeyCode::Char('j')
-                                        if key
-                                            .modifiers
-                                            .contains(event::KeyModifiers::CONTROL) =>
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                                     {
                                         match current_picker_mode {
                                             Some(crate::core::app::PickerMode::Theme) => {
@@ -660,8 +668,9 @@ pub async fn run_chat(
                                                             id,
                                                             status_suffix(true)
                                                         )),
-                                                        Err(_e) => app_guard
-                                                            .set_status("Theme error"),
+                                                        Err(_e) => {
+                                                            app_guard.set_status("Theme error")
+                                                        }
                                                     }
                                                 }
                                                 app_guard.picker = None;
@@ -686,7 +695,9 @@ pub async fn run_chat(
                                                                 id,
                                                                 status_suffix(persist)
                                                             ));
-                                                            if app_guard.in_provider_model_transition {
+                                                            if app_guard
+                                                                .in_provider_model_transition
+                                                            {
                                                                 app_guard
                                                                     .complete_provider_model_transition(
                                                                     );
@@ -726,7 +737,9 @@ pub async fn run_chat(
                                                                 tokio::spawn(async move {
                                                                     let mut app_guard =
                                                                         app_clone.lock().await;
-                                                                    let _ = app_guard.open_model_picker().await;
+                                                                    let _ = app_guard
+                                                                        .open_model_picker()
+                                                                        .await;
                                                                 });
                                                             }
                                                         }
@@ -1854,9 +1867,12 @@ pub async fn run_chat(
                             };
                             if !send_now {
                                 let mut app_guard = app.lock().await;
-                                app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                                    ta.insert_str("\n");
-                                });
+                                app_guard.apply_textarea_edit_and_recompute(
+                                    term_size.width,
+                                    |ta| {
+                                        ta.insert_str("\n");
+                                    },
+                                );
                                 last_input_layout_update = Instant::now();
                                 continue;
                             }
@@ -1882,12 +1898,13 @@ pub async fn run_chat(
                                 match process_input(&mut app_guard, &input_text) {
                                     CommandResult::Continue => {
                                         let term_size = terminal.size().unwrap_or_default();
-                                        let input_area_height = app_guard
-                                            .calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard.calculate_available_height(
-                                            term_size.height,
-                                            input_area_height,
-                                        );
+                                        let input_area_height =
+                                            app_guard.calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard
+                                            .calculate_available_height(
+                                                term_size.height,
+                                                input_area_height,
+                                            );
                                         app_guard.update_scroll_position(
                                             available_height,
                                             term_size.width,
@@ -1908,14 +1925,16 @@ pub async fn run_chat(
                                     }
                                     CommandResult::ProcessAsMessage(message) => {
                                         app_guard.auto_scroll = true;
-                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let (cancel_token, stream_id) =
+                                            app_guard.start_new_stream();
                                         let api_messages = app_guard.add_user_message(message);
-                                        let input_area_height = app_guard
-                                            .calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard.calculate_available_height(
-                                            term_size.height,
-                                            input_area_height,
-                                        );
+                                        let input_area_height =
+                                            app_guard.calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard
+                                            .calculate_available_height(
+                                                term_size.height,
+                                                input_area_height,
+                                            );
                                         app_guard.update_scroll_position(
                                             available_height,
                                             terminal.size().unwrap_or_default().width,

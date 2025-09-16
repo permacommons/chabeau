@@ -229,6 +229,7 @@ impl ScrollCalculator {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
+            render_links: true,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         };
@@ -253,6 +254,7 @@ impl ScrollCalculator {
                     msg,
                     theme,
                     syntax_enabled,
+                    true,
                     terminal_width,
                 )
             } else {
@@ -297,6 +299,7 @@ impl ScrollCalculator {
                     msg,
                     theme,
                     syntax_enabled,
+                    true,
                     terminal_width,
                 );
                 out.extend(rendered.lines);
@@ -391,6 +394,7 @@ impl ScrollCalculator {
                     msg,
                     theme,
                     syntax_enabled,
+                    true,
                     terminal_width,
                 )
             } else {
@@ -875,9 +879,10 @@ mod tests {
 
         // Now render using markdown with the same terminal width
         use crate::ui::markdown::render_message_markdown_opts_with_width;
-        let rendered = render_message_markdown_opts_with_width(
+        let rendered = crate::ui::markdown::render_message_markdown_opts_with_width(
             &messages[0],
             &theme,
+            true,
             true,
             Some(terminal_width as usize),
         );

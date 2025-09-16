@@ -35,6 +35,7 @@ pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage 
             &msg.content,
             theme,
             true,
+            true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
         ),
@@ -43,6 +44,7 @@ pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage 
             &msg.content,
             theme,
             true,
+            true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
         ),
@@ -50,6 +52,7 @@ pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage 
             RoleKind::Assistant,
             &msg.content,
             theme,
+            true,
             true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
@@ -62,6 +65,7 @@ pub fn render_message_markdown_opts_with_width(
     msg: &Message,
     theme: &Theme,
     syntax_enabled: bool,
+    render_links: bool,
     terminal_width: Option<usize>,
 ) -> RenderedMessage {
     // Backward-compatible wrapper that uses the default table policy (WrapCells)
@@ -69,6 +73,7 @@ pub fn render_message_markdown_opts_with_width(
         msg,
         theme,
         syntax_enabled,
+        render_links,
         terminal_width,
         crate::ui::layout::TableOverflowPolicy::WrapCells,
     )
@@ -79,6 +84,7 @@ pub fn render_message_markdown_with_policy(
     msg: &Message,
     theme: &Theme,
     syntax_enabled: bool,
+    render_links: bool,
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessage {
@@ -88,6 +94,7 @@ pub fn render_message_markdown_with_policy(
             &msg.content,
             theme,
             syntax_enabled,
+            render_links,
             terminal_width,
             policy,
         ),
@@ -96,6 +103,7 @@ pub fn render_message_markdown_with_policy(
             &msg.content,
             theme,
             syntax_enabled,
+            render_links,
             terminal_width,
             policy,
         ),
@@ -104,6 +112,7 @@ pub fn render_message_markdown_with_policy(
             &msg.content,
             theme,
             syntax_enabled,
+            render_links,
             terminal_width,
             policy,
         ),
@@ -151,6 +160,7 @@ fn render_with_parser_role_and_width_policy(
     content: &str,
     theme: &Theme,
     syntax_enabled: bool,
+    render_links: bool,
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessage {
@@ -262,7 +272,17 @@ fn render_with_parser_role_and_width_policy(
                         .add_modifier(Modifier::DIM);
                     style_stack.push(new);
                 }
-                Tag::Link { .. } => {
+                Tag::Link { dest_url, .. } => {
+                    if render_links {
+                        let url = dest_url.to_string();
+                        let osc_start = format!("\x1B]8;;{}\x1B\\", url);
+                        let span = Span::raw(osc_start);
+                        if let Some(ref mut table) = table_state {
+                            table.add_span(span);
+                        } else {
+                            current_spans.push(span);
+                        }
+                    }
                     let new = theme.md_link_style();
                     style_stack.push(new);
                 }
@@ -359,8 +379,20 @@ fn render_with_parser_role_and_width_policy(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                     style_stack.pop();
+                }
+                TagEnd::Link => {
+                    style_stack.pop();
+                    if render_links {
+                        let osc_end = "\x1B]8;;\x1B\\";
+                        let span = Span::raw(osc_end);
+                        if let Some(ref mut table) = table_state {
+                            table.add_span(span);
+                        } else {
+                            current_spans.push(span);
+                        }
+                    }
                 }
                 TagEnd::Table => {
                     if let Some(table) = table_state.take() {
@@ -1255,9 +1287,10 @@ mod tests {
         render_message_markdown_with_policy, TableState,
     };
     use crate::core::message::Message;
+    use crate::ui::theme::Theme;
     use pulldown_cmark::{Options, Parser};
     use ratatui::style::Modifier;
-    use ratatui::text::Span;
+    use ratatui::text::{Line, Span};
     use std::collections::VecDeque;
     use unicode_width::UnicodeWidthStr;
 
@@ -1301,8 +1334,13 @@ mod tests {
 
         // Render the same message with width and ensure the lines at [start..start+len]
         // correspond to the code lines
-        let rendered =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
+        let rendered = super::render_message_markdown_opts_with_width(
+            &messages[0],
+            &theme,
+            false,
+            true,
+            width,
+        );
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
         assert!(lines.len() > *start + *len);
         assert_eq!(lines[*start], "first");
@@ -1338,10 +1376,20 @@ mod tests {
         assert_eq!(content, "alpha\nbeta");
 
         // Build full rendering for both messages and assert selected span matches
-        let rendered0 =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
-        let rendered1 =
-            super::render_message_markdown_opts_with_width(&messages[1], &theme, false, width);
+        let rendered0 = super::render_message_markdown_opts_with_width(
+            &messages[0],
+            &theme,
+            false,
+            true,
+            width,
+        );
+        let rendered1 = super::render_message_markdown_opts_with_width(
+            &messages[1],
+            &theme,
+            false,
+            true,
+            width,
+        );
         let combined: Vec<String> = rendered0
             .lines
             .iter()
@@ -1385,7 +1433,8 @@ End of table."###
                 .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered =
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, None);
 
         // Check that we have table lines with borders
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
@@ -1424,7 +1473,8 @@ End of table."###
             .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered =
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, None);
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Extract table lines
@@ -1735,7 +1785,7 @@ End of table."###
 
         // Wide terminal - should fit everything without wrapping or truncation
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(150));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(150));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find content lines (not borders)
@@ -1791,7 +1841,7 @@ End of table."###
 
         // Medium terminal width - should wrap content within cells
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No ellipsis should be present
@@ -1962,7 +2012,7 @@ End of table."###
 
         // Use a modest width to force wrapping within the Benefits cell
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Collect only table content lines (skip borders/separators)
@@ -2073,7 +2123,7 @@ End of table."###
 
         // Narrow terminal that requires wrapping
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(45));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(45));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Verify no truncation
@@ -2128,7 +2178,7 @@ End of table."###
 
         // Extremely narrow terminal (20 chars)
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(20));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(20));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Critical: NO truncation even in extreme cases
@@ -2183,7 +2233,7 @@ End of table."###
 
         // Medium width terminal
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(70));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(70));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No truncation of Unicode content
@@ -2229,6 +2279,7 @@ End of table."###
         let rendered = render_message_markdown_opts_with_width(
             messages.front().unwrap(),
             &theme,
+            true,
             true,
             Some(80),
         );
@@ -2280,7 +2331,7 @@ End of table."###
 
         // Test with a medium terminal width to force wrapping
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(120));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(120));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("=== Government Systems Table Output ===");
@@ -2380,7 +2431,7 @@ End of table."###
 
         // Test with narrow terminal width (60 chars) to force wrapping
         let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+            render_message_markdown_opts_with_width(&messages[0], &theme, true, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("\nRendered table with width 60:");
@@ -2469,6 +2520,101 @@ End of table."###
             let row_width = UnicodeWidthStr::width(row.as_str());
             assert!(row_width <= 100, "Row {} should not be excessively wide due to proper wrapping: width={}, content: '{}'", i, row_width, row);
         }
+    }
+
+    /// Helper to get raw text content from a list of lines
+    fn get_raw_text(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn test_plain_urls_are_not_hyperlinked() {
+        let message = Message {
+            role: "assistant".into(),
+            content: "A plain url: http://example.com.".into(),
+        };
+        let theme = Theme::dark_default();
+        let rendered =
+            render_message_markdown_opts_with_width(&message, &theme, true, true, Some(80));
+
+        let full_content = get_raw_text(&rendered.lines);
+        assert!(!full_content.contains("\x1B]8;;"));
+    }
+
+    #[test]
+    fn test_hyperlinks_in_markdown_links() {
+        let message = Message {
+            role: "assistant".into(),
+            content: "A link: [website](https://example.com).".into(),
+        };
+        let theme = Theme::dark_default();
+        let rendered =
+            render_message_markdown_opts_with_width(&message, &theme, true, true, Some(80));
+        let full_content = get_raw_text(&rendered.lines);
+
+        let expected_url = "https://example.com";
+        let expected_osc_start = format!("\x1B]8;;{}\x1B\\", expected_url);
+        let expected_osc_end = "\x1B]8;;\x1B\\";
+
+        assert!(
+            full_content.contains(&expected_osc_start),
+            "Should contain OSC start"
+        );
+        assert!(full_content.contains("website"), "Should contain link text");
+        assert!(
+            full_content.contains(&expected_osc_end),
+            "Should contain OSC end"
+        );
+
+        let start_pos = full_content.find(&expected_osc_start).unwrap();
+        let text_pos = full_content.find("website").unwrap();
+        let end_pos = full_content.rfind(&expected_osc_end).unwrap();
+        assert!(start_pos < text_pos, "OSC start should be before text");
+        assert!(text_pos < end_pos, "Link text should be before OSC end");
+    }
+
+    #[test]
+    fn test_hyperlinks_in_table_cells() {
+        let message = Message {
+            role: "assistant".into(),
+            content: "| Header |\n|--------|\n| [link](http://example.com) |".into(),
+        };
+        let theme = Theme::dark_default();
+        let rendered =
+            render_message_markdown_opts_with_width(&message, &theme, true, true, Some(80));
+        let full_content = get_raw_text(&rendered.lines);
+
+        let expected_url = "http://example.com";
+        let expected_osc_start = format!("\x1B]8;;{}\x1B\\", expected_url);
+        let expected_osc_end = "\x1B]8;;\x1B\\";
+
+        assert!(
+            full_content.contains(&expected_osc_start),
+            "Should contain OSC start in table"
+        );
+        assert!(
+            full_content.contains("link"),
+            "Should contain link text in table"
+        );
+        assert!(
+            full_content.contains(&expected_osc_end),
+            "Should contain OSC end in table"
+        );
+
+        let start_pos = full_content.find(&expected_osc_start).unwrap();
+        let text_pos = full_content.find("link").unwrap();
+        let end_pos = full_content.rfind(&expected_osc_end).unwrap();
+        assert!(start_pos < text_pos, "OSC start should be before text");
+        assert!(text_pos < end_pos, "Link text should be before OSC end");
     }
 }
 
@@ -3479,7 +3625,7 @@ pub fn build_markdown_display_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for msg in messages {
-        let rendered = render_message_markdown_opts_with_width(msg, theme, true, None);
+        let rendered = render_message_markdown_opts_with_width(msg, theme, true, true, None);
         lines.extend(rendered.lines);
     }
     lines

@@ -23,13 +23,14 @@ pulldown-cmark = "0.10"
 clap = { version = "4.0", features = ["derive"] }
 futures-util = "0.3"
 tokio-util = "0.7.15"
-keyring = { version = "3.0", features = ["sync-secret-service", "windows-native", "apple-native"] }
+keyring = { version = "3.0", features = ["windows-native", "apple-native"] }
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.20"
 tui-textarea = "0.7"
 syntect = "5"
 unicode-width = "0.2.0"
 memchr = "2.7"
+unicode-segmentation = "1.12.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

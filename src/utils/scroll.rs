@@ -265,6 +265,7 @@ impl ScrollCalculator {
                 );
                 crate::ui::markdown::RenderedMessage {
                     lines: layout.lines,
+                    urls: Vec::new(),
                 }
             };
             if selected_index == Some(i) && msg.role == "user" {
@@ -403,6 +404,7 @@ impl ScrollCalculator {
                 );
                 crate::ui::markdown::RenderedMessage {
                     lines: layout.lines,
+                    urls: Vec::new(),
                 }
             };
             lines.extend(rendered.lines);

@@ -23,6 +23,7 @@ struct TableState {
 /// Description of a rendered message (line-based), used by the TUI renderer.
 pub struct RenderedMessage {
     pub lines: Vec<Line<'static>>,
+    pub urls: Vec<String>,
 }
 
 /// Markdown renderer using pulldown-cmark with theming.
@@ -128,7 +129,10 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
     if !out.is_empty() {
         out.push(Line::from(""));
     }
-    RenderedMessage { lines: out }
+    RenderedMessage {
+        lines: out,
+        urls: Vec::new(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +166,7 @@ fn render_with_parser_role_and_width_policy(
     let parser = Parser::new_ext(content, options);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
 
     // Inline buffer for current line
     let mut current_spans: Vec<Span<'static>> = Vec::new();
@@ -262,9 +267,11 @@ fn render_with_parser_role_and_width_policy(
                         .add_modifier(Modifier::DIM);
                     style_stack.push(new);
                 }
-                Tag::Link { .. } => {
+                Tag::Link { dest_url, .. } => {
                     let new = theme.md_link_style();
                     style_stack.push(new);
+                    urls.push(dest_url.to_string());
+                    current_spans.push(Span::raw("\u{E000}"));
                 }
                 Tag::Table(_) => {
                     flush_current_line(&mut lines, &mut current_spans);
@@ -359,8 +366,12 @@ fn render_with_parser_role_and_width_policy(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                     style_stack.pop();
+                }
+                TagEnd::Link => {
+                    style_stack.pop();
+                    current_spans.push(Span::raw("\u{E001}"));
                 }
                 TagEnd::Table => {
                     if let Some(table) = table_state.take() {
@@ -458,7 +469,7 @@ fn render_with_parser_role_and_width_policy(
         lines.push(Line::from(""));
     }
 
-    RenderedMessage { lines }
+    RenderedMessage { lines, urls }
 }
 
 /// Render message and also compute local code block ranges (start line index, len, content).

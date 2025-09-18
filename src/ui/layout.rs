@@ -78,7 +78,12 @@ impl LayoutEngine {
                     cfg.width,
                     cfg.table_overflow_policy,
                 );
-                out.extend(rendered.lines);
+                let mut lines = rendered.lines;
+                let urls = rendered.urls;
+                if !urls.is_empty() {
+                    lines = crate::ui::links::arm_links(&lines, &urls);
+                }
+                out.extend(lines);
             }
             Layout { lines: out }
         } else {

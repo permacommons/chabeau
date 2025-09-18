@@ -395,6 +395,7 @@ mod tests {
     #[test]
     fn test_process_input_dump_empty_conversation() {
         let mut app = create_test_app();
+        app.messages.clear(); // Ensure the conversation is empty
 
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();

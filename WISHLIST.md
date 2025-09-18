@@ -24,7 +24,6 @@ Items are removed when completed.
 
 - Refactor `src/ui/chat_loop.rs` into smaller, testable units — [OPEN]
   - Extract input handling, selection mode, picker handling, and streaming dispatch into helpers/modules — [OPEN]
-  - Introduce a single `Mode` enum (e.g., `Typing | EditSelect | InPlaceEdit { index }`) to replace multiple booleans — [OPEN]
   - Add pure functions for selection navigation (wrap-around) and reuse across keys (↑/↓/j/k/Ctrl+P) — [OPEN]
 - Unify message line building — [PARTIAL]
   - Merge normal and highlighted builders behind a single function with an optional style patch — [OPEN]

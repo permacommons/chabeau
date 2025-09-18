@@ -365,7 +365,7 @@ pub async fn run_chat(
         // Handle events
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
-                    match ev {
+            match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Always allow Ctrl+C to quit, even when a modal is open
                     if matches!(key.code, KeyCode::Char('c'))
@@ -481,7 +481,11 @@ pub async fn run_chat(
                                             None
                                         }
                                     }
-                                    KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                    KeyCode::Char('j')
+                                        if !key
+                                            .modifiers
+                                            .contains(event::KeyModifiers::CONTROL) =>
+                                    {
                                         picker.move_down();
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
@@ -520,10 +524,11 @@ pub async fn run_chat(
                                         None
                                     }
                                     // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
-                                    KeyCode::Enter
-                                    | KeyCode::Char('j')
+                                    KeyCode::Enter | KeyCode::Char('j')
                                         if key.code == KeyCode::Enter
-                                            || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                            || key
+                                                .modifiers
+                                                .contains(event::KeyModifiers::CONTROL) =>
                                     {
                                         let is_persistent = if key.code == KeyCode::Enter {
                                             key.modifiers.contains(event::KeyModifiers::ALT)
@@ -577,16 +582,17 @@ pub async fn run_chat(
                                                             status_suffix(persist)
                                                         ));
                                                         if app_guard.in_provider_model_transition {
-                                                            app_guard.complete_provider_model_transition();
+                                                            app_guard
+                                                                .complete_provider_model_transition(
+                                                                );
                                                         }
                                                         if app_guard.startup_requires_model {
-                                                            app_guard.startup_requires_model = false;
+                                                            app_guard.startup_requires_model =
+                                                                false;
                                                         }
                                                     }
-                                                    Err(e) => app_guard.set_status(format!(
-                                                        "Model error: {}",
-                                                        e
-                                                    )),
+                                                    Err(e) => app_guard
+                                                        .set_status(format!("Model error: {}", e)),
                                                 }
                                             }
                                             app_guard.picker = None;
@@ -616,15 +622,19 @@ pub async fn run_chat(
                                                         app_guard.picker_mode = None;
                                                         if should_open_model_picker {
                                                             if app_guard.startup_requires_provider {
-                                                                app_guard.startup_requires_provider =
+                                                                app_guard
+                                                                    .startup_requires_provider =
                                                                     false;
-                                                                app_guard.startup_requires_model = true;
+                                                                app_guard.startup_requires_model =
+                                                                    true;
                                                             }
                                                             let app_clone = app.clone();
                                                             tokio::spawn(async move {
                                                                 let mut app_guard =
                                                                     app_clone.lock().await;
-                                                                let _ = app_guard.open_model_picker().await;
+                                                                let _ = app_guard
+                                                                    .open_model_picker()
+                                                                    .await;
                                                             });
                                                         }
                                                     }
@@ -645,9 +655,7 @@ pub async fn run_chat(
                                     }
                                     // Ctrl+J: persist selection to config (documented only in /help)
                                     KeyCode::Char('j')
-                                        if key
-                                            .modifiers
-                                            .contains(event::KeyModifiers::CONTROL) =>
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                                     {
                                         match current_picker_mode {
                                             Some(crate::core::app::PickerMode::Theme) => {
@@ -660,8 +668,9 @@ pub async fn run_chat(
                                                             id,
                                                             status_suffix(true)
                                                         )),
-                                                        Err(_e) => app_guard
-                                                            .set_status("Theme error"),
+                                                        Err(_e) => {
+                                                            app_guard.set_status("Theme error")
+                                                        }
                                                     }
                                                 }
                                                 app_guard.picker = None;
@@ -686,7 +695,9 @@ pub async fn run_chat(
                                                                 id,
                                                                 status_suffix(persist)
                                                             ));
-                                                            if app_guard.in_provider_model_transition {
+                                                            if app_guard
+                                                                .in_provider_model_transition
+                                                            {
                                                                 app_guard
                                                                     .complete_provider_model_transition(
                                                                     );
@@ -726,7 +737,9 @@ pub async fn run_chat(
                                                                 tokio::spawn(async move {
                                                                     let mut app_guard =
                                                                         app_clone.lock().await;
-                                                                    let _ = app_guard.open_model_picker().await;
+                                                                    let _ = app_guard
+                                                                        .open_model_picker()
+                                                                        .await;
                                                                 });
                                                             }
                                                         }
@@ -886,13 +899,13 @@ pub async fn run_chat(
                                 crate::ui::layout::TableOverflowPolicy::WrapCells,
                                 app_guard.syntax_enabled,
                             );
-                        if app_guard.block_select_mode {
+                        if app_guard.in_block_select_mode() {
                             // Cycle upward like Ctrl+P
-                            if let Some(cur) = app_guard.selected_block_index {
+                            if let Some(cur) = app_guard.selected_block_index() {
                                 let total = blocks.len();
                                 if total > 0 {
                                     let next = if cur == 0 { total - 1 } else { cur - 1 };
-                                    app_guard.selected_block_index = Some(next);
+                                    app_guard.set_selected_block_index(next);
                                     if let Some((start, _len, _)) = blocks.get(next) {
                                         let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
                                         let input_area_height =
@@ -948,26 +961,25 @@ pub async fn run_chat(
                         && key.modifiers.contains(event::KeyModifiers::CONTROL)
                     {
                         let mut app_guard = app.lock().await;
-                        if app_guard.edit_select_mode {
-                            // Cycle upwards to previous user message (wrap at start)
-                            if let Some(current) = app_guard.selected_user_message_index {
-                                let next_idx = app_guard
+                        if app_guard.in_edit_select_mode() {
+                            if let Some(current) = app_guard.selected_user_message_index() {
+                                if let Some(next_idx) = app_guard
                                     .prev_user_message_index(current)
-                                    .or_else(|| app_guard.last_user_message_index());
-                                app_guard.selected_user_message_index = next_idx;
-                            } else {
-                                app_guard.selected_user_message_index =
-                                    app_guard.last_user_message_index();
+                                    .or_else(|| app_guard.last_user_message_index())
+                                {
+                                    app_guard.set_selected_user_message_index(next_idx);
+                                }
+                            } else if let Some(last) = app_guard.last_user_message_index() {
+                                app_guard.set_selected_user_message_index(last);
                             }
                         } else {
-                            // Enter edit-select mode only if we have user messages
                             if app_guard.last_user_message_index().is_none() {
                                 app_guard.set_status("No user messages");
                                 continue;
                             }
                             app_guard.enter_edit_select_mode();
                         }
-                        if let Some(idx) = app_guard.selected_user_message_index {
+                        if let Some(idx) = app_guard.selected_user_message_index() {
                             app_guard.scroll_index_into_view(
                                 idx,
                                 term_size.width,
@@ -980,50 +992,48 @@ pub async fn run_chat(
                     // When in edit-select mode, handle navigation and actions
                     {
                         let mut app_guard = app.lock().await;
-                        if app_guard.edit_select_mode {
+                        if app_guard.in_edit_select_mode() {
                             match key.code {
                                 KeyCode::Esc => {
                                     app_guard.exit_edit_select_mode();
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
-                                    if let Some(current) = app_guard.selected_user_message_index {
-                                        let prev = app_guard
+                                    if let Some(current) = app_guard.selected_user_message_index() {
+                                        if let Some(prev) = app_guard
                                             .prev_user_message_index(current)
-                                            .or_else(|| app_guard.last_user_message_index());
-                                        if let Some(prev) = prev {
-                                            app_guard.selected_user_message_index = Some(prev);
+                                            .or_else(|| app_guard.last_user_message_index())
+                                        {
+                                            app_guard.set_selected_user_message_index(prev);
                                             app_guard.scroll_index_into_view(
                                                 prev,
                                                 term_size.width,
                                                 term_size.height,
                                             );
                                         }
-                                    } else {
-                                        app_guard.selected_user_message_index =
-                                            app_guard.last_user_message_index();
+                                    } else if let Some(last) = app_guard.last_user_message_index() {
+                                        app_guard.set_selected_user_message_index(last);
                                     }
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
-                                    if let Some(current) = app_guard.selected_user_message_index {
-                                        let next = app_guard
+                                    if let Some(current) = app_guard.selected_user_message_index() {
+                                        if let Some(next) = app_guard
                                             .next_user_message_index(current)
-                                            .or_else(|| app_guard.first_user_message_index());
-                                        if let Some(next) = next {
-                                            app_guard.selected_user_message_index = Some(next);
+                                            .or_else(|| app_guard.first_user_message_index())
+                                        {
+                                            app_guard.set_selected_user_message_index(next);
                                             app_guard.scroll_index_into_view(
                                                 next,
                                                 term_size.width,
                                                 term_size.height,
                                             );
                                         }
-                                    } else {
-                                        app_guard.selected_user_message_index =
-                                            app_guard.last_user_message_index();
+                                    } else if let Some(last) = app_guard.last_user_message_index() {
+                                        app_guard.set_selected_user_message_index(last);
                                     }
                                 }
                                 KeyCode::Enter => {
                                     // Truncate selected and everything below, put content into input
-                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                    if let Some(idx) = app_guard.selected_user_message_index() {
                                         if idx < app_guard.messages.len()
                                             && app_guard.messages[idx].role == "user"
                                         {
@@ -1060,7 +1070,7 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Char('E') | KeyCode::Char('e') => {
                                     // Edit in place: populate input with content, do NOT truncate
-                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                    if let Some(idx) = app_guard.selected_user_message_index() {
                                         if idx < app_guard.messages.len()
                                             && app_guard.messages[idx].role == "user"
                                         {
@@ -1073,7 +1083,7 @@ pub async fn run_chat(
                                 }
                                 KeyCode::Delete => {
                                     // Delete selected and everything below; do not populate input
-                                    if let Some(idx) = app_guard.selected_user_message_index {
+                                    if let Some(idx) = app_guard.selected_user_message_index() {
                                         if idx < app_guard.messages.len()
                                             && app_guard.messages[idx].role == "user"
                                         {
@@ -1111,13 +1121,13 @@ pub async fn run_chat(
                     // When in block-select mode, handle navigation and actions
                     {
                         let mut app_guard = app.lock().await;
-                        if app_guard.block_select_mode {
+                        if app_guard.in_block_select_mode() {
                             match key.code {
                                 KeyCode::Esc => {
                                     app_guard.exit_block_select_mode();
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
-                                    if let Some(cur) = app_guard.selected_block_index {
+                                    if let Some(cur) = app_guard.selected_block_index() {
                                         let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
@@ -1128,7 +1138,7 @@ pub async fn run_chat(
                                         .len();
                                         if total > 0 {
                                             let next = if cur == 0 { total - 1 } else { cur - 1 };
-                                            app_guard.selected_block_index = Some(next);
+                                            app_guard.set_selected_block_index(next);
                                             // Scroll to block start
                                             let ranges =
                                                 crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
@@ -1161,11 +1171,11 @@ pub async fn run_chat(
                                             }
                                         }
                                     } else {
-                                        app_guard.selected_block_index = Some(0);
+                                        app_guard.set_selected_block_index(0);
                                     }
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
-                                    if let Some(cur) = app_guard.selected_block_index {
+                                    if let Some(cur) = app_guard.selected_block_index() {
                                         let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
@@ -1176,7 +1186,7 @@ pub async fn run_chat(
                                         .len();
                                         if total > 0 {
                                             let next = (cur + 1) % total;
-                                            app_guard.selected_block_index = Some(next);
+                                            app_guard.set_selected_block_index(next);
                                             // Scroll to block start
                                             let ranges =
                                                 crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
@@ -1209,11 +1219,11 @@ pub async fn run_chat(
                                             }
                                         }
                                     } else {
-                                        app_guard.selected_block_index = Some(0);
+                                        app_guard.set_selected_block_index(0);
                                     }
                                 }
                                 KeyCode::Char('c') | KeyCode::Char('C') => {
-                                    if let Some(cur) = app_guard.selected_block_index {
+                                    if let Some(cur) = app_guard.selected_block_index() {
                                         let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
                                             &app_guard.messages,
                                             &app_guard.theme,
@@ -1245,7 +1255,7 @@ pub async fn run_chat(
                                     }
                                 }
                                 KeyCode::Char('s') | KeyCode::Char('S') => {
-                                    if let Some(cur) = app_guard.selected_block_index {
+                                    if let Some(cur) = app_guard.selected_block_index() {
                                         let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&app_guard.messages);
                                         if let Some((content, lang)) = contents.get(cur) {
                                             use chrono::Utc;
@@ -1608,15 +1618,15 @@ pub async fn run_chat(
                         }
                         KeyCode::Esc => {
                             let mut app_guard = app.lock().await;
-                            if app_guard.file_prompt.is_some() {
+                            if app_guard.file_prompt().is_some() {
                                 app_guard.cancel_file_prompt();
                                 continue;
                             }
-                            if app_guard.edit_select_mode {
+                            if app_guard.in_edit_select_mode() {
                                 app_guard.exit_edit_select_mode();
                                 continue;
                             }
-                            if app_guard.in_place_edit_index.is_some() {
+                            if app_guard.in_place_edit_index().is_some() {
                                 app_guard.cancel_in_place_edit();
                                 app_guard.clear_input();
                                 continue;
@@ -1631,7 +1641,7 @@ pub async fn run_chat(
                             // Handle filename prompt (Enter: save if new; Alt+Enter: overwrite)
                             {
                                 let mut app_guard = app.lock().await;
-                                if let Some(prompt) = app_guard.file_prompt.clone() {
+                                if let Some(prompt) = app_guard.file_prompt().cloned() {
                                     let filename = app_guard.get_input_text().trim().to_string();
                                     if filename.is_empty() {
                                         continue;
@@ -1715,7 +1725,7 @@ pub async fn run_chat(
                                 // If editing in place, apply changes to history instead of sending
                                 {
                                     let mut app_guard = app.lock().await;
-                                    if let Some(idx) = app_guard.in_place_edit_index.take() {
+                                    if let Some(idx) = app_guard.take_in_place_edit_index() {
                                         // Apply edit to the selected user message
                                         if idx < app_guard.messages.len()
                                             && app_guard.messages[idx].role == "user"
@@ -1850,13 +1860,16 @@ pub async fn run_chat(
                         {
                             let send_now = {
                                 let app_guard = app.lock().await;
-                                app_guard.compose_mode && app_guard.file_prompt.is_none()
+                                app_guard.compose_mode && app_guard.file_prompt().is_none()
                             };
                             if !send_now {
                                 let mut app_guard = app.lock().await;
-                                app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                                    ta.insert_str("\n");
-                                });
+                                app_guard.apply_textarea_edit_and_recompute(
+                                    term_size.width,
+                                    |ta| {
+                                        ta.insert_str("\n");
+                                    },
+                                );
                                 last_input_layout_update = Instant::now();
                                 continue;
                             }
@@ -1882,12 +1895,13 @@ pub async fn run_chat(
                                 match process_input(&mut app_guard, &input_text) {
                                     CommandResult::Continue => {
                                         let term_size = terminal.size().unwrap_or_default();
-                                        let input_area_height = app_guard
-                                            .calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard.calculate_available_height(
-                                            term_size.height,
-                                            input_area_height,
-                                        );
+                                        let input_area_height =
+                                            app_guard.calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard
+                                            .calculate_available_height(
+                                                term_size.height,
+                                                input_area_height,
+                                            );
                                         app_guard.update_scroll_position(
                                             available_height,
                                             term_size.width,
@@ -1908,14 +1922,16 @@ pub async fn run_chat(
                                     }
                                     CommandResult::ProcessAsMessage(message) => {
                                         app_guard.auto_scroll = true;
-                                        let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                        let (cancel_token, stream_id) =
+                                            app_guard.start_new_stream();
                                         let api_messages = app_guard.add_user_message(message);
-                                        let input_area_height = app_guard
-                                            .calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard.calculate_available_height(
-                                            term_size.height,
-                                            input_area_height,
-                                        );
+                                        let input_area_height =
+                                            app_guard.calculate_input_area_height(term_size.width);
+                                        let available_height = app_guard
+                                            .calculate_available_height(
+                                                term_size.height,
+                                                input_area_height,
+                                            );
                                         app_guard.update_scroll_position(
                                             available_height,
                                             terminal.size().unwrap_or_default().width,

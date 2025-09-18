@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::core::app::App;
+use crate::core::app::{App, UiMode};
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
@@ -15,10 +15,7 @@ pub fn create_test_app() -> App {
         messages: VecDeque::new(),
         input: String::new(),
         input_cursor_position: 0,
-        input_mode: true,
-        edit_select_mode: false,
-        selected_user_message_index: None,
-        in_place_edit_index: None,
+        mode: UiMode::Typing,
         current_response: String::new(),
         client: reqwest::Client::new(),
         model: "test-model".to_string(),
@@ -43,8 +40,6 @@ pub fn create_test_app() -> App {
         current_theme_id: None,
         picker: None,
         picker_mode: None,
-        block_select_mode: false,
-        selected_block_index: None,
         theme_before_picker: None,
         theme_id_before_picker: None,
         model_before_picker: None,
@@ -63,7 +58,6 @@ pub fn create_test_app() -> App {
         prewrap_cache: None,
         status: None,
         status_set_at: None,
-        file_prompt: None,
         startup_requires_provider: false,
         startup_requires_model: false,
         startup_multiple_providers_available: false,

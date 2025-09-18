@@ -17,15 +17,32 @@ use std::{collections::VecDeque, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 
+#[derive(Debug, Clone)]
+pub enum FilePromptKind {
+    Dump,
+    SaveCodeBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilePrompt {
+    pub kind: FilePromptKind,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum UiMode {
+    Typing,
+    EditSelect { selected_index: usize },
+    BlockSelect { block_index: usize },
+    InPlaceEdit { index: usize },
+    FilePrompt(FilePrompt),
+}
+
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
     pub input_cursor_position: usize,
-    pub input_mode: bool,
-    // Edit/select modes
-    pub edit_select_mode: bool,
-    pub selected_user_message_index: Option<usize>,
-    pub in_place_edit_index: Option<usize>,
+    pub mode: UiMode,
     pub current_response: String,
     pub client: Client,
     pub model: String,
@@ -51,9 +68,6 @@ pub struct App {
     pub current_theme_id: Option<String>,
     pub picker: Option<PickerState>,
     pub picker_mode: Option<PickerMode>,
-    // Block select mode (inline, like Ctrl+P for user messages)
-    pub block_select_mode: bool,
-    pub selected_block_index: Option<usize>,
     pub theme_before_picker: Option<Theme>,
     pub theme_id_before_picker: Option<String>,
     // Model picker state
@@ -80,8 +94,6 @@ pub struct App {
     // One-line ephemeral status message (shown in input border)
     pub status: Option<String>,
     pub status_set_at: Option<Instant>,
-    // When present, the input area is used to prompt for a filename
-    pub file_prompt: Option<FilePrompt>,
     // Startup gating flags for initial selection flows
     pub startup_requires_provider: bool,
     pub startup_requires_model: bool,
@@ -100,6 +112,78 @@ pub enum PickerMode {
 }
 
 impl App {
+    pub fn is_input_active(&self) -> bool {
+        matches!(
+            self.mode,
+            UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
+        )
+    }
+
+    pub fn in_edit_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::EditSelect { .. })
+    }
+
+    pub fn selected_user_message_index(&self) -> Option<usize> {
+        if let UiMode::EditSelect { selected_index } = self.mode {
+            Some(selected_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_selected_user_message_index(&mut self, index: usize) {
+        if let UiMode::EditSelect { selected_index } = &mut self.mode {
+            *selected_index = index;
+        }
+    }
+
+    pub fn in_block_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::BlockSelect { .. })
+    }
+
+    pub fn selected_block_index(&self) -> Option<usize> {
+        if let UiMode::BlockSelect { block_index } = self.mode {
+            Some(block_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_selected_block_index(&mut self, index: usize) {
+        if let UiMode::BlockSelect { block_index } = &mut self.mode {
+            *block_index = index;
+        }
+    }
+
+    pub fn in_place_edit_index(&self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    fn set_mode(&mut self, mode: UiMode) {
+        self.mode = mode;
+    }
+
+    pub fn file_prompt(&self) -> Option<&FilePrompt> {
+        if let UiMode::FilePrompt(ref prompt) = self.mode {
+            Some(prompt)
+        } else {
+            None
+        }
+    }
+
+    pub fn take_in_place_edit_index(&mut self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            self.set_mode(UiMode::Typing);
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     /// Returns true if current picker should use alphabetical sorting (A–Z / Z–A)
     fn picker_prefers_alphabetical(&self) -> bool {
         self.picker_mode == Some(PickerMode::Theme)
@@ -196,10 +280,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: Client::new(),
             model: final_model,
@@ -224,8 +305,6 @@ impl App {
             current_theme_id: config.theme.clone(),
             picker: None,
             picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
             model_before_picker: None,
@@ -244,7 +323,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -302,10 +380,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: Client::new(),
             model: String::new(),
@@ -330,8 +405,6 @@ impl App {
             current_theme_id: config.theme.clone(),
             picker: None,
             picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
             model_before_picker: None,
@@ -350,7 +423,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: true,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -496,10 +568,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: reqwest::Client::new(),
             model: "bench".into(),
@@ -524,8 +593,6 @@ impl App {
             current_theme_id: None,
             picker: None,
             picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
             theme_before_picker: None,
             theme_id_before_picker: None,
             model_before_picker: None,
@@ -544,7 +611,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -662,31 +728,25 @@ impl App {
     }
 
     pub fn start_file_prompt_dump(&mut self, filename: String) {
-        self.file_prompt = Some(FilePrompt {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::Dump,
             content: None,
-        });
+        }));
         self.set_input_text(filename);
-        self.input_mode = true;
-        self.in_place_edit_index = None;
-        self.edit_select_mode = false;
-        self.block_select_mode = false;
     }
 
     pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
-        self.file_prompt = Some(FilePrompt {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::SaveCodeBlock,
             content: Some(content),
-        });
+        }));
         self.set_input_text(filename);
-        self.input_mode = true;
-        self.in_place_edit_index = None;
-        self.edit_select_mode = false;
-        self.block_select_mode = false;
     }
 
     pub fn cancel_file_prompt(&mut self) {
-        self.file_prompt = None;
+        if let UiMode::FilePrompt(_) = self.mode {
+            self.set_mode(UiMode::Typing);
+        }
         self.clear_input();
     }
 
@@ -862,40 +922,42 @@ impl App {
 
     /// Enter edit-select mode: lock input and select most recent user message
     pub fn enter_edit_select_mode(&mut self) {
-        self.edit_select_mode = true;
-        self.input_mode = false; // lock input area
-        self.selected_user_message_index = self.last_user_message_index();
+        if let Some(idx) = self.last_user_message_index() {
+            self.set_mode(UiMode::EditSelect {
+                selected_index: idx,
+            });
+        }
     }
 
     /// Exit edit-select mode
     pub fn exit_edit_select_mode(&mut self) {
-        self.edit_select_mode = false;
-        self.input_mode = true; // unlock input area
+        if self.in_edit_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     /// Begin in-place edit of a user message at `index`
     pub fn start_in_place_edit(&mut self, index: usize) {
-        self.in_place_edit_index = Some(index);
-        self.input_mode = true;
+        self.set_mode(UiMode::InPlaceEdit { index });
     }
 
     /// Cancel in-place edit (does not modify history)
     pub fn cancel_in_place_edit(&mut self) {
-        self.in_place_edit_index = None;
+        if matches!(self.mode, UiMode::InPlaceEdit { .. }) {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     /// Enter block select mode: lock input and set selected block index
     pub fn enter_block_select_mode(&mut self, index: usize) {
-        self.block_select_mode = true;
-        self.selected_block_index = Some(index);
-        self.input_mode = false; // lock input area
+        self.set_mode(UiMode::BlockSelect { block_index: index });
     }
 
     /// Exit block select mode and unlock input
     pub fn exit_block_select_mode(&mut self) {
-        self.block_select_mode = false;
-        self.selected_block_index = None;
-        self.input_mode = true; // unlock input area
+        if self.in_block_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     pub fn prepare_retry(
@@ -2017,18 +2079,6 @@ pub(crate) struct PrewrapCache {
     last_start: usize,
     last_len: usize,
     lines: Vec<Line<'static>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum FilePromptKind {
-    Dump,
-    SaveCodeBlock,
-}
-
-#[derive(Debug, Clone)]
-pub struct FilePrompt {
-    pub kind: FilePromptKind,
-    pub content: Option<String>,
 }
 
 fn hash_last_message(messages: &VecDeque<Message>) -> u64 {

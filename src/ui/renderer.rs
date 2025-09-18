@@ -26,9 +26,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let lines = if !app.edit_select_mode && !app.block_select_mode {
+    let lines = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
         app.get_prewrapped_lines_cached(chunks[0].width).clone()
-    } else if app.edit_select_mode {
+    } else if app.in_edit_select_mode() {
         let highlight = app
             .theme
             .streaming_indicator_style
@@ -36,14 +36,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
             &app.messages,
             &app.theme,
-            app.selected_user_message_index,
+            app.selected_user_message_index(),
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
         crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
-    } else if app.block_select_mode {
+    } else if app.in_block_select_mode() {
         let highlight = app
             .theme
             .streaming_indicator_style
@@ -51,7 +51,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
             &app.messages,
             &app.theme,
-            app.selected_block_index,
+            app.selected_block_index(),
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
@@ -101,9 +101,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ""
     };
 
-    let base_title = if app.edit_select_mode {
+    let base_title = if app.in_edit_select_mode() {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
-    } else if app.block_select_mode {
+    } else if app.in_block_select_mode() {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
     } else if app.picker.is_some() {
         // Show specific prompt for picker mode with global shortcuts
@@ -119,9 +119,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
         }
-    } else if app.file_prompt.is_some() {
+    } else if app.file_prompt().is_some() {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
-    } else if app.in_place_edit_index.is_some() {
+    } else if app.in_place_edit_index().is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
     } else if app.compose_mode {
         "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
@@ -250,7 +250,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Set cursor based on wrapped text and linear cursor position
     // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
-    if app.input_mode && available_width > 0 && app.picker.is_none() {
+    if app.is_input_active() && available_width > 0 && app.picker.is_none() {
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             app.get_input_text(),
             app.input_cursor_position,

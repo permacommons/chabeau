@@ -4,6 +4,7 @@ use ratatui::text::Line;
 
 use super::theme::Theme;
 use crate::core::message::Message;
+use crate::ui::links::LinkHotspot;
 
 /// Policy for how tables should behave when they cannot reasonably fit within the terminal width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,7 @@ impl Default for LayoutConfig {
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub lines: Vec<Line<'static>>,
+    pub hotspots: Vec<LinkHotspot>,
 }
 
 pub struct LayoutEngine;
@@ -69,18 +71,27 @@ impl LayoutEngine {
     ) -> Layout {
         if cfg.markdown_enabled {
             // Route through the existing markdown renderer with explicit width when provided.
-            let mut out = Vec::new();
+            let mut out_lines = Vec::new();
+            let mut out_hotspots = Vec::new();
             for msg in messages {
-                let rendered = crate::ui::markdown::render_message_markdown_with_policy(
+                let mut rendered = crate::ui::markdown::render_message_markdown_with_policy(
                     msg,
                     theme,
                     cfg.syntax_enabled,
                     cfg.width,
                     cfg.table_overflow_policy,
                 );
-                out.extend(rendered.lines);
+                let y_offset = out_lines.len() as u16;
+                for hotspot in &mut rendered.hotspots {
+                    hotspot.rect.y += y_offset;
+                }
+                out_lines.extend(rendered.lines);
+                out_hotspots.extend(rendered.hotspots);
             }
-            Layout { lines: out }
+            Layout {
+                lines: out_lines,
+                hotspots: out_hotspots,
+            }
         } else {
             // Plain text fallback (no markdown). Build plain lines, then wrap to width if provided
             // so long lines do not overflow when markdown is disabled.
@@ -88,7 +99,10 @@ impl LayoutEngine {
             if let Some(w) = cfg.width {
                 lines = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, w as u16);
             }
-            Layout { lines }
+            Layout {
+                lines,
+                hotspots: Vec::new(),
+            }
         }
     }
 }

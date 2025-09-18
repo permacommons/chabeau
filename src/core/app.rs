@@ -5,6 +5,7 @@ use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::appearance::{detect_preferred_appearance, Appearance};
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
+use crate::ui::links::{LinkHotspot, UrlOverlay};
 use crate::ui::picker::{PickerItem, PickerState};
 use crate::ui::theme::Theme;
 use crate::utils::logging::LoggingState;
@@ -90,6 +91,9 @@ pub struct App {
     pub startup_env_only: bool,
     // Compose mode: Enter inserts newline; Alt+Enter sends; persists until toggled
     pub compose_mode: bool,
+    // Mouse capture mode for clickable links
+    pub mouse_capture_enabled: bool,
+    pub url_overlay: Option<UrlOverlay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +255,8 @@ impl App {
             exit_requested: false,
             startup_env_only: false,
             compose_mode: false,
+            mouse_capture_enabled: false,
+            url_overlay: None,
         };
 
         // Keep textarea state in sync with the string input initially
@@ -357,6 +363,8 @@ impl App {
             exit_requested: false,
             startup_env_only: false,
             compose_mode: false,
+            mouse_capture_enabled: false,
+            url_overlay: None,
         };
 
         app.set_input_text(String::new());
@@ -367,7 +375,7 @@ impl App {
     /// Return prewrapped chat lines for current state, caching across frames when safe.
     /// Cache is used only in normal mode (no selection/highlight) and invalidated when
     /// width, flags, theme signature, message count, or last message content hash changes.
-    pub fn get_prewrapped_lines_cached(&mut self, width: u16) -> &Vec<Line<'static>> {
+    pub fn get_prewrapped_lines_cached(&mut self, width: u16) -> (&Vec<Line<'static>>, &Vec<LinkHotspot>) {
         let theme_sig = compute_theme_signature(&self.theme);
         let markdown = self.markdown_enabled;
         let syntax = self.syntax_enabled;
@@ -396,25 +404,28 @@ impl App {
         } else if only_last_changed {
             // Fast path: only last message content changed; update tail of cache
             if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
-                let last_lines = if markdown {
+                let last_rendered = if markdown {
                     crate::ui::markdown::render_message_markdown_opts_with_width(
                         last_msg,
                         &self.theme,
                         syntax,
                         Some(width as usize),
                     )
-                    .lines
                 } else {
-                    // Use the layout engine to obtain width-aware wrapped plain text
                     let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
                         &VecDeque::from([last_msg.clone()]),
                         &self.theme,
                         Some(width as usize),
                         syntax,
                     );
-                    layout.lines
+                    crate::ui::markdown::RenderedMessage {
+                        lines: layout.lines,
+                        hotspots: layout.hotspots,
+                    }
                 };
-                // No additional prewrapping since lines already respect width
+                let last_lines = last_rendered.lines;
+                let _last_hotspots = last_rendered.hotspots;
+
                 let start = c.last_start;
                 let old_len = c.last_len;
                 let mut new_buf: Vec<Line<'static>> =
@@ -424,16 +435,22 @@ impl App {
                 c.lines = new_buf;
                 c.last_len = last_lines.len();
                 c.last_msg_hash = last_hash;
+                // Just rebuild hotspots for now, this path is tricky
+                let layout = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
+                    &self.messages,
+                    &self.theme,
+                    markdown,
+                    syntax,
+                    Some(width as usize),
+                );
+                c.hotspots = layout.hotspots;
             } else {
-                // Fallback to full rebuild if something unexpected
                 only_last_changed = false;
             }
         }
 
         if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
-            // Build lines with proper width constraints - this is the semantic approach
-            // The renderer should handle width constraints correctly without needing post-processing
-            let pre =
+            let layout =
                 crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
                     &self.messages,
                     &self.theme,
@@ -441,29 +458,28 @@ impl App {
                     syntax,
                     Some(width as usize),
                 );
-            // Compute last message length to allow fast tail updates
             let (last_start, last_len) = if let Some(last_msg) = self.messages.back() {
-                let last_lines = if markdown {
+                 let last_rendered = if markdown {
                     crate::ui::markdown::render_message_markdown_opts_with_width(
                         last_msg,
                         &self.theme,
                         syntax,
                         Some(width as usize),
                     )
-                    .lines
                 } else {
-                    // Use the layout engine to obtain width-aware wrapped plain text
                     let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
                         &VecDeque::from([last_msg.clone()]),
                         &self.theme,
                         Some(width as usize),
                         syntax,
                     );
-                    layout.lines
+                    crate::ui::markdown::RenderedMessage {
+                        lines: layout.lines,
+                        hotspots: layout.hotspots,
+                    }
                 };
-                // No additional prewrapping needed since lines already respect width
-                let len = last_lines.len();
-                let start = pre.len().saturating_sub(len);
+                let len = last_rendered.lines.len();
+                let start = layout.lines.len().saturating_sub(len);
                 (start, len)
             } else {
                 (0, 0)
@@ -477,12 +493,13 @@ impl App {
                 last_msg_hash: last_hash,
                 last_start,
                 last_len,
-                lines: pre,
+                lines: layout.lines,
+                hotspots: layout.hotspots,
             });
         }
 
-        // Safe unwrap since we just populated if missing
-        &self.prewrap_cache.as_ref().unwrap().lines
+        let cache = self.prewrap_cache.as_ref().unwrap();
+        (&cache.lines, &cache.hotspots)
     }
 
     pub fn invalidate_prewrap_cache(&mut self) {
@@ -551,6 +568,8 @@ impl App {
             exit_requested: false,
             startup_env_only: false,
             compose_mode: false,
+            mouse_capture_enabled: false,
+            url_overlay: None,
         }
     }
 
@@ -558,13 +577,14 @@ impl App {
         &self,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
+        let layout = ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
             &self.messages,
             &self.theme,
             self.markdown_enabled,
             self.syntax_enabled,
             terminal_width,
-        )
+        );
+        layout.lines
     }
 
     pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
@@ -2017,6 +2037,7 @@ pub(crate) struct PrewrapCache {
     last_start: usize,
     last_len: usize,
     lines: Vec<Line<'static>>,
+    pub hotspots: Vec<LinkHotspot>,
 }
 
 #[derive(Debug, Clone)]
@@ -2181,10 +2202,10 @@ mod tests {
             });
         }
         let w = 100u16;
-        let p1 = app.get_prewrapped_lines_cached(w);
+        let (p1, _) = app.get_prewrapped_lines_cached(w);
         assert!(!p1.is_empty());
         let ptr1 = p1.as_ptr();
-        let p2 = app.get_prewrapped_lines_cached(w);
+        let (p2, _) = app.get_prewrapped_lines_cached(w);
         let ptr2 = p2.as_ptr();
         assert_eq!(ptr1, ptr2, "cache should be reused when nothing changed");
     }
@@ -2196,9 +2217,9 @@ mod tests {
             role: "user".into(),
             content: "hello world".into(),
         });
-        let p1 = app.get_prewrapped_lines_cached(80);
+        let (p1, _) = app.get_prewrapped_lines_cached(80);
         let ptr1 = p1.as_ptr();
-        let p2 = app.get_prewrapped_lines_cached(120);
+        let (p2, _) = app.get_prewrapped_lines_cached(120);
         let ptr2 = p2.as_ptr();
         assert_ne!(ptr1, ptr2, "cache should invalidate on width change");
     }
@@ -2301,7 +2322,7 @@ mod tests {
         if let Some(last) = app.messages.back_mut() {
             last.content.push_str(" and now it changed");
         }
-        let second = app.get_prewrapped_lines_cached(width).clone();
+        let (second, _) = app.get_prewrapped_lines_cached(width);
         // Convert to strings and check for wrapping (no line exceeds width)
         let rendered: Vec<String> = second.iter().map(|l| l.to_string()).collect();
         let content_lines: Vec<&String> = rendered.iter().filter(|s| !s.is_empty()).collect();
@@ -2542,7 +2563,7 @@ mod tests {
         let width = 80u16;
 
         // Get the height that the renderer will actually use (prewrapped with width)
-        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
+        let (prewrapped_lines, _) = app.get_prewrapped_lines_cached(width);
         let renderer_height = prewrapped_lines.len() as u16;
 
         // Get the height that scroll calculations currently use
@@ -2632,7 +2653,7 @@ fn main() {
 
         // The key insight: Both block navigation and rendering should use the same cached approach
         // for consistency. In production, block navigation would also use get_prewrapped_lines_cached.
-        let lines = app.get_prewrapped_lines_cached(width);
+        let (lines, _) = app.get_prewrapped_lines_cached(width);
 
         let _block_nav_offset = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
             lines,
@@ -2679,7 +2700,7 @@ Some additional text after the table."#;
         let width = 40u16;
 
         // Get the height that the renderer will actually use (prewrapped with narrow width)
-        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
+        let (prewrapped_lines, _) = app.get_prewrapped_lines_cached(width);
         let renderer_height = prewrapped_lines.len() as u16;
 
         // Get the height that scroll calculations currently use (widthless, then scroll heuristic)
@@ -2740,7 +2761,8 @@ Some additional text after the table."#;
             }
 
             // The key test: prewrap cache and scroll calculation should give same height
-            let prewrap_height = app.get_prewrapped_lines_cached(width).len() as u16;
+            let (prewrapped_lines, _) = app.get_prewrapped_lines_cached(width);
+            let prewrap_height = prewrapped_lines.len() as u16;
             let scroll_calc_height = app.calculate_wrapped_line_count(width);
 
             assert_eq!(

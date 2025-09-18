@@ -30,6 +30,7 @@ tui-textarea = "0.7"
 syntect = "5"
 unicode-width = "0.2.0"
 memchr = "2.7"
+open = "5.0.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

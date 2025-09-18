@@ -70,6 +70,8 @@ pub fn create_test_app() -> App {
         exit_requested: false,
         startup_env_only: false,
         compose_mode: false,
+        mouse_capture_enabled: false,
+        url_overlay: None,
     }
 }
 

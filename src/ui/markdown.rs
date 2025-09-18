@@ -1,7 +1,9 @@
 #![allow(clippy::items_after_test_module)]
 use crate::core::message::Message;
+use crate::ui::links::LinkHotspot;
 use crate::ui::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
@@ -23,6 +25,14 @@ struct TableState {
 /// Description of a rendered message (line-based), used by the TUI renderer.
 pub struct RenderedMessage {
     pub lines: Vec<Line<'static>>,
+    pub hotspots: Vec<LinkHotspot>,
+}
+
+#[derive(Clone, Debug)]
+struct RichSpan {
+    content: String,
+    style: Style,
+    link_url: Option<String>,
 }
 
 /// Markdown renderer using pulldown-cmark with theming.
@@ -128,7 +138,10 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
     if !out.is_empty() {
         out.push(Line::from(""));
     }
-    RenderedMessage { lines: out }
+    RenderedMessage {
+        lines: out,
+        hotspots: Vec::new(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,11 +175,13 @@ fn render_with_parser_role_and_width_policy(
     let parser = Parser::new_ext(content, options);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut hotspots: Vec<LinkHotspot> = Vec::new();
 
-    // Inline buffer for current line
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    // Buffer for the current paragraph/heading/list item
+    let mut current_rich_spans: Vec<RichSpan> = Vec::new();
     // Style stack for inline formatting
     let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
+    let mut current_link_url: Option<String> = None;
 
     // List handling
     let mut list_stack: Vec<ListKind> = Vec::new();
@@ -186,18 +201,30 @@ fn render_with_parser_role_and_width_policy(
                 Tag::Paragraph => {
                     if role == RoleKind::User {
                         if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                            current_rich_spans.push(RichSpan {
+                                content: "You: ".to_string(),
+                                style: theme.user_prefix_style,
+                                link_url: None,
+                            });
                             did_prefix_user = true;
                         } else {
-                            current_spans.push(Span::raw("     "));
+                            current_rich_spans.push(RichSpan {
+                                content: "     ".to_string(),
+                                style: Style::default(),
+                                link_url: None,
+                            });
                         }
                     }
                 }
                 Tag::Heading { level, .. } => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let style = theme.md_heading_style(level as u8);
                     if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
                     style_stack.push(style);
@@ -212,7 +239,7 @@ fn render_with_parser_role_and_width_policy(
                     });
                 }
                 Tag::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
                         ListKind::Unordered => "- ".to_string(),
                         ListKind::Ordered(_n) => {
@@ -226,10 +253,18 @@ fn render_with_parser_role_and_width_policy(
                         }
                     };
                     if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
+                    current_rich_spans.push(RichSpan {
+                        content: marker,
+                        style: theme.md_list_marker_style(),
+                        link_url: None,
+                    });
                 }
                 Tag::CodeBlock(kind) => {
                     in_code_block = Some(match kind {
@@ -262,12 +297,13 @@ fn render_with_parser_role_and_width_policy(
                         .add_modifier(Modifier::DIM);
                     style_stack.push(new);
                 }
-                Tag::Link { .. } => {
+                Tag::Link { dest_url, .. } => {
                     let new = theme.md_link_style();
                     style_stack.push(new);
+                    current_link_url = Some(dest_url.to_string());
                 }
                 Tag::Table(_) => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     table_state = Some(TableState::new());
                 }
                 Tag::TableHead => {
@@ -290,44 +326,39 @@ fn render_with_parser_role_and_width_policy(
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
                     if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
+                        if !current_rich_spans.is_empty() {
+                            let (wrapped_lines, new_hotspots) = wrap_rich_spans_to_width(
+                                &current_rich_spans,
+                                w,
+                                lines.len(),
+                                role == RoleKind::User,
+                            );
+                            lines.extend(wrapped_lines);
+                            hotspots.extend(new_hotspots);
+                            current_rich_spans.clear();
                         }
                     } else {
-                        flush_current_line(&mut lines, &mut current_spans);
+                        flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     }
                     lines.push(Line::from(""));
                 }
                 TagEnd::Heading(_level) => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::BlockQuote => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::List(_start) => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     list_stack.pop();
                 }
                 TagEnd::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 }
                 TagEnd::CodeBlock => {
                     let joined = code_block_lines.join("\n");
@@ -359,8 +390,12 @@ fn render_with_parser_role_and_width_policy(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                     style_stack.pop();
+                }
+                TagEnd::Link => {
+                    style_stack.pop();
+                    current_link_url = None;
                 }
                 TagEnd::Table => {
                     if let Some(table) = table_state.take() {
@@ -402,38 +437,49 @@ fn render_with_parser_role_and_width_policy(
                     );
                     table.add_span(span);
                 } else {
-                    current_spans.push(Span::styled(
-                        detab(&text),
-                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    ))
+                    current_rich_spans.push(RichSpan {
+                        content: detab(&text),
+                        style: *style_stack.last().unwrap_or(&base_text_style(role, theme)),
+                        link_url: current_link_url.clone(),
+                    });
                 }
             }
             Event::Code(code) => {
                 let s = theme.md_inline_code_style();
-                let span = Span::styled(detab(&code), s);
                 if let Some(ref mut table) = table_state {
+                    let span = Span::styled(detab(&code), s);
                     table.add_span(span);
                 } else {
-                    current_spans.push(span);
+                    current_rich_spans.push(RichSpan {
+                        content: detab(&code),
+                        style: s,
+                        link_url: current_link_url.clone(),
+                    });
                 }
             }
             Event::SoftBreak => {
-                // Treat soft breaks as new lines
-                flush_current_line(&mut lines, &mut current_spans);
-                // For user messages, indent continuation lines
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 if role == RoleKind::User && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
+                    current_rich_spans.push(RichSpan {
+                        content: "     ".to_string(),
+                        style: Style::default(),
+                        link_url: None,
+                    });
                 }
             }
             Event::HardBreak => {
-                flush_current_line(&mut lines, &mut current_spans);
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
             }
             Event::Rule => {
-                flush_current_line(&mut lines, &mut current_spans);
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 lines.push(Line::from(""));
             }
             Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
+                current_rich_spans.push(RichSpan {
+                    content: "[ ] ".to_string(),
+                    style: theme.md_list_marker_style(),
+                    link_url: None,
+                });
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 if let Some(ref mut table) = table_state {
@@ -442,13 +488,11 @@ fn render_with_parser_role_and_width_policy(
                     }
                 }
             }
-            Event::FootnoteReference(_) => {
-                // Ignore advanced/HTML/Math for TUI rendering
-            }
+            Event::FootnoteReference(_) => {}
         }
     }
 
-    flush_current_line(&mut lines, &mut current_spans);
+    flush_current_rich_line(&mut lines, &mut current_rich_spans);
     if !lines.is_empty()
         && lines
             .last()
@@ -458,7 +502,7 @@ fn render_with_parser_role_and_width_policy(
         lines.push(Line::from(""));
     }
 
-    RenderedMessage { lines }
+    RenderedMessage { lines, hotspots }
 }
 
 /// Render message and also compute local code block ranges (start line index, len, content).
@@ -486,7 +530,7 @@ pub fn render_message_with_ranges(
     } else {
         RoleKind::Assistant
     };
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_rich_spans: Vec<RichSpan> = Vec::new();
     let mut style_stack: Vec<Style> = vec![base_text_style_bool(is_user, theme)];
     let mut list_stack: Vec<ListKind> = Vec::new();
     let mut in_code_block: Option<String> = None;
@@ -499,18 +543,30 @@ pub fn render_message_with_ranges(
                 Tag::Paragraph => {
                     if is_user {
                         if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                            current_rich_spans.push(RichSpan {
+                                content: "You: ".to_string(),
+                                style: theme.user_prefix_style,
+                                link_url: None,
+                            });
                             did_prefix_user = true;
                         } else {
-                            current_spans.push(Span::raw("     "));
+                            current_rich_spans.push(RichSpan {
+                                content: "     ".to_string(),
+                                style: Style::default(),
+                                link_url: None,
+                            });
                         }
                     }
                 }
                 Tag::Heading { level, .. } => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let style = theme.md_heading_style(level as u8);
                     if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
                     style_stack.push(style);
@@ -523,7 +579,7 @@ pub fn render_message_with_ranges(
                     });
                 }
                 Tag::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
                         ListKind::Unordered => "- ".to_string(),
                         ListKind::Ordered(_n) => {
@@ -537,10 +593,18 @@ pub fn render_message_with_ranges(
                         }
                     };
                     if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
+                    current_rich_spans.push(RichSpan {
+                        content: marker,
+                        style: theme.md_list_marker_style(),
+                        link_url: None,
+                    });
                 }
                 Tag::CodeBlock(kind) => {
                     in_code_block = Some(match kind {
@@ -575,25 +639,25 @@ pub fn render_message_with_ranges(
             },
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                 }
                 TagEnd::Heading(_level) => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::BlockQuote => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::List(_start) => {
-                    flush_current_line(&mut lines, &mut current_spans);
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     list_stack.pop();
                 }
-                TagEnd::Item => flush_current_line(&mut lines, &mut current_spans),
+                TagEnd::Item => flush_current_rich_line(&mut lines, &mut current_rich_spans),
                 TagEnd::CodeBlock => {
                     let start = lines.len();
                     for l in code_block_lines.drain(..) {
@@ -626,37 +690,50 @@ pub fn render_message_with_ranges(
                         code_block_lines.push(detab(l).to_string());
                     }
                 } else {
-                    current_spans.push(Span::styled(
-                        detab(&text),
-                        *style_stack
+                    current_rich_spans.push(RichSpan {
+                        content: detab(&text),
+                        style: *style_stack
                             .last()
                             .unwrap_or(&base_text_style_bool(is_user, theme)),
-                    ))
+                        link_url: None,
+                    });
                 }
             }
             Event::Code(code) => {
                 let s = theme.md_inline_code_style();
-                current_spans.push(Span::styled(detab(&code), s));
+                current_rich_spans.push(RichSpan {
+                    content: detab(&code),
+                    style: s,
+                    link_url: None,
+                });
             }
             Event::SoftBreak => {
-                flush_current_line(&mut lines, &mut current_spans);
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 if is_user && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
+                    current_rich_spans.push(RichSpan {
+                        content: "     ".to_string(),
+                        style: Style::default(),
+                        link_url: None,
+                    });
                 }
             }
-            Event::HardBreak => flush_current_line(&mut lines, &mut current_spans),
+            Event::HardBreak => flush_current_rich_line(&mut lines, &mut current_rich_spans),
             Event::Rule => {
-                flush_current_line(&mut lines, &mut current_spans);
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 lines.push(Line::from(""));
             }
             Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
+                current_rich_spans.push(RichSpan {
+                    content: "[ ] ".to_string(),
+                    style: theme.md_list_marker_style(),
+                    link_url: None,
+                });
             }
             Event::Html(_) | Event::InlineHtml(_) | Event::FootnoteReference(_) => {}
         }
     }
 
-    flush_current_line(&mut lines, &mut current_spans);
+    flush_current_rich_line(&mut lines, &mut current_rich_spans);
     if !lines.is_empty()
         && lines
             .last()
@@ -713,16 +790,25 @@ fn render_message_with_ranges_with_width_and_policy(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut ranges: Vec<(usize, usize, String)> = Vec::new();
+    let mut hotspots: Vec<LinkHotspot> = Vec::new();
 
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    // Buffer for the current paragraph/heading/list item
+    let mut current_rich_spans: Vec<RichSpan> = Vec::new();
+    // Style stack for inline formatting
     let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
+    let mut current_link_url: Option<String> = None;
+
+    // List handling
     let mut list_stack: Vec<ListKind> = Vec::new();
-    let mut in_code_block: Option<String> = None;
+    // Code block handling
+    let mut in_code_block: Option<String> = None; // language hint
     let mut code_block_lines: Vec<String> = Vec::new();
+    // Table handling
     let mut table_state: Option<TableState> = None;
 
+    // User prefix handling
     let is_user = role == RoleKind::User;
-    let mut did_prefix_user = role != RoleKind::User;
+    let mut did_prefix_user = role != RoleKind::User; // only user gets prefix
 
     for event in parser {
         match event {
@@ -730,43 +816,37 @@ fn render_message_with_ranges_with_width_and_policy(
                 Tag::Paragraph => {
                     if role == RoleKind::User {
                         if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                            current_rich_spans.push(RichSpan {
+                                content: "You: ".to_string(),
+                                style: theme.user_prefix_style,
+                                link_url: None,
+                            });
                             did_prefix_user = true;
                         } else {
-                            current_spans.push(Span::raw("     "));
+                            current_rich_spans.push(RichSpan {
+                                content: "     ".to_string(),
+                                style: Style::default(),
+                                link_url: None,
+                            });
                         }
                     }
                 }
                 Tag::Heading { level, .. } => {
-                    // Flush existing and start heading style
-                    if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        }
-                    } else if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let style = theme.md_heading_style(level as u8);
                     if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
                     style_stack.push(style);
                 }
-                Tag::BlockQuote => style_stack.push(theme.md_blockquote_style()),
+                Tag::BlockQuote => {
+                    style_stack.push(theme.md_blockquote_style());
+                }
                 Tag::List(start) => {
                     list_stack.push(match start {
                         Some(n) => ListKind::Ordered(n),
@@ -774,26 +854,7 @@ fn render_message_with_ranges_with_width_and_policy(
                     });
                 }
                 Tag::Item => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
                         ListKind::Unordered => "- ".to_string(),
                         ListKind::Ordered(_n) => {
@@ -807,10 +868,18 @@ fn render_message_with_ranges_with_width_and_policy(
                         }
                     };
                     if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        current_rich_spans.push(RichSpan {
+                            content: "You: ".to_string(),
+                            style: theme.user_prefix_style,
+                            link_url: None,
+                        });
                         did_prefix_user = true;
                     }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
+                    current_rich_spans.push(RichSpan {
+                        content: marker,
+                        style: theme.md_list_marker_style(),
+                        link_url: None,
+                    });
                 }
                 Tag::CodeBlock(kind) => {
                     in_code_block = Some(match kind {
@@ -819,49 +888,37 @@ fn render_message_with_ranges_with_width_and_policy(
                     });
                     code_block_lines.clear();
                 }
-                Tag::Emphasis => style_stack.push(
-                    style_stack
+                Tag::Emphasis => {
+                    let new = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Tag::Strong => style_stack.push(
-                    style_stack
+                        .add_modifier(Modifier::ITALIC);
+                    style_stack.push(new);
+                }
+                Tag::Strong => {
+                    let new = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Tag::Strikethrough => style_stack.push(
-                    style_stack
+                        .add_modifier(Modifier::BOLD);
+                    style_stack.push(new);
+                }
+                Tag::Strikethrough => {
+                    let new = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::DIM),
-                ),
-                Tag::Link { .. } => style_stack.push(theme.md_link_style()),
+                        .add_modifier(Modifier::DIM);
+                    style_stack.push(new);
+                }
+                Tag::Link { dest_url, .. } => {
+                    let new = theme.md_link_style();
+                    style_stack.push(new);
+                    current_link_url = Some(dest_url.to_string());
+                }
                 Tag::Table(_) => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     table_state = Some(TableState::new());
                 }
                 Tag::TableHead => {
@@ -884,72 +941,41 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
                     if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
+                        if !current_rich_spans.is_empty() {
+                            let (wrapped_lines, new_hotspots) = wrap_rich_spans_to_width(
+                                &current_rich_spans,
+                                w,
+                                lines.len(),
+                                role == RoleKind::User,
+                            );
+                            lines.extend(wrapped_lines);
+                            hotspots.extend(new_hotspots);
+                            current_rich_spans.clear();
                         }
-                    } else if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
+                    } else {
+                        flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     }
                     lines.push(Line::from(""));
                 }
                 TagEnd::Heading(_level) => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::BlockQuote => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     style_stack.pop();
                 }
                 TagEnd::List(_start) => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                     lines.push(Line::from(""));
                     list_stack.pop();
                 }
                 TagEnd::Item => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 }
                 TagEnd::CodeBlock => {
-                    // Capture start before pushing code block lines
                     let start = lines.len();
                     let joined = code_block_lines.join("\n");
                     if syntax_enabled {
@@ -984,8 +1010,12 @@ fn render_message_with_ranges_with_width_and_policy(
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                     style_stack.pop();
+                }
+                TagEnd::Link => {
+                    style_stack.pop();
+                    current_link_url = None;
                 }
                 TagEnd::Table => {
                     if let Some(table) = table_state.take() {
@@ -1027,84 +1057,49 @@ fn render_message_with_ranges_with_width_and_policy(
                     );
                     table.add_span(span);
                 } else {
-                    current_spans.push(Span::styled(
-                        detab(&text),
-                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    ))
+                    current_rich_spans.push(RichSpan {
+                        content: detab(&text),
+                        style: *style_stack.last().unwrap_or(&base_text_style(role, theme)),
+                        link_url: current_link_url.clone(),
+                    });
                 }
             }
             Event::Code(code) => {
                 let s = theme.md_inline_code_style();
-                let span = Span::styled(detab(&code), s);
                 if let Some(ref mut table) = table_state {
+                    let span = Span::styled(detab(&code), s);
                     table.add_span(span);
                 } else {
-                    current_spans.push(span);
+                    current_rich_spans.push(RichSpan {
+                        content: detab(&code),
+                        style: s,
+                        link_url: current_link_url.clone(),
+                    });
                 }
             }
             Event::SoftBreak => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for (i, segs) in wrapped.into_iter().enumerate() {
-                            if i == 0 {
-                                lines.push(Line::from(segs));
-                            } else if role == RoleKind::User {
-                                let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                with_indent.push(Span::raw("     "));
-                                with_indent.extend(segs);
-                                lines.push(Line::from(with_indent));
-                            } else {
-                                lines.push(Line::from(segs));
-                            }
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 if role == RoleKind::User && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
+                    current_rich_spans.push(RichSpan {
+                        content: "     ".to_string(),
+                        style: Style::default(),
+                        link_url: None,
+                    });
                 }
             }
             Event::HardBreak => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for (i, segs) in wrapped.into_iter().enumerate() {
-                            if i == 0 {
-                                lines.push(Line::from(segs));
-                            } else if role == RoleKind::User {
-                                let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                with_indent.push(Span::raw("     "));
-                                with_indent.extend(segs);
-                                lines.push(Line::from(with_indent));
-                            } else {
-                                lines.push(Line::from(segs));
-                            }
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
             }
             Event::Rule => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for segs in wrapped.into_iter() {
-                            lines.push(Line::from(segs));
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                flush_current_rich_line(&mut lines, &mut current_rich_spans);
                 lines.push(Line::from(""));
             }
             Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
+                current_rich_spans.push(RichSpan {
+                    content: "[ ] ".to_string(),
+                    style: theme.md_list_marker_style(),
+                    link_url: None,
+                });
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 if let Some(ref mut table) = table_state {
@@ -1117,25 +1112,7 @@ fn render_message_with_ranges_with_width_and_policy(
         }
     }
 
-    if !current_spans.is_empty() {
-        if let Some(w) = terminal_width {
-            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-            for (i, segs) in wrapped.into_iter().enumerate() {
-                if i == 0 {
-                    lines.push(Line::from(segs));
-                } else if role == RoleKind::User {
-                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                    with_indent.push(Span::raw("     "));
-                    with_indent.extend(segs);
-                    lines.push(Line::from(with_indent));
-                } else {
-                    lines.push(Line::from(segs));
-                }
-            }
-        } else {
-            lines.push(Line::from(std::mem::take(&mut current_spans)));
-        }
-    }
+    flush_current_rich_line(&mut lines, &mut current_rich_spans);
     if !lines.is_empty()
         && lines
             .last()
@@ -1144,6 +1121,7 @@ fn render_message_with_ranges_with_width_and_policy(
     {
         lines.push(Line::from(""));
     }
+
     (lines, ranges)
 }
 
@@ -1913,7 +1891,7 @@ End of table."###
         let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
             &messages, &theme, true, true, Some(terminal_width as usize)
         );
-        let line_strings: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let line_strings: Vec<String> = lines.lines.iter().map(|l| l.to_string()).collect();
 
         println!("=== PROPERLY RENDERED TABLE ===");
         for (i, line) in line_strings.iter().enumerate() {
@@ -3349,126 +3327,146 @@ fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
     }
 }
 
-fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Span<'static>>) {
-    if !current_spans.is_empty() {
-        lines.push(Line::from(std::mem::take(current_spans)));
+fn flush_current_rich_line(
+    lines: &mut Vec<Line<'static>>,
+    current_rich_spans: &mut Vec<RichSpan>,
+) {
+    if !current_rich_spans.is_empty() {
+        // For now, just convert to spans and discard link info.
+        // Hotspot generation will happen in wrap_rich_spans_to_width.
+        let spans: Vec<Span> = current_rich_spans
+            .iter()
+            .map(|rs| Span::styled(rs.content.clone(), rs.style))
+            .collect();
+        lines.push(Line::from(spans));
+        current_rich_spans.clear();
     }
+}
+
+fn wrap_rich_spans_to_width(
+    rich_spans: &[RichSpan],
+    max_width: usize,
+    start_y: usize,
+    is_user: bool,
+) -> (Vec<Line<'static>>, Vec<LinkHotspot>) {
+    let mut lines = Vec::new();
+    let mut hotspots = Vec::new();
+    if rich_spans.is_empty() {
+        return (lines, hotspots);
+    }
+
+    let mut current_line_spans = Vec::new();
+    let mut current_line_width = 0;
+    let mut current_y = start_y;
+    let indent = if is_user { 5 } else { 0 };
+
+    for rich_span in rich_spans {
+        let words = rich_span.content.split(' ').collect::<Vec<&str>>();
+        for (i, word) in words.iter().enumerate() {
+            let mut current_word = word.to_string();
+            while !current_word.is_empty() {
+                let word_width = UnicodeWidthStr::width(current_word.as_str());
+
+                if current_line_width + word_width > max_width {
+                    if current_line_width > indent {
+                        lines.push(Line::from(
+                            current_line_spans.drain(..).collect::<Vec<Span>>(),
+                        ));
+                        current_line_width = indent;
+                        current_y += 1;
+                        if is_user {
+                            current_line_spans.push(Span::raw("     "));
+                        }
+                    }
+
+                    // Word is longer than max_width, so we need to break it
+                    let mut break_pos = 0;
+                    let mut part_width = 0;
+                    for (j, c) in current_word.char_indices() {
+                        let char_width = UnicodeWidthStr::width(c.to_string().as_str());
+                        if current_line_width + part_width + char_width > max_width {
+                            break;
+                        }
+                        part_width += char_width;
+                        break_pos = j + c.len_utf8();
+                    }
+
+                    if break_pos == 0 {
+                        // if a single character is wider than max_width
+                        break_pos = current_word
+                            .char_indices()
+                            .next()
+                            .map_or(0, |(j, c)| j + c.len_utf8());
+                    }
+
+                    let part = current_word[..break_pos].to_string();
+                    let x = current_line_width as u16;
+                    let y = current_y as u16;
+                    let span = Span::styled(part.clone(), rich_span.style);
+
+                    if let Some(url) = &rich_span.link_url {
+                        hotspots.push(LinkHotspot {
+                            url: url.clone(),
+                            rect: Rect::new(x, y, UnicodeWidthStr::width(part.as_str()) as u16, 1),
+                        });
+                    }
+
+                    current_line_spans.push(span);
+                    lines.push(Line::from(
+                        current_line_spans.drain(..).collect::<Vec<Span>>(),
+                    ));
+                    current_line_width = indent;
+                    current_y += 1;
+                    if is_user {
+                        current_line_spans.push(Span::raw("     "));
+                    }
+
+                    current_word = current_word[break_pos..].to_string();
+                } else {
+                    let x = current_line_width as u16;
+                    let y = current_y as u16;
+                    let span = Span::styled(current_word.clone(), rich_span.style);
+
+                    if let Some(url) = &rich_span.link_url {
+                        hotspots.push(LinkHotspot {
+                            url: url.clone(),
+                            rect: Rect::new(x, y, word_width as u16, 1),
+                        });
+                    }
+
+                    current_line_spans.push(span);
+                    current_line_width += word_width;
+                    current_word.clear();
+                }
+            }
+
+            if i < words.len() - 1 {
+                if current_line_width + 1 > max_width {
+                    lines.push(Line::from(
+                        current_line_spans.drain(..).collect::<Vec<Span>>(),
+                    ));
+                    current_line_width = indent;
+                    current_y += 1;
+                    if is_user {
+                        current_line_spans.push(Span::raw("     "));
+                    }
+                }
+                current_line_spans.push(Span::raw(" "));
+                current_line_width += 1;
+            }
+        }
+    }
+
+    if !current_line_spans.is_empty() {
+        lines.push(Line::from(current_line_spans));
+    }
+
+    (lines, hotspots)
 }
 
 fn detab(s: &str) -> String {
     // Simple, predictable detab: replace tabs with 4 spaces
     s.replace('\t', "    ")
-}
-
-// Shared helper: wrap generic paragraph spans (non-table) to width, preserving styles.
-// Used by both the main renderer and width-aware range computation to ensure consistency.
-fn wrap_spans_to_width_generic_shared(
-    spans: &[Span<'static>],
-    max_width: usize,
-) -> Vec<Vec<Span<'static>>> {
-    const MAX_UNBREAKABLE_LENGTH: usize = 30;
-    if spans.is_empty() {
-        return vec![Vec::new()];
-    }
-    let mut wrapped_lines = Vec::new();
-    let mut current_line: Vec<Span<'static>> = Vec::new();
-    let mut current_width = 0usize;
-    // Break incoming spans into owned (text, style) parts
-    let mut parts: Vec<(String, Style)> = spans
-        .iter()
-        .map(|s| (s.content.to_string(), s.style))
-        .collect();
-    for (mut text, style) in parts.drain(..) {
-        while !text.is_empty() {
-            let mut chars_to_fit = 0usize;
-            let mut width_so_far = 0usize;
-            let mut last_break_pos: Option<(usize, usize)> = None;
-            for (char_pos, ch) in text.char_indices() {
-                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                if current_width + width_so_far + cw <= max_width {
-                    width_so_far += cw;
-                    chars_to_fit = char_pos + ch.len_utf8();
-                    if ch.is_whitespace() {
-                        last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
-                    }
-                } else {
-                    break;
-                }
-            }
-            if chars_to_fit == 0 {
-                // Nothing fits on this line
-                if !current_line.is_empty() {
-                    wrapped_lines.push(std::mem::take(&mut current_line));
-                    current_width = 0;
-                    continue;
-                } else {
-                    // Consider unbreakable word
-                    let next_word_end = text.find(char::is_whitespace).unwrap_or(text.len());
-                    let next_word = &text[..next_word_end];
-                    let ww = UnicodeWidthStr::width(next_word);
-                    if ww <= MAX_UNBREAKABLE_LENGTH {
-                        current_line.push(Span::styled(next_word.to_string(), style));
-                        current_width += ww;
-                        if next_word_end < text.len() {
-                            text = text[next_word_end..].to_string();
-                        } else {
-                            break;
-                        }
-                    } else {
-                        // Hard break the very long token
-                        let mut forced_width = 0usize;
-                        let mut forced_end = text.len();
-                        for (char_pos, ch) in text.char_indices() {
-                            let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                            if forced_width + cw > max_width {
-                                forced_end = char_pos;
-                                break;
-                            }
-                            forced_width += cw;
-                        }
-                        if forced_end > 0 {
-                            let chunk = text[..forced_end].to_string();
-                            current_line.push(Span::styled(chunk, style));
-                            current_width = forced_width;
-                            text = text[forced_end..].to_string();
-                            if !text.is_empty() {
-                                wrapped_lines.push(std::mem::take(&mut current_line));
-                                current_width = 0;
-                            }
-                        } else {
-                            current_line.push(Span::styled(text.clone(), style));
-                            current_width += UnicodeWidthStr::width(text.as_str());
-                            break;
-                        }
-                    }
-                }
-            } else if chars_to_fit >= text.len() {
-                current_line.push(Span::styled(text.clone(), style));
-                current_width += width_so_far;
-                break;
-            } else {
-                let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
-                let left = text[..break_pos].trim_end();
-                if !left.is_empty() {
-                    current_line.push(Span::styled(left.to_string(), style));
-                    current_width += UnicodeWidthStr::width(left);
-                }
-                text = text[break_pos..].trim_start().to_string();
-                if !text.is_empty() {
-                    wrapped_lines.push(std::mem::take(&mut current_line));
-                    current_width = 0;
-                }
-            }
-        }
-    }
-    if !current_line.is_empty() {
-        wrapped_lines.push(current_line);
-    }
-    if wrapped_lines.is_empty() {
-        vec![Vec::new()]
-    } else {
-        wrapped_lines
-    }
 }
 
 /// Build display lines for all messages using markdown rendering

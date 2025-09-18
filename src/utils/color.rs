@@ -263,18 +263,34 @@ mod tests {
 
     #[test]
     fn detects_truecolor_from_env() {
+        let original_colorterm = std::env::var("COLORTERM").ok();
         std::env::set_var("COLORTERM", "truecolor");
         assert_eq!(detect_color_depth(), ColorDepth::Truecolor);
-        std::env::remove_var("COLORTERM");
+        if let Some(val) = original_colorterm {
+            std::env::set_var("COLORTERM", val);
+        } else {
+            std::env::remove_var("COLORTERM");
+        }
     }
 
     #[test]
     fn detects_256_from_term() {
+        let original_colorterm = std::env::var("COLORTERM").ok();
+        let original_term = std::env::var("TERM").ok();
+
         // Ensure COLORTERM doesn't force truecolor in this environment
         std::env::remove_var("COLORTERM");
         std::env::set_var("TERM", "xterm-256color");
         assert_eq!(detect_color_depth(), ColorDepth::X256);
-        std::env::remove_var("TERM");
+
+        if let Some(val) = original_colorterm {
+            std::env::set_var("COLORTERM", val);
+        }
+        if let Some(val) = original_term {
+            std::env::set_var("TERM", val);
+        } else {
+            std::env::remove_var("TERM");
+        }
     }
 
     #[test]

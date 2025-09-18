@@ -15,10 +15,11 @@ use crate::{
 };
 use futures_util::StreamExt;
 use memchr::memchr;
+use open;
 use ratatui::crossterm::{
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
-        MouseEventKind,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -315,7 +316,12 @@ pub async fn run_chat(
     // Setup terminal only after successful app creation
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        event::EnableMouseCapture
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -379,6 +385,18 @@ pub async fn run_chat(
                     {
                         let mut app_guard = app.lock().await;
                         app_guard.clear_status();
+                        continue;
+                    }
+                    // Toggle mouse capture with F2
+                    if matches!(key.code, KeyCode::F(2)) {
+                        let mut app_guard = app.lock().await;
+                        app_guard.mouse_capture_enabled = !app_guard.mouse_capture_enabled;
+                        let status = if app_guard.mouse_capture_enabled {
+                            "Mouse capture enabled"
+                        } else {
+                            "Mouse capture disabled"
+                        };
+                        app_guard.set_status(status.to_string());
                         continue;
                     }
                     // Toggle compose mode with F4
@@ -894,7 +912,8 @@ pub async fn run_chat(
                                     let next = if cur == 0 { total - 1 } else { cur - 1 };
                                     app_guard.selected_block_index = Some(next);
                                     if let Some((start, _len, _)) = blocks.get(next) {
-                                        let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                        let layout = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                        let lines = &layout.lines;
                                         let input_area_height =
                                             app_guard.calculate_input_area_height(term_size.width);
                                         let available_height = term_size
@@ -902,7 +921,7 @@ pub async fn run_chat(
                                             .saturating_sub(input_area_height + 2)
                                             .saturating_sub(1);
                                         let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                            &lines,
+                                            lines,
                                             term_size.width,
                                             available_height,
                                             *start,
@@ -922,7 +941,8 @@ pub async fn run_chat(
                             let last = blocks.len().saturating_sub(1);
                             app_guard.enter_block_select_mode(last);
                             if let Some((start, _len, _)) = blocks.get(last) {
-                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                let layout = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                let lines = &layout.lines;
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(term_size.width);
                                 let available_height = term_size
@@ -930,7 +950,7 @@ pub async fn run_chat(
                                     .saturating_sub(input_area_height + 2)
                                     .saturating_sub(1);
                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
+                                                    lines,
                                                     term_size.width,
                                                     available_height,
                                                     *start,
@@ -1139,7 +1159,8 @@ pub async fn run_chat(
                                                     app_guard.syntax_enabled,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                                let layout = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                                let lines = &layout.lines;
                                                 let input_area_height = app_guard
                                                     .calculate_input_area_height(term_size.width);
                                                 let available_height = term_size
@@ -1147,7 +1168,7 @@ pub async fn run_chat(
                                                     .saturating_sub(input_area_height + 2)
                                                     .saturating_sub(1);
                                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
+                                                    lines,
                                                     term_size.width,
                                                     available_height,
                                                     *start,
@@ -1187,7 +1208,8 @@ pub async fn run_chat(
                                                     app_guard.syntax_enabled,
                                                 );
                                             if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                                let layout = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
+                                                let lines = &layout.lines;
                                                 let input_area_height = app_guard
                                                     .calculate_input_area_height(term_size.width);
                                                 let available_height = term_size
@@ -1195,7 +1217,7 @@ pub async fn run_chat(
                                                     .saturating_sub(input_area_height + 2)
                                                     .saturating_sub(1);
                                                 let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                    &lines,
+                                    lines,
                                     term_size.width,
                                     available_height,
                                     *start,
@@ -2092,6 +2114,45 @@ pub async fn run_chat(
                     last_input_layout_update = Instant::now();
                 }
                 Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(button) => {
+                        if button == MouseButton::Left {
+                            let mut app_guard = app.lock().await;
+                            if app_guard.mouse_capture_enabled {
+                                let hotspots = app_guard.get_prewrapped_lines_cached(term_size.width).1.to_vec();
+                                let scroll_offset = app_guard.scroll_offset;
+                                let url_overlay = app_guard.url_overlay.clone();
+                                let x = mouse.column;
+                                let y = mouse.row;
+                                let chat_area_y_offset = 1;
+                                let relative_y = y.saturating_sub(chat_area_y_offset);
+                                let message_line_index = (relative_y + scroll_offset) as usize;
+
+                                if let Some(overlay) = url_overlay {
+                                    if overlay.rect.contains(ratatui::layout::Position { x, y }) {
+                                        if let Err(e) = open::that(&overlay.url) {
+                                            app_guard.set_status(format!("Error opening URL: {}", e));
+                                        }
+                                        app_guard.url_overlay = None;
+                                    } else {
+                                        app_guard.url_overlay = None;
+                                    }
+                                } else {
+                                    for hotspot in hotspots {
+                                        if hotspot.rect.y as usize == message_line_index && x >= hotspot.rect.x && x < hotspot.rect.x + hotspot.rect.width {
+                                            let url = hotspot.url.clone();
+                                            let overlay_width = (url.len() + 4) as u16;
+                                            let overlay_height = 3;
+                                            let overlay_x = term_size.width.saturating_sub(overlay_width) / 2;
+                                            let overlay_y = term_size.height.saturating_sub(overlay_height) / 2;
+                                            let rect = ratatui::layout::Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
+                                            app_guard.url_overlay = Some(crate::ui::links::UrlOverlay { url, rect });
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     MouseEventKind::ScrollUp => {
                         let mut app_guard = app.lock().await;
                         app_guard.auto_scroll = false;
@@ -2178,7 +2239,8 @@ pub async fn run_chat(
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableBracketedPaste
+        DisableBracketedPaste,
+        event::DisableMouseCapture
     )?;
     terminal.show_cursor()?;
 

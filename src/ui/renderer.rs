@@ -26,8 +26,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let lines = if !app.edit_select_mode && !app.block_select_mode {
-        app.get_prewrapped_lines_cached(chunks[0].width).clone()
+    let (lines, _hotspots) = if !app.edit_select_mode && !app.block_select_mode {
+        let (cached_lines, cached_hotspots) = app.get_prewrapped_lines_cached(chunks[0].width);
+        (cached_lines.clone(), cached_hotspots.clone())
     } else if app.edit_select_mode {
         let highlight = app
             .theme
@@ -42,7 +43,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
-        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
+        (
+            crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width),
+            Vec::new(),
+        )
     } else if app.block_select_mode {
         let highlight = app
             .theme
@@ -57,7 +61,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
-        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
+        (
+            crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width),
+            Vec::new(),
+        )
     } else {
         unreachable!()
     };
@@ -262,6 +269,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let cursor_y = inner.y.saturating_add(visible_line);
             f.set_cursor_position((cursor_x, cursor_y));
         }
+    }
+
+    // Render URL overlay if present
+    if let Some(overlay) = &app.url_overlay {
+        let area = overlay.rect;
+        f.render_widget(Clear, area); //this clears the background
+        let block = Block::default()
+            .title(overlay.url.as_str())
+            .borders(Borders::ALL);
+        f.render_widget(block, area);
     }
 
     // Render modal picker overlay if present

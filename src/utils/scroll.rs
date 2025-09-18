@@ -213,7 +213,7 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             None,
-        )
+        ).lines
     }
 
     /// Build display lines using theme, flags, and terminal width for table balancing
@@ -223,7 +223,7 @@ impl ScrollCalculator {
         markdown_enabled: bool,
         syntax_enabled: bool,
         terminal_width: Option<usize>,
-    ) -> Vec<Line<'static>> {
+    ) -> crate::ui::layout::Layout {
         // Route through the unified layout engine so downstream consumers get the same
         // width-aware line stream everywhere (renderer, scroll math, selection, etc.).
         let cfg = crate::ui::layout::LayoutConfig {
@@ -232,8 +232,7 @@ impl ScrollCalculator {
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         };
-        let layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
-        layout.lines
+        crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg)
     }
 
     /// Build display lines with selection highlighting and terminal width for table balancing
@@ -265,6 +264,7 @@ impl ScrollCalculator {
                 );
                 crate::ui::markdown::RenderedMessage {
                     lines: layout.lines,
+                    hotspots: layout.hotspots,
                 }
             };
             if selected_index == Some(i) && msg.role == "user" {
@@ -403,6 +403,7 @@ impl ScrollCalculator {
                 );
                 crate::ui::markdown::RenderedMessage {
                     lines: layout.lines,
+                    hotspots: layout.hotspots,
                 }
             };
             lines.extend(rendered.lines);
@@ -656,9 +657,9 @@ mod tests {
         );
 
         // With wide terminal (markdown), and narrow (plain), narrow should produce >= lines
-        assert!(lines_narrow.len() >= lines_wide.len());
+        assert!(lines_narrow.lines.len() >= lines_wide.lines.len());
         // And not fewer lines than wide
-        assert!(lines_narrow.len() >= lines_wide.len());
+        assert!(lines_narrow.lines.len() >= lines_wide.lines.len());
     }
 
     #[test]
@@ -688,7 +689,7 @@ mod tests {
             Some(width),
         );
         // Filter to content lines only (non-empty)
-        let rendered: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let rendered: Vec<String> = lines.lines.iter().map(|l| l.to_string()).collect();
         let content_lines: Vec<String> = rendered.into_iter().filter(|s| !s.is_empty()).collect();
 
         // Should have wrapped into multiple visual lines
@@ -871,7 +872,7 @@ mod tests {
             false,
             Some(terminal_width as usize),
         );
-        let scroll_line_count = display_lines.len();
+        let scroll_line_count = display_lines.lines.len();
 
         // Now render using markdown with the same terminal width
         use crate::ui::markdown::render_message_markdown_opts_with_width;

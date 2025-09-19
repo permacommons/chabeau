@@ -29,10 +29,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let lines = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
         app.get_prewrapped_lines_cached(chunks[0].width).clone()
     } else if app.in_edit_select_mode() {
-        let highlight = app
-            .theme
-            .streaming_indicator_style
-            .add_modifier(Modifier::REVERSED);
+        let highlight = Style::default();
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
             &app.messages,
             &app.theme,
@@ -44,10 +41,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         );
         crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
     } else if app.in_block_select_mode() {
-        let highlight = app
-            .theme
-            .streaming_indicator_style
-            .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        let highlight = Style::default().add_modifier(Modifier::BOLD);
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
             &app.messages,
             &app.theme,

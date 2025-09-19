@@ -15,6 +15,7 @@ pub struct Theme {
     // Chrome
     pub title_style: Style,
     pub streaming_indicator_style: Style,
+    pub selection_highlight_style: Style,
     pub input_border_style: Style,
     pub input_title_style: Style,
 
@@ -59,6 +60,7 @@ impl Theme {
 
             title_style: Style::default().fg(Color::Gray),
             streaming_indicator_style: Style::default().fg(Color::White),
+            selection_highlight_style: Style::default().bg(Color::Rgb(31, 41, 55)),
             input_border_style: Style::default().fg(Color::Gray),
             input_title_style: Style::default().fg(Color::Gray),
 
@@ -100,6 +102,7 @@ impl Theme {
 
             title_style: Style::default().fg(Color::DarkGray),
             streaming_indicator_style: Style::default().fg(Color::Black),
+            selection_highlight_style: Style::default().bg(Color::Rgb(219, 234, 254)),
             input_border_style: Style::default().fg(Color::Black),
             input_title_style: Style::default().fg(Color::DarkGray),
 
@@ -141,6 +144,7 @@ impl Theme {
 
             title_style: Style::default().fg(Color::LightMagenta),
             streaming_indicator_style: Style::default().fg(Color::LightMagenta),
+            selection_highlight_style: Style::default().bg(Color::Rgb(68, 71, 90)),
             input_border_style: Style::default().fg(Color::LightMagenta),
             input_title_style: Style::default().fg(Color::LightMagenta),
 
@@ -255,10 +259,24 @@ impl Theme {
             let mut style = Style::default();
             if let Some(ref spec) = s {
                 for tok in spec.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                    let lower = tok.to_ascii_lowercase();
+                    if let Some(rest) = lower.strip_prefix("bg:") {
+                        if let Some(color) = parse_color(rest.trim()) {
+                            style = style.bg(color);
+                            continue;
+                        }
+                    }
+                    if let Some(rest) = lower.strip_prefix("bg(").and_then(|s| s.strip_suffix(')'))
+                    {
+                        if let Some(color) = parse_color(rest.trim()) {
+                            style = style.bg(color);
+                            continue;
+                        }
+                    }
                     if let Some(color) = parse_color(tok) {
                         style = style.fg(color);
                     } else {
-                        match tok {
+                        match lower.as_str() {
                             "bold" => style = style.add_modifier(Modifier::BOLD),
                             "reversed" => style = style.add_modifier(Modifier::REVERSED),
                             "italic" => style = style.add_modifier(Modifier::ITALIC),
@@ -290,6 +308,7 @@ impl Theme {
 
             title_style: parse_style(&spec.title),
             streaming_indicator_style: parse_style(&spec.streaming_indicator),
+            selection_highlight_style: parse_style(&spec.selection_highlight),
             input_border_style: parse_style(&spec.input_border),
             input_title_style: parse_style(&spec.input_title),
 
@@ -343,6 +362,10 @@ impl Theme {
 
         // Fallbacks for markdown styles when not provided
         theme = theme.with_md_fallbacks();
+        if theme.selection_highlight_style.bg.is_none() {
+            let fallback = Self::default_selection_highlight_for_bg(background_color);
+            theme.selection_highlight_style = theme.selection_highlight_style.patch(fallback);
+        }
         theme
     }
 
@@ -357,6 +380,25 @@ impl Theme {
             Black | DarkGray => LightRed,
             Rgb(_r, _g, _b) => Rgb(255, 100, 100),
             _ => LightRed,
+        }
+    }
+
+    fn default_selection_highlight_for_bg(bg: Color) -> Style {
+        use Color::*;
+        match bg {
+            White | LightYellow | LightCyan | LightBlue | LightMagenta | LightGreen | LightRed => {
+                Style::default().bg(Color::Rgb(219, 234, 254))
+            }
+            Gray => Style::default().bg(Color::Rgb(219, 234, 254)),
+            Rgb(r, g, b) => {
+                if Self::is_bright(r, g, b) {
+                    Style::default().bg(Color::Rgb(219, 234, 254))
+                } else {
+                    Style::default().bg(Color::Rgb(31, 41, 55))
+                }
+            }
+            Indexed(_) => Style::default().bg(Color::Rgb(45, 55, 72)),
+            _ => Style::default().bg(Color::Rgb(31, 41, 55)),
         }
     }
 

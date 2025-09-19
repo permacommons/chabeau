@@ -258,11 +258,13 @@ impl ScrollCalculator {
             if let Some(msg) = messages.get(sel) {
                 if msg.role == "user" {
                     if let Some(span) = layout.message_spans.get(sel) {
-                        let highlight_style = theme.user_text_style.patch(highlight);
+                        let highlight_style = theme.selection_highlight_style.patch(highlight);
                         for line in layout.lines.iter_mut().skip(span.start).take(span.len) {
-                            let text = line.to_string();
-                            if !text.is_empty() {
-                                *line = Line::from(Span::styled(text, highlight_style));
+                            if line.spans.is_empty() {
+                                continue;
+                            }
+                            for span in &mut line.spans {
+                                span.style = span.style.patch(highlight_style);
                             }
                         }
                     }
@@ -294,10 +296,14 @@ impl ScrollCalculator {
         if markdown_enabled {
             if let Some(idx) = selected_block {
                 if let Some((start, len, _content)) = layout.codeblock_ranges.get(idx).cloned() {
-                    let highlight_style = theme.md_codeblock_text_style().patch(highlight);
+                    let highlight_style = theme.selection_highlight_style.patch(highlight);
                     for line in layout.lines.iter_mut().skip(start).take(len) {
-                        let text = line.to_string();
-                        *line = Line::from(Span::styled(text, highlight_style));
+                        if line.spans.is_empty() {
+                            continue;
+                        }
+                        for span in &mut line.spans {
+                            span.style = span.style.patch(highlight_style);
+                        }
                     }
                 }
             }
@@ -523,6 +529,7 @@ mod tests {
     use super::*;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{create_test_message, create_test_messages};
+    use ratatui::style::Style;
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -882,7 +889,7 @@ mod tests {
         messages.push_back(create_test_message("assistant", "Hi there!"));
         messages.push_back(create_test_message("user", "How are you?"));
         let theme = Theme::dark_default();
-        let highlight = theme.streaming_indicator_style;
+        let highlight = Style::default();
 
         let normal = ScrollCalculator::build_display_lines_with_theme(&messages, &theme);
         let highlighted =
@@ -1034,8 +1041,7 @@ mod tests {
             content,
         });
 
-        let highlight =
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED);
+        let highlight = ratatui::style::Style::default();
 
         let lines =
             ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
@@ -1048,9 +1054,9 @@ mod tests {
                 Some(20), // small width to force wrapping
             );
 
-        let expected_style = theme.md_codeblock_text_style().patch(
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
-        );
+        let expected_style = theme
+            .md_codeblock_text_style()
+            .patch(theme.selection_highlight_style.patch(highlight));
 
         // Determine expected highlighted range via width-aware ranges
         let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
@@ -1085,8 +1091,8 @@ mod tests {
             content: "```\nalpha\nbeta\n```\n".to_string(),
         });
 
-        let highlight = ratatui::style::Style::default()
-            .add_modifier(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD);
+        let highlight =
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD);
 
         let lines =
             ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
@@ -1103,10 +1109,9 @@ mod tests {
         let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&messages);
         assert_eq!(contents.len(), 1, "Parser should detect one code block");
 
-        let expected_style = theme.md_codeblock_text_style().patch(
-            ratatui::style::Style::default()
-                .add_modifier(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD),
-        );
+        let expected_style = theme
+            .md_codeblock_text_style()
+            .patch(theme.selection_highlight_style.patch(highlight));
 
         // Determine expected highlighted range via width-aware ranges
         let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
@@ -1120,10 +1125,7 @@ mod tests {
         let (start, len, _content) = ranges[0].clone();
         for line in lines.iter().skip(start).take(len) {
             for sp in &line.spans {
-                assert_eq!(
-                    sp.style, expected_style,
-                    "Code line should be highlighted after table"
-                );
+                assert_eq!(sp.style, expected_style, "Highlight modifiers should be applied");
             }
         }
     }

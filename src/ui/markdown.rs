@@ -3189,6 +3189,7 @@ pub fn build_markdown_display_lines(
 
 /// Build display lines for all messages using plain text rendering (tests only)
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn build_plain_display_lines(
     messages: &VecDeque<Message>,
     theme: &Theme,

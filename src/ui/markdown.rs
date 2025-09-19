@@ -1,5 +1,6 @@
 #![allow(clippy::items_after_test_module)]
 use crate::core::message::Message;
+use crate::ui::layout::MessageLineSpan;
 use crate::ui::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -25,36 +26,30 @@ pub struct RenderedMessage {
     pub lines: Vec<Line<'static>>,
 }
 
+/// Extended render metadata used by the layout engine when downstream consumers
+/// need code block ranges or per-message spans.
+pub struct RenderedMessageDetails {
+    pub lines: Vec<Line<'static>>,
+    pub codeblock_ranges: Vec<(usize, usize, String)>,
+}
+
+impl RenderedMessageDetails {
+    pub fn into_rendered(self) -> RenderedMessage {
+        RenderedMessage { lines: self.lines }
+    }
+}
+
 /// Markdown renderer using pulldown-cmark with theming.
 #[cfg(test)]
 #[allow(dead_code)]
 pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage {
-    match msg.role.as_str() {
-        "system" => render_with_parser_role_and_width_policy(
-            RoleKind::System,
-            &msg.content,
-            theme,
-            true,
-            None,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        ),
-        "user" => render_with_parser_role_and_width_policy(
-            RoleKind::User,
-            &msg.content,
-            theme,
-            true,
-            None,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        ),
-        _ => render_with_parser_role_and_width_policy(
-            RoleKind::Assistant,
-            &msg.content,
-            theme,
-            true,
-            None,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        ),
-    }
+    render_message_markdown_with_policy(
+        msg,
+        theme,
+        true,
+        None,
+        crate::ui::layout::TableOverflowPolicy::WrapCells,
+    )
 }
 
 /// Render markdown with options to enable/disable syntax highlighting and terminal width for table balancing.
@@ -65,16 +60,18 @@ pub fn render_message_markdown_opts_with_width(
     terminal_width: Option<usize>,
 ) -> RenderedMessage {
     // Backward-compatible wrapper that uses the default table policy (WrapCells)
-    render_message_markdown_with_policy(
+    render_message_markdown_details_with_policy(
         msg,
         theme,
         syntax_enabled,
         terminal_width,
         crate::ui::layout::TableOverflowPolicy::WrapCells,
     )
+    .into_rendered()
 }
 
-/// Render markdown with explicit table overflow policy.
+/// Render markdown with explicit table overflow policy (tests only).
+#[cfg(test)]
 pub fn render_message_markdown_with_policy(
     msg: &Message,
     theme: &Theme,
@@ -82,31 +79,53 @@ pub fn render_message_markdown_with_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessage {
+    render_message_markdown_details_with_policy(msg, theme, syntax_enabled, terminal_width, policy)
+        .into_rendered()
+}
+
+pub fn render_message_markdown_details_with_policy(
+    msg: &Message,
+    theme: &Theme,
+    syntax_enabled: bool,
+    terminal_width: Option<usize>,
+    policy: crate::ui::layout::TableOverflowPolicy,
+) -> RenderedMessageDetails {
     match msg.role.as_str() {
-        "system" => render_with_parser_role_and_width_policy(
-            RoleKind::System,
-            &msg.content,
-            theme,
-            syntax_enabled,
-            terminal_width,
-            policy,
-        ),
-        "user" => render_with_parser_role_and_width_policy(
-            RoleKind::User,
-            &msg.content,
-            theme,
-            syntax_enabled,
-            terminal_width,
-            policy,
-        ),
-        _ => render_with_parser_role_and_width_policy(
-            RoleKind::Assistant,
-            &msg.content,
-            theme,
-            syntax_enabled,
-            terminal_width,
-            policy,
-        ),
+        "system" => {
+            let rendered = render_system_message(&msg.content, theme);
+            RenderedMessageDetails {
+                lines: rendered.lines,
+                codeblock_ranges: Vec::new(),
+            }
+        }
+        "user" => {
+            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::User,
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+            );
+            RenderedMessageDetails {
+                lines,
+                codeblock_ranges: ranges,
+            }
+        }
+        _ => {
+            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::Assistant,
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+            );
+            RenderedMessageDetails {
+                lines,
+                codeblock_ranges: ranges,
+            }
+        }
     }
 }
 
@@ -135,330 +154,13 @@ fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
 pub enum RoleKind {
     User,
     Assistant,
-    System,
 }
 
 fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
     match role {
         RoleKind::User => theme.user_text_style,
         RoleKind::Assistant => theme.md_paragraph_style(),
-        RoleKind::System => theme.system_text_style,
     }
-}
-
-fn render_with_parser_role_and_width_policy(
-    role: RoleKind,
-    content: &str,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-    table_policy: crate::ui::layout::TableOverflowPolicy,
-) -> RenderedMessage {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    let parser = Parser::new_ext(content, options);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Inline buffer for current line
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-    // Style stack for inline formatting
-    let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
-
-    // List handling
-    let mut list_stack: Vec<ListKind> = Vec::new();
-    // Code block handling
-    let mut in_code_block: Option<String> = None; // language hint
-    let mut code_block_lines: Vec<String> = Vec::new();
-    // Table handling
-    let mut table_state: Option<TableState> = None;
-
-    // User prefix handling
-    let is_user = role == RoleKind::User;
-    let mut did_prefix_user = role != RoleKind::User; // only user gets prefix
-
-    for event in parser {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    if role == RoleKind::User {
-                        if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                            did_prefix_user = true;
-                        } else {
-                            current_spans.push(Span::raw("     "));
-                        }
-                    }
-                }
-                Tag::Heading { level, .. } => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    let style = theme.md_heading_style(level as u8);
-                    if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                        did_prefix_user = true;
-                    }
-                    style_stack.push(style);
-                }
-                Tag::BlockQuote => {
-                    style_stack.push(theme.md_blockquote_style());
-                }
-                Tag::List(start) => {
-                    list_stack.push(match start {
-                        Some(n) => ListKind::Ordered(n),
-                        None => ListKind::Unordered,
-                    });
-                }
-                Tag::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
-                        ListKind::Unordered => "- ".to_string(),
-                        ListKind::Ordered(_n) => {
-                            if let Some(ListKind::Ordered(ref mut k)) = list_stack.last_mut() {
-                                let cur = *k;
-                                *k += 1;
-                                format!("{}. ", cur)
-                            } else {
-                                "1. ".to_string()
-                            }
-                        }
-                    };
-                    if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                        did_prefix_user = true;
-                    }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
-                }
-                Tag::CodeBlock(kind) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
-                    code_block_lines.clear();
-                }
-                Tag::Emphasis => {
-                    let new = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::ITALIC);
-                    style_stack.push(new);
-                }
-                Tag::Strong => {
-                    let new = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::BOLD);
-                    style_stack.push(new);
-                }
-                Tag::Strikethrough => {
-                    let new = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::DIM);
-                    style_stack.push(new);
-                }
-                Tag::Link { .. } => {
-                    let new = theme.md_link_style();
-                    style_stack.push(new);
-                }
-                Tag::Table(_) => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    table_state = Some(TableState::new());
-                }
-                Tag::TableHead => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_header();
-                    }
-                }
-                Tag::TableRow => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_row();
-                    }
-                }
-                Tag::TableCell => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_cell();
-                    }
-                }
-                _ => {}
-            },
-            Event::End(tag_end) => match tag_end {
-                TagEnd::Paragraph => {
-                    if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        }
-                    } else {
-                        flush_current_line(&mut lines, &mut current_spans);
-                    }
-                    lines.push(Line::from(""));
-                }
-                TagEnd::Heading(_level) => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    style_stack.pop();
-                }
-                TagEnd::BlockQuote => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    style_stack.pop();
-                }
-                TagEnd::List(_start) => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    list_stack.pop();
-                }
-                TagEnd::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
-                TagEnd::CodeBlock => {
-                    let joined = code_block_lines.join("\n");
-                    if syntax_enabled {
-                        if let Some(mut hl_lines) = crate::utils::syntax::highlight_code_block(
-                            in_code_block.as_deref().unwrap_or(""),
-                            &joined,
-                            theme,
-                        ) {
-                            lines.append(&mut hl_lines);
-                        } else {
-                            for l in joined.split('\n') {
-                                let mut st = theme.md_codeblock_text_style();
-                                if let Some(bg) = theme.md_codeblock_bg_color() {
-                                    st = st.bg(bg);
-                                }
-                                lines.push(Line::from(Span::styled(detab(l), st)));
-                            }
-                        }
-                    } else {
-                        for l in joined.split('\n') {
-                            let mut st = theme.md_codeblock_text_style();
-                            if let Some(bg) = theme.md_codeblock_bg_color() {
-                                st = st.bg(bg);
-                            }
-                            lines.push(Line::from(Span::styled(detab(l), st)));
-                        }
-                    }
-                    lines.push(Line::from(""));
-                    in_code_block = None;
-                }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
-                    style_stack.pop();
-                }
-                TagEnd::Table => {
-                    if let Some(table) = table_state.take() {
-                        let mut table_lines = table.render_table_with_width_policy(
-                            theme,
-                            terminal_width,
-                            table_policy,
-                        );
-                        lines.append(&mut table_lines);
-                        lines.push(Line::from(""));
-                    }
-                }
-                TagEnd::TableHead => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_header();
-                    }
-                }
-                TagEnd::TableRow => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_row();
-                    }
-                }
-                TagEnd::TableCell => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_cell();
-                    }
-                }
-                _ => {}
-            },
-            Event::Text(text) => {
-                if in_code_block.is_some() {
-                    for l in text.lines() {
-                        code_block_lines.push(detab(l).to_string());
-                    }
-                } else if let Some(ref mut table) = table_state {
-                    let span = Span::styled(
-                        detab(&text),
-                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    );
-                    table.add_span(span);
-                } else {
-                    current_spans.push(Span::styled(
-                        detab(&text),
-                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    ))
-                }
-            }
-            Event::Code(code) => {
-                let s = theme.md_inline_code_style();
-                let span = Span::styled(detab(&code), s);
-                if let Some(ref mut table) = table_state {
-                    table.add_span(span);
-                } else {
-                    current_spans.push(span);
-                }
-            }
-            Event::SoftBreak => {
-                // Treat soft breaks as new lines
-                flush_current_line(&mut lines, &mut current_spans);
-                // For user messages, indent continuation lines
-                if role == RoleKind::User && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
-                }
-            }
-            Event::HardBreak => {
-                flush_current_line(&mut lines, &mut current_spans);
-            }
-            Event::Rule => {
-                flush_current_line(&mut lines, &mut current_spans);
-                lines.push(Line::from(""));
-            }
-            Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
-            }
-            Event::Html(html) | Event::InlineHtml(html) => {
-                if let Some(ref mut table) = table_state {
-                    if html.trim() == "<br>" || html.trim() == "<br/>" {
-                        table.new_line_in_cell();
-                    }
-                }
-            }
-            Event::FootnoteReference(_) => {
-                // Ignore advanced/HTML/Math for TUI rendering
-            }
-        }
-    }
-
-    flush_current_line(&mut lines, &mut current_spans);
-    if !lines.is_empty()
-        && lines
-            .last()
-            .map(|l| !l.to_string().is_empty())
-            .unwrap_or(false)
-    {
-        lines.push(Line::from(""));
-    }
-
-    RenderedMessage { lines }
 }
 
 /// Render message and also compute local code block ranges (start line index, len, content).
@@ -3485,17 +3187,29 @@ pub fn build_markdown_display_lines(
     lines
 }
 
-/// Build display lines for all messages using plain text rendering
+/// Build display lines for all messages using plain text rendering (tests only)
+#[cfg(test)]
 pub fn build_plain_display_lines(
     messages: &VecDeque<Message>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
+    build_plain_display_lines_with_spans(messages, theme).0
+}
+
+pub fn build_plain_display_lines_with_spans(
+    messages: &VecDeque<Message>,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<MessageLineSpan>) {
     let mut lines = Vec::new();
+    let mut spans = Vec::with_capacity(messages.len());
     for msg in messages {
+        let start = lines.len();
         match msg.role.as_str() {
             "system" => {
                 let rendered = render_system_message(&msg.content, theme);
+                let len = rendered.lines.len();
                 lines.extend(rendered.lines);
+                spans.push(MessageLineSpan { start, len });
             }
             "user" => {
                 for (i, line) in msg.content.lines().enumerate() {
@@ -3514,9 +3228,12 @@ pub fn build_plain_display_lines(
                 if !msg.content.is_empty() {
                     lines.push(Line::from(""));
                 }
+                spans.push(MessageLineSpan {
+                    start,
+                    len: lines.len().saturating_sub(start),
+                });
             }
             _ => {
-                // Assistant messages
                 for line in msg.content.lines() {
                     lines.push(Line::from(Span::styled(
                         detab(line),
@@ -3526,8 +3243,12 @@ pub fn build_plain_display_lines(
                 if !msg.content.is_empty() {
                     lines.push(Line::from(""));
                 }
+                spans.push(MessageLineSpan {
+                    start,
+                    len: lines.len().saturating_sub(start),
+                });
             }
         }
     }
-    lines
+    (lines, spans)
 }

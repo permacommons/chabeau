@@ -246,38 +246,31 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        for (i, msg) in messages.iter().enumerate() {
-            let mut rendered = if markdown_enabled {
-                crate::ui::markdown::render_message_markdown_opts_with_width(
-                    msg,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                )
-            } else {
-                // Route plain text through the layout engine to apply width-aware wrapping
-                let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
-                    &VecDeque::from([msg.clone()]),
-                    theme,
-                    terminal_width,
-                    syntax_enabled,
-                );
-                crate::ui::markdown::RenderedMessage {
-                    lines: layout.lines,
-                }
-            };
-            if selected_index == Some(i) && msg.role == "user" {
-                for l in &mut rendered.lines {
-                    if !l.to_string().is_empty() {
-                        let text = l.to_string();
-                        *l = Line::from(Span::styled(text, theme.user_text_style.patch(highlight)));
+        let cfg = crate::ui::layout::LayoutConfig {
+            width: terminal_width,
+            markdown_enabled,
+            syntax_enabled,
+            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+        };
+        let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
+
+        if let Some(sel) = selected_index {
+            if let Some(msg) = messages.get(sel) {
+                if msg.role == "user" {
+                    if let Some(span) = layout.message_spans.get(sel) {
+                        let highlight_style = theme.user_text_style.patch(highlight);
+                        for line in layout.lines.iter_mut().skip(span.start).take(span.len) {
+                            let text = line.to_string();
+                            if !text.is_empty() {
+                                *line = Line::from(Span::styled(text, highlight_style));
+                            }
+                        }
                     }
                 }
             }
-            lines.extend(rendered.lines);
         }
-        lines
+
+        layout.lines
     }
 
     /// Build display lines with codeblock highlighting and terminal width for table balancing
@@ -290,47 +283,27 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        let mut lines = if markdown_enabled {
-            let mut out = Vec::new();
-            for msg in messages {
-                let rendered = crate::ui::markdown::render_message_markdown_opts_with_width(
-                    msg,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                );
-                out.extend(rendered.lines);
-            }
-            out
-        } else {
-            // Route plain text through the layout engine to apply width-aware wrapping
-            let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
-                messages,
-                theme,
-                terminal_width,
-                syntax_enabled,
-            );
-            layout.lines
+        let cfg = crate::ui::layout::LayoutConfig {
+            width: terminal_width,
+            markdown_enabled,
+            syntax_enabled,
+            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         };
+        let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
+
         if markdown_enabled {
             if let Some(idx) = selected_block {
-                let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                    messages,
-                    theme,
-                    terminal_width,
-                    crate::ui::layout::TableOverflowPolicy::WrapCells,
-                    syntax_enabled,
-                );
-                if let Some((start, len, _content)) = ranges.get(idx).cloned() {
+                if let Some((start, len, _content)) = layout.codeblock_ranges.get(idx).cloned() {
                     let highlight_style = theme.md_codeblock_text_style().patch(highlight);
-                    for line in lines.iter_mut().skip(start).take(len) {
+                    for line in layout.lines.iter_mut().skip(start).take(len) {
                         let text = line.to_string();
                         *line = Line::from(Span::styled(text, highlight_style));
                     }
                 }
             }
         }
-        lines
+
+        layout.lines
     }
 
     /// Compute a scroll offset that positions the start of a given logical line index

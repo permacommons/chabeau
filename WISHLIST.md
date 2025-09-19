@@ -26,7 +26,6 @@ Items are removed when completed.
   - Extract input handling, selection mode, picker handling, and streaming dispatch into helpers/modules — [OPEN]
   - Add pure functions for selection navigation (wrap-around) and reuse across keys (↑/↓/j/k/Ctrl+P) — [OPEN]
 - Unify message line building — [PARTIAL]
-  - Merge normal and highlighted builders behind a single function with an optional style patch — [OPEN]
   - Consider full-row background highlight for selected messages (not just styled spans) — [OPEN]
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]

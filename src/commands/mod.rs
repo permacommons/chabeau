@@ -417,9 +417,9 @@ mod tests {
         let mut app = create_test_app();
         let res = process_input(&mut app, "/theme");
         matches!(res, CommandResult::Continue);
-        assert!(app.picker.is_some());
+        assert!(app.picker_session().is_some());
         // Picker should have at least the built-ins
-        let picker = app.picker.as_ref().unwrap();
+        let picker = app.picker_state().unwrap();
         assert!(picker.items.len() >= 3);
     }
 
@@ -446,18 +446,30 @@ mod tests {
         app.open_theme_picker();
 
         // Should store all themes for filtering
-        assert!(!app.all_available_themes.is_empty());
+        assert!(app
+            .theme_picker_state()
+            .map(|state| !state.all_items.is_empty())
+            .unwrap_or(false));
 
         // Should start with empty filter
-        assert!(app.theme_search_filter.is_empty());
+        assert!(app
+            .theme_picker_state()
+            .map(|state| state.search_filter.is_empty())
+            .unwrap_or(true));
 
         // Add a filter and verify filtering works
-        app.theme_search_filter.push_str("dark");
+        if let Some(state) = app.theme_picker_state_mut() {
+            state.search_filter.push_str("dark");
+        }
         app.filter_themes();
 
-        if let Some(picker) = &app.picker {
+        if let Some(picker) = app.picker_state() {
             // Should have filtered results
-            assert!(picker.items.len() <= app.all_available_themes.len());
+            let total = app
+                .theme_picker_state()
+                .map(|state| state.all_items.len())
+                .unwrap_or(0);
+            assert!(picker.items.len() <= total);
             // Title should show filter status
             assert!(picker.title.contains("filter: 'dark'"));
         }
@@ -468,7 +480,7 @@ mod tests {
         let mut app = create_test_app();
         app.open_theme_picker();
 
-        if let Some(picker) = &mut app.picker {
+        if let Some(picker) = app.picker_state_mut() {
             // Test Home key (move to start)
             picker.selected = picker.items.len() - 1; // Move to last
             picker.move_to_start();
@@ -499,7 +511,7 @@ mod tests {
         // Open theme picker - should default to A-Z (Name mode)
         app.open_theme_picker();
 
-        if let Some(picker) = &app.picker {
+        if let Some(picker) = app.picker_state() {
             // Should default to Name mode (A-Z)
             assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Name);
             // Title should show "Sort by: A-Z"
@@ -511,13 +523,13 @@ mod tests {
         }
 
         // Cycle to Z-A mode
-        if let Some(picker) = &mut app.picker {
+        if let Some(picker) = app.picker_state_mut() {
             picker.cycle_sort_mode();
         }
         app.sort_picker_items();
         app.update_picker_title();
 
-        if let Some(picker) = &app.picker {
+        if let Some(picker) = app.picker_state() {
             // Should now be in Date mode (Z-A for themes)
             assert_eq!(picker.sort_mode, crate::ui::picker::SortMode::Date);
             // Title should show "Sort by: Z-A"

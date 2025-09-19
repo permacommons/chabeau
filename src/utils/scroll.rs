@@ -322,12 +322,10 @@ impl ScrollCalculator {
                     syntax_enabled,
                 );
                 if let Some((start, len, _content)) = ranges.get(idx).cloned() {
-                    for i in start..start + len {
-                        if i < lines.len() {
-                            let text = lines[i].to_string();
-                            let st = theme.md_codeblock_text_style().patch(highlight);
-                            lines[i] = Line::from(Span::styled(text, st));
-                        }
+                    let highlight_style = theme.md_codeblock_text_style().patch(highlight);
+                    for line in lines.iter_mut().skip(start).take(len) {
+                        let text = line.to_string();
+                        *line = Line::from(Span::styled(text, highlight_style));
                     }
                 }
             }
@@ -1091,8 +1089,7 @@ mod tests {
         );
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();
-        for idx in start..start + len {
-            let line = &lines[idx];
+        for line in lines.iter().skip(start).take(len) {
             // All spans in the code line should have the patched style
             for sp in &line.spans {
                 assert_eq!(sp.style, expected_style, "Code line should be highlighted");
@@ -1148,8 +1145,7 @@ mod tests {
         );
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();
-        for idx in start..start + len {
-            let line = &lines[idx];
+        for line in lines.iter().skip(start).take(len) {
             for sp in &line.spans {
                 assert_eq!(
                     sp.style, expected_style,

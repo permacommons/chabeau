@@ -384,29 +384,27 @@ pub async fn run_chat(
                     // Toggle compose mode with F4
                     if matches!(key.code, KeyCode::F(4)) {
                         let mut app_guard = app.lock().await;
-                        app_guard.compose_mode = !app_guard.compose_mode;
+                        app_guard.toggle_compose_mode();
                         continue;
                     }
                     // If a picker is open, handle navigation/selection first
                     {
                         let mut app_guard = app.lock().await;
-                        let current_picker_mode = app_guard.picker_mode.clone();
+                        let current_picker_mode = app_guard.current_picker_mode();
                         let provider_name = app_guard.provider_name.clone(); // Extract before mutable borrow
                         if let Some(selected_id) = {
-                            if let Some(picker) = &mut app_guard.picker {
+                            if let Some(picker) = app_guard.picker_state_mut() {
                                 match key.code {
                                     KeyCode::Esc => {
                                         match current_picker_mode {
                                             Some(crate::core::app::PickerMode::Theme) => {
                                                 app_guard.revert_theme_preview();
-                                                app_guard.picker = None;
-                                                app_guard.picker_mode = None;
+                                                app_guard.close_picker();
                                             }
                                             Some(crate::core::app::PickerMode::Model) => {
                                                 if app_guard.startup_requires_model {
                                                     // Startup mandatory model selection
-                                                    app_guard.picker = None;
-                                                    app_guard.picker_mode = None;
+                                                    app_guard.close_picker();
                                                     if app_guard
                                                         .startup_multiple_providers_available
                                                     {
@@ -431,20 +429,17 @@ pub async fn run_chat(
                                                             .revert_provider_model_transition();
                                                         app_guard.set_status("Selection cancelled");
                                                     }
-                                                    app_guard.picker = None;
-                                                    app_guard.picker_mode = None;
+                                                    app_guard.close_picker();
                                                 }
                                             }
                                             Some(crate::core::app::PickerMode::Provider) => {
                                                 if app_guard.startup_requires_provider {
                                                     // Startup mandatory provider selection: exit if cancelled
-                                                    app_guard.picker = None;
-                                                    app_guard.picker_mode = None;
+                                                    app_guard.close_picker();
                                                     app_guard.exit_requested = true;
                                                 } else {
                                                     app_guard.revert_provider_preview();
-                                                    app_guard.picker = None;
-                                                    app_guard.picker_mode = None;
+                                                    app_guard.close_picker();
                                                 }
                                             }
                                             _ => {}
@@ -557,8 +552,7 @@ pub async fn run_chat(
                                                     Err(_e) => app_guard.set_status("Theme error"),
                                                 }
                                             }
-                                            app_guard.picker = None;
-                                            app_guard.picker_mode = None;
+                                            app_guard.close_picker();
                                             Some("__picker_handled__".to_string())
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Model)
@@ -595,8 +589,7 @@ pub async fn run_chat(
                                                         .set_status(format!("Model error: {}", e)),
                                                 }
                                             }
-                                            app_guard.picker = None;
-                                            app_guard.picker_mode = None;
+                                            app_guard.close_picker();
                                             Some("__picker_handled__".to_string())
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Provider)
@@ -618,8 +611,7 @@ pub async fn run_chat(
                                                             id,
                                                             status_suffix(is_persistent)
                                                         ));
-                                                        app_guard.picker = None;
-                                                        app_guard.picker_mode = None;
+                                                        app_guard.close_picker();
                                                         if should_open_model_picker {
                                                             if app_guard.startup_requires_provider {
                                                                 app_guard
@@ -643,8 +635,7 @@ pub async fn run_chat(
                                                             "Provider error: {}",
                                                             e
                                                         ));
-                                                        app_guard.picker = None;
-                                                        app_guard.picker_mode = None;
+                                                        app_guard.close_picker();
                                                     }
                                                 }
                                             }
@@ -673,8 +664,7 @@ pub async fn run_chat(
                                                         }
                                                     }
                                                 }
-                                                app_guard.picker = None;
-                                                app_guard.picker_mode = None;
+                                                app_guard.close_picker();
                                                 Some("__picker_handled__".to_string())
                                             }
                                             Some(crate::core::app::PickerMode::Model) => {
@@ -713,8 +703,7 @@ pub async fn run_chat(
                                                         )),
                                                     }
                                                 }
-                                                app_guard.picker = None;
-                                                app_guard.picker_mode = None;
+                                                app_guard.close_picker();
                                                 Some("__picker_handled__".to_string())
                                             }
                                             Some(crate::core::app::PickerMode::Provider) => {
@@ -730,8 +719,7 @@ pub async fn run_chat(
                                                                 id,
                                                                 status_suffix(true)
                                                             ));
-                                                            app_guard.picker = None;
-                                                            app_guard.picker_mode = None;
+                                                            app_guard.close_picker();
                                                             if should_open_model_picker {
                                                                 let app_clone = app.clone();
                                                                 tokio::spawn(async move {
@@ -817,22 +805,35 @@ pub async fn run_chat(
                                     KeyCode::Backspace => {
                                         if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Model)
-                                            && !app_guard.model_search_filter.is_empty()
                                         {
-                                            app_guard.model_search_filter.pop();
-                                            app_guard.filter_models();
+                                            if let Some(state) = app_guard.model_picker_state_mut()
+                                            {
+                                                if !state.search_filter.is_empty() {
+                                                    state.search_filter.pop();
+                                                    app_guard.filter_models();
+                                                }
+                                            }
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
-                                            && !app_guard.theme_search_filter.is_empty()
                                         {
-                                            app_guard.theme_search_filter.pop();
-                                            app_guard.filter_themes();
+                                            if let Some(state) = app_guard.theme_picker_state_mut()
+                                            {
+                                                if !state.search_filter.is_empty() {
+                                                    state.search_filter.pop();
+                                                    app_guard.filter_themes();
+                                                }
+                                            }
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Provider)
-                                            && !app_guard.provider_search_filter.is_empty()
                                         {
-                                            app_guard.provider_search_filter.pop();
-                                            app_guard.filter_providers();
+                                            if let Some(state) =
+                                                app_guard.provider_picker_state_mut()
+                                            {
+                                                if !state.search_filter.is_empty() {
+                                                    state.search_filter.pop();
+                                                    app_guard.filter_providers();
+                                                }
+                                            }
                                         }
                                         None
                                     }
@@ -842,24 +843,36 @@ pub async fn run_chat(
                                         {
                                             // Add character to filter for model picker
                                             if !c.is_control() {
-                                                app_guard.model_search_filter.push(c);
-                                                app_guard.filter_models();
+                                                if let Some(state) =
+                                                    app_guard.model_picker_state_mut()
+                                                {
+                                                    state.search_filter.push(c);
+                                                    app_guard.filter_models();
+                                                }
                                             }
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Theme)
                                         {
                                             // Add character to filter for theme picker
                                             if !c.is_control() {
-                                                app_guard.theme_search_filter.push(c);
-                                                app_guard.filter_themes();
+                                                if let Some(state) =
+                                                    app_guard.theme_picker_state_mut()
+                                                {
+                                                    state.search_filter.push(c);
+                                                    app_guard.filter_themes();
+                                                }
                                             }
                                         } else if current_picker_mode
                                             == Some(crate::core::app::PickerMode::Provider)
                                         {
                                             // Add character to filter for provider picker
                                             if !c.is_control() {
-                                                app_guard.provider_search_filter.push(c);
-                                                app_guard.filter_providers();
+                                                if let Some(state) =
+                                                    app_guard.provider_picker_state_mut()
+                                                {
+                                                    state.search_filter.push(c);
+                                                    app_guard.filter_providers();
+                                                }
                                             }
                                         }
                                         None
@@ -878,7 +891,7 @@ pub async fn run_chat(
                                 app_guard.preview_theme_by_id(&selected_id);
                             }
                             continue; // handled by picker
-                        } else if app_guard.picker.is_some() {
+                        } else if app_guard.picker_session().is_some() {
                             continue;
                         }
                     }

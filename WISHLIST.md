@@ -24,7 +24,6 @@ Items are removed when completed.
 
 - Refactor `src/ui/chat_loop.rs` into smaller, testable units — [PARTIAL]
   - Extract input handling, selection mode, picker handling, and streaming dispatch into helpers/modules — [PARTIAL]
-  - Add pure functions for selection navigation (wrap-around) and reuse across keys (↑/↓/j/k/Ctrl+P) — [PARTIAL]
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]
 - Centralize help text — [OPEN]

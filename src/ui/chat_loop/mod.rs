@@ -164,421 +164,31 @@ pub async fn run_chat(
                     // Global: Ctrl+B to enter block select mode or cycle upward when active
                     if matches!(key.code, KeyCode::Char('b'))
                         && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                        && handle_ctrl_b_event(&app, term_size.width, term_size.height).await
                     {
-                        let mut app_guard = app.lock().await;
-                        if !app_guard.markdown_enabled {
-                            app_guard.set_status("Markdown disabled (/markdown on)");
-                            continue;
-                        }
-                        let blocks =
-                            crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                &app_guard.messages,
-                                &app_guard.theme,
-                                Some(term_size.width as usize),
-                                crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                app_guard.syntax_enabled,
-                            );
-                        if app_guard.in_block_select_mode() {
-                            // Cycle upward like Ctrl+P
-                            if let Some(cur) = app_guard.selected_block_index() {
-                                let total = blocks.len();
-                                if let Some(next) = wrap_previous_index(cur, total) {
-                                    app_guard.set_selected_block_index(next);
-                                    if let Some((start, _len, _)) = blocks.get(next) {
-                                        let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
-                                        let input_area_height =
-                                            app_guard.calculate_input_area_height(term_size.width);
-                                        let available_height = term_size
-                                            .height
-                                            .saturating_sub(input_area_height + 2)
-                                            .saturating_sub(1);
-                                        let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                            &lines,
-                                            term_size.width,
-                                            available_height,
-                                            *start,
-                                        );
-                                        let max_scroll = app_guard.calculate_max_scroll_offset(
-                                            available_height,
-                                            term_size.width,
-                                        );
-                                        app_guard.scroll_offset = desired.min(max_scroll);
-                                    }
-                                }
-                            }
-                        } else if blocks.is_empty() {
-                            app_guard.set_status("No code blocks");
-                        } else {
-                            // Enter mode and lock input, select most recent block
-                            let last = blocks.len().saturating_sub(1);
-                            app_guard.enter_block_select_mode(last);
-                            if let Some((start, _len, _)) = blocks.get(last) {
-                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(term_size.width);
-                                let available_height = term_size
-                                    .height
-                                    .saturating_sub(input_area_height + 2)
-                                    .saturating_sub(1);
-                                let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
-                                                    term_size.width,
-                                                    available_height,
-                                                    *start,
-                                                );
-                                let max_scroll = app_guard
-                                    .calculate_max_scroll_offset(available_height, term_size.width);
-                                app_guard.scroll_offset = desired.min(max_scroll);
-                            }
-                        }
                         continue;
                     }
 
                     // Global: Ctrl+P to enter edit-select mode (or cycle upward)
                     if matches!(key.code, KeyCode::Char('p'))
                         && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                        && handle_ctrl_p_event(&app, term_size.width, term_size.height).await
                     {
-                        let mut app_guard = app.lock().await;
-                        if app_guard.in_edit_select_mode() {
-                            if let Some(current) = app_guard.selected_user_message_index() {
-                                if let Some(next_idx) = app_guard
-                                    .prev_user_message_index(current)
-                                    .or_else(|| app_guard.last_user_message_index())
-                                {
-                                    app_guard.set_selected_user_message_index(next_idx);
-                                }
-                            } else if let Some(last) = app_guard.last_user_message_index() {
-                                app_guard.set_selected_user_message_index(last);
-                            }
-                        } else {
-                            if app_guard.last_user_message_index().is_none() {
-                                app_guard.set_status("No user messages");
-                                continue;
-                            }
-                            app_guard.enter_edit_select_mode();
-                        }
-                        if let Some(idx) = app_guard.selected_user_message_index() {
-                            app_guard.scroll_index_into_view(
-                                idx,
-                                term_size.width,
-                                term_size.height,
-                            );
-                        }
                         continue;
                     }
 
-                    // When in edit-select mode, handle navigation and actions
+                    if handle_edit_select_mode_event(&app, &key, term_size.width, term_size.height)
+                        .await
                     {
-                        let mut app_guard = app.lock().await;
-                        if app_guard.in_edit_select_mode() {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app_guard.exit_edit_select_mode();
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    if let Some(current) = app_guard.selected_user_message_index() {
-                                        if let Some(prev) = app_guard
-                                            .prev_user_message_index(current)
-                                            .or_else(|| app_guard.last_user_message_index())
-                                        {
-                                            app_guard.set_selected_user_message_index(prev);
-                                            app_guard.scroll_index_into_view(
-                                                prev,
-                                                term_size.width,
-                                                term_size.height,
-                                            );
-                                        }
-                                    } else if let Some(last) = app_guard.last_user_message_index() {
-                                        app_guard.set_selected_user_message_index(last);
-                                    }
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    if let Some(current) = app_guard.selected_user_message_index() {
-                                        if let Some(next) = app_guard
-                                            .next_user_message_index(current)
-                                            .or_else(|| app_guard.first_user_message_index())
-                                        {
-                                            app_guard.set_selected_user_message_index(next);
-                                            app_guard.scroll_index_into_view(
-                                                next,
-                                                term_size.width,
-                                                term_size.height,
-                                            );
-                                        }
-                                    } else if let Some(last) = app_guard.last_user_message_index() {
-                                        app_guard.set_selected_user_message_index(last);
-                                    }
-                                }
-                                KeyCode::Enter => {
-                                    // Truncate selected and everything below, put content into input
-                                    if let Some(idx) = app_guard.selected_user_message_index() {
-                                        if idx < app_guard.messages.len()
-                                            && app_guard.messages[idx].role == "user"
-                                        {
-                                            let content = app_guard.messages[idx].content.clone();
-                                            // Cancel any active stream
-                                            app_guard.cancel_current_stream();
-                                            // Truncate from selected index (drops selected and below)
-                                            app_guard.messages.truncate(idx);
-                                            app_guard.invalidate_prewrap_cache();
-                                            // Rewrite log file to reflect truncation
-                                            let _ = app_guard
-                                                .logging
-                                                .rewrite_log_without_last_response(
-                                                    &app_guard.messages,
-                                                );
-                                            // Put content into input for editing
-                                            app_guard.set_input_text(content);
-                                            // Exit selection mode
-                                            app_guard.exit_edit_select_mode();
-                                            // Scroll to bottom of remaining messages
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = app_guard
-                                                .calculate_available_height(
-                                                    term_size.height,
-                                                    input_area_height,
-                                                );
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                term_size.width,
-                                            );
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('E') | KeyCode::Char('e') => {
-                                    // Edit in place: populate input with content, do NOT truncate
-                                    if let Some(idx) = app_guard.selected_user_message_index() {
-                                        if idx < app_guard.messages.len()
-                                            && app_guard.messages[idx].role == "user"
-                                        {
-                                            let content = app_guard.messages[idx].content.clone();
-                                            app_guard.set_input_text(content);
-                                            app_guard.start_in_place_edit(idx);
-                                            app_guard.exit_edit_select_mode();
-                                        }
-                                    }
-                                }
-                                KeyCode::Delete => {
-                                    // Delete selected and everything below; do not populate input
-                                    if let Some(idx) = app_guard.selected_user_message_index() {
-                                        if idx < app_guard.messages.len()
-                                            && app_guard.messages[idx].role == "user"
-                                        {
-                                            // Cancel any active stream
-                                            app_guard.cancel_current_stream();
-                                            app_guard.messages.truncate(idx);
-                                            app_guard.invalidate_prewrap_cache();
-                                            let _ = app_guard
-                                                .logging
-                                                .rewrite_log_without_last_response(
-                                                    &app_guard.messages,
-                                                );
-                                            app_guard.exit_edit_select_mode();
-                                            // Scroll to bottom of remaining messages
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = app_guard
-                                                .calculate_available_height(
-                                                    term_size.height,
-                                                    input_area_height,
-                                                );
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                term_size.width,
-                                            );
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                            continue; // handled edit-select mode
-                        }
+                        continue;
                     }
 
-                    // When in block-select mode, handle navigation and actions
+                    if handle_block_select_mode_event(&app, &key, term_size.width, term_size.height)
+                        .await
                     {
-                        let mut app_guard = app.lock().await;
-                        if app_guard.in_block_select_mode() {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app_guard.exit_block_select_mode();
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    if let Some(cur) = app_guard.selected_block_index() {
-                                        let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                            &app_guard.messages,
-                                            &app_guard.theme,
-                                            Some(term_size.width as usize),
-                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                            app_guard.syntax_enabled,
-                                        )
-                                        .len();
-                                        if let Some(next) = wrap_previous_index(cur, total) {
-                                            app_guard.set_selected_block_index(next);
-                                            // Scroll to block start
-                                            let ranges =
-                                                crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                                    &app_guard.messages,
-                                                    &app_guard.theme,
-                                                    Some(term_size.width as usize),
-                                                    crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                                    app_guard.syntax_enabled,
-                                                );
-                                            if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
-                                                let input_area_height = app_guard
-                                                    .calculate_input_area_height(term_size.width);
-                                                let available_height = term_size
-                                                    .height
-                                                    .saturating_sub(input_area_height + 2)
-                                                    .saturating_sub(1);
-                                                let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                                    &lines,
-                                                    term_size.width,
-                                                    available_height,
-                                                    *start,
-                                                );
-                                                let max_scroll = app_guard
-                                                    .calculate_max_scroll_offset(
-                                                        available_height,
-                                                        term_size.width,
-                                                    );
-                                                app_guard.scroll_offset = desired.min(max_scroll);
-                                            }
-                                        }
-                                    } else {
-                                        app_guard.set_selected_block_index(0);
-                                    }
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    if let Some(cur) = app_guard.selected_block_index() {
-                                        let total = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                            &app_guard.messages,
-                                            &app_guard.theme,
-                                            Some(term_size.width as usize),
-                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                            app_guard.syntax_enabled,
-                                        )
-                                        .len();
-                                        if let Some(next) = wrap_next_index(cur, total) {
-                                            app_guard.set_selected_block_index(next);
-                                            // Scroll to block start
-                                            let ranges =
-                                                crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                                    &app_guard.messages,
-                                                    &app_guard.theme,
-                                                    Some(term_size.width as usize),
-                                                    crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                                    app_guard.syntax_enabled,
-                                                );
-                                            if let Some((start, _len, _)) = ranges.get(next) {
-                                                let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
-                                                let input_area_height = app_guard
-                                                    .calculate_input_area_height(term_size.width);
-                                                let available_height = term_size
-                                                    .height
-                                                    .saturating_sub(input_area_height + 2)
-                                                    .saturating_sub(1);
-                                                let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-                                    &lines,
-                                    term_size.width,
-                                    available_height,
-                                    *start,
-                                );
-                                                let max_scroll = app_guard
-                                                    .calculate_max_scroll_offset(
-                                                        available_height,
-                                                        term_size.width,
-                                                    );
-                                                app_guard.scroll_offset = desired.min(max_scroll);
-                                            }
-                                        }
-                                    } else {
-                                        app_guard.set_selected_block_index(0);
-                                    }
-                                }
-                                KeyCode::Char('c') | KeyCode::Char('C') => {
-                                    if let Some(cur) = app_guard.selected_block_index() {
-                                        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                                            &app_guard.messages,
-                                            &app_guard.theme,
-                                            Some(term_size.width as usize),
-                                            crate::ui::layout::TableOverflowPolicy::WrapCells,
-                                            app_guard.syntax_enabled,
-                                        );
-                                        if let Some((_start, _len, content)) = ranges.get(cur) {
-                                            match crate::utils::clipboard::copy_to_clipboard(
-                                                content,
-                                            ) {
-                                                Ok(()) => app_guard.set_status("Copied code block"),
-                                                Err(_e) => app_guard.set_status("Clipboard error"),
-                                            }
-                                            // Leave block-select mode and scroll to bottom
-                                            app_guard.exit_block_select_mode();
-                                            app_guard.auto_scroll = true;
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = term_size
-                                                .height
-                                                .saturating_sub(input_area_height + 2)
-                                                .saturating_sub(1);
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                term_size.width,
-                                            );
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('s') | KeyCode::Char('S') => {
-                                    if let Some(cur) = app_guard.selected_block_index() {
-                                        let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&app_guard.messages);
-                                        if let Some((content, lang)) = contents.get(cur) {
-                                            use chrono::Utc;
-                                            use std::fs;
-                                            let date = Utc::now().format("%Y-%m-%d");
-                                            let ext = language_to_extension(lang.as_deref());
-                                            let filename =
-                                                format!("chabeau-block-{}.{}", date, ext);
-                                            // If the file exists, open a filename prompt; otherwise save immediately.
-                                            if std::path::Path::new(&filename).exists() {
-                                                app_guard.set_status("File already exists.");
-                                                app_guard.start_file_prompt_save_block(
-                                                    filename,
-                                                    content.clone(),
-                                                );
-                                            } else {
-                                                match fs::write(&filename, content) {
-                                                    Ok(()) => app_guard.set_status(format!(
-                                                        "Saved to {}",
-                                                        filename
-                                                    )),
-                                                    Err(_e) => app_guard
-                                                        .set_status("Error saving code block"),
-                                                }
-                                            }
-                                            // Exit block-select mode (return to regular input)
-                                            app_guard.exit_block_select_mode();
-                                            // Scroll to bottom after action
-                                            app_guard.auto_scroll = true;
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = term_size
-                                                .height
-                                                .saturating_sub(input_area_height + 2)
-                                                .saturating_sub(1);
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                term_size.width,
-                                            );
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                            continue;
-                        }
+                        continue;
                     }
+
                     match key.code {
                         KeyCode::Home => {
                             let mut app_guard = app.lock().await;
@@ -1351,6 +961,299 @@ pub async fn run_chat(
     terminal.show_cursor()?;
 
     result
+}
+
+fn scroll_block_into_view(
+    app_guard: &mut App,
+    term_width: u16,
+    term_height: u16,
+    block_start: usize,
+) {
+    let lines =
+        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
+            &app_guard.messages,
+            &app_guard.theme,
+            app_guard.markdown_enabled,
+            app_guard.syntax_enabled,
+            Some(term_width as usize),
+        );
+    let input_area_height = app_guard.calculate_input_area_height(term_width);
+    let available_height = term_height
+        .saturating_sub(input_area_height + 2)
+        .saturating_sub(1);
+    let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
+        &lines,
+        term_width,
+        available_height,
+        block_start,
+    );
+    let max_scroll = app_guard.calculate_max_scroll_offset(available_height, term_width);
+    app_guard.scroll_offset = desired.min(max_scroll);
+}
+
+async fn handle_ctrl_p_event(app: &Arc<Mutex<App>>, term_width: u16, term_height: u16) -> bool {
+    let mut app_guard = app.lock().await;
+
+    if app_guard.last_user_message_index().is_none() {
+        app_guard.set_status("No user messages");
+        return true;
+    }
+
+    if app_guard.in_edit_select_mode() {
+        if let Some(current) = app_guard.selected_user_message_index() {
+            if let Some(prev) = app_guard
+                .prev_user_message_index(current)
+                .or_else(|| app_guard.last_user_message_index())
+            {
+                app_guard.set_selected_user_message_index(prev);
+            }
+        } else if let Some(last) = app_guard.last_user_message_index() {
+            app_guard.set_selected_user_message_index(last);
+        }
+    } else {
+        app_guard.enter_edit_select_mode();
+        if let Some(last) = app_guard.last_user_message_index() {
+            app_guard.set_selected_user_message_index(last);
+        }
+    }
+
+    if let Some(idx) = app_guard.selected_user_message_index() {
+        app_guard.scroll_index_into_view(idx, term_width, term_height);
+    }
+
+    true
+}
+
+async fn handle_edit_select_mode_event(
+    app: &Arc<Mutex<App>>,
+    key: &event::KeyEvent,
+    term_width: u16,
+    term_height: u16,
+) -> bool {
+    let mut app_guard = app.lock().await;
+    if !app_guard.in_edit_select_mode() {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app_guard.exit_edit_select_mode();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(current) = app_guard.selected_user_message_index() {
+                if let Some(prev) = app_guard
+                    .prev_user_message_index(current)
+                    .or_else(|| app_guard.last_user_message_index())
+                {
+                    app_guard.set_selected_user_message_index(prev);
+                    app_guard.scroll_index_into_view(prev, term_width, term_height);
+                }
+            } else if let Some(last) = app_guard.last_user_message_index() {
+                app_guard.set_selected_user_message_index(last);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(current) = app_guard.selected_user_message_index() {
+                if let Some(next) = app_guard
+                    .next_user_message_index(current)
+                    .or_else(|| app_guard.first_user_message_index())
+                {
+                    app_guard.set_selected_user_message_index(next);
+                    app_guard.scroll_index_into_view(next, term_width, term_height);
+                }
+            } else if let Some(last) = app_guard.last_user_message_index() {
+                app_guard.set_selected_user_message_index(last);
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(idx) = app_guard.selected_user_message_index() {
+                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+                    let content = app_guard.messages[idx].content.clone();
+                    app_guard.cancel_current_stream();
+                    app_guard.messages.truncate(idx);
+                    app_guard.invalidate_prewrap_cache();
+                    let _ = app_guard
+                        .logging
+                        .rewrite_log_without_last_response(&app_guard.messages);
+                    app_guard.set_input_text(content);
+                    app_guard.exit_edit_select_mode();
+                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let available_height =
+                        app_guard.calculate_available_height(term_height, input_area_height);
+                    app_guard.update_scroll_position(available_height, term_width);
+                }
+            }
+        }
+        KeyCode::Char('E') | KeyCode::Char('e') => {
+            if let Some(idx) = app_guard.selected_user_message_index() {
+                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+                    let content = app_guard.messages[idx].content.clone();
+                    app_guard.set_input_text(content);
+                    app_guard.start_in_place_edit(idx);
+                    app_guard.exit_edit_select_mode();
+                }
+            }
+        }
+        KeyCode::Delete => {
+            if let Some(idx) = app_guard.selected_user_message_index() {
+                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+                    app_guard.cancel_current_stream();
+                    app_guard.messages.truncate(idx);
+                    app_guard.invalidate_prewrap_cache();
+                    let _ = app_guard
+                        .logging
+                        .rewrite_log_without_last_response(&app_guard.messages);
+                    app_guard.exit_edit_select_mode();
+                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let available_height =
+                        app_guard.calculate_available_height(term_height, input_area_height);
+                    app_guard.update_scroll_position(available_height, term_width);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    true
+}
+
+async fn handle_ctrl_b_event(app: &Arc<Mutex<App>>, term_width: u16, term_height: u16) -> bool {
+    let mut app_guard = app.lock().await;
+    if !app_guard.markdown_enabled {
+        app_guard.set_status("Markdown disabled (/markdown on)");
+        return true;
+    }
+
+    let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+        &app_guard.messages,
+        &app_guard.theme,
+        Some(term_width as usize),
+        crate::ui::layout::TableOverflowPolicy::WrapCells,
+        app_guard.syntax_enabled,
+    );
+
+    if app_guard.in_block_select_mode() {
+        if let Some(cur) = app_guard.selected_block_index() {
+            let total = blocks.len();
+            if let Some(next) = wrap_previous_index(cur, total) {
+                app_guard.set_selected_block_index(next);
+                if let Some((start, _len, _)) = blocks.get(next) {
+                    scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+                }
+            }
+        }
+    } else if blocks.is_empty() {
+        app_guard.set_status("No code blocks");
+    } else {
+        let last = blocks.len().saturating_sub(1);
+        app_guard.enter_block_select_mode(last);
+        if let Some((start, _len, _)) = blocks.get(last) {
+            scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+        }
+    }
+
+    true
+}
+
+async fn handle_block_select_mode_event(
+    app: &Arc<Mutex<App>>,
+    key: &event::KeyEvent,
+    term_width: u16,
+    term_height: u16,
+) -> bool {
+    let mut app_guard = app.lock().await;
+    if !app_guard.in_block_select_mode() {
+        return false;
+    }
+
+    let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+        &app_guard.messages,
+        &app_guard.theme,
+        Some(term_width as usize),
+        crate::ui::layout::TableOverflowPolicy::WrapCells,
+        app_guard.syntax_enabled,
+    );
+
+    match key.code {
+        KeyCode::Esc => {
+            app_guard.exit_block_select_mode();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(cur) = app_guard.selected_block_index() {
+                let total = ranges.len();
+                if let Some(next) = wrap_previous_index(cur, total) {
+                    app_guard.set_selected_block_index(next);
+                    if let Some((start, _len, _)) = ranges.get(next) {
+                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+                    }
+                }
+            } else if !ranges.is_empty() {
+                app_guard.set_selected_block_index(0);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(cur) = app_guard.selected_block_index() {
+                let total = ranges.len();
+                if let Some(next) = wrap_next_index(cur, total) {
+                    app_guard.set_selected_block_index(next);
+                    if let Some((start, _len, _)) = ranges.get(next) {
+                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+                    }
+                }
+            } else if !ranges.is_empty() {
+                app_guard.set_selected_block_index(0);
+            }
+        }
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            if let Some(cur) = app_guard.selected_block_index() {
+                if let Some((_start, _len, content)) = ranges.get(cur) {
+                    match crate::utils::clipboard::copy_to_clipboard(content) {
+                        Ok(()) => app_guard.set_status("Copied code block"),
+                        Err(_e) => app_guard.set_status("Clipboard error"),
+                    }
+                    app_guard.exit_block_select_mode();
+                    app_guard.auto_scroll = true;
+                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let available_height = term_height
+                        .saturating_sub(input_area_height + 2)
+                        .saturating_sub(1);
+                    app_guard.update_scroll_position(available_height, term_width);
+                }
+            }
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            if let Some(cur) = app_guard.selected_block_index() {
+                let contents =
+                    crate::ui::markdown::compute_codeblock_contents_with_lang(&app_guard.messages);
+                if let Some((content, lang)) = contents.get(cur) {
+                    use chrono::Utc;
+                    use std::fs;
+                    let date = Utc::now().format("%Y-%m-%d");
+                    let ext = language_to_extension(lang.as_deref());
+                    let filename = format!("chabeau-block-{}.{}", date, ext);
+                    if std::path::Path::new(&filename).exists() {
+                        app_guard.set_status("File already exists.");
+                        app_guard.start_file_prompt_save_block(filename, content.clone());
+                    } else {
+                        match fs::write(&filename, content) {
+                            Ok(()) => app_guard.set_status(format!("Saved to {}", filename)),
+                            Err(_e) => app_guard.set_status("Error saving code block"),
+                        }
+                    }
+                    app_guard.exit_block_select_mode();
+                    app_guard.auto_scroll = true;
+                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let available_height = term_height
+                        .saturating_sub(input_area_height + 2)
+                        .saturating_sub(1);
+                    app_guard.update_scroll_position(available_height, term_width);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    true
 }
 
 struct PickerEventResult {

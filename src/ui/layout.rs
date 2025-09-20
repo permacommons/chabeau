@@ -32,11 +32,21 @@ impl Default for LayoutConfig {
     }
 }
 
-/// Result of a layout pass. For now this is a thin wrapper over the flattened Lines,
-/// but it can be extended with block metadata, per-line widths, and coordinate mappings.
-#[derive(Clone, Debug)]
+/// Mapping for a single message's contribution to the flattened line stream.
+#[derive(Clone, Debug, Default)]
+pub struct MessageLineSpan {
+    pub start: usize,
+    pub len: usize,
+}
+
+/// Result of a layout pass. Carries the flattened lines along with metadata
+/// describing each message's contribution and any code block ranges (for
+/// selection/highlight overlays).
+#[derive(Clone, Debug, Default)]
 pub struct Layout {
     pub lines: Vec<Line<'static>>,
+    pub message_spans: Vec<MessageLineSpan>,
+    pub codeblock_ranges: Vec<(usize, usize, String)>,
 }
 
 pub struct LayoutEngine;
@@ -69,26 +79,59 @@ impl LayoutEngine {
     ) -> Layout {
         if cfg.markdown_enabled {
             // Route through the existing markdown renderer with explicit width when provided.
-            let mut out = Vec::new();
+            let mut lines = Vec::new();
+            let mut message_spans = Vec::with_capacity(messages.len());
+            let mut codeblock_ranges = Vec::new();
             for msg in messages {
-                let rendered = crate::ui::markdown::render_message_markdown_with_policy(
+                let start = lines.len();
+                let rendered = crate::ui::markdown::render_message_markdown_details_with_policy(
                     msg,
                     theme,
                     cfg.syntax_enabled,
                     cfg.width,
                     cfg.table_overflow_policy,
                 );
-                out.extend(rendered.lines);
+                let len = rendered.lines.len();
+                lines.extend(rendered.lines);
+                message_spans.push(MessageLineSpan { start, len });
+                for (offset, cb_len, content) in rendered.codeblock_ranges {
+                    codeblock_ranges.push((start + offset, cb_len, content));
+                }
             }
-            Layout { lines: out }
+            Layout {
+                lines,
+                message_spans,
+                codeblock_ranges,
+            }
         } else {
-            // Plain text fallback (no markdown). Build plain lines, then wrap to width if provided
-            // so long lines do not overflow when markdown is disabled.
-            let mut lines = crate::ui::markdown::build_plain_display_lines(messages, theme);
+            // Plain text fallback (no markdown). Build base lines/spans, then apply optional
+            // width-aware wrapping per message so the layout stays aligned with rendering.
+            let (base_lines, base_spans) =
+                crate::ui::markdown::build_plain_display_lines_with_spans(messages, theme);
             if let Some(w) = cfg.width {
-                lines = crate::utils::scroll::ScrollCalculator::prewrap_lines(&lines, w as u16);
+                let mut lines: Vec<Line<'static>> = Vec::new();
+                let mut spans: Vec<MessageLineSpan> = Vec::with_capacity(base_spans.len());
+                for span in &base_spans {
+                    let slice = &base_lines[span.start..span.start + span.len];
+                    let wrapped =
+                        crate::utils::scroll::ScrollCalculator::prewrap_lines(slice, w as u16);
+                    let start = lines.len();
+                    let len = wrapped.len();
+                    lines.extend(wrapped);
+                    spans.push(MessageLineSpan { start, len });
+                }
+                Layout {
+                    lines,
+                    message_spans: spans,
+                    codeblock_ranges: Vec::new(),
+                }
+            } else {
+                Layout {
+                    lines: base_lines,
+                    message_spans: base_spans,
+                    codeblock_ranges: Vec::new(),
+                }
             }
-            Layout { lines }
         }
     }
 }

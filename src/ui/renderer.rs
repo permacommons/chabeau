@@ -26,32 +26,26 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let lines = if !app.edit_select_mode && !app.block_select_mode {
+    let lines = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
         app.get_prewrapped_lines_cached(chunks[0].width).clone()
-    } else if app.edit_select_mode {
-        let highlight = app
-            .theme
-            .streaming_indicator_style
-            .add_modifier(Modifier::REVERSED);
+    } else if app.in_edit_select_mode() {
+        let highlight = Style::default();
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
             &app.messages,
             &app.theme,
-            app.selected_user_message_index,
+            app.selected_user_message_index(),
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
         crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
-    } else if app.block_select_mode {
-        let highlight = app
-            .theme
-            .streaming_indicator_style
-            .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+    } else if app.in_block_select_mode() {
+        let highlight = Style::default().add_modifier(Modifier::BOLD);
         let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
             &app.messages,
             &app.theme,
-            app.selected_block_index,
+            app.selected_block_index(),
             highlight,
             app.markdown_enabled,
             app.syntax_enabled,
@@ -101,13 +95,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ""
     };
 
-    let base_title = if app.edit_select_mode {
+    let base_title = if app.in_edit_select_mode() {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
-    } else if app.block_select_mode {
+    } else if app.in_block_select_mode() {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
-    } else if app.picker.is_some() {
+    } else if app.picker_session().is_some() {
         // Show specific prompt for picker mode with global shortcuts
-        match app.picker_mode {
+        match app.current_picker_mode() {
             Some(crate::core::app::PickerMode::Model) => {
                 "Select a model (Esc=cancel • Ctrl+C=quit)"
             }
@@ -119,9 +113,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
         }
-    } else if app.file_prompt.is_some() {
+    } else if app.file_prompt().is_some() {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
-    } else if app.in_place_edit_index.is_some() {
+    } else if app.in_place_edit_index().is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
     } else if app.compose_mode {
         "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
@@ -250,7 +244,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Set cursor based on wrapped text and linear cursor position
     // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
-    if app.input_mode && available_width > 0 && app.picker.is_none() {
+    if app.is_input_active() && available_width > 0 && app.picker_session().is_none() {
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             app.get_input_text(),
             app.input_cursor_position,
@@ -265,7 +259,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 
     // Render modal picker overlay if present
-    if let Some(picker) = &app.picker {
+    if let Some(picker) = app.picker_state() {
         let area = centered_rect(60, 60, f.area());
 
         // Clear any content under the modal
@@ -360,14 +354,11 @@ fn build_main_title(app: &App) -> String {
 /// Generate help text for picker dialogs with appropriate shortcuts
 fn generate_picker_help_text(app: &App) -> String {
     // Check if current selection is a default (has asterisk)
-    let selected_is_default = if let Some(picker) = &app.picker {
-        picker
-            .get_selected_item()
-            .map(|item| item.label.ends_with('*'))
-            .unwrap_or(false)
-    } else {
-        false
-    };
+    let selected_is_default = app
+        .picker_state()
+        .and_then(|picker| picker.get_selected_item())
+        .map(|item| item.label.ends_with('*'))
+        .unwrap_or(false);
 
     let del_help = if selected_is_default {
         " • Del=Remove default"
@@ -376,11 +367,20 @@ fn generate_picker_help_text(app: &App) -> String {
     };
 
     // Get the search filter for the current picker mode
-    let search_filter = match app.picker_mode {
-        Some(crate::core::app::PickerMode::Model) => &app.model_search_filter,
-        Some(crate::core::app::PickerMode::Theme) => &app.theme_search_filter,
-        Some(crate::core::app::PickerMode::Provider) => &app.provider_search_filter,
-        _ => &String::new(),
+    let search_filter = match app.current_picker_mode() {
+        Some(crate::core::app::PickerMode::Model) => app
+            .model_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
+        Some(crate::core::app::PickerMode::Theme) => app
+            .theme_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
+        Some(crate::core::app::PickerMode::Provider) => app
+            .provider_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
+        _ => "",
     };
 
     let first_line = if search_filter.is_empty() {
@@ -390,8 +390,8 @@ fn generate_picker_help_text(app: &App) -> String {
     };
 
     // Suppress persistent save option during env-only startup model selection
-    let show_persist =
-        !(app.startup_env_only && app.picker_mode == Some(crate::core::app::PickerMode::Model));
+    let show_persist = !(app.startup_env_only
+        && app.current_picker_mode() == Some(crate::core::app::PickerMode::Model));
     if show_persist {
         format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
     } else {
@@ -449,12 +449,72 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::{App, PickerMode};
+    use crate::core::app::{
+        App, ModelPickerState, PickerData, PickerMode, PickerSession, ProviderPickerState,
+        ThemePickerState,
+    };
     use crate::ui::picker::PickerState;
     use crate::ui::theme::Theme;
 
     fn create_test_app() -> App {
         App::new_bench(Theme::dark_default(), true, false)
+    }
+
+    fn set_model_picker(
+        app: &mut App,
+        search_filter: &str,
+        items: Vec<crate::ui::picker::PickerItem>,
+        selected: usize,
+        has_dates: bool,
+    ) {
+        let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Model,
+            state: picker_state,
+            data: PickerData::Model(ModelPickerState {
+                search_filter: search_filter.to_string(),
+                all_items: items,
+                before_model: None,
+                has_dates,
+            }),
+        });
+    }
+
+    fn set_theme_picker(
+        app: &mut App,
+        search_filter: &str,
+        items: Vec<crate::ui::picker::PickerItem>,
+        selected: usize,
+    ) {
+        let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Theme,
+            state: picker_state,
+            data: PickerData::Theme(ThemePickerState {
+                search_filter: search_filter.to_string(),
+                all_items: items,
+                before_theme: None,
+                before_theme_id: None,
+            }),
+        });
+    }
+
+    fn set_provider_picker(
+        app: &mut App,
+        search_filter: &str,
+        items: Vec<crate::ui::picker::PickerItem>,
+        selected: usize,
+    ) {
+        let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Provider,
+            state: picker_state,
+            data: PickerData::Provider(ProviderPickerState {
+                search_filter: search_filter.to_string(),
+                all_items: items,
+                before_provider: None,
+            }),
+        });
     }
 
     #[test]
@@ -484,8 +544,6 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_no_filter_no_default() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Model);
-        app.model_search_filter = String::new();
         // Create picker with non-default item
         let items = vec![crate::ui::picker::PickerItem {
             id: "test-model".to_string(),
@@ -493,8 +551,7 @@ mod tests {
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_model_picker(&mut app, "", items, 0, false);
 
         let help_text = generate_picker_help_text(&app);
 
@@ -506,16 +563,13 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_with_filter() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Model);
-        app.model_search_filter = "gpt".to_string();
         let items = vec![crate::ui::picker::PickerItem {
             id: "test-model".to_string(),
             label: "Test Model".to_string(),
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_model_picker(&mut app, "gpt", items, 0, false);
 
         let help_text = generate_picker_help_text(&app);
 
@@ -527,8 +581,6 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_with_default_selected() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Provider);
-        app.provider_search_filter = String::new();
         // Create picker with default item (has asterisk)
         let items = vec![crate::ui::picker::PickerItem {
             id: "default-provider".to_string(),
@@ -536,8 +588,7 @@ mod tests {
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_provider_picker(&mut app, "", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 
@@ -549,8 +600,6 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_with_default_selected() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Model);
-        app.model_search_filter = String::new();
         // Create picker with default item (has asterisk)
         let items = vec![crate::ui::picker::PickerItem {
             id: "default-model".to_string(),
@@ -558,8 +607,7 @@ mod tests {
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_model_picker(&mut app, "", items, 0, false);
 
         let help_text = generate_picker_help_text(&app);
 
@@ -571,16 +619,13 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_theme_picker() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Theme);
-        app.theme_search_filter = String::new();
         let items = vec![crate::ui::picker::PickerItem {
             id: "dark".to_string(),
             label: "Dark Theme".to_string(),
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_theme_picker(&mut app, "", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 
@@ -592,8 +637,6 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_theme_with_default_selected() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Theme);
-        app.theme_search_filter = String::new();
         // Default theme: asterisk on label
         let items = vec![crate::ui::picker::PickerItem {
             id: "dark".to_string(),
@@ -601,8 +644,7 @@ mod tests {
             metadata: None,
             sort_key: None,
         }];
-        let picker = PickerState::new("Test".to_string(), items, 0);
-        app.picker = Some(picker);
+        set_theme_picker(&mut app, "", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 

@@ -17,15 +17,119 @@ use std::{collections::VecDeque, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 
+#[derive(Debug, Clone)]
+pub enum FilePromptKind {
+    Dump,
+    SaveCodeBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilePrompt {
+    pub kind: FilePromptKind,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum UiMode {
+    Typing,
+    EditSelect { selected_index: usize },
+    BlockSelect { block_index: usize },
+    InPlaceEdit { index: usize },
+    FilePrompt(FilePrompt),
+}
+
+#[derive(Debug, Clone)]
+pub struct ThemePickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+    pub before_theme: Option<Theme>,
+    pub before_theme_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelPickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+    pub before_model: Option<String>,
+    pub has_dates: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderPickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+    pub before_provider: Option<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum PickerData {
+    Theme(ThemePickerState),
+    Model(ModelPickerState),
+    Provider(ProviderPickerState),
+}
+
+#[derive(Debug, Clone)]
+pub struct PickerSession {
+    pub mode: PickerMode,
+    pub state: PickerState,
+    pub data: PickerData,
+}
+
+impl PickerSession {
+    fn prefers_alphabetical(&self) -> bool {
+        match (&self.mode, &self.data) {
+            (PickerMode::Theme, _) | (PickerMode::Provider, _) => true,
+            (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
+            _ => false,
+        }
+    }
+
+    fn default_sort_mode(&self) -> crate::ui::picker::SortMode {
+        if self.prefers_alphabetical() {
+            crate::ui::picker::SortMode::Name
+        } else {
+            crate::ui::picker::SortMode::Date
+        }
+    }
+
+    fn filter_hint_threshold(&self) -> usize {
+        match self.mode {
+            PickerMode::Model => 20,
+            _ => 10,
+        }
+    }
+
+    fn base_title(&self) -> &'static str {
+        match self.mode {
+            PickerMode::Model => "Pick Model",
+            PickerMode::Provider => "Pick Provider",
+            PickerMode::Theme => "Pick Theme",
+        }
+    }
+
+    fn search_filter(&self) -> &String {
+        match &self.data {
+            PickerData::Model(state) => &state.search_filter,
+            PickerData::Theme(state) => &state.search_filter,
+            PickerData::Provider(state) => &state.search_filter,
+        }
+    }
+
+    fn all_items(&self) -> &Vec<PickerItem> {
+        match &self.data {
+            PickerData::Model(state) => &state.all_items,
+            PickerData::Theme(state) => &state.all_items,
+            PickerData::Provider(state) => &state.all_items,
+        }
+    }
+}
+
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
     pub input_cursor_position: usize,
-    pub input_mode: bool,
-    // Edit/select modes
-    pub edit_select_mode: bool,
-    pub selected_user_message_index: Option<usize>,
-    pub in_place_edit_index: Option<usize>,
+    pub mode: UiMode,
     pub current_response: String,
     pub client: Client,
     pub model: String,
@@ -49,26 +153,7 @@ pub struct App {
     pub theme: Theme,
     // Currently active theme id for this session (may differ from default in config)
     pub current_theme_id: Option<String>,
-    pub picker: Option<PickerState>,
-    pub picker_mode: Option<PickerMode>,
-    // Block select mode (inline, like Ctrl+P for user messages)
-    pub block_select_mode: bool,
-    pub selected_block_index: Option<usize>,
-    pub theme_before_picker: Option<Theme>,
-    pub theme_id_before_picker: Option<String>,
-    // Model picker state
-    pub model_before_picker: Option<String>,
-    pub model_search_filter: String,
-    pub all_available_models: Vec<PickerItem>,
-    // Whether the current model picker has any date metadata
-    pub model_picker_has_dates: bool,
-    // Theme picker state
-    pub theme_search_filter: String,
-    pub all_available_themes: Vec<PickerItem>,
-    // Provider picker state
-    pub provider_before_picker: Option<(String, String)>, // (provider_name, display_name)
-    pub provider_search_filter: String,
-    pub all_available_providers: Vec<PickerItem>,
+    pub picker_session: Option<PickerSession>,
     // Track when we're in a provider->model transition flow
     pub in_provider_model_transition: bool,
     pub provider_model_transition_state: Option<(String, String, String, String, String)>, // (prev_provider_name, prev_provider_display, prev_model, prev_api_key, prev_base_url)
@@ -80,8 +165,6 @@ pub struct App {
     // One-line ephemeral status message (shown in input border)
     pub status: Option<String>,
     pub status_set_at: Option<Instant>,
-    // When present, the input area is used to prompt for a filename
-    pub file_prompt: Option<FilePrompt>,
     // Startup gating flags for initial selection flows
     pub startup_requires_provider: bool,
     pub startup_requires_model: bool,
@@ -92,7 +175,7 @@ pub struct App {
     pub compose_mode: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerMode {
     Theme,
     Model,
@@ -100,22 +183,180 @@ pub enum PickerMode {
 }
 
 impl App {
-    /// Returns true if current picker should use alphabetical sorting (A–Z / Z–A)
-    fn picker_prefers_alphabetical(&self) -> bool {
-        self.picker_mode == Some(PickerMode::Theme)
-            || self.picker_mode == Some(PickerMode::Provider)
-            || (self.picker_mode == Some(PickerMode::Model) && !self.model_picker_has_dates)
+    pub fn is_input_active(&self) -> bool {
+        matches!(
+            self.mode,
+            UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
+        )
     }
 
-    /// Returns the default sort mode for the active picker
-    fn default_sort_mode_for_current_picker(&self) -> crate::ui::picker::SortMode {
-        if self.picker_prefers_alphabetical() {
-            crate::ui::picker::SortMode::Name // A–Z by default
+    pub fn in_edit_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::EditSelect { .. })
+    }
+
+    pub fn selected_user_message_index(&self) -> Option<usize> {
+        if let UiMode::EditSelect { selected_index } = self.mode {
+            Some(selected_index)
         } else {
-            // For models with dates, default to Date (newest first)
-            crate::ui::picker::SortMode::Date
+            None
         }
     }
+
+    pub fn set_selected_user_message_index(&mut self, index: usize) {
+        if let UiMode::EditSelect { selected_index } = &mut self.mode {
+            *selected_index = index;
+        }
+    }
+
+    pub fn in_block_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::BlockSelect { .. })
+    }
+
+    pub fn selected_block_index(&self) -> Option<usize> {
+        if let UiMode::BlockSelect { block_index } = self.mode {
+            Some(block_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_selected_block_index(&mut self, index: usize) {
+        if let UiMode::BlockSelect { block_index } = &mut self.mode {
+            *block_index = index;
+        }
+    }
+
+    pub fn in_place_edit_index(&self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    fn set_mode(&mut self, mode: UiMode) {
+        self.mode = mode;
+    }
+
+    pub fn file_prompt(&self) -> Option<&FilePrompt> {
+        if let UiMode::FilePrompt(ref prompt) = self.mode {
+            Some(prompt)
+        } else {
+            None
+        }
+    }
+
+    pub fn take_in_place_edit_index(&mut self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            self.set_mode(UiMode::Typing);
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn toggle_compose_mode(&mut self) {
+        self.compose_mode = !self.compose_mode;
+    }
+
+    pub fn picker_session(&self) -> Option<&PickerSession> {
+        self.picker_session.as_ref()
+    }
+
+    pub fn picker_session_mut(&mut self) -> Option<&mut PickerSession> {
+        self.picker_session.as_mut()
+    }
+
+    pub fn current_picker_mode(&self) -> Option<PickerMode> {
+        self.picker_session().map(|session| session.mode)
+    }
+
+    pub fn picker_state(&self) -> Option<&PickerState> {
+        self.picker_session().map(|session| &session.state)
+    }
+
+    pub fn picker_state_mut(&mut self) -> Option<&mut PickerState> {
+        self.picker_session_mut().map(|session| &mut session.state)
+    }
+
+    pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
+        match self.picker_session() {
+            Some(PickerSession {
+                mode: PickerMode::Theme,
+                data: PickerData::Theme(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn theme_picker_state_mut(&mut self) -> Option<&mut ThemePickerState> {
+        match self.picker_session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Theme,
+                data: PickerData::Theme(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn model_picker_state(&self) -> Option<&ModelPickerState> {
+        match self.picker_session() {
+            Some(PickerSession {
+                mode: PickerMode::Model,
+                data: PickerData::Model(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn model_picker_state_mut(&mut self) -> Option<&mut ModelPickerState> {
+        match self.picker_session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Model,
+                data: PickerData::Model(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn provider_picker_state(&self) -> Option<&ProviderPickerState> {
+        match self.picker_session() {
+            Some(PickerSession {
+                mode: PickerMode::Provider,
+                data: PickerData::Provider(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn provider_picker_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
+        match self.picker_session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Provider,
+                data: PickerData::Provider(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// Close any active picker session.
+    pub fn close_picker(&mut self) {
+        self.picker_session = None;
+    }
+
+    /// Returns true if current picker should use alphabetical sorting (A–Z / Z–A)
+    fn picker_prefers_alphabetical(&self) -> bool {
+        self.picker_session()
+            .map(|session| session.prefers_alphabetical())
+            .unwrap_or(false)
+    }
+
     pub async fn new_with_auth(
         model: String,
         log_file: Option<String>,
@@ -196,10 +437,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: Client::new(),
             model: final_model,
@@ -222,21 +460,7 @@ impl App {
             textarea: TextArea::default(),
             theme: resolved_theme,
             current_theme_id: config.theme.clone(),
-            picker: None,
-            picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
-            theme_before_picker: None,
-            theme_id_before_picker: None,
-            model_before_picker: None,
-            model_search_filter: String::new(),
-            all_available_models: Vec::new(),
-            model_picker_has_dates: false,
-            theme_search_filter: String::new(),
-            all_available_themes: Vec::new(),
-            provider_before_picker: None,
-            provider_search_filter: String::new(),
-            all_available_providers: Vec::new(),
+            picker_session: None,
             in_provider_model_transition: false,
             provider_model_transition_state: None,
             markdown_enabled: config.markdown.unwrap_or(true),
@@ -244,7 +468,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -302,10 +525,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: Client::new(),
             model: String::new(),
@@ -328,21 +548,7 @@ impl App {
             textarea: TextArea::default(),
             theme: resolved_theme,
             current_theme_id: config.theme.clone(),
-            picker: None,
-            picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
-            theme_before_picker: None,
-            theme_id_before_picker: None,
-            model_before_picker: None,
-            model_search_filter: String::new(),
-            all_available_models: Vec::new(),
-            model_picker_has_dates: false,
-            theme_search_filter: String::new(),
-            all_available_themes: Vec::new(),
-            provider_before_picker: None,
-            provider_search_filter: String::new(),
-            all_available_providers: Vec::new(),
+            picker_session: None,
             in_provider_model_transition: false,
             provider_model_transition_state: None,
             markdown_enabled: config.markdown.unwrap_or(true),
@@ -350,7 +556,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: true,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -496,10 +701,7 @@ impl App {
             messages: VecDeque::new(),
             input: String::new(),
             input_cursor_position: 0,
-            input_mode: true,
-            edit_select_mode: false,
-            selected_user_message_index: None,
-            in_place_edit_index: None,
+            mode: UiMode::Typing,
             current_response: String::new(),
             client: reqwest::Client::new(),
             model: "bench".into(),
@@ -522,21 +724,7 @@ impl App {
             textarea: tui_textarea::TextArea::default(),
             theme,
             current_theme_id: None,
-            picker: None,
-            picker_mode: None,
-            block_select_mode: false,
-            selected_block_index: None,
-            theme_before_picker: None,
-            theme_id_before_picker: None,
-            model_before_picker: None,
-            model_search_filter: String::new(),
-            all_available_models: Vec::new(),
-            model_picker_has_dates: false,
-            theme_search_filter: String::new(),
-            all_available_themes: Vec::new(),
-            provider_before_picker: None,
-            provider_search_filter: String::new(),
-            all_available_providers: Vec::new(),
+            picker_session: None,
             in_provider_model_transition: false,
             provider_model_transition_state: None,
             markdown_enabled,
@@ -544,7 +732,6 @@ impl App {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
-            file_prompt: None,
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
@@ -662,31 +849,25 @@ impl App {
     }
 
     pub fn start_file_prompt_dump(&mut self, filename: String) {
-        self.file_prompt = Some(FilePrompt {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::Dump,
             content: None,
-        });
+        }));
         self.set_input_text(filename);
-        self.input_mode = true;
-        self.in_place_edit_index = None;
-        self.edit_select_mode = false;
-        self.block_select_mode = false;
     }
 
     pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
-        self.file_prompt = Some(FilePrompt {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::SaveCodeBlock,
             content: Some(content),
-        });
+        }));
         self.set_input_text(filename);
-        self.input_mode = true;
-        self.in_place_edit_index = None;
-        self.edit_select_mode = false;
-        self.block_select_mode = false;
     }
 
     pub fn cancel_file_prompt(&mut self) {
-        self.file_prompt = None;
+        if let UiMode::FilePrompt(_) = self.mode {
+            self.set_mode(UiMode::Typing);
+        }
         self.clear_input();
     }
 
@@ -862,40 +1043,42 @@ impl App {
 
     /// Enter edit-select mode: lock input and select most recent user message
     pub fn enter_edit_select_mode(&mut self) {
-        self.edit_select_mode = true;
-        self.input_mode = false; // lock input area
-        self.selected_user_message_index = self.last_user_message_index();
+        if let Some(idx) = self.last_user_message_index() {
+            self.set_mode(UiMode::EditSelect {
+                selected_index: idx,
+            });
+        }
     }
 
     /// Exit edit-select mode
     pub fn exit_edit_select_mode(&mut self) {
-        self.edit_select_mode = false;
-        self.input_mode = true; // unlock input area
+        if self.in_edit_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     /// Begin in-place edit of a user message at `index`
     pub fn start_in_place_edit(&mut self, index: usize) {
-        self.in_place_edit_index = Some(index);
-        self.input_mode = true;
+        self.set_mode(UiMode::InPlaceEdit { index });
     }
 
     /// Cancel in-place edit (does not modify history)
     pub fn cancel_in_place_edit(&mut self) {
-        self.in_place_edit_index = None;
+        if matches!(self.mode, UiMode::InPlaceEdit { .. }) {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     /// Enter block select mode: lock input and set selected block index
     pub fn enter_block_select_mode(&mut self, index: usize) {
-        self.block_select_mode = true;
-        self.selected_block_index = Some(index);
-        self.input_mode = false; // lock input area
+        self.set_mode(UiMode::BlockSelect { block_index: index });
     }
 
     /// Exit block select mode and unlock input
     pub fn exit_block_select_mode(&mut self) {
-        self.block_select_mode = false;
-        self.selected_block_index = None;
-        self.input_mode = true; // unlock input area
+        if self.in_block_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
     }
 
     pub fn prepare_retry(
@@ -1169,16 +1352,11 @@ impl App {
 
     /// Open a theme picker modal with built-in and custom themes
     pub fn open_theme_picker(&mut self) {
-        self.picker_mode = Some(PickerMode::Theme);
-        // Save current theme and configured id for cancel
-        self.theme_before_picker = Some(self.theme.clone());
-        self.theme_search_filter.clear();
         let cfg = Config::load_test_safe();
-        self.theme_id_before_picker = cfg.theme.clone();
 
         let mut items: Vec<PickerItem> = Vec::new();
         let default_theme_id = cfg.theme.clone();
-        // Built-ins
+
         for t in crate::ui::builtin_themes::load_builtin_themes() {
             let is_default = default_theme_id
                 .as_ref()
@@ -1201,7 +1379,7 @@ impl App {
                 sort_key: Some(t.display_name.clone()),
             });
         }
-        // Custom
+
         for ct in cfg.list_custom_themes() {
             let is_default = default_theme_id
                 .as_ref()
@@ -1226,49 +1404,50 @@ impl App {
             });
         }
 
-        // Store all themes for filtering
-        self.all_available_themes = items.clone();
-
-        // Select the currently active theme if present (session theme may differ from default)
-        let mut selected = 0usize;
         let active_theme_id = self
             .current_theme_id
             .as_ref()
             .or(cfg.theme.as_ref())
             .cloned();
-        if let Some(id) = active_theme_id {
+
+        let mut selected = 0usize;
+        if let Some(id) = &active_theme_id {
             if let Some((idx, _)) = items
                 .iter()
                 .enumerate()
-                .find(|(_, it)| it.id.eq_ignore_ascii_case(&id))
+                .find(|(_, it)| it.id.eq_ignore_ascii_case(id))
             {
                 selected = idx;
             }
         }
 
-        let mut picker_state = PickerState::new("Pick Theme", items, selected);
-        // Default to alphabetical for themes
-        picker_state.sort_mode = self.default_sort_mode_for_current_picker();
-        self.picker = Some(picker_state);
+        let picker_state = PickerState::new("Pick Theme", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Theme,
+            state: picker_state,
+            data: PickerData::Theme(ThemePickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_theme: Some(self.theme.clone()),
+                before_theme_id: cfg.theme.clone(),
+            }),
+        };
 
-        // Apply initial sorting and update title
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
         self.sort_picker_items();
         self.update_picker_title();
 
-        // Find active theme in the list after sorting and set selection
-        let post_active_id = self
-            .current_theme_id
-            .as_ref()
-            .or(cfg.theme.as_ref())
-            .cloned();
-        if let (Some(theme_id), Some(picker)) = (post_active_id, &mut self.picker) {
-            if let Some((idx, _)) = picker
+        if let (Some(theme_id), Some(session)) = (active_theme_id, self.picker_session_mut()) {
+            if let Some((idx, _)) = session
+                .state
                 .items
                 .iter()
                 .enumerate()
                 .find(|(_, it)| it.id.eq_ignore_ascii_case(&theme_id))
             {
-                picker.selected = idx;
+                session.state.selected = idx;
             }
         }
     }
@@ -1291,9 +1470,10 @@ impl App {
         let mut cfg = Config::load_test_safe();
         cfg.theme = Some(id.to_string());
         cfg.save_test_safe().map_err(|e| e.to_string())?;
-        // Clear preview snapshot once committed
-        self.theme_before_picker = None;
-        self.theme_id_before_picker = None;
+        if let Some(state) = self.theme_picker_state_mut() {
+            state.before_theme = None;
+            state.before_theme_id = None;
+        }
         Ok(())
     }
 
@@ -1317,28 +1497,28 @@ impl App {
 
     /// Revert theme to the one before opening picker (on cancel)
     pub fn revert_theme_preview(&mut self) {
-        if let Some(prev) = self.theme_before_picker.clone() {
+        let previous_theme = self
+            .theme_picker_state()
+            .and_then(|state| state.before_theme.clone());
+
+        if let Some(state) = self.theme_picker_state_mut() {
+            state.before_theme = None;
+            state.before_theme_id = None;
+            state.search_filter.clear();
+            state.all_items.clear();
+        }
+
+        if let Some(prev) = previous_theme {
             self.theme = prev;
             self.configure_textarea_appearance();
         }
-        // Do not modify config
-        self.theme_before_picker = None;
-        self.theme_id_before_picker = None;
-        self.theme_search_filter.clear();
-        self.all_available_themes.clear();
     }
 
     /// Open a model picker modal with available models from current provider
     pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.picker_mode = Some(PickerMode::Model);
-        self.model_before_picker = Some(self.model.clone());
-        self.model_search_filter.clear();
-
-        // Load config to detect default model for current provider
         let cfg = Config::load_test_safe();
         let default_model_for_provider = cfg.get_default_model(&self.provider_name).cloned();
 
-        // Fetch models from current provider
         let models_response = fetch_models(
             &self.client,
             &self.base_url,
@@ -1354,9 +1534,7 @@ impl App {
         let mut models = models_response.data;
         sort_models(&mut models);
 
-        // Determine if provider supplies usable creation dates for any model
-        // Consider a date present if numeric `created` > 0 exists or `created_at` resembles a date
-        self.model_picker_has_dates = models.iter().any(|m| {
+        let has_dates = models.iter().any(|m| {
             m.created.map(|v| v > 0).unwrap_or(false)
                 || m.created_at
                     .as_ref()
@@ -1377,24 +1555,20 @@ impl App {
                     model.id.clone()
                 };
 
-                // Mark default model for this provider with an asterisk
                 if let Some(ref def) = default_model_for_provider {
                     if def.eq_ignore_ascii_case(&model.id) {
                         label.push('*');
                     }
                 }
 
-                // Extract metadata for display with robust error handling
                 let metadata = if let Some(created) = model.created {
                     if created > 0 && created < u64::MAX / 1000 {
-                        // Handle both seconds and milliseconds, with overflow protection
                         let timestamp_secs = if created > 10_000_000_000 {
-                            created / 1000 // Convert milliseconds to seconds
+                            created / 1000
                         } else {
                             created
                         };
 
-                        // Validate timestamp is within reasonable bounds (Unix epoch to ~year 3000)
                         if timestamp_secs > 0 && timestamp_secs < 32_503_680_000 {
                             chrono::DateTime::<chrono::Utc>::from_timestamp(
                                 timestamp_secs as i64,
@@ -1411,7 +1585,6 @@ impl App {
                     }
                 } else if let Some(created_at) = &model.created_at {
                     if !created_at.is_empty() {
-                        // Basic validation for date string format
                         if created_at.len() > 4
                             && (created_at.contains('-') || created_at.contains('/'))
                         {
@@ -1423,7 +1596,6 @@ impl App {
                         None
                     }
                 } else {
-                    // Provide fallback metadata for models without creation dates
                     model
                         .owned_by
                         .as_ref()
@@ -1431,8 +1603,7 @@ impl App {
                         .map(|owner| format!("Owner: {}", owner))
                 };
 
-                // Sort key for date sorting only when dates are available
-                let sort_key = if self.model_picker_has_dates {
+                let sort_key = if has_dates {
                     model
                         .created
                         .filter(|&created| created > 0)
@@ -1450,47 +1621,59 @@ impl App {
             })
             .collect();
 
-        // Re-evaluate date availability based on built items (their sort_key)
-        self.model_picker_has_dates = items.iter().any(|it| it.sort_key.is_some());
-
-        // Store all models for filtering
-        self.all_available_models = items.clone();
-
-        // Find current model in the list
         let mut selected = 0usize;
         if let Some((idx, _)) = items.iter().enumerate().find(|(_, it)| it.id == self.model) {
             selected = idx;
         }
 
-        // Initialize picker; default to A–Z when no dates are available
-        let mut picker_state = PickerState::new("Pick Model", items, selected);
-        picker_state.sort_mode = self.default_sort_mode_for_current_picker();
-        self.picker = Some(picker_state);
+        let picker_state = PickerState::new("Pick Model", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Model,
+            state: picker_state,
+            data: PickerData::Model(ModelPickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_model: Some(self.model.clone()),
+                has_dates,
+            }),
+        };
 
-        // Apply initial sorting and update title
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
         self.sort_picker_items();
         self.update_picker_title();
+
+        let current_model = self.model.clone();
+        if let Some(session) = self.picker_session_mut() {
+            if let Some((idx, _)) = session
+                .state
+                .items
+                .iter()
+                .enumerate()
+                .find(|(_, it)| it.id == current_model)
+            {
+                session.state.selected = idx;
+            }
+        }
 
         Ok(())
     }
 
-    /// Generic method to filter picker items based on search term
-    fn filter_picker_items(
-        &mut self,
-        search_filter: &str,
-        all_items: &[PickerItem],
-        base_title: &str,
-        min_items_for_filter_hint: usize,
-    ) {
-        let prefers_alpha = self.picker_prefers_alphabetical();
-        if let Some(picker) = &mut self.picker {
-            let search_term = search_filter.to_lowercase();
-
-            // Filter the full item list
-            let filtered_items: Vec<PickerItem> = if search_term.is_empty() {
-                all_items.to_vec()
+    /// Filter models based on search term and update picker
+    pub fn filter_models(&mut self) {
+        let Some(session) = self.picker_session_mut() else {
+            return;
+        };
+        if let (PickerMode::Model, PickerData::Model(model_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = model_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                model_state.all_items.clone()
             } else {
-                all_items
+                model_state
+                    .all_items
                     .iter()
                     .filter(|item| {
                         item.id.to_lowercase().contains(&search_term)
@@ -1499,116 +1682,82 @@ impl App {
                     .cloned()
                     .collect()
             };
-
-            // Update picker items
-            picker.items = filtered_items.clone();
-
-            // Reset selection to first item if current selection is out of bounds
-            if picker.selected >= filtered_items.len() {
-                picker.selected = 0;
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
             }
-
-            // Re-apply sorting after filtering
-            if prefers_alpha {
-                // For themes and providers, use alphabetical sorting
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Date => {
-                        // Z-A sorting (reverse alphabetical)
-                        picker.items.sort_by(|a, b| b.label.cmp(&a.label));
-                    }
-                    crate::ui::picker::SortMode::Name => {
-                        // A-Z sorting (normal alphabetical)
-                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
-                    }
-                }
-            } else {
-                // For models, use timestamp-based sorting
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Date => {
-                        picker.items.sort_by(|a, b| {
-                            match (&a.sort_key, &b.sort_key) {
-                                (Some(a_key), Some(b_key)) => b_key.cmp(a_key), // Reverse for newest first
-                                (Some(_), None) => std::cmp::Ordering::Less,
-                                (None, Some(_)) => std::cmp::Ordering::Greater,
-                                (None, None) => a.label.cmp(&b.label),
-                            }
-                        });
-                    }
-                    crate::ui::picker::SortMode::Name => {
-                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
-                    }
-                }
-            }
-
-            // Update the title to show filtered count and sort mode
-            let sort_text = if prefers_alpha {
-                // For themes and providers, show A-Z or Z-A instead of name/date
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Name => "A-Z",
-                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order
-                }
-            } else {
-                // For models, keep date/name as sort indicators
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Date => "date",
-                    crate::ui::picker::SortMode::Name => "name",
-                }
-            };
-
-            picker.title = if search_term.is_empty() {
-                if all_items.len() > min_items_for_filter_hint {
-                    format!(
-                        "{} ({} available - Sort by: {} - type to filter)",
-                        base_title,
-                        all_items.len(),
-                        sort_text
-                    )
-                } else {
-                    format!("{} (Sort by: {})", base_title, sort_text)
-                }
-            } else {
-                format!(
-                    "{} (filter: '{}' - {} matches - Sort by: {})",
-                    base_title,
-                    search_filter,
-                    filtered_items.len(),
-                    sort_text
-                )
-            };
-        }
-    }
-
-    /// Filter models based on search term and update picker
-    pub fn filter_models(&mut self) {
-        if self.picker_mode == Some(PickerMode::Model) {
-            let search_filter = self.model_search_filter.clone();
-            let all_items = self.all_available_models.clone();
-            self.filter_picker_items(&search_filter, &all_items, "Pick Model", 20);
+            self.sort_picker_items();
+            self.update_picker_title();
         }
     }
 
     /// Filter themes based on search term and update picker
     pub fn filter_themes(&mut self) {
-        if self.picker_mode == Some(PickerMode::Theme) {
-            let search_filter = self.theme_search_filter.clone();
-            let all_items = self.all_available_themes.clone();
-            self.filter_picker_items(&search_filter, &all_items, "Pick Theme", 10);
+        let Some(session) = self.picker_session_mut() else {
+            return;
+        };
+        if let (PickerMode::Theme, PickerData::Theme(theme_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = theme_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                theme_state.all_items.clone()
+            } else {
+                theme_state
+                    .all_items
+                    .iter()
+                    .filter(|item| {
+                        item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
+            }
+            self.sort_picker_items();
+            self.update_picker_title();
         }
     }
 
     /// Filter providers based on search term and update picker
     pub fn filter_providers(&mut self) {
-        if self.picker_mode == Some(PickerMode::Provider) {
-            let search_filter = self.provider_search_filter.clone();
-            let all_items = self.all_available_providers.clone();
-            self.filter_picker_items(&search_filter, &all_items, "Pick Provider", 10);
+        let Some(session) = self.picker_session_mut() else {
+            return;
+        };
+        if let (PickerMode::Provider, PickerData::Provider(provider_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = provider_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                provider_state.all_items.clone()
+            } else {
+                provider_state
+                    .all_items
+                    .iter()
+                    .filter(|item| {
+                        item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
+            }
+            self.sort_picker_items();
+            self.update_picker_title();
         }
     }
 
     /// Sort picker items based on current sort mode
     pub fn sort_picker_items(&mut self) {
         let prefers_alpha = self.picker_prefers_alphabetical();
-        if let Some(picker) = &mut self.picker {
+        if let Some(session) = self.picker_session_mut() {
+            let picker = &mut session.state;
             if prefers_alpha {
                 // For themes and providers, use alphabetical sorting
                 match picker.sort_mode {
@@ -1652,57 +1801,55 @@ impl App {
 
     /// Update picker title to show sort mode
     pub fn update_picker_title(&mut self) {
-        let prefers_alpha = self.picker_prefers_alphabetical();
-        if let Some(picker) = &mut self.picker {
-            // Determine sort text based on mode and picker type
-            let sort_text = if prefers_alpha {
-                // For themes and providers, show A-Z or Z-A instead of name/date
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Name => "A-Z",
-                    crate::ui::picker::SortMode::Date => "Z-A", // Treat "Date" as reverse order
-                }
-            } else {
-                // For models, keep date/name as sort indicators
-                match picker.sort_mode {
-                    crate::ui::picker::SortMode::Date => "date",
-                    crate::ui::picker::SortMode::Name => "name",
-                }
-            };
+        let Some(session) = self.picker_session_mut() else {
+            return;
+        };
 
-            let base_title = if self.picker_mode == Some(PickerMode::Model) {
-                "Pick Model"
-            } else if self.picker_mode == Some(PickerMode::Provider) {
-                "Pick Provider"
-            } else {
-                "Pick Theme"
-            };
+        let prefers_alpha = session.prefers_alphabetical();
+        let base_title = session.base_title();
+        let item_count = session.all_items().len();
+        let threshold = session.filter_hint_threshold();
+        let search_filter = session.search_filter().clone();
 
-            // Update title with sort information
-            let item_count = if self.picker_mode == Some(PickerMode::Model) {
-                self.all_available_models.len()
-            } else if self.picker_mode == Some(PickerMode::Provider) {
-                self.all_available_providers.len()
-            } else {
-                self.all_available_themes.len()
-            };
+        let picker = &mut session.state;
+        let sort_text = if prefers_alpha {
+            match picker.sort_mode {
+                crate::ui::picker::SortMode::Name => "A-Z",
+                crate::ui::picker::SortMode::Date => "Z-A",
+            }
+        } else {
+            match picker.sort_mode {
+                crate::ui::picker::SortMode::Date => "date",
+                crate::ui::picker::SortMode::Name => "name",
+            }
+        };
 
-            picker.title = if item_count > 10 {
+        picker.title = if search_filter.is_empty() {
+            if item_count > threshold {
                 format!(
                     "{} ({} available - Sort by: {} - type to filter)",
                     base_title, item_count, sort_text
                 )
             } else {
                 format!("{} (Sort by: {})", base_title, sort_text)
-            };
+            }
+        } else {
+            format!(
+                "{} (filter: '{}' - {} matches - Sort by: {})",
+                base_title,
+                search_filter,
+                picker.items.len(),
+                sort_text
+            )
         }
     }
 
     /// Apply model by id and persist in current session (not config)
     pub fn apply_model_by_id(&mut self, model_id: &str) {
         self.model = model_id.to_string();
-        self.model_before_picker = None;
-        // Reset model picker aux state
-        self.model_picker_has_dates = false;
+        if let Some(state) = self.model_picker_state_mut() {
+            state.before_model = None;
+        }
         // Complete provider->model transition if we were in one
         if self.in_provider_model_transition {
             self.complete_provider_model_transition();
@@ -1711,12 +1858,20 @@ impl App {
 
     /// Revert model to the one before opening picker (on cancel)
     pub fn revert_model_preview(&mut self) {
-        if let Some(prev) = self.model_before_picker.clone() {
+        let previous_model = self
+            .model_picker_state()
+            .and_then(|state| state.before_model.clone());
+
+        if let Some(state) = self.model_picker_state_mut() {
+            state.before_model = None;
+            state.search_filter.clear();
+            state.all_items.clear();
+            state.has_dates = false;
+        }
+
+        if let Some(prev) = previous_model {
             self.model = prev;
         }
-        self.model_before_picker = None;
-        self.model_search_filter.clear();
-        self.all_available_models.clear();
         // Check if we're in a provider->model transition and need to revert
         if self.in_provider_model_transition {
             self.revert_provider_model_transition();
@@ -1727,14 +1882,6 @@ impl App {
     pub fn open_provider_picker(&mut self) {
         use crate::auth::AuthManager;
         use crate::core::builtin_providers::load_builtin_providers;
-
-        self.picker_mode = Some(PickerMode::Provider);
-        // Save current provider for cancel
-        self.provider_before_picker = Some((
-            self.provider_name.clone(),
-            self.provider_display_name.clone(),
-        ));
-        self.provider_search_filter.clear();
 
         let auth_manager = AuthManager::new();
         let cfg = Config::load_test_safe();
@@ -1809,27 +1956,45 @@ impl App {
             return;
         }
 
-        // Store all providers for filtering
-        self.all_available_providers = items.clone();
+        let mut selected = 0usize;
+        if let Some((idx, _)) = items
+            .iter()
+            .enumerate()
+            .find(|(_, it)| it.id == self.provider_name)
+        {
+            selected = idx;
+        }
 
-        let mut picker_state = PickerState::new("Pick Provider", items, 0);
-        // Set provider picker to default to alphabetical (A-Z) sorting
-        picker_state.sort_mode = crate::ui::picker::SortMode::Name;
-        self.picker = Some(picker_state);
+        let picker_state = PickerState::new("Pick Provider", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Provider,
+            state: picker_state,
+            data: PickerData::Provider(ProviderPickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_provider: Some((
+                    self.provider_name.clone(),
+                    self.provider_display_name.clone(),
+                )),
+            }),
+        };
 
-        // Apply initial sorting and update title
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
         self.sort_picker_items();
         self.update_picker_title();
 
-        // Find current provider in the list after sorting
-        if let Some(picker) = &mut self.picker {
-            if let Some((idx, _)) = picker
+        let current_provider = self.provider_name.clone();
+        if let Some(session) = self.picker_session_mut() {
+            if let Some((idx, _)) = session
+                .state
                 .items
                 .iter()
                 .enumerate()
-                .find(|(_, it)| it.id == self.provider_name)
+                .find(|(_, it)| it.id == current_provider)
             {
-                picker.selected = idx;
+                session.state.selected = idx;
             }
         }
     }
@@ -1856,7 +2021,6 @@ impl App {
                         self.base_url = base_url;
                         self.provider_name = provider_name.clone();
                         self.provider_display_name = provider_display_name;
-                        self.provider_before_picker = None;
                         self.model = default_model.clone();
                         false // No need to open model picker
                     } else {
@@ -1876,9 +2040,12 @@ impl App {
                         self.base_url = base_url;
                         self.provider_name = provider_name.clone();
                         self.provider_display_name = provider_display_name;
-                        self.provider_before_picker = None;
                         true // Need to open model picker
                     };
+
+                if let Some(state) = self.provider_picker_state_mut() {
+                    state.before_provider = None;
+                }
 
                 (Ok(()), open_model_picker)
             }
@@ -1912,14 +2079,21 @@ impl App {
 
     /// Revert provider to the one before opening picker (on cancel)
     pub fn revert_provider_preview(&mut self) {
-        if let Some((prev_name, prev_display)) = self.provider_before_picker.clone() {
+        let previous_provider = self
+            .provider_picker_state()
+            .and_then(|state| state.before_provider.clone());
+
+        if let Some(state) = self.provider_picker_state_mut() {
+            state.before_provider = None;
+            state.search_filter.clear();
+            state.all_items.clear();
+        }
+
+        if let Some((prev_name, prev_display)) = previous_provider {
             self.provider_name = prev_name;
             self.provider_display_name = prev_display;
             // Note: We don't revert api_key and base_url as they should stay consistent with provider
         }
-        self.provider_before_picker = None;
-        self.provider_search_filter.clear();
-        self.all_available_providers.clear();
     }
 
     /// Revert provider and model to previous state during provider->model transition cancellation
@@ -1975,9 +2149,10 @@ impl App {
         self.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
         self.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
-        // Clear preview snapshot but don't persist to config
-        self.theme_before_picker = None;
-        self.theme_id_before_picker = None;
+        if let Some(state) = self.theme_picker_state_mut() {
+            state.before_theme = None;
+            state.before_theme_id = None;
+        }
         Ok(())
     }
 
@@ -2017,18 +2192,6 @@ pub(crate) struct PrewrapCache {
     last_start: usize,
     last_len: usize,
     lines: Vec<Line<'static>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum FilePromptKind {
-    Dump,
-    SaveCodeBlock,
-}
-
-#[derive(Debug, Clone)]
-pub struct FilePrompt {
-    pub kind: FilePromptKind,
-    pub content: Option<String>,
 }
 
 fn hash_last_message(messages: &VecDeque<Message>) -> u64 {
@@ -2071,7 +2234,7 @@ mod tests {
         app.open_theme_picker();
 
         // After sorting and selection alignment, ensure selected item has id "light"
-        if let Some(picker) = &app.picker {
+        if let Some(picker) = app.picker_state() {
             let idx = picker.selected;
             let selected_id = &picker.items[idx].id;
             assert_eq!(selected_id, "light");
@@ -2083,8 +2246,6 @@ mod tests {
     #[test]
     fn model_picker_title_uses_az_when_no_dates() {
         let mut app = create_test_app();
-        app.picker_mode = Some(PickerMode::Model);
-        app.model_picker_has_dates = false;
         // Build a model picker with no sort_key (no dates)
         let items = vec![
             PickerItem {
@@ -2100,12 +2261,20 @@ mod tests {
                 sort_key: None,
             },
         ];
-        let mut picker = PickerState::new("Pick Model", items, 0);
-        // Should default to A-Z in no-date scenarios
-        picker.sort_mode = crate::ui::picker::SortMode::Name;
-        app.picker = Some(picker);
+        let mut picker_state = PickerState::new("Pick Model", items.clone(), 0);
+        picker_state.sort_mode = crate::ui::picker::SortMode::Name;
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Model,
+            state: picker_state,
+            data: PickerData::Model(ModelPickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_model: None,
+                has_dates: false,
+            }),
+        });
         app.update_picker_title();
-        let picker = app.picker.as_ref().unwrap();
+        let picker = app.picker_state().unwrap();
         assert!(picker.title.contains("Sort by: A-Z"));
     }
 
@@ -2145,28 +2314,59 @@ mod tests {
     fn default_sort_mode_helper_behaviour() {
         let mut app = create_test_app();
         // Theme picker prefers alphabetical → Name
-        app.picker_mode = Some(PickerMode::Theme);
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Theme,
+            state: PickerState::new("Pick Theme", vec![], 0),
+            data: PickerData::Theme(ThemePickerState {
+                search_filter: String::new(),
+                all_items: Vec::new(),
+                before_theme: None,
+                before_theme_id: None,
+            }),
+        });
         assert!(matches!(
-            app.default_sort_mode_for_current_picker(),
+            app.picker_session().unwrap().default_sort_mode(),
             crate::ui::picker::SortMode::Name
         ));
         // Provider picker prefers alphabetical → Name
-        app.picker_mode = Some(PickerMode::Provider);
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Provider,
+            state: PickerState::new("Pick Provider", vec![], 0),
+            data: PickerData::Provider(ProviderPickerState {
+                search_filter: String::new(),
+                all_items: Vec::new(),
+                before_provider: None,
+            }),
+        });
         assert!(matches!(
-            app.default_sort_mode_for_current_picker(),
+            app.picker_session().unwrap().default_sort_mode(),
             crate::ui::picker::SortMode::Name
         ));
         // Model picker with dates → Date
-        app.picker_mode = Some(PickerMode::Model);
-        app.model_picker_has_dates = true;
+        app.picker_session = Some(PickerSession {
+            mode: PickerMode::Model,
+            state: PickerState::new("Pick Model", vec![], 0),
+            data: PickerData::Model(ModelPickerState {
+                search_filter: String::new(),
+                all_items: Vec::new(),
+                before_model: None,
+                has_dates: true,
+            }),
+        });
         assert!(matches!(
-            app.default_sort_mode_for_current_picker(),
+            app.picker_session().unwrap().default_sort_mode(),
             crate::ui::picker::SortMode::Date
         ));
         // Model picker without dates → Name
-        app.model_picker_has_dates = false;
+        if let Some(PickerSession {
+            data: PickerData::Model(state),
+            ..
+        }) = app.picker_session_mut()
+        {
+            state.has_dates = false;
+        }
         assert!(matches!(
-            app.default_sort_mode_for_current_picker(),
+            app.picker_session().unwrap().default_sort_mode(),
             crate::ui::picker::SortMode::Name
         ));
     }

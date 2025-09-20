@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::core::app::App;
+use crate::core::app::{App, UiMode};
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
@@ -15,10 +15,7 @@ pub fn create_test_app() -> App {
         messages: VecDeque::new(),
         input: String::new(),
         input_cursor_position: 0,
-        input_mode: true,
-        edit_select_mode: false,
-        selected_user_message_index: None,
-        in_place_edit_index: None,
+        mode: UiMode::Typing,
         current_response: String::new(),
         client: reqwest::Client::new(),
         model: "test-model".to_string(),
@@ -41,21 +38,7 @@ pub fn create_test_app() -> App {
         textarea: tui_textarea::TextArea::default(),
         theme: Theme::dark_default(),
         current_theme_id: None,
-        picker: None,
-        picker_mode: None,
-        block_select_mode: false,
-        selected_block_index: None,
-        theme_before_picker: None,
-        theme_id_before_picker: None,
-        model_before_picker: None,
-        model_search_filter: String::new(),
-        all_available_models: Vec::new(),
-        model_picker_has_dates: false,
-        theme_search_filter: String::new(),
-        all_available_themes: Vec::new(),
-        provider_before_picker: None,
-        provider_search_filter: String::new(),
-        all_available_providers: Vec::new(),
+        picker_session: None,
         in_provider_model_transition: false,
         provider_model_transition_state: None,
         markdown_enabled: true,
@@ -63,7 +46,6 @@ pub fn create_test_app() -> App {
         prewrap_cache: None,
         status: None,
         status_set_at: None,
-        file_prompt: None,
         startup_requires_provider: false,
         startup_requires_model: false,
         startup_multiple_providers_available: false,

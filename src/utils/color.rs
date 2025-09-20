@@ -73,6 +73,7 @@ pub fn quantize_theme_if_needed(
 
     theme.title_style = quantize_style(theme.title_style, depth);
     theme.streaming_indicator_style = quantize_style(theme.streaming_indicator_style, depth);
+    theme.selection_highlight_style = quantize_style(theme.selection_highlight_style, depth);
     theme.input_border_style = quantize_style(theme.input_border_style, depth);
     theme.input_title_style = quantize_style(theme.input_title_style, depth);
 

@@ -17,7 +17,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly)
 - Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
-- Interactive theme and model pickers with filtering, sorting, and metadata display
+- Interactive theme and model pickers with filtering and sorting
 - Message retry and external editor support
 - Conversation logging with pause/resume
 - Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code)

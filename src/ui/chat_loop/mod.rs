@@ -3,18 +3,17 @@
 //! This module contains the main event loop that handles user input, renders the UI,
 //! and manages the chat session.
 
-use crate::api::{ChatRequest, ChatResponse};
+mod setup;
+mod stream;
+
+use self::setup::bootstrap_app;
+use self::stream::{StreamDispatcher, StreamParams, STREAM_END_MARKER};
+
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::App;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
-use crate::utils::url::construct_api_url;
-use crate::{
-    auth::AuthManager, core::builtin_providers::load_builtin_providers, core::config::Config,
-};
-use futures_util::StreamExt;
-use memchr::memchr;
 use ratatui::crossterm::{
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
@@ -32,117 +31,6 @@ use std::{
 };
 use tokio::sync::{mpsc, Mutex};
 use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
-
-// Module-level stream end marker for helper usage and event loop
-const STREAM_END_MARKER: &str = "<<STREAM_END>>";
-
-struct StreamParams {
-    client: reqwest::Client,
-    base_url: String,
-    api_key: String,
-    model: String,
-    api_messages: Vec<crate::api::ChatMessage>,
-    cancel_token: tokio_util::sync::CancellationToken,
-    stream_id: u64,
-    tx: tokio::sync::mpsc::UnboundedSender<(String, u64)>,
-}
-
-fn spawn_stream(params: StreamParams) {
-    let StreamParams {
-        client,
-        base_url,
-        api_key,
-        model,
-        api_messages,
-        cancel_token,
-        stream_id,
-        tx,
-    } = params;
-    let tx_clone = tx.clone();
-    tokio::spawn(async move {
-        let request = ChatRequest {
-            model,
-            messages: api_messages,
-            stream: true,
-        };
-
-        tokio::select! {
-            _ = async {
-                let chat_url = construct_api_url(&base_url, "chat/completions");
-                match client
-                    .post(chat_url)
-                    .header("Authorization", format!("Bearer {api_key}"))
-                    .header("Content-Type", "application/json")
-                    .json(&request)
-                    .send()
-                    .await
-                {
-                    Ok(response) => {
-                        if !response.status().is_success() {
-                            let error_text = response
-                                .text()
-                                .await
-                                .unwrap_or_else(|_| "<no body>".to_string());
-                            let _ = tx_clone.send((format!("<<API_ERROR>>{}", error_text), stream_id));
-                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                            return;
-                        }
-
-                        let mut stream = response.bytes_stream();
-                        let mut buffer: Vec<u8> = Vec::new();
-
-                        while let Some(chunk) = stream.next().await {
-                            if cancel_token.is_cancelled() {
-                                return;
-                            }
-
-                            if let Ok(chunk_bytes) = chunk {
-                                buffer.extend_from_slice(&chunk_bytes);
-
-                                while let Some(newline_pos) = memchr(b'\n', &buffer) {
-                                    let line_str = match std::str::from_utf8(&buffer[..newline_pos]) {
-                                        Ok(s) => s.trim(),
-                                        Err(e) => {
-                                            eprintln!("Invalid UTF-8 in stream: {e}");
-                                            buffer.drain(..=newline_pos);
-                                            continue;
-                                        }
-                                    };
-
-                                    if let Some(data) = line_str.strip_prefix("data: ") {
-                                        if data == "[DONE]" {
-                                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                                            return;
-                                        }
-
-                                        match serde_json::from_str::<ChatResponse>(data) {
-                                            Ok(response) => {
-                                                if let Some(choice) = response.choices.first() {
-                                                    if let Some(content) = &choice.delta.content {
-                                                        let _ = tx_clone.send((content.clone(), stream_id));
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Failed to parse JSON: {e} - Data: {data}");
-                                            }
-                                        }
-                                    }
-                                    buffer.drain(..=newline_pos);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx_clone.send((format!("<<API_ERROR>>{}", e), stream_id));
-                        let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                    }
-                }
-            } => {}
-            _ = cancel_token.cancelled() => {}
-        }
-    });
-}
 
 fn language_to_extension(lang: Option<&str>) -> &'static str {
     if let Some(l) = lang {
@@ -185,126 +73,7 @@ pub async fn run_chat(
     provider: Option<String>,
     env_only: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // Startup provider selection policy per spec
-    let config = Config::load()?;
-    let auth_manager = AuthManager::new();
-
-    // Collect providers that have tokens (ignored when env_only=true)
-    let mut token_providers: Vec<String> = Vec::new();
-    if !env_only {
-        for bp in load_builtin_providers() {
-            if auth_manager.get_token(&bp.id).unwrap_or(None).is_some() {
-                token_providers.push(bp.id);
-            }
-        }
-        for (id, _display, _url, has_token) in auth_manager.list_custom_providers() {
-            if has_token {
-                token_providers.push(id);
-            }
-        }
-    }
-    // Environment variable counts as OpenAI auth (not token-backed)
-    let has_env_openai = std::env::var("OPENAI_API_KEY").is_ok();
-
-    // Decide startup path
-    let mut selected_provider: Option<String> = None;
-    let mut open_provider_picker = false;
-    let total_available = token_providers.len() + if has_env_openai { 1 } else { 0 };
-    let multiple_providers_available = total_available > 1;
-
-    // Respect -p when provided (ignored in env-only mode)
-    if !env_only {
-        if let Some(p) = provider.clone() {
-            if !p.is_empty() {
-                selected_provider = Some(p);
-            }
-        }
-    }
-
-    if selected_provider.is_none() {
-        if env_only {
-            // Force env path: verify OPENAI_API_KEY exists
-            if !has_env_openai {
-                eprintln!("❌ --env used but OPENAI_API_KEY is not set");
-                std::process::exit(2);
-            }
-            // Let authentication fallback handle provider naming via env
-            // Do not open provider picker in env-only mode
-        }
-        if let Some(default_p) = &config.default_provider {
-            selected_provider = Some(default_p.clone());
-        } else if token_providers.len() == 1 {
-            // Exactly one configured provider → select it automatically, even if env is present
-            selected_provider = token_providers.first().cloned();
-        } else if total_available > 1 {
-            open_provider_picker = true;
-        } else if has_env_openai {
-            // Env-only OpenAI: pass None to let authentication fall back to env vars
-            selected_provider = None;
-        } else {
-            // No auth available, show guidance and exit
-            eprintln!("❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional");
-            std::process::exit(2);
-        }
-    }
-
-    // Create app accordingly
-    let app = if open_provider_picker {
-        let app = Arc::new(Mutex::new(
-            App::new_uninitialized(log.clone()).await.expect("init app"),
-        ));
-        {
-            let mut app_guard = app.lock().await;
-            app_guard.startup_requires_provider = true;
-            app_guard.startup_multiple_providers_available = multiple_providers_available;
-            app_guard.open_provider_picker();
-        }
-        app
-    } else {
-        let app = Arc::new(Mutex::new(
-            match App::new_with_auth(model.clone(), log.clone(), selected_provider, env_only).await
-            {
-                Ok(app) => app,
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    if error_msg.contains("No authentication")
-                        || error_msg.contains("OPENAI_API_KEY")
-                    {
-                        eprintln!("{error_msg}");
-                        eprintln!();
-                        eprintln!("💡 Quick fixes:");
-                        eprintln!("  • chabeau auth                    # Interactive setup");
-                        eprintln!("  • chabeau -p                      # Check provider status");
-                        eprintln!("  • export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)");
-                        std::process::exit(2);
-                    } else {
-                        eprintln!("❌ Error: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            },
-        ));
-        // If no model is configured, open the model picker at startup
-        let mut need_model_picker = false;
-        {
-            let app_guard = app.lock().await;
-            if app_guard.model.is_empty() {
-                need_model_picker = true;
-            }
-        }
-        if need_model_picker {
-            let mut app_guard = app.lock().await;
-            app_guard.startup_requires_model = true;
-            app_guard.startup_multiple_providers_available = multiple_providers_available;
-            // If we have env-only auth (no token providers), disable persisting defaults
-            let env_only = has_env_openai && token_providers.is_empty();
-            app_guard.startup_env_only = env_only;
-            if let Err(e) = app_guard.open_model_picker().await {
-                app_guard.set_status(format!("Model picker error: {}", e));
-            }
-        }
-        app
-    };
+    let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only).await?;
 
     // Sign-off line (no noisy startup banners)
     println!(
@@ -320,9 +89,8 @@ pub async fn run_chat(
     let mut terminal = Terminal::new(backend)?;
 
     // Channel for streaming updates with stream ID
-    let (tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
-
-    // STREAM_END_MARKER defined at module level
+    let (stream_tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
+    let stream_dispatcher = StreamDispatcher::new(stream_tx);
 
     // Drawing cadence control
     let _last_draw = Instant::now();
@@ -388,513 +156,11 @@ pub async fn run_chat(
                         continue;
                     }
                     // If a picker is open, handle navigation/selection first
-                    {
-                        let mut app_guard = app.lock().await;
-                        let current_picker_mode = app_guard.current_picker_mode();
-                        let provider_name = app_guard.provider_name.clone(); // Extract before mutable borrow
-                        if let Some(selected_id) = {
-                            if let Some(picker) = app_guard.picker_state_mut() {
-                                match key.code {
-                                    KeyCode::Esc => {
-                                        match current_picker_mode {
-                                            Some(crate::core::app::PickerMode::Theme) => {
-                                                app_guard.revert_theme_preview();
-                                                app_guard.close_picker();
-                                            }
-                                            Some(crate::core::app::PickerMode::Model) => {
-                                                if app_guard.startup_requires_model {
-                                                    // Startup mandatory model selection
-                                                    app_guard.close_picker();
-                                                    if app_guard
-                                                        .startup_multiple_providers_available
-                                                    {
-                                                        // Go back to provider picker per spec
-                                                        app_guard.startup_requires_model = false;
-                                                        app_guard.startup_requires_provider = true;
-                                                        // Clear provider selection in title bar during startup bounce-back
-                                                        app_guard.provider_name.clear();
-                                                        app_guard.provider_display_name =
-                                                            "(no provider selected)".to_string();
-                                                        app_guard.api_key.clear();
-                                                        app_guard.base_url.clear();
-                                                        app_guard.open_provider_picker();
-                                                    } else {
-                                                        // Exit app if no alternative provider
-                                                        app_guard.exit_requested = true;
-                                                    }
-                                                } else {
-                                                    app_guard.revert_model_preview();
-                                                    if app_guard.in_provider_model_transition {
-                                                        app_guard
-                                                            .revert_provider_model_transition();
-                                                        app_guard.set_status("Selection cancelled");
-                                                    }
-                                                    app_guard.close_picker();
-                                                }
-                                            }
-                                            Some(crate::core::app::PickerMode::Provider) => {
-                                                if app_guard.startup_requires_provider {
-                                                    // Startup mandatory provider selection: exit if cancelled
-                                                    app_guard.close_picker();
-                                                    app_guard.exit_requested = true;
-                                                } else {
-                                                    app_guard.revert_provider_preview();
-                                                    app_guard.close_picker();
-                                                }
-                                            }
-                                            _ => {}
-                                        }
-                                        None
-                                    }
-                                    KeyCode::Up => {
-                                        picker.move_up();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::Down => {
-                                        picker.move_down();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::Char('k') => {
-                                        picker.move_up();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::Char('j')
-                                        if !key
-                                            .modifiers
-                                            .contains(event::KeyModifiers::CONTROL) =>
-                                    {
-                                        picker.move_down();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::Home => {
-                                        picker.move_to_start();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::End => {
-                                        picker.move_to_end();
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            picker.selected_id().map(|s| s.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    KeyCode::F(6) => {
-                                        picker.cycle_sort_mode();
-                                        // Re-sort and update title
-                                        let _ = picker; // Release borrow
-                                        app_guard.sort_picker_items();
-                                        app_guard.update_picker_title();
-                                        None
-                                    }
-                                    // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
-                                    KeyCode::Enter | KeyCode::Char('j')
-                                        if key.code == KeyCode::Enter
-                                            || key
-                                                .modifiers
-                                                .contains(event::KeyModifiers::CONTROL) =>
-                                    {
-                                        let is_persistent = if key.code == KeyCode::Enter {
-                                            key.modifiers.contains(event::KeyModifiers::ALT)
-                                        } else {
-                                            true
-                                        };
-                                        // Common apply path
-                                        // Theme
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            if let Some(id) =
-                                                picker.selected_id().map(|s| s.to_string())
-                                            {
-                                                let res = if is_persistent {
-                                                    app_guard.apply_theme_by_id(&id)
-                                                } else {
-                                                    app_guard.apply_theme_by_id_session_only(&id)
-                                                };
-                                                match res {
-                                                    Ok(_) => app_guard.set_status(format!(
-                                                        "Theme set: {}{}",
-                                                        id,
-                                                        status_suffix(is_persistent)
-                                                    )),
-                                                    Err(_e) => app_guard.set_status("Theme error"),
-                                                }
-                                            }
-                                            app_guard.close_picker();
-                                            Some("__picker_handled__".to_string())
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Model)
-                                        {
-                                            if let Some(id) =
-                                                picker.selected_id().map(|s| s.to_string())
-                                            {
-                                                let persist =
-                                                    is_persistent && !app_guard.startup_env_only;
-                                                let res = if persist {
-                                                    app_guard.apply_model_by_id_persistent(&id)
-                                                } else {
-                                                    app_guard.apply_model_by_id(&id);
-                                                    Ok(())
-                                                };
-                                                match res {
-                                                    Ok(_) => {
-                                                        app_guard.set_status(format!(
-                                                            "Model set: {}{}",
-                                                            id,
-                                                            status_suffix(persist)
-                                                        ));
-                                                        if app_guard.in_provider_model_transition {
-                                                            app_guard
-                                                                .complete_provider_model_transition(
-                                                                );
-                                                        }
-                                                        if app_guard.startup_requires_model {
-                                                            app_guard.startup_requires_model =
-                                                                false;
-                                                        }
-                                                    }
-                                                    Err(e) => app_guard
-                                                        .set_status(format!("Model error: {}", e)),
-                                                }
-                                            }
-                                            app_guard.close_picker();
-                                            Some("__picker_handled__".to_string())
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Provider)
-                                        {
-                                            if let Some(id) =
-                                                picker.selected_id().map(|s| s.to_string())
-                                            {
-                                                let (res, should_open_model_picker) =
-                                                    if is_persistent {
-                                                        app_guard
-                                                            .apply_provider_by_id_persistent(&id)
-                                                    } else {
-                                                        app_guard.apply_provider_by_id(&id)
-                                                    };
-                                                match res {
-                                                    Ok(_) => {
-                                                        app_guard.set_status(format!(
-                                                            "Provider set: {}{}",
-                                                            id,
-                                                            status_suffix(is_persistent)
-                                                        ));
-                                                        app_guard.close_picker();
-                                                        if should_open_model_picker {
-                                                            if app_guard.startup_requires_provider {
-                                                                app_guard
-                                                                    .startup_requires_provider =
-                                                                    false;
-                                                                app_guard.startup_requires_model =
-                                                                    true;
-                                                            }
-                                                            let app_clone = app.clone();
-                                                            tokio::spawn(async move {
-                                                                let mut app_guard =
-                                                                    app_clone.lock().await;
-                                                                let _ = app_guard
-                                                                    .open_model_picker()
-                                                                    .await;
-                                                            });
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        app_guard.set_status(format!(
-                                                            "Provider error: {}",
-                                                            e
-                                                        ));
-                                                        app_guard.close_picker();
-                                                    }
-                                                }
-                                            }
-                                            Some("__picker_handled__".to_string())
-                                        } else {
-                                            Some("__picker_handled__".to_string())
-                                        }
-                                    }
-                                    // Ctrl+J: persist selection to config (documented only in /help)
-                                    KeyCode::Char('j')
-                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                                    {
-                                        match current_picker_mode {
-                                            Some(crate::core::app::PickerMode::Theme) => {
-                                                if let Some(id) =
-                                                    picker.selected_id().map(|s| s.to_string())
-                                                {
-                                                    match app_guard.apply_theme_by_id(&id) {
-                                                        Ok(_) => app_guard.set_status(format!(
-                                                            "Theme set: {}{}",
-                                                            id,
-                                                            status_suffix(true)
-                                                        )),
-                                                        Err(_e) => {
-                                                            app_guard.set_status("Theme error")
-                                                        }
-                                                    }
-                                                }
-                                                app_guard.close_picker();
-                                                Some("__picker_handled__".to_string())
-                                            }
-                                            Some(crate::core::app::PickerMode::Model) => {
-                                                if let Some(id) =
-                                                    picker.selected_id().map(|s| s.to_string())
-                                                {
-                                                    let persist = !app_guard.startup_env_only;
-                                                    let res = if persist {
-                                                        app_guard.apply_model_by_id_persistent(&id)
-                                                    } else {
-                                                        app_guard.apply_model_by_id(&id);
-                                                        Ok(())
-                                                    };
-                                                    match res {
-                                                        Ok(_) => {
-                                                            app_guard.set_status(format!(
-                                                                "Model set: {}{}",
-                                                                id,
-                                                                status_suffix(persist)
-                                                            ));
-                                                            if app_guard
-                                                                .in_provider_model_transition
-                                                            {
-                                                                app_guard
-                                                                    .complete_provider_model_transition(
-                                                                    );
-                                                            }
-                                                            if app_guard.startup_requires_model {
-                                                                app_guard.startup_requires_model =
-                                                                    false;
-                                                            }
-                                                        }
-                                                        Err(e) => app_guard.set_status(format!(
-                                                            "Model error: {}",
-                                                            e
-                                                        )),
-                                                    }
-                                                }
-                                                app_guard.close_picker();
-                                                Some("__picker_handled__".to_string())
-                                            }
-                                            Some(crate::core::app::PickerMode::Provider) => {
-                                                if let Some(id) =
-                                                    picker.selected_id().map(|s| s.to_string())
-                                                {
-                                                    let (res, should_open_model_picker) = app_guard
-                                                        .apply_provider_by_id_persistent(&id);
-                                                    match res {
-                                                        Ok(_) => {
-                                                            app_guard.set_status(format!(
-                                                                "Provider set: {}{}",
-                                                                id,
-                                                                status_suffix(true)
-                                                            ));
-                                                            app_guard.close_picker();
-                                                            if should_open_model_picker {
-                                                                let app_clone = app.clone();
-                                                                tokio::spawn(async move {
-                                                                    let mut app_guard =
-                                                                        app_clone.lock().await;
-                                                                    let _ = app_guard
-                                                                        .open_model_picker()
-                                                                        .await;
-                                                                });
-                                                            }
-                                                        }
-                                                        Err(e) => app_guard.set_status(format!(
-                                                            "Provider error: {}",
-                                                            e
-                                                        )),
-                                                    }
-                                                }
-                                                Some("__picker_handled__".to_string())
-                                            }
-                                            _ => Some("__picker_handled__".to_string()),
-                                        }
-                                    }
-                                    KeyCode::Delete => {
-                                        // Del key to unset defaults - only works if current selection is a default (has *)
-                                        if let Some(selected_item) = picker.get_selected_item() {
-                                            if selected_item.label.ends_with('*') {
-                                                let item_id = selected_item.id.clone();
-
-                                                // Release picker borrow by ending the scope
-                                                let _ = picker;
-
-                                                let result = match current_picker_mode {
-                                                    Some(crate::core::app::PickerMode::Model) => {
-                                                        app_guard
-                                                            .unset_default_model(&provider_name)
-                                                    }
-                                                    Some(crate::core::app::PickerMode::Theme) => {
-                                                        app_guard.unset_default_theme()
-                                                    }
-                                                    Some(
-                                                        crate::core::app::PickerMode::Provider,
-                                                    ) => app_guard.unset_default_provider(),
-                                                    _ => Err("Unknown picker mode".to_string()),
-                                                };
-                                                match result {
-                                                    Ok(_) => {
-                                                        app_guard.set_status(format!(
-                                                            "Removed default: {}",
-                                                            item_id
-                                                        ));
-                                                        // Refresh the picker to remove the asterisk
-                                                        match current_picker_mode {
-                                                            Some(crate::core::app::PickerMode::Model) => {
-                                                                // Store app reference for async refresh
-                                                                let app_clone = app.clone();
-                                                                tokio::spawn(async move {
-                                                                    let mut app_guard = app_clone.lock().await;
-                                                                    let _ = app_guard.open_model_picker().await;
-                                                                });
-                                                            }
-                                                            Some(crate::core::app::PickerMode::Theme) => {
-                                                                app_guard.open_theme_picker();
-                                                            }
-                                                            Some(crate::core::app::PickerMode::Provider) => {
-                                                                app_guard.open_provider_picker();
-                                                            }
-                                                            _ => {}
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        app_guard.set_status(format!(
-                                                            "Error removing default: {}",
-                                                            e
-                                                        ));
-                                                    }
-                                                }
-                                            } else {
-                                                app_guard.set_status("Del key only works on default items (marked with *)");
-                                            }
-                                        }
-                                        None
-                                    }
-                                    KeyCode::Backspace => {
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Model)
-                                        {
-                                            if let Some(state) = app_guard.model_picker_state_mut()
-                                            {
-                                                if !state.search_filter.is_empty() {
-                                                    state.search_filter.pop();
-                                                    app_guard.filter_models();
-                                                }
-                                            }
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            if let Some(state) = app_guard.theme_picker_state_mut()
-                                            {
-                                                if !state.search_filter.is_empty() {
-                                                    state.search_filter.pop();
-                                                    app_guard.filter_themes();
-                                                }
-                                            }
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Provider)
-                                        {
-                                            if let Some(state) =
-                                                app_guard.provider_picker_state_mut()
-                                            {
-                                                if !state.search_filter.is_empty() {
-                                                    state.search_filter.pop();
-                                                    app_guard.filter_providers();
-                                                }
-                                            }
-                                        }
-                                        None
-                                    }
-                                    KeyCode::Char(c) => {
-                                        if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Model)
-                                        {
-                                            // Add character to filter for model picker
-                                            if !c.is_control() {
-                                                if let Some(state) =
-                                                    app_guard.model_picker_state_mut()
-                                                {
-                                                    state.search_filter.push(c);
-                                                    app_guard.filter_models();
-                                                }
-                                            }
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Theme)
-                                        {
-                                            // Add character to filter for theme picker
-                                            if !c.is_control() {
-                                                if let Some(state) =
-                                                    app_guard.theme_picker_state_mut()
-                                                {
-                                                    state.search_filter.push(c);
-                                                    app_guard.filter_themes();
-                                                }
-                                            }
-                                        } else if current_picker_mode
-                                            == Some(crate::core::app::PickerMode::Provider)
-                                        {
-                                            // Add character to filter for provider picker
-                                            if !c.is_control() {
-                                                if let Some(state) =
-                                                    app_guard.provider_picker_state_mut()
-                                                {
-                                                    state.search_filter.push(c);
-                                                    app_guard.filter_providers();
-                                                }
-                                            }
-                                        }
-                                        None
-                                    }
-                                    // No block actions in picker modes
-                                    _ => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } {
-                            // Apply preview after releasing mutable borrow of picker (theme only)
-                            if current_picker_mode == Some(crate::core::app::PickerMode::Theme)
-                                && selected_id != "__picker_handled__"
-                            {
-                                app_guard.preview_theme_by_id(&selected_id);
-                            }
-                            continue; // handled by picker
-                        } else if app_guard.picker_session().is_some() {
-                            continue;
-                        }
+                    let picker_state = handle_picker_key_event(&app, &key).await;
+                    if picker_state.selection.is_some() || picker_state.has_session {
+                        continue;
                     }
+
                     // Global: Ctrl+B to enter block select mode or cycle upward when active
                     if matches!(key.code, KeyCode::Char('b'))
                         && key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -916,8 +182,7 @@ pub async fn run_chat(
                             // Cycle upward like Ctrl+P
                             if let Some(cur) = app_guard.selected_block_index() {
                                 let total = blocks.len();
-                                if total > 0 {
-                                    let next = if cur == 0 { total - 1 } else { cur - 1 };
+                                if let Some(next) = wrap_previous_index(cur, total) {
                                     app_guard.set_selected_block_index(next);
                                     if let Some((start, _len, _)) = blocks.get(next) {
                                         let lines = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(&app_guard.messages, &app_guard.theme, app_guard.markdown_enabled, app_guard.syntax_enabled, Some(term_size.width as usize));
@@ -1149,8 +414,7 @@ pub async fn run_chat(
                                             app_guard.syntax_enabled,
                                         )
                                         .len();
-                                        if total > 0 {
-                                            let next = if cur == 0 { total - 1 } else { cur - 1 };
+                                        if let Some(next) = wrap_previous_index(cur, total) {
                                             app_guard.set_selected_block_index(next);
                                             // Scroll to block start
                                             let ranges =
@@ -1197,8 +461,7 @@ pub async fn run_chat(
                                             app_guard.syntax_enabled,
                                         )
                                         .len();
-                                        if total > 0 {
-                                            let next = (cur + 1) % total;
+                                        if let Some(next) = wrap_next_index(cur, total) {
                                             app_guard.set_selected_block_index(next);
                                             // Scroll to block start
                                             let ranges =
@@ -1392,15 +655,7 @@ pub async fn run_chat(
                             match editor_result {
                                 Ok(Some(message)) => {
                                     // Editor returned content, send it immediately
-                                    let (
-                                        api_messages,
-                                        client,
-                                        model,
-                                        api_key,
-                                        base_url,
-                                        cancel_token,
-                                        stream_id,
-                                    ) = {
+                                    let stream_params = {
                                         let mut app_guard = app.lock().await;
 
                                         // Re-enable auto-scroll when user sends a new message
@@ -1424,28 +679,19 @@ pub async fn run_chat(
                                             terminal_size.width,
                                         );
 
-                                        (
+                                        StreamParams {
+                                            client: app_guard.client.clone(),
+                                            base_url: app_guard.base_url.clone(),
+                                            api_key: app_guard.api_key.clone(),
+                                            model: app_guard.model.clone(),
                                             api_messages,
-                                            app_guard.client.clone(),
-                                            app_guard.model.clone(),
-                                            app_guard.api_key.clone(),
-                                            app_guard.base_url.clone(),
                                             cancel_token,
                                             stream_id,
-                                        )
+                                        }
                                     };
 
                                     // Send the message to API (deduplicated helper)
-                                    spawn_stream(StreamParams {
-                                        client,
-                                        base_url,
-                                        api_key,
-                                        model,
-                                        api_messages,
-                                        cancel_token,
-                                        stream_id,
-                                        tx: tx.clone(),
-                                    });
+                                    stream_dispatcher.spawn(stream_params);
                                 }
                                 Ok(None) => {
                                     // Editor returned no content or user cancelled
@@ -1484,16 +730,7 @@ pub async fn run_chat(
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             // Retry the last bot response with debounce protection
-                            let (
-                                should_retry,
-                                api_messages,
-                                client,
-                                model,
-                                api_key,
-                                base_url,
-                                cancel_token,
-                                stream_id,
-                            ) = {
+                            let stream_params = {
                                 let mut app_guard = app.lock().await;
 
                                 // Check debounce at the event level to prevent any processing
@@ -1511,123 +748,27 @@ pub async fn run_chat(
                                     .saturating_sub(input_area_height + 2) // Dynamic input area + borders
                                     .saturating_sub(1); // 1 for title
 
-                                if let Some(api_messages) =
-                                    app_guard.prepare_retry(available_height, terminal_size.width)
-                                {
-                                    // Start new stream (this will cancel any existing stream)
-                                    let (cancel_token, stream_id) = app_guard.start_new_stream();
+                                app_guard
+                                    .prepare_retry(available_height, terminal_size.width)
+                                    .map(|api_messages| {
+                                        let (cancel_token, stream_id) =
+                                            app_guard.start_new_stream();
 
-                                    (
-                                        true,
-                                        api_messages,
-                                        app_guard.client.clone(),
-                                        app_guard.model.clone(),
-                                        app_guard.api_key.clone(),
-                                        app_guard.base_url.clone(),
-                                        cancel_token,
-                                        stream_id,
-                                    )
-                                } else {
-                                    (
-                                        false,
-                                        Vec::new(),
-                                        app_guard.client.clone(),
-                                        String::new(),
-                                        String::new(),
-                                        String::new(),
-                                        tokio_util::sync::CancellationToken::new(),
-                                        0,
-                                    )
-                                }
+                                        StreamParams {
+                                            client: app_guard.client.clone(),
+                                            base_url: app_guard.base_url.clone(),
+                                            api_key: app_guard.api_key.clone(),
+                                            model: app_guard.model.clone(),
+                                            api_messages,
+                                            cancel_token,
+                                            stream_id,
+                                        }
+                                    })
                             };
 
-                            if !should_retry {
-                                continue;
+                            if let Some(params) = stream_params {
+                                stream_dispatcher.spawn(params);
                             }
-
-                            // Spawn the same API request logic as for Enter key
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                let request = ChatRequest {
-                                    model,
-                                    messages: api_messages,
-                                    stream: true,
-                                };
-
-                                // Use tokio::select! to race between the HTTP request and cancellation
-                                tokio::select! {
-                                            _ = async {
-                                                let chat_url = construct_api_url(&base_url, "chat/completions");
-                                                match client
-                                                    .post(chat_url)
-                                                    .header("Authorization", format!("Bearer {api_key}"))
-                                                    .header("Content-Type", "application/json")
-                                                    .json(&request)
-                                                    .send()
-                                                    .await
-                                        {
-                                            Ok(response) => {
-                                                if !response.status().is_success() {
-                                                    if let Ok(error_text) = response.text().await {
-                                                        eprintln!("API request failed: {error_text}");
-                                                    }
-                                                    return;
-                                                }
-
-                                                let mut stream = response.bytes_stream();
-                                                let mut buffer = String::new();
-
-                                                while let Some(chunk) = stream.next().await {
-                                                    // Check for cancellation before processing each chunk
-                                                    if cancel_token.is_cancelled() {
-                                                        return;
-                                                    }
-
-                                                    if let Ok(chunk_bytes) = chunk {
-                                                        let chunk_str = String::from_utf8_lossy(&chunk_bytes);
-                                                        buffer.push_str(&chunk_str);
-
-                                                        // Process complete lines from buffer
-                                                        while let Some(newline_pos) = buffer.find('\n') {
-                                                            let line = buffer[..newline_pos].trim().to_string();
-                                                            buffer.drain(..=newline_pos);
-
-                                                            if let Some(data) = line.strip_prefix("data: ") {
-                                                                if data == "[DONE]" {
-                                                                    // Signal end of streaming
-                                                                    let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
-                                                                    return;
-                                                                }
-
-                                                                match serde_json::from_str::<ChatResponse>(data) {
-                                                                    Ok(response) => {
-                                                                        if let Some(choice) = response.choices.first() {
-                                                                            if let Some(content) = &choice.delta.content {
-                                                                                let _ = tx_clone.send((content.clone(), stream_id));
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    Err(e) => {
-                                                                        eprintln!("Failed to parse JSON: {e} - Data: {data}");
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Error sending message: {e}");
-                                            }
-                                        }
-                                    } => {
-                                        // HTTP request completed normally
-                                    }
-                                    _ = cancel_token.cancelled() => {
-                                        // Stream was cancelled, clean up
-                                    }
-                                }
-                            });
                         }
                         KeyCode::Esc => {
                             let mut app_guard = app.lock().await;
@@ -1855,7 +996,7 @@ pub async fn run_chat(
                                     continue;
                                 }
 
-                                spawn_stream(StreamParams {
+                                stream_dispatcher.spawn(StreamParams {
                                     client,
                                     base_url,
                                     api_key,
@@ -1863,7 +1004,6 @@ pub async fn run_chat(
                                     api_messages,
                                     cancel_token,
                                     stream_id,
-                                    tx: tx.clone(),
                                 });
                             }
                         }
@@ -1966,7 +1106,7 @@ pub async fn run_chat(
                             if !should_send_to_api {
                                 continue;
                             }
-                            spawn_stream(StreamParams {
+                            stream_dispatcher.spawn(StreamParams {
                                 client,
                                 base_url,
                                 api_key,
@@ -1974,7 +1114,6 @@ pub async fn run_chat(
                                 api_messages,
                                 cancel_token,
                                 stream_id,
-                                tx: tx.clone(),
                             });
                         }
                         KeyCode::Char('a')
@@ -2212,4 +1351,464 @@ pub async fn run_chat(
     terminal.show_cursor()?;
 
     result
+}
+
+struct PickerEventResult {
+    selection: Option<String>,
+    has_session: bool,
+}
+
+async fn handle_picker_key_event(
+    app: &Arc<Mutex<App>>,
+    key: &event::KeyEvent,
+) -> PickerEventResult {
+    let mut app_guard = app.lock().await;
+    let current_picker_mode = app_guard.current_picker_mode();
+    let provider_name = app_guard.provider_name.clone();
+
+    let selection = if let Some(picker) = app_guard.picker_state_mut() {
+        match key.code {
+            KeyCode::Esc => {
+                match current_picker_mode {
+                    Some(crate::core::app::PickerMode::Theme) => {
+                        app_guard.revert_theme_preview();
+                        app_guard.close_picker();
+                    }
+                    Some(crate::core::app::PickerMode::Model) => {
+                        if app_guard.startup_requires_model {
+                            // Startup mandatory model selection
+                            app_guard.close_picker();
+                            if app_guard.startup_multiple_providers_available {
+                                // Go back to provider picker per spec
+                                app_guard.startup_requires_model = false;
+                                app_guard.startup_requires_provider = true;
+                                // Clear provider selection in title bar during startup bounce-back
+                                app_guard.provider_name.clear();
+                                app_guard.provider_display_name =
+                                    "(no provider selected)".to_string();
+                                app_guard.api_key.clear();
+                                app_guard.base_url.clear();
+                                app_guard.open_provider_picker();
+                            } else {
+                                // Exit app if no alternative provider
+                                app_guard.exit_requested = true;
+                            }
+                        } else {
+                            app_guard.revert_model_preview();
+                            if app_guard.in_provider_model_transition {
+                                app_guard.revert_provider_model_transition();
+                                app_guard.set_status("Selection cancelled");
+                            }
+                            app_guard.close_picker();
+                        }
+                    }
+                    Some(crate::core::app::PickerMode::Provider) => {
+                        if app_guard.startup_requires_provider {
+                            // Startup mandatory provider selection: exit if cancelled
+                            app_guard.close_picker();
+                            app_guard.exit_requested = true;
+                        } else {
+                            app_guard.revert_provider_preview();
+                            app_guard.close_picker();
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            }
+            KeyCode::Up => {
+                picker.move_up();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::Down => {
+                picker.move_down();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('k') => {
+                picker.move_up();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                picker.move_down();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::Home => {
+                picker.move_to_start();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::End => {
+                picker.move_to_end();
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    picker.selected_id().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            KeyCode::F(6) => {
+                picker.cycle_sort_mode();
+                // Re-sort and update title
+                let _ = picker; // Release borrow
+                app_guard.sort_picker_items();
+                app_guard.update_picker_title();
+                None
+            }
+            // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
+            KeyCode::Enter | KeyCode::Char('j')
+                if key.code == KeyCode::Enter
+                    || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+            {
+                let is_persistent = if key.code == KeyCode::Enter {
+                    key.modifiers.contains(event::KeyModifiers::ALT)
+                } else {
+                    true
+                };
+                // Common apply path
+                // Theme
+                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                        let res = if is_persistent {
+                            app_guard.apply_theme_by_id(&id)
+                        } else {
+                            app_guard.apply_theme_by_id_session_only(&id)
+                        };
+                        match res {
+                            Ok(_) => app_guard.set_status(format!(
+                                "Theme set: {}{}",
+                                id,
+                                status_suffix(is_persistent)
+                            )),
+                            Err(_e) => app_guard.set_status("Theme error"),
+                        }
+                    }
+                    app_guard.close_picker();
+                    Some("__picker_handled__".to_string())
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
+                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                        let persist = is_persistent && !app_guard.startup_env_only;
+                        let res = if persist {
+                            app_guard.apply_model_by_id_persistent(&id)
+                        } else {
+                            app_guard.apply_model_by_id(&id);
+                            Ok(())
+                        };
+                        match res {
+                            Ok(_) => {
+                                app_guard.set_status(format!(
+                                    "Model set: {}{}",
+                                    id,
+                                    status_suffix(persist)
+                                ));
+                                if app_guard.in_provider_model_transition {
+                                    app_guard.complete_provider_model_transition();
+                                }
+                                if app_guard.startup_requires_model {
+                                    app_guard.startup_requires_model = false;
+                                }
+                            }
+                            Err(e) => app_guard.set_status(format!("Model error: {}", e)),
+                        }
+                    }
+                    app_guard.close_picker();
+                    Some("__picker_handled__".to_string())
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
+                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                        let (res, should_open_model_picker) = if is_persistent {
+                            app_guard.apply_provider_by_id_persistent(&id)
+                        } else {
+                            app_guard.apply_provider_by_id(&id)
+                        };
+                        match res {
+                            Ok(_) => {
+                                app_guard.set_status(format!(
+                                    "Provider set: {}{}",
+                                    id,
+                                    status_suffix(is_persistent)
+                                ));
+                                app_guard.close_picker();
+                                if should_open_model_picker {
+                                    if app_guard.startup_requires_provider {
+                                        app_guard.startup_requires_provider = false;
+                                        app_guard.startup_requires_model = true;
+                                    }
+                                    let app_clone = app.clone();
+                                    tokio::spawn(async move {
+                                        let mut app_guard = app_clone.lock().await;
+                                        let _ = app_guard.open_model_picker().await;
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                app_guard.set_status(format!("Provider error: {}", e));
+                                app_guard.close_picker();
+                            }
+                        }
+                    }
+                    Some("__picker_handled__".to_string())
+                } else {
+                    Some("__picker_handled__".to_string())
+                }
+            }
+            // Ctrl+J: persist selection to config (documented only in /help)
+            KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                match current_picker_mode {
+                    Some(crate::core::app::PickerMode::Theme) => {
+                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                            match app_guard.apply_theme_by_id(&id) {
+                                Ok(_) => app_guard.set_status(format!(
+                                    "Theme set: {}{}",
+                                    id,
+                                    status_suffix(true)
+                                )),
+                                Err(_e) => app_guard.set_status("Theme error"),
+                            }
+                        }
+                        app_guard.close_picker();
+                        Some("__picker_handled__".to_string())
+                    }
+                    Some(crate::core::app::PickerMode::Model) => {
+                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                            let persist = !app_guard.startup_env_only;
+                            let res = if persist {
+                                app_guard.apply_model_by_id_persistent(&id)
+                            } else {
+                                app_guard.apply_model_by_id(&id);
+                                Ok(())
+                            };
+                            match res {
+                                Ok(_) => {
+                                    app_guard.set_status(format!(
+                                        "Model set: {}{}",
+                                        id,
+                                        status_suffix(persist)
+                                    ));
+                                    if app_guard.in_provider_model_transition {
+                                        app_guard.complete_provider_model_transition();
+                                    }
+                                    if app_guard.startup_requires_model {
+                                        app_guard.startup_requires_model = false;
+                                    }
+                                }
+                                Err(e) => app_guard.set_status(format!("Model error: {}", e)),
+                            }
+                        }
+                        app_guard.close_picker();
+                        Some("__picker_handled__".to_string())
+                    }
+                    Some(crate::core::app::PickerMode::Provider) => {
+                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
+                            let (res, should_open_model_picker) =
+                                app_guard.apply_provider_by_id_persistent(&id);
+                            match res {
+                                Ok(_) => {
+                                    app_guard.set_status(format!(
+                                        "Provider set: {}{}",
+                                        id,
+                                        status_suffix(true)
+                                    ));
+                                    app_guard.close_picker();
+                                    if should_open_model_picker {
+                                        let app_clone = app.clone();
+                                        tokio::spawn(async move {
+                                            let mut app_guard = app_clone.lock().await;
+                                            let _ = app_guard.open_model_picker().await;
+                                        });
+                                    }
+                                }
+                                Err(e) => app_guard.set_status(format!("Provider error: {}", e)),
+                            }
+                        }
+                        Some("__picker_handled__".to_string())
+                    }
+                    _ => Some("__picker_handled__".to_string()),
+                }
+            }
+            KeyCode::Delete => {
+                // Del key to unset defaults - only works if current selection is a default (has *)
+                if let Some(selected_item) = picker.get_selected_item() {
+                    if selected_item.label.ends_with('*') {
+                        let item_id = selected_item.id.clone();
+
+                        // Release picker borrow by ending the scope
+                        let _ = picker;
+
+                        let result = match current_picker_mode {
+                            Some(crate::core::app::PickerMode::Model) => {
+                                app_guard.unset_default_model(&provider_name)
+                            }
+                            Some(crate::core::app::PickerMode::Theme) => {
+                                app_guard.unset_default_theme()
+                            }
+                            Some(crate::core::app::PickerMode::Provider) => {
+                                app_guard.unset_default_provider()
+                            }
+                            _ => Err("Unknown picker mode".to_string()),
+                        };
+                        match result {
+                            Ok(_) => {
+                                app_guard.set_status(format!("Removed default: {}", item_id));
+                                // Refresh the picker to remove the asterisk
+                                match current_picker_mode {
+                                    Some(crate::core::app::PickerMode::Model) => {
+                                        // Store app reference for async refresh
+                                        let app_clone = app.clone();
+                                        tokio::spawn(async move {
+                                            let mut app_guard = app_clone.lock().await;
+                                            let _ = app_guard.open_model_picker().await;
+                                        });
+                                    }
+                                    Some(crate::core::app::PickerMode::Theme) => {
+                                        app_guard.open_theme_picker();
+                                    }
+                                    Some(crate::core::app::PickerMode::Provider) => {
+                                        app_guard.open_provider_picker();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Err(e) => {
+                                app_guard.set_status(format!("Error removing default: {}", e));
+                            }
+                        }
+                    } else {
+                        app_guard.set_status("Del key only works on default items (marked with *)");
+                    }
+                }
+                None
+            }
+            KeyCode::Backspace => {
+                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
+                    if let Some(state) = app_guard.model_picker_state_mut() {
+                        if !state.search_filter.is_empty() {
+                            state.search_filter.pop();
+                            app_guard.filter_models();
+                        }
+                    }
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    if let Some(state) = app_guard.theme_picker_state_mut() {
+                        if !state.search_filter.is_empty() {
+                            state.search_filter.pop();
+                            app_guard.filter_themes();
+                        }
+                    }
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
+                    if let Some(state) = app_guard.provider_picker_state_mut() {
+                        if !state.search_filter.is_empty() {
+                            state.search_filter.pop();
+                            app_guard.filter_providers();
+                        }
+                    }
+                }
+                None
+            }
+            KeyCode::Char(c) => {
+                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
+                    // Add character to filter for model picker
+                    if !c.is_control() {
+                        if let Some(state) = app_guard.model_picker_state_mut() {
+                            state.search_filter.push(c);
+                            app_guard.filter_models();
+                        }
+                    }
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+                    // Add character to filter for theme picker
+                    if !c.is_control() {
+                        if let Some(state) = app_guard.theme_picker_state_mut() {
+                            state.search_filter.push(c);
+                            app_guard.filter_themes();
+                        }
+                    }
+                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
+                    // Add character to filter for provider picker
+                    if !c.is_control() {
+                        if let Some(state) = app_guard.provider_picker_state_mut() {
+                            state.search_filter.push(c);
+                            app_guard.filter_providers();
+                        }
+                    }
+                }
+                None
+            }
+            // No block actions in picker modes
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+        if let Some(selected_id) = selection.as_ref() {
+            if selected_id != "__picker_handled__" {
+                app_guard.preview_theme_by_id(selected_id);
+            }
+        }
+    }
+
+    let has_session = app_guard.picker_session().is_some();
+    PickerEventResult {
+        selection,
+        has_session,
+    }
+}
+
+fn wrap_previous_index(current: usize, total: usize) -> Option<usize> {
+    if total == 0 {
+        None
+    } else if current == 0 {
+        Some(total - 1)
+    } else {
+        Some(current - 1)
+    }
+}
+
+fn wrap_next_index(current: usize, total: usize) -> Option<usize> {
+    if total == 0 {
+        None
+    } else {
+        Some((current + 1) % total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{wrap_next_index, wrap_previous_index};
+
+    #[test]
+    fn wrap_previous_handles_empty() {
+        assert_eq!(wrap_previous_index(0, 0), None);
+    }
+
+    #[test]
+    fn wrap_previous_wraps_to_end() {
+        assert_eq!(wrap_previous_index(0, 5), Some(4));
+    }
+
+    #[test]
+    fn wrap_next_handles_empty() {
+        assert_eq!(wrap_next_index(0, 0), None);
+    }
+
+    #[test]
+    fn wrap_next_wraps_to_start() {
+        assert_eq!(wrap_next_index(4, 5), Some(0));
+    }
 }

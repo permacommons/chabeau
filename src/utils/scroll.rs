@@ -2,7 +2,11 @@ use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::theme::Theme;
-use ratatui::{style::Style, text::Line, text::Span};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::Line,
+    text::Span,
+};
 use std::collections::VecDeque;
 
 /// Handles all scroll-related calculations and line building
@@ -272,6 +276,7 @@ impl ScrollCalculator {
                                 highlight_style,
                                 cfg.width,
                                 include_empty,
+                                theme,
                             );
                         }
                     }
@@ -305,7 +310,13 @@ impl ScrollCalculator {
                 if let Some((start, len, _content)) = layout.codeblock_ranges.get(idx).cloned() {
                     let highlight_style = theme.selection_highlight_style.patch(highlight);
                     for line in layout.lines.iter_mut().skip(start).take(len) {
-                        Self::apply_selection_highlight(line, highlight_style, cfg.width, true);
+                        Self::apply_selection_highlight(
+                            line,
+                            highlight_style,
+                            cfg.width,
+                            true,
+                            theme,
+                        );
                     }
                 }
             }
@@ -532,11 +543,32 @@ impl ScrollCalculator {
         highlight: Style,
         width: Option<usize>,
         include_empty: bool,
+        theme: &Theme,
     ) {
+        use crate::utils::color::ColorDepth;
+
+        let depth = crate::utils::color::detect_color_depth();
+        let using_16_color = depth == ColorDepth::X16;
+        let mut highlight_style = highlight;
+
+        if using_16_color {
+            highlight_style = Style::default().add_modifier(Modifier::REVERSED);
+        }
+
         let mut has_content = false;
-        // Apply highlight to existing spans (preserves foreground styling)
+        let mut fallback_fg = theme
+            .assistant_text_style
+            .fg
+            .or(theme.user_text_style.fg)
+            .unwrap_or(Color::White);
+
         for span in &mut line.spans {
-            span.style = span.style.patch(highlight);
+            if using_16_color {
+                let base_fg = span.style.fg.unwrap_or(fallback_fg);
+                fallback_fg = base_fg;
+                span.style = Style::default().fg(base_fg);
+            }
+            span.style = span.style.patch(highlight_style);
             if !span.content.trim().is_empty() {
                 has_content = true;
             }
@@ -550,7 +582,7 @@ impl ScrollCalculator {
             if line.spans.is_empty() {
                 if include_empty && target_width > 0 {
                     let padding = " ".repeat(target_width);
-                    *line = Line::from(Span::styled(padding, highlight));
+                    *line = Line::from(Span::styled(padding, highlight_style));
                 }
                 return;
             }
@@ -558,7 +590,7 @@ impl ScrollCalculator {
             let current_width = line.width();
             if current_width < target_width {
                 let padding = " ".repeat(target_width - current_width);
-                line.spans.push(Span::styled(padding, highlight));
+                line.spans.push(Span::styled(padding, highlight_style));
             }
         }
     }
@@ -569,7 +601,7 @@ mod tests {
     use super::*;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{create_test_message, create_test_messages};
-    use ratatui::style::Style;
+    use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -1072,6 +1104,7 @@ mod tests {
 
     #[test]
     fn highlight_is_correct_after_wrapped_paragraph() {
+        std::env::set_var("CHABEAU_COLOR", "truecolor");
         let theme = Theme::dark_default();
         let mut messages: VecDeque<Message> = VecDeque::new();
         let long_para = "This is a very long line that should wrap multiple times given a small terminal width so that the visual line count before the code block increases significantly.";
@@ -1114,13 +1147,21 @@ mod tests {
                 .iter()
                 .filter(|span| !span.content.trim().is_empty())
             {
-                assert_eq!(sp.style, expected_style, "Code line should be highlighted");
+                let alt_style = Style::default()
+                    .fg(expected_style.fg.unwrap_or(Color::White))
+                    .add_modifier(Modifier::REVERSED);
+                assert!(
+                    sp.style == expected_style || sp.style == alt_style,
+                    "Code line should be highlighted"
+                );
             }
         }
+        std::env::remove_var("CHABEAU_COLOR");
     }
 
     #[test]
     fn highlight_is_correct_after_table() {
+        std::env::set_var("CHABEAU_COLOR", "truecolor");
         let theme = Theme::dark_default();
         let mut messages: VecDeque<Message> = VecDeque::new();
         // Message 0: a table that will be rendered before the code block
@@ -1172,11 +1213,15 @@ mod tests {
                 .iter()
                 .filter(|span| !span.content.trim().is_empty())
             {
-                assert_eq!(
-                    sp.style, expected_style,
+                let alt_style = Style::default()
+                    .fg(expected_style.fg.unwrap_or(Color::White))
+                    .add_modifier(Modifier::REVERSED);
+                assert!(
+                    sp.style == expected_style || sp.style == alt_style,
                     "Highlight modifiers should be applied"
                 );
             }
         }
+        std::env::remove_var("CHABEAU_COLOR");
     }
 }

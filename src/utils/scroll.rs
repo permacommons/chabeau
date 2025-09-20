@@ -2,7 +2,7 @@ use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::theme::Theme;
-use ratatui::{text::Line, text::Span};
+use ratatui::{style::Style, text::Line, text::Span};
 use std::collections::VecDeque;
 
 /// Handles all scroll-related calculations and line building
@@ -259,13 +259,20 @@ impl ScrollCalculator {
                 if msg.role == "user" {
                     if let Some(span) = layout.message_spans.get(sel) {
                         let highlight_style = theme.selection_highlight_style.patch(highlight);
-                        for line in layout.lines.iter_mut().skip(span.start).take(span.len) {
-                            if line.spans.is_empty() {
-                                continue;
-                            }
-                            for span in &mut line.spans {
-                                span.style = span.style.patch(highlight_style);
-                            }
+                        for (offset, line) in layout
+                            .lines
+                            .iter_mut()
+                            .skip(span.start)
+                            .take(span.len)
+                            .enumerate()
+                        {
+                            let include_empty = offset < span.len.saturating_sub(1);
+                            Self::apply_selection_highlight(
+                                line,
+                                highlight_style,
+                                cfg.width,
+                                include_empty,
+                            );
                         }
                     }
                 }
@@ -298,12 +305,7 @@ impl ScrollCalculator {
                 if let Some((start, len, _content)) = layout.codeblock_ranges.get(idx).cloned() {
                     let highlight_style = theme.selection_highlight_style.patch(highlight);
                     for line in layout.lines.iter_mut().skip(start).take(len) {
-                        if line.spans.is_empty() {
-                            continue;
-                        }
-                        for span in &mut line.spans {
-                            span.style = span.style.patch(highlight_style);
-                        }
+                        Self::apply_selection_highlight(line, highlight_style, cfg.width, true);
                     }
                 }
             }
@@ -521,6 +523,44 @@ impl ScrollCalculator {
         available_height: u16,
     ) -> u16 {
         Self::calculate_scroll_to_bottom(messages, terminal_width, available_height)
+    }
+}
+
+impl ScrollCalculator {
+    fn apply_selection_highlight(
+        line: &mut Line<'static>,
+        highlight: Style,
+        width: Option<usize>,
+        include_empty: bool,
+    ) {
+        let mut has_content = false;
+        // Apply highlight to existing spans (preserves foreground styling)
+        for span in &mut line.spans {
+            span.style = span.style.patch(highlight);
+            if !span.content.trim().is_empty() {
+                has_content = true;
+            }
+        }
+
+        if !has_content && !include_empty {
+            return;
+        }
+
+        if let Some(target_width) = width {
+            if line.spans.is_empty() {
+                if include_empty && target_width > 0 {
+                    let padding = " ".repeat(target_width);
+                    *line = Line::from(Span::styled(padding, highlight));
+                }
+                return;
+            }
+
+            let current_width = line.width();
+            if current_width < target_width {
+                let padding = " ".repeat(target_width - current_width);
+                line.spans.push(Span::styled(padding, highlight));
+            }
+        }
     }
 }
 
@@ -1069,8 +1109,11 @@ mod tests {
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();
         for line in lines.iter().skip(start).take(len) {
-            // All spans in the code line should have the patched style
-            for sp in &line.spans {
+            for sp in line
+                .spans
+                .iter()
+                .filter(|span| !span.content.trim().is_empty())
+            {
                 assert_eq!(sp.style, expected_style, "Code line should be highlighted");
             }
         }
@@ -1124,8 +1167,15 @@ mod tests {
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();
         for line in lines.iter().skip(start).take(len) {
-            for sp in &line.spans {
-                assert_eq!(sp.style, expected_style, "Highlight modifiers should be applied");
+            for sp in line
+                .spans
+                .iter()
+                .filter(|span| !span.content.trim().is_empty())
+            {
+                assert_eq!(
+                    sp.style, expected_style,
+                    "Highlight modifiers should be applied"
+                );
             }
         }
     }

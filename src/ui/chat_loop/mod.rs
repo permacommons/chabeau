@@ -122,14 +122,6 @@ pub async fn run_chat(
         }
         // Cache terminal size for this tick
         let term_size = terminal.size().unwrap_or_default();
-        // Local throttle helper
-        let mut update_if_due = |app_guard: &mut App| {
-            if last_input_layout_update.elapsed() >= Duration::from_millis(16) {
-                app_guard.recompute_input_layout_after_edit(term_size.width);
-                last_input_layout_update = Instant::now();
-            }
-        };
-
         // Handle events
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
@@ -189,6 +181,95 @@ pub async fn run_chat(
                         continue;
                     }
 
+                    if matches!(key.code, KeyCode::Esc) && handle_general_escape(&app).await {
+                        continue;
+                    }
+
+                    if matches!(key.code, KeyCode::Char('c'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        break 'main_loop Ok(());
+                    }
+
+                    if matches!(key.code, KeyCode::Char('d'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        if let Some(action) = handle_ctrl_d_key(&app, term_size.width).await {
+                            match action {
+                                KeyLoopAction::Break => break 'main_loop Ok(()),
+                                KeyLoopAction::Continue => continue,
+                            }
+                        }
+                    }
+
+                    if matches!(key.code, KeyCode::Char('t'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        if let Some(action) = handle_external_editor_shortcut(
+                            &app,
+                            &mut terminal,
+                            &stream_dispatcher,
+                            term_size.width,
+                            term_size.height,
+                        )
+                        .await?
+                        {
+                            match action {
+                                KeyLoopAction::Break => break 'main_loop Ok(()),
+                                KeyLoopAction::Continue => continue,
+                            }
+                        }
+                    }
+
+                    if matches!(key.code, KeyCode::Char('r'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                        && handle_retry_shortcut(
+                            &app,
+                            term_size.width,
+                            term_size.height,
+                            &stream_dispatcher,
+                        )
+                        .await
+                    {
+                        continue;
+                    }
+
+                    if matches!(key.code, KeyCode::Enter) {
+                        if let Some(action) = handle_enter_key(
+                            &app,
+                            &key,
+                            term_size.width,
+                            term_size.height,
+                            &stream_dispatcher,
+                        )
+                        .await?
+                        {
+                            match action {
+                                KeyLoopAction::Break => break 'main_loop Ok(()),
+                                KeyLoopAction::Continue => continue,
+                            }
+                        }
+                    }
+
+                    if matches!(key.code, KeyCode::Char('j'))
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        if let Some(action) = handle_ctrl_j_shortcut(
+                            &app,
+                            term_size.width,
+                            term_size.height,
+                            &stream_dispatcher,
+                            &mut last_input_layout_update,
+                        )
+                        .await?
+                        {
+                            match action {
+                                KeyLoopAction::Break => break 'main_loop Ok(()),
+                                KeyLoopAction::Continue => continue,
+                            }
+                        }
+                    }
+
                     match key.code {
                         KeyCode::Home => {
                             let mut app_guard = app.lock().await;
@@ -224,539 +305,45 @@ pub async fn run_chat(
                                 .saturating_sub(1);
                             app_guard.page_down(available_height, term_size.width);
                         }
-                        KeyCode::Char('c')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            break 'main_loop Ok(());
-                        }
-                        KeyCode::Char('d')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            // Ctrl+D: exit if input is empty, else delete forward
-                            let mut app_guard = app.lock().await;
-                            if app_guard.get_input_text().is_empty() {
-                                break 'main_loop Ok(());
-                            } else {
-                                app_guard.apply_textarea_edit_and_recompute(
-                                    term_size.width,
-                                    |ta| {
-                                        ta.input_without_shortcuts(TAInput {
-                                            key: TAKey::Delete,
-                                            ctrl: false,
-                                            alt: false,
-                                            shift: false,
-                                        });
-                                    },
-                                );
-                            }
-                        }
-                        KeyCode::Char('t')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            // Handle CTRL+T for external editor
-                            let editor_result = {
-                                let mut app_guard = app.lock().await;
-                                handle_external_editor(&mut app_guard).await
-                            };
-
-                            // Force a full redraw after editor
-                            terminal.clear()?;
-
-                            match editor_result {
-                                Ok(Some(message)) => {
-                                    // Editor returned content, send it immediately
-                                    let stream_params = {
-                                        let mut app_guard = app.lock().await;
-
-                                        // Re-enable auto-scroll when user sends a new message
-                                        app_guard.auto_scroll = true;
-
-                                        // Start new stream (this will cancel any existing stream)
-                                        let (cancel_token, stream_id) =
-                                            app_guard.start_new_stream();
-                                        let api_messages = app_guard.add_user_message(message);
-
-                                        // Update scroll position to ensure latest messages are visible
-                                        let terminal_size = terminal.size().unwrap_or_default();
-                                        let input_area_height = app_guard
-                                            .calculate_input_area_height(terminal_size.width);
-                                        let available_height = terminal_size
-                                            .height
-                                            .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                            .saturating_sub(1); // 1 for title
-                                        app_guard.update_scroll_position(
-                                            available_height,
-                                            terminal_size.width,
-                                        );
-
-                                        StreamParams {
-                                            client: app_guard.client.clone(),
-                                            base_url: app_guard.base_url.clone(),
-                                            api_key: app_guard.api_key.clone(),
-                                            model: app_guard.model.clone(),
-                                            api_messages,
-                                            cancel_token,
-                                            stream_id,
-                                        }
-                                    };
-
-                                    // Send the message to API (deduplicated helper)
-                                    stream_dispatcher.spawn(stream_params);
-                                }
-                                Ok(None) => {
-                                    // Editor returned no content or user cancelled
-                                    let mut app_guard = app.lock().await;
-                                    let terminal_size = terminal.size().unwrap_or_default();
-                                    let input_area_height =
-                                        app_guard.calculate_input_area_height(terminal_size.width);
-                                    let available_height = terminal_size
-                                        .height
-                                        .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                        .saturating_sub(1); // 1 for title
-                                    app_guard.update_scroll_position(
-                                        available_height,
-                                        terminal_size.width,
-                                    );
-                                }
-                                Err(e) => {
-                                    let mut app_guard = app.lock().await;
-                                    app_guard.set_status(format!("Editor error: {}", e));
-                                    // Keep view stable; brief corner status is sufficient
-                                    let terminal_size = terminal.size().unwrap_or_default();
-                                    let input_area_height =
-                                        app_guard.calculate_input_area_height(terminal_size.width);
-                                    let available_height = terminal_size
-                                        .height
-                                        .saturating_sub(input_area_height + 2)
-                                        .saturating_sub(1);
-                                    app_guard.update_scroll_position(
-                                        available_height,
-                                        terminal_size.width,
-                                    );
-                                }
-                            }
-                        }
-                        KeyCode::Char('r')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            // Retry the last bot response with debounce protection
-                            let stream_params = {
-                                let mut app_guard = app.lock().await;
-
-                                // Check debounce at the event level to prevent any processing
-                                let now = std::time::Instant::now();
-                                if now.duration_since(app_guard.last_retry_time).as_millis() < 200 {
-                                    // Too soon since last retry, ignore completely
-                                    continue;
-                                }
-
-                                let terminal_size = terminal.size().unwrap_or_default();
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(terminal_size.width);
-                                let available_height = terminal_size
-                                    .height
-                                    .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                    .saturating_sub(1); // 1 for title
-
-                                app_guard
-                                    .prepare_retry(available_height, terminal_size.width)
-                                    .map(|api_messages| {
-                                        let (cancel_token, stream_id) =
-                                            app_guard.start_new_stream();
-
-                                        StreamParams {
-                                            client: app_guard.client.clone(),
-                                            base_url: app_guard.base_url.clone(),
-                                            api_key: app_guard.api_key.clone(),
-                                            model: app_guard.model.clone(),
-                                            api_messages,
-                                            cancel_token,
-                                            stream_id,
-                                        }
-                                    })
-                            };
-
-                            if let Some(params) = stream_params {
-                                stream_dispatcher.spawn(params);
-                            }
-                        }
-                        KeyCode::Esc => {
-                            let mut app_guard = app.lock().await;
-                            if app_guard.file_prompt().is_some() {
-                                app_guard.cancel_file_prompt();
-                                continue;
-                            }
-                            if app_guard.in_edit_select_mode() {
-                                app_guard.exit_edit_select_mode();
-                                continue;
-                            }
-                            if app_guard.in_place_edit_index().is_some() {
-                                app_guard.cancel_in_place_edit();
-                                app_guard.clear_input();
-                                continue;
-                            }
-                            if app_guard.is_streaming {
-                                // Use the new cancellation mechanism
-                                app_guard.cancel_current_stream();
-                            }
-                        }
-                        KeyCode::Enter => {
-                            let modifiers = key.modifiers;
-                            // Handle filename prompt (Enter: save if new; Alt+Enter: overwrite)
-                            {
-                                let mut app_guard = app.lock().await;
-                                if let Some(prompt) = app_guard.file_prompt().cloned() {
-                                    let filename = app_guard.get_input_text().trim().to_string();
-                                    if filename.is_empty() {
-                                        continue;
-                                    }
-                                    let overwrite = modifiers.contains(event::KeyModifiers::ALT);
-                                    match prompt.kind {
-                                        crate::core::app::FilePromptKind::Dump => {
-                                            // Use commands helper to dump
-                                            let res =
-                                                crate::commands::dump_conversation_with_overwrite(
-                                                    &app_guard, &filename, overwrite,
-                                                );
-                                            match res {
-                                                Ok(()) => {
-                                                    app_guard.set_status(format!(
-                                                        "Dumped: {}",
-                                                        filename
-                                                    ));
-                                                    app_guard.cancel_file_prompt();
-                                                }
-                                                Err(e) => {
-                                                    let msg = e.to_string();
-                                                    if msg.contains("already exists") {
-                                                        app_guard
-                                                            .set_status("Log file already exists.");
-                                                    } else {
-                                                        app_guard.set_status(format!(
-                                                            "Dump error: {}",
-                                                            msg
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        crate::core::app::FilePromptKind::SaveCodeBlock => {
-                                            use std::fs;
-                                            let exists = std::path::Path::new(&filename).exists();
-                                            if exists && !overwrite {
-                                                app_guard.set_status("File already exists.");
-                                            } else if let Some(content) = prompt.content {
-                                                match fs::write(&filename, content) {
-                                                    Ok(()) => {
-                                                        app_guard.set_status(format!(
-                                                            "Saved to {}",
-                                                            filename
-                                                        ));
-                                                        app_guard.cancel_file_prompt();
-                                                    }
-                                                    Err(_e) => {
-                                                        app_guard
-                                                            .set_status("Error saving code block");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    continue;
-                                }
-                            }
-                            // Compose/newline logic:
-                            // - Compose mode: Enter inserts newline; Alt+Enter sends
-                            // - Normal mode: Alt+Enter inserts newline; Enter sends
-                            {
-                                let app_guard = app.lock().await;
-                                let compose = app_guard.compose_mode;
-                                let alt = modifiers.contains(event::KeyModifiers::ALT);
-                                drop(app_guard);
-                                let should_insert_newline = if compose { !alt } else { alt };
-                                if should_insert_newline {
-                                    let mut app_guard = app.lock().await;
-                                    app_guard.apply_textarea_edit_and_recompute(
-                                        term_size.width,
-                                        |ta| {
-                                            ta.insert_str("\n");
-                                        },
-                                    );
-                                    continue;
-                                }
-                            }
-                            {
-                                // If editing in place, apply changes to history instead of sending
-                                {
-                                    let mut app_guard = app.lock().await;
-                                    if let Some(idx) = app_guard.take_in_place_edit_index() {
-                                        // Apply edit to the selected user message
-                                        if idx < app_guard.messages.len()
-                                            && app_guard.messages[idx].role == "user"
-                                        {
-                                            let new_text = app_guard.get_input_text().to_string();
-                                            app_guard.messages[idx].content = new_text;
-                                            app_guard.invalidate_prewrap_cache();
-                                            // Rewrite log file to reflect in-place edit
-                                            let _ = app_guard
-                                                .logging
-                                                .rewrite_log_without_last_response(
-                                                    &app_guard.messages,
-                                                );
-                                        }
-                                        app_guard.clear_input();
-                                        continue;
-                                    }
-                                }
-                                let (
-                                    should_send_to_api,
-                                    api_messages,
-                                    client,
-                                    model,
-                                    api_key,
-                                    base_url,
-                                    cancel_token,
-                                    stream_id,
-                                ) = {
-                                    let mut app_guard = app.lock().await;
-                                    if app_guard.get_input_text().trim().is_empty() {
-                                        continue;
-                                    }
-
-                                    let input_text = app_guard.get_input_text().to_string();
-                                    app_guard.clear_input();
-
-                                    // Process input for commands
-                                    match process_input(&mut app_guard, &input_text) {
-                                        CommandResult::Continue => {
-                                            // Command was processed, don't send to API
-                                            // Update scroll position to ensure latest messages are visible
-                                            let term_size = terminal.size().unwrap_or_default();
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = app_guard
-                                                .calculate_available_height(
-                                                    term_size.height,
-                                                    input_area_height,
-                                                );
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                term_size.width,
-                                            );
-                                            continue;
-                                        }
-                                        CommandResult::OpenModelPicker => {
-                                            // Open model picker asynchronously
-                                            match app_guard.open_model_picker().await {
-                                                Ok(_) => {
-                                                    // Status messages not needed - help is shown in-dialog
-                                                }
-                                                Err(e) => {
-                                                    app_guard.set_status(format!(
-                                                        "Model picker error: {}",
-                                                        e
-                                                    ));
-                                                }
-                                            }
-                                            continue;
-                                        }
-                                        CommandResult::OpenProviderPicker => {
-                                            // Open provider picker
-                                            app_guard.open_provider_picker();
-                                            // Status messages not needed - help is shown in-dialog
-                                            continue;
-                                        }
-                                        CommandResult::ProcessAsMessage(message) => {
-                                            // Re-enable auto-scroll when user sends a new message
-                                            app_guard.auto_scroll = true;
-
-                                            // Start new stream (this will cancel any existing stream)
-                                            let (cancel_token, stream_id) =
-                                                app_guard.start_new_stream();
-                                            let api_messages = app_guard.add_user_message(message);
-
-                                            // Update scroll position to ensure latest messages are visible
-                                            let input_area_height = app_guard
-                                                .calculate_input_area_height(term_size.width);
-                                            let available_height = app_guard
-                                                .calculate_available_height(
-                                                    term_size.height,
-                                                    input_area_height,
-                                                );
-                                            app_guard.update_scroll_position(
-                                                available_height,
-                                                terminal.size().unwrap_or_default().width,
-                                            );
-
-                                            (
-                                                true,
-                                                api_messages,
-                                                app_guard.client.clone(),
-                                                app_guard.model.clone(),
-                                                app_guard.api_key.clone(),
-                                                app_guard.base_url.clone(),
-                                                cancel_token,
-                                                stream_id,
-                                            )
-                                        }
-                                    }
-                                };
-
-                                if !should_send_to_api {
-                                    continue;
-                                }
-
-                                stream_dispatcher.spawn(StreamParams {
-                                    client,
-                                    base_url,
-                                    api_key,
-                                    model,
-                                    api_messages,
-                                    cancel_token,
-                                    stream_id,
-                                });
-                            }
-                        }
-                        // Ctrl+J: newline in normal mode; send in compose mode
-                        KeyCode::Char('j')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            let send_now = {
-                                let app_guard = app.lock().await;
-                                app_guard.compose_mode && app_guard.file_prompt().is_none()
-                            };
-                            if !send_now {
-                                let mut app_guard = app.lock().await;
-                                app_guard.apply_textarea_edit_and_recompute(
-                                    term_size.width,
-                                    |ta| {
-                                        ta.insert_str("\n");
-                                    },
-                                );
-                                last_input_layout_update = Instant::now();
-                                continue;
-                            }
-                            // Send path (same as Enter send)
-                            let (
-                                should_send_to_api,
-                                api_messages,
-                                client,
-                                model,
-                                api_key,
-                                base_url,
-                                cancel_token,
-                                stream_id,
-                            ) = {
-                                let mut app_guard = app.lock().await;
-                                if app_guard.get_input_text().trim().is_empty() {
-                                    continue;
-                                }
-
-                                let input_text = app_guard.get_input_text().to_string();
-                                app_guard.clear_input();
-
-                                match process_input(&mut app_guard, &input_text) {
-                                    CommandResult::Continue => {
-                                        let term_size = terminal.size().unwrap_or_default();
-                                        let input_area_height =
-                                            app_guard.calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard
-                                            .calculate_available_height(
-                                                term_size.height,
-                                                input_area_height,
-                                            );
-                                        app_guard.update_scroll_position(
-                                            available_height,
-                                            term_size.width,
-                                        );
-                                        continue;
-                                    }
-                                    CommandResult::OpenModelPicker => {
-                                        match app_guard.open_model_picker().await {
-                                            Ok(_) => {}
-                                            Err(e) => app_guard
-                                                .set_status(format!("Model picker error: {}", e)),
-                                        }
-                                        continue;
-                                    }
-                                    CommandResult::OpenProviderPicker => {
-                                        app_guard.open_provider_picker();
-                                        continue;
-                                    }
-                                    CommandResult::ProcessAsMessage(message) => {
-                                        app_guard.auto_scroll = true;
-                                        let (cancel_token, stream_id) =
-                                            app_guard.start_new_stream();
-                                        let api_messages = app_guard.add_user_message(message);
-                                        let input_area_height =
-                                            app_guard.calculate_input_area_height(term_size.width);
-                                        let available_height = app_guard
-                                            .calculate_available_height(
-                                                term_size.height,
-                                                input_area_height,
-                                            );
-                                        app_guard.update_scroll_position(
-                                            available_height,
-                                            terminal.size().unwrap_or_default().width,
-                                        );
-
-                                        (
-                                            true,
-                                            api_messages,
-                                            app_guard.client.clone(),
-                                            app_guard.model.clone(),
-                                            app_guard.api_key.clone(),
-                                            app_guard.base_url.clone(),
-                                            cancel_token,
-                                            stream_id,
-                                        )
-                                    }
-                                }
-                            };
-                            if !should_send_to_api {
-                                continue;
-                            }
-                            stream_dispatcher.spawn(StreamParams {
-                                client,
-                                base_url,
-                                api_key,
-                                model,
-                                api_messages,
-                                cancel_token,
-                                stream_id,
-                            });
-                        }
                         KeyCode::Char('a')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            // Forward to textarea (beginning of line)
                             let mut app_guard = app.lock().await;
                             app_guard.apply_textarea_edit(|ta| {
                                 ta.input(TAInput::from(key));
                             });
-                            update_if_due(&mut app_guard);
+                            recompute_input_layout_if_due(
+                                &mut app_guard,
+                                term_size.width,
+                                &mut last_input_layout_update,
+                            );
                         }
                         KeyCode::Char('e')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            // Forward to textarea (end of line)
                             let mut app_guard = app.lock().await;
                             app_guard.apply_textarea_edit(|ta| {
                                 ta.input(TAInput::from(key));
                             });
-                            update_if_due(&mut app_guard);
+                            recompute_input_layout_if_due(
+                                &mut app_guard,
+                                term_size.width,
+                                &mut last_input_layout_update,
+                            );
                         }
                         KeyCode::Left => {
                             let mut app_guard = app.lock().await;
                             let compose = app_guard.compose_mode;
                             let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
                             if (compose && !shift) || (!compose && shift) {
-                                // Move exactly one character left (ignore selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
-                                update_if_due(&mut app_guard);
+                                recompute_input_layout_if_due(
+                                    &mut app_guard,
+                                    term_size.width,
+                                    &mut last_input_layout_update,
+                                );
                             } else {
-                                // Scroll left
                                 app_guard.horizontal_scroll_offset =
                                     app_guard.horizontal_scroll_offset.saturating_sub(1);
                             }
@@ -766,26 +353,26 @@ pub async fn run_chat(
                             let compose = app_guard.compose_mode;
                             let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
                             if (compose && !shift) || (!compose && shift) {
-                                // Move exactly one character right (ignore selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
-                                update_if_due(&mut app_guard);
+                                recompute_input_layout_if_due(
+                                    &mut app_guard,
+                                    term_size.width,
+                                    &mut last_input_layout_update,
+                                );
                             } else {
-                                // Scroll right
                                 app_guard.horizontal_scroll_offset =
                                     app_guard.horizontal_scroll_offset.saturating_add(1);
                             }
                         }
                         KeyCode::Char(_) => {
                             let mut app_guard = app.lock().await;
-                            // Let textarea handle text input, including multi-byte chars
                             app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
                                 ta.input(TAInput::from(key));
                             });
                         }
                         KeyCode::Delete => {
                             let mut app_guard = app.lock().await;
-                            // Forward delete in input area
                             app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
                                 ta.input_without_shortcuts(TAInput {
                                     key: TAKey::Delete,
@@ -797,12 +384,15 @@ pub async fn run_chat(
                         }
                         KeyCode::Backspace => {
                             let mut app_guard = app.lock().await;
-                            // Use input_without_shortcuts to ensure Backspace always deletes a single char/newline
                             let input = TAInput::from(key);
                             app_guard.apply_textarea_edit(|ta| {
                                 ta.input_without_shortcuts(input);
                             });
-                            update_if_due(&mut app_guard);
+                            recompute_input_layout_if_due(
+                                &mut app_guard,
+                                term_size.width,
+                                &mut last_input_layout_update,
+                            );
                         }
                         KeyCode::Up => {
                             let modifiers = key.modifiers;
@@ -811,11 +401,13 @@ pub async fn run_chat(
                             let shift = modifiers.contains(event::KeyModifiers::SHIFT);
 
                             if (compose && !shift) || (!compose && shift) {
-                                // Move cursor up exactly one line (no selection)
                                 app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
-                                update_if_due(&mut app_guard);
+                                recompute_input_layout_if_due(
+                                    &mut app_guard,
+                                    term_size.width,
+                                    &mut last_input_layout_update,
+                                );
                             } else {
-                                // Scroll chat history up
                                 app_guard.auto_scroll = false;
                                 app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
                             }
@@ -827,19 +419,21 @@ pub async fn run_chat(
                             let shift = modifiers.contains(event::KeyModifiers::SHIFT);
 
                             if (compose && !shift) || (!compose && shift) {
-                                // Move cursor down exactly one line (no selection)
                                 app_guard
                                     .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
-                                update_if_due(&mut app_guard);
+                                recompute_input_layout_if_due(
+                                    &mut app_guard,
+                                    term_size.width,
+                                    &mut last_input_layout_update,
+                                );
                             } else {
-                                // Scroll chat history down
                                 app_guard.auto_scroll = false;
                                 let input_area_height =
                                     app_guard.calculate_input_area_height(term_size.width);
                                 let available_height = term_size
                                     .height
-                                    .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                                    .saturating_sub(1); // 1 for title
+                                    .saturating_sub(input_area_height + 2)
+                                    .saturating_sub(1);
                                 let max_scroll = app_guard
                                     .calculate_max_scroll_offset(available_height, term_size.width);
                                 app_guard.scroll_offset =
@@ -1256,9 +850,356 @@ async fn handle_block_select_mode_event(
     true
 }
 
+async fn handle_external_editor_shortcut(
+    app: &Arc<Mutex<App>>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    stream_dispatcher: &StreamDispatcher,
+    term_width: u16,
+    term_height: u16,
+) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
+    let editor_result = {
+        let mut app_guard = app.lock().await;
+        handle_external_editor(&mut app_guard).await
+    };
+
+    terminal.clear()?;
+
+    match editor_result {
+        Ok(Some(message)) => {
+            let mut app_guard = app.lock().await;
+            let params =
+                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
+            drop(app_guard);
+            stream_dispatcher.spawn(params);
+            Ok(Some(KeyLoopAction::Continue))
+        }
+        Ok(None) => {
+            let mut app_guard = app.lock().await;
+            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let available_height = term_height
+                .saturating_sub(input_area_height + 2)
+                .saturating_sub(1);
+            app_guard.update_scroll_position(available_height, term_width);
+            Ok(Some(KeyLoopAction::Continue))
+        }
+        Err(e) => {
+            let mut app_guard = app.lock().await;
+            app_guard.set_status(format!("Editor error: {}", e));
+            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let available_height = term_height
+                .saturating_sub(input_area_height + 2)
+                .saturating_sub(1);
+            app_guard.update_scroll_position(available_height, term_width);
+            Ok(Some(KeyLoopAction::Continue))
+        }
+    }
+}
+
+async fn handle_general_escape(app: &Arc<Mutex<App>>) -> bool {
+    let mut app_guard = app.lock().await;
+    if app_guard.file_prompt().is_some() {
+        app_guard.cancel_file_prompt();
+        return true;
+    }
+    if app_guard.in_place_edit_index().is_some() {
+        app_guard.cancel_in_place_edit();
+        app_guard.clear_input();
+        return true;
+    }
+    if app_guard.is_streaming {
+        app_guard.cancel_current_stream();
+        return true;
+    }
+    false
+}
+
+async fn process_input_submission(
+    app: &Arc<Mutex<App>>,
+    input_text: String,
+    term_width: u16,
+    term_height: u16,
+) -> SubmissionResult {
+    let mut app_guard = app.lock().await;
+
+    match process_input(&mut app_guard, &input_text) {
+        CommandResult::Continue => {
+            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let available_height =
+                app_guard.calculate_available_height(term_height, input_area_height);
+            app_guard.update_scroll_position(available_height, term_width);
+            SubmissionResult::Continue
+        }
+        CommandResult::OpenModelPicker => {
+            if let Err(e) = app_guard.open_model_picker().await {
+                app_guard.set_status(format!("Model picker error: {}", e));
+            }
+            SubmissionResult::Continue
+        }
+        CommandResult::OpenProviderPicker => {
+            app_guard.open_provider_picker();
+            SubmissionResult::Continue
+        }
+        CommandResult::ProcessAsMessage(message) => {
+            let params =
+                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
+            SubmissionResult::Spawn(params)
+        }
+    }
+}
+
+async fn handle_enter_key(
+    app: &Arc<Mutex<App>>,
+    key: &event::KeyEvent,
+    term_width: u16,
+    term_height: u16,
+    stream_dispatcher: &StreamDispatcher,
+) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
+    let modifiers = key.modifiers;
+
+    {
+        let mut app_guard = app.lock().await;
+        if let Some(prompt) = app_guard.file_prompt().cloned() {
+            let filename = app_guard.get_input_text().trim().to_string();
+            if filename.is_empty() {
+                return Ok(Some(KeyLoopAction::Continue));
+            }
+            let overwrite = modifiers.contains(event::KeyModifiers::ALT);
+            match prompt.kind {
+                crate::core::app::FilePromptKind::Dump => {
+                    let res = crate::commands::dump_conversation_with_overwrite(
+                        &app_guard, &filename, overwrite,
+                    );
+                    match res {
+                        Ok(()) => {
+                            app_guard.set_status(format!("Dumped: {}", filename));
+                            app_guard.cancel_file_prompt();
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("exists") && !overwrite {
+                                app_guard.set_status("File exists (Alt+Enter to overwrite)");
+                            } else {
+                                app_guard.set_status(format!("Dump error: {}", msg));
+                            }
+                        }
+                    }
+                }
+                crate::core::app::FilePromptKind::SaveCodeBlock => {
+                    use std::fs;
+                    let exists = std::path::Path::new(&filename).exists();
+                    if exists && !overwrite {
+                        app_guard.set_status("File already exists.");
+                    } else if let Some(content) = prompt.content {
+                        match fs::write(&filename, content) {
+                            Ok(()) => {
+                                app_guard.set_status(format!("Saved to {}", filename));
+                                app_guard.cancel_file_prompt();
+                            }
+                            Err(_e) => {
+                                app_guard.set_status("Error saving code block");
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(Some(KeyLoopAction::Continue));
+        }
+    }
+
+    let should_insert_newline = {
+        let app_guard = app.lock().await;
+        let compose = app_guard.compose_mode;
+        let alt = modifiers.contains(event::KeyModifiers::ALT);
+        if compose {
+            !alt
+        } else {
+            alt
+        }
+    };
+
+    if should_insert_newline {
+        let mut app_guard = app.lock().await;
+        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
+            ta.insert_str("\n");
+        });
+        return Ok(Some(KeyLoopAction::Continue));
+    }
+
+    {
+        let mut app_guard = app.lock().await;
+        if let Some(idx) = app_guard.take_in_place_edit_index() {
+            if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+                let new_text = app_guard.get_input_text().to_string();
+                app_guard.messages[idx].content = new_text;
+                app_guard.invalidate_prewrap_cache();
+                let _ = app_guard
+                    .logging
+                    .rewrite_log_without_last_response(&app_guard.messages);
+            }
+            app_guard.clear_input();
+            return Ok(Some(KeyLoopAction::Continue));
+        }
+    }
+
+    let input_text = {
+        let mut app_guard = app.lock().await;
+        if app_guard.get_input_text().trim().is_empty() {
+            return Ok(Some(KeyLoopAction::Continue));
+        }
+        let text = app_guard.get_input_text().to_string();
+        app_guard.clear_input();
+        text
+    };
+
+    match process_input_submission(app, input_text, term_width, term_height).await {
+        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
+        SubmissionResult::Spawn(params) => {
+            stream_dispatcher.spawn(params);
+            Ok(Some(KeyLoopAction::Continue))
+        }
+    }
+}
+
+async fn handle_ctrl_j_shortcut(
+    app: &Arc<Mutex<App>>,
+    term_width: u16,
+    term_height: u16,
+    stream_dispatcher: &StreamDispatcher,
+    last_input_layout_update: &mut Instant,
+) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
+    let send_now = {
+        let app_guard = app.lock().await;
+        app_guard.compose_mode && app_guard.file_prompt().is_none()
+    };
+
+    if !send_now {
+        let mut app_guard = app.lock().await;
+        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
+            ta.insert_str("\n");
+        });
+        *last_input_layout_update = Instant::now();
+        return Ok(Some(KeyLoopAction::Continue));
+    }
+
+    let input_text = {
+        let mut app_guard = app.lock().await;
+        if app_guard.get_input_text().trim().is_empty() {
+            return Ok(Some(KeyLoopAction::Continue));
+        }
+        let text = app_guard.get_input_text().to_string();
+        app_guard.clear_input();
+        text
+    };
+
+    match process_input_submission(app, input_text, term_width, term_height).await {
+        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
+        SubmissionResult::Spawn(params) => {
+            stream_dispatcher.spawn(params);
+            Ok(Some(KeyLoopAction::Continue))
+        }
+    }
+}
+
+async fn handle_ctrl_d_key(app: &Arc<Mutex<App>>, term_width: u16) -> Option<KeyLoopAction> {
+    let mut app_guard = app.lock().await;
+    if app_guard.get_input_text().is_empty() {
+        Some(KeyLoopAction::Break)
+    } else {
+        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
+            ta.input_without_shortcuts(TAInput {
+                key: TAKey::Delete,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+        });
+        Some(KeyLoopAction::Continue)
+    }
+}
+
+async fn handle_retry_shortcut(
+    app: &Arc<Mutex<App>>,
+    term_width: u16,
+    term_height: u16,
+    stream_dispatcher: &StreamDispatcher,
+) -> bool {
+    let maybe_params = {
+        let mut app_guard = app.lock().await;
+        let now = Instant::now();
+        if now.duration_since(app_guard.last_retry_time).as_millis() < 200 {
+            return true;
+        }
+
+        let input_area_height = app_guard.calculate_input_area_height(term_width);
+        let available_height = app_guard.calculate_available_height(term_height, input_area_height);
+
+        app_guard
+            .prepare_retry(available_height, term_width)
+            .map(|api_messages| {
+                let (cancel_token, stream_id) = app_guard.start_new_stream();
+                StreamParams {
+                    client: app_guard.client.clone(),
+                    base_url: app_guard.base_url.clone(),
+                    api_key: app_guard.api_key.clone(),
+                    model: app_guard.model.clone(),
+                    api_messages,
+                    cancel_token,
+                    stream_id,
+                }
+            })
+    };
+
+    if let Some(params) = maybe_params {
+        stream_dispatcher.spawn(params);
+    }
+
+    true
+}
+
+fn prepare_stream_params_for_message(
+    app_guard: &mut App,
+    message: String,
+    term_width: u16,
+    term_height: u16,
+) -> StreamParams {
+    app_guard.auto_scroll = true;
+    let (cancel_token, stream_id) = app_guard.start_new_stream();
+    let api_messages = app_guard.add_user_message(message);
+    let input_area_height = app_guard.calculate_input_area_height(term_width);
+    let available_height = app_guard.calculate_available_height(term_height, input_area_height);
+    app_guard.update_scroll_position(available_height, term_width);
+
+    StreamParams {
+        client: app_guard.client.clone(),
+        base_url: app_guard.base_url.clone(),
+        api_key: app_guard.api_key.clone(),
+        model: app_guard.model.clone(),
+        api_messages,
+        cancel_token,
+        stream_id,
+    }
+}
+
+enum KeyLoopAction {
+    Continue,
+    Break,
+}
+
+enum SubmissionResult {
+    Continue,
+    Spawn(StreamParams),
+}
+
 struct PickerEventResult {
     selection: Option<String>,
     has_session: bool,
+}
+
+fn recompute_input_layout_if_due(app: &mut App, term_width: u16, last_update: &mut Instant) {
+    if last_update.elapsed() >= Duration::from_millis(16) {
+        app.recompute_input_layout_after_edit(term_width);
+        *last_update = Instant::now();
+    }
 }
 
 async fn handle_picker_key_event(

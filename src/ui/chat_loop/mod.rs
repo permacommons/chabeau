@@ -7,7 +7,11 @@ mod keybindings;
 mod setup;
 mod stream;
 
-use self::keybindings::{handle_arrow_keys, handle_navigation_keys, handle_textarea_editing_keys};
+use self::keybindings::{
+    build_mode_aware_registry, scroll_block_into_view, wrap_next_index, wrap_previous_index,
+    KeyContext, KeyLoopAction, KeyResult,
+};
+
 use self::setup::bootstrap_app;
 use self::stream::{StreamDispatcher, StreamParams, STREAM_END_MARKER};
 
@@ -32,7 +36,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex};
-use tui_textarea::{Input as TAInput, Key as TAKey};
 
 fn language_to_extension(lang: Option<&str>) -> &'static str {
     if let Some(l) = lang {
@@ -88,11 +91,14 @@ pub async fn run_chat(
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let terminal = Arc::new(Mutex::new(Terminal::new(backend)?));
 
     // Channel for streaming updates with stream ID
     let (stream_tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
-    let stream_dispatcher = StreamDispatcher::new(stream_tx);
+    let stream_dispatcher = Arc::new(StreamDispatcher::new(stream_tx));
+
+    // Initialize mode-aware keybinding registry
+    let mode_registry = build_mode_aware_registry(stream_dispatcher.clone(), terminal.clone());
 
     // Drawing cadence control
     let _last_draw = Instant::now();
@@ -120,201 +126,61 @@ pub async fn run_chat(
             if app_guard.exit_requested {
                 break 'main_loop Ok(());
             }
-            terminal.draw(|f| ui(f, &mut app_guard))?;
+            let mut terminal_guard = terminal.lock().await;
+            terminal_guard.draw(|f| ui(f, &mut app_guard))?;
         }
         // Cache terminal size for this tick
-        let term_size = terminal.size().unwrap_or_default();
+        let term_size = {
+            let terminal_guard = terminal.lock().await;
+            terminal_guard.size().unwrap_or_default()
+        };
         // Handle events
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
             match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // Always allow Ctrl+C to quit, even when a modal is open
-                    if matches!(key.code, KeyCode::Char('c'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
-                        break 'main_loop Ok(());
-                    }
-                    // Clear ephemeral status with Ctrl+L
-                    if matches!(key.code, KeyCode::Char('l'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
+                    // Determine the current context based on app state
+                    let context = {
+                        let app_guard = app.lock().await;
+                        let picker_open = app_guard.model_picker_state().is_some()
+                            || app_guard.theme_picker_state().is_some()
+                            || app_guard.provider_picker_state().is_some();
+                        KeyContext::from_ui_mode(&app_guard.mode, picker_open)
+                    };
+
+                    // Smart routing: check if this should be handled as text input first
+                    if mode_registry.should_handle_as_text_input(&key, &context) {
+                        // Direct text input - bypass registry and go straight to tui-textarea
                         let mut app_guard = app.lock().await;
-                        app_guard.clear_status();
-                        continue;
-                    }
-                    // Toggle compose mode with F4
-                    if matches!(key.code, KeyCode::F(4)) {
-                        let mut app_guard = app.lock().await;
-                        app_guard.toggle_compose_mode();
-                        continue;
-                    }
-                    // If a picker is open, handle navigation/selection first
-                    let picker_state = handle_picker_key_event(&app, &key).await;
-                    if picker_state.selection.is_some() || picker_state.has_session {
+                        app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                            ta.input(tui_textarea::Input::from(key));
+                        });
                         continue;
                     }
 
-                    // Global: Ctrl+B to enter block select mode or cycle upward when active
-                    if matches!(key.code, KeyCode::Char('b'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                        && handle_ctrl_b_event(&app, term_size.width, term_size.height).await
-                    {
-                        continue;
-                    }
-
-                    // Global: Ctrl+P to enter edit-select mode (or cycle upward)
-                    if matches!(key.code, KeyCode::Char('p'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                        && handle_ctrl_p_event(&app, term_size.width, term_size.height).await
-                    {
-                        continue;
-                    }
-
-                    if handle_edit_select_mode_event(&app, &key, term_size.width, term_size.height)
-                        .await
-                    {
-                        continue;
-                    }
-
-                    if handle_block_select_mode_event(&app, &key, term_size.width, term_size.height)
-                        .await
-                    {
-                        continue;
-                    }
-
-                    if matches!(key.code, KeyCode::Esc) && handle_general_escape(&app).await {
-                        continue;
-                    }
-
-                    if matches!(key.code, KeyCode::Char('c'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
-                        break 'main_loop Ok(());
-                    }
-
-                    if matches!(key.code, KeyCode::Char('d'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
-                        if let Some(action) = handle_ctrl_d_key(&app, term_size.width).await {
-                            match action {
-                                KeyLoopAction::Break => break 'main_loop Ok(()),
-                                KeyLoopAction::Continue => continue,
-                            }
-                        }
-                    }
-
-                    if matches!(key.code, KeyCode::Char('t'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
-                        if let Some(action) = handle_external_editor_shortcut(
-                            &app,
-                            &mut terminal,
-                            &stream_dispatcher,
-                            term_size.width,
-                            term_size.height,
-                        )
-                        .await?
-                        {
-                            match action {
-                                KeyLoopAction::Break => break 'main_loop Ok(()),
-                                KeyLoopAction::Continue => continue,
-                            }
-                        }
-                    }
-
-                    if matches!(key.code, KeyCode::Char('r'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                        && handle_retry_shortcut(
-                            &app,
-                            term_size.width,
-                            term_size.height,
-                            &stream_dispatcher,
-                        )
-                        .await
-                    {
-                        continue;
-                    }
-
-                    if matches!(key.code, KeyCode::Enter) {
-                        if let Some(action) = handle_enter_key(
+                    // Use mode-aware registry for discrete actions
+                    let registry_result = mode_registry
+                        .handle_key_event(
                             &app,
                             &key,
+                            context.clone(),
                             term_size.width,
                             term_size.height,
-                            &stream_dispatcher,
+                            Some(last_input_layout_update),
                         )
-                        .await?
-                        {
-                            match action {
-                                KeyLoopAction::Break => break 'main_loop Ok(()),
-                                KeyLoopAction::Continue => continue,
-                            }
-                        }
+                        .await;
+
+                    // Update the layout time if it was modified
+                    if let Some(updated_time) = registry_result.updated_layout_time {
+                        last_input_layout_update = updated_time;
                     }
 
-                    if matches!(key.code, KeyCode::Char('j'))
-                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                    {
-                        if let Some(action) = handle_ctrl_j_shortcut(
-                            &app,
-                            term_size.width,
-                            term_size.height,
-                            &stream_dispatcher,
-                            &mut last_input_layout_update,
-                        )
-                        .await?
-                        {
-                            match action {
-                                KeyLoopAction::Break => break 'main_loop Ok(()),
-                                KeyLoopAction::Continue => continue,
-                            }
-                        }
-                    }
-
-                    // Handle navigation keys (Home/End/PageUp/PageDown)
-                    {
-                        let mut app_guard = app.lock().await;
-                        if handle_navigation_keys(
-                            &mut app_guard,
-                            key.code,
-                            term_size.width,
-                            term_size.height,
-                        )
-                        .await
-                        {
-                            continue;
-                        }
-                    }
-
-                    // Handle arrow keys (Left/Right/Up/Down)
-                    {
-                        let mut app_guard = app.lock().await;
-                        if handle_arrow_keys(
-                            &mut app_guard,
-                            &key,
-                            term_size.width,
-                            term_size.height,
-                            &mut last_input_layout_update,
-                        )
-                        .await
-                        {
-                            continue;
-                        }
-                    }
-
-                    // Handle textarea editing keys (Ctrl+A/E, Delete, Backspace, regular chars)
-                    {
-                        let mut app_guard = app.lock().await;
-                        if handle_textarea_editing_keys(
-                            &mut app_guard,
-                            &key,
-                            term_size.width,
-                            &mut last_input_layout_update,
-                        )
-                        .await
-                        {
-                            continue;
+                    // Handle registry results
+                    match registry_result.result {
+                        KeyResult::Exit => break 'main_loop Ok(()),
+                        KeyResult::Continue | KeyResult::Handled => continue,
+                        KeyResult::NotHandled => {
+                            // Key not handled by registry - silently ignore
                         }
                     }
                 }
@@ -347,18 +213,14 @@ pub async fn run_chat(
                     MouseEventKind::ScrollDown => {
                         let mut app_guard = app.lock().await;
                         app_guard.auto_scroll = false;
-                        let input_area_height = app_guard
-                            .calculate_input_area_height(terminal.size().unwrap_or_default().width);
-                        let available_height = terminal
-                            .size()
-                            .unwrap_or_default()
+                        let input_area_height =
+                            app_guard.calculate_input_area_height(term_size.width);
+                        let available_height = term_size
                             .height
                             .saturating_sub(input_area_height + 2)
                             .saturating_sub(1);
-                        let max_scroll = app_guard.calculate_max_scroll_offset(
-                            available_height,
-                            terminal.size().unwrap_or_default().width,
-                        );
+                        let max_scroll = app_guard
+                            .calculate_max_scroll_offset(available_height, term_size.width);
                         app_guard.scroll_offset =
                             (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
                     }
@@ -422,75 +284,17 @@ pub async fn run_chat(
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableBracketedPaste
-    )?;
-    terminal.show_cursor()?;
+    {
+        let mut terminal_guard = terminal.lock().await;
+        execute!(
+            terminal_guard.backend_mut(),
+            LeaveAlternateScreen,
+            DisableBracketedPaste
+        )?;
+        terminal_guard.show_cursor()?;
+    }
 
     result
-}
-
-fn scroll_block_into_view(
-    app_guard: &mut App,
-    term_width: u16,
-    term_height: u16,
-    block_start: usize,
-) {
-    let lines =
-        crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
-            &app_guard.messages,
-            &app_guard.theme,
-            app_guard.markdown_enabled,
-            app_guard.syntax_enabled,
-            Some(term_width as usize),
-        );
-    let input_area_height = app_guard.calculate_input_area_height(term_width);
-    let available_height = term_height
-        .saturating_sub(input_area_height + 2)
-        .saturating_sub(1);
-    let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-        &lines,
-        term_width,
-        available_height,
-        block_start,
-    );
-    let max_scroll = app_guard.calculate_max_scroll_offset(available_height, term_width);
-    app_guard.scroll_offset = desired.min(max_scroll);
-}
-
-async fn handle_ctrl_p_event(app: &Arc<Mutex<App>>, term_width: u16, term_height: u16) -> bool {
-    let mut app_guard = app.lock().await;
-
-    if app_guard.last_user_message_index().is_none() {
-        app_guard.set_status("No user messages");
-        return true;
-    }
-
-    if app_guard.in_edit_select_mode() {
-        if let Some(current) = app_guard.selected_user_message_index() {
-            if let Some(prev) = app_guard
-                .prev_user_message_index(current)
-                .or_else(|| app_guard.last_user_message_index())
-            {
-                app_guard.set_selected_user_message_index(prev);
-            }
-        } else if let Some(last) = app_guard.last_user_message_index() {
-            app_guard.set_selected_user_message_index(last);
-        }
-    } else {
-        app_guard.enter_edit_select_mode();
-        if let Some(last) = app_guard.last_user_message_index() {
-            app_guard.set_selected_user_message_index(last);
-        }
-    }
-
-    if let Some(idx) = app_guard.selected_user_message_index() {
-        app_guard.scroll_index_into_view(idx, term_width, term_height);
-    }
-
-    true
 }
 
 async fn handle_edit_select_mode_event(
@@ -507,6 +311,7 @@ async fn handle_edit_select_mode_event(
     match key.code {
         KeyCode::Esc => {
             app_guard.exit_edit_select_mode();
+            true
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(current) = app_guard.selected_user_message_index() {
@@ -520,7 +325,9 @@ async fn handle_edit_select_mode_event(
             } else if let Some(last) = app_guard.last_user_message_index() {
                 app_guard.set_selected_user_message_index(last);
             }
+            true
         }
+
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(current) = app_guard.selected_user_message_index() {
                 if let Some(next) = app_guard
@@ -533,6 +340,7 @@ async fn handle_edit_select_mode_event(
             } else if let Some(last) = app_guard.last_user_message_index() {
                 app_guard.set_selected_user_message_index(last);
             }
+            true
         }
         KeyCode::Enter => {
             if let Some(idx) = app_guard.selected_user_message_index() {
@@ -552,6 +360,7 @@ async fn handle_edit_select_mode_event(
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
+            true
         }
         KeyCode::Char('E') | KeyCode::Char('e') => {
             if let Some(idx) = app_guard.selected_user_message_index() {
@@ -562,6 +371,7 @@ async fn handle_edit_select_mode_event(
                     app_guard.exit_edit_select_mode();
                 }
             }
+            true
         }
         KeyCode::Delete => {
             if let Some(idx) = app_guard.selected_user_message_index() {
@@ -579,49 +389,11 @@ async fn handle_edit_select_mode_event(
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
+            true
         }
-        _ => {}
+
+        _ => false, // Key not handled - allow fallback handlers to process it
     }
-
-    true
-}
-
-async fn handle_ctrl_b_event(app: &Arc<Mutex<App>>, term_width: u16, term_height: u16) -> bool {
-    let mut app_guard = app.lock().await;
-    if !app_guard.markdown_enabled {
-        app_guard.set_status("Markdown disabled (/markdown on)");
-        return true;
-    }
-
-    let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-        &app_guard.messages,
-        &app_guard.theme,
-        Some(term_width as usize),
-        crate::ui::layout::TableOverflowPolicy::WrapCells,
-        app_guard.syntax_enabled,
-    );
-
-    if app_guard.in_block_select_mode() {
-        if let Some(cur) = app_guard.selected_block_index() {
-            let total = blocks.len();
-            if let Some(next) = wrap_previous_index(cur, total) {
-                app_guard.set_selected_block_index(next);
-                if let Some((start, _len, _)) = blocks.get(next) {
-                    scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-                }
-            }
-        }
-    } else if blocks.is_empty() {
-        app_guard.set_status("No code blocks");
-    } else {
-        let last = blocks.len().saturating_sub(1);
-        app_guard.enter_block_select_mode(last);
-        if let Some((start, _len, _)) = blocks.get(last) {
-            scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-        }
-    }
-
-    true
 }
 
 async fn handle_block_select_mode_event(
@@ -646,6 +418,7 @@ async fn handle_block_select_mode_event(
     match key.code {
         KeyCode::Esc => {
             app_guard.exit_block_select_mode();
+            true
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(cur) = app_guard.selected_block_index() {
@@ -659,6 +432,7 @@ async fn handle_block_select_mode_event(
             } else if !ranges.is_empty() {
                 app_guard.set_selected_block_index(0);
             }
+            true
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(cur) = app_guard.selected_block_index() {
@@ -672,7 +446,9 @@ async fn handle_block_select_mode_event(
             } else if !ranges.is_empty() {
                 app_guard.set_selected_block_index(0);
             }
+            true
         }
+
         KeyCode::Char('c') | KeyCode::Char('C') => {
             if let Some(cur) = app_guard.selected_block_index() {
                 if let Some((_start, _len, content)) = ranges.get(cur) {
@@ -689,6 +465,7 @@ async fn handle_block_select_mode_event(
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
+            true
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
             if let Some(cur) = app_guard.selected_block_index() {
@@ -718,11 +495,10 @@ async fn handle_block_select_mode_event(
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
+            true
         }
-        _ => {}
+        _ => false, // Key not handled - allow fallback handlers to process it
     }
-
-    true
 }
 
 async fn handle_external_editor_shortcut(
@@ -731,13 +507,15 @@ async fn handle_external_editor_shortcut(
     stream_dispatcher: &StreamDispatcher,
     term_width: u16,
     term_height: u16,
-) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
+) -> Result<Option<KeyLoopAction>, String> {
     let editor_result = {
         let mut app_guard = app.lock().await;
-        handle_external_editor(&mut app_guard).await
+        handle_external_editor(&mut app_guard)
+            .await
+            .map_err(|e| e.to_string())
     };
 
-    terminal.clear()?;
+    terminal.clear().map_err(|e| e.to_string())?;
 
     match editor_result {
         Ok(Some(message)) => {
@@ -758,8 +536,9 @@ async fn handle_external_editor_shortcut(
             Ok(Some(KeyLoopAction::Continue))
         }
         Err(e) => {
+            let error_msg = e.to_string();
             let mut app_guard = app.lock().await;
-            app_guard.set_status(format!("Editor error: {}", e));
+            app_guard.set_status(format!("Editor error: {}", error_msg));
             let input_area_height = app_guard.calculate_input_area_height(term_width);
             let available_height = term_height
                 .saturating_sub(input_area_height + 2)
@@ -768,24 +547,6 @@ async fn handle_external_editor_shortcut(
             Ok(Some(KeyLoopAction::Continue))
         }
     }
-}
-
-async fn handle_general_escape(app: &Arc<Mutex<App>>) -> bool {
-    let mut app_guard = app.lock().await;
-    if app_guard.file_prompt().is_some() {
-        app_guard.cancel_file_prompt();
-        return true;
-    }
-    if app_guard.in_place_edit_index().is_some() {
-        app_guard.cancel_in_place_edit();
-        app_guard.clear_input();
-        return true;
-    }
-    if app_guard.is_streaming {
-        app_guard.cancel_current_stream();
-        return true;
-    }
-    false
 }
 
 async fn process_input_submission(
@@ -975,23 +736,6 @@ async fn handle_ctrl_j_shortcut(
     }
 }
 
-async fn handle_ctrl_d_key(app: &Arc<Mutex<App>>, term_width: u16) -> Option<KeyLoopAction> {
-    let mut app_guard = app.lock().await;
-    if app_guard.get_input_text().is_empty() {
-        Some(KeyLoopAction::Break)
-    } else {
-        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-            ta.input_without_shortcuts(TAInput {
-                key: TAKey::Delete,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            });
-        });
-        Some(KeyLoopAction::Continue)
-    }
-}
-
 async fn handle_retry_shortcut(
     app: &Arc<Mutex<App>>,
     term_width: u16,
@@ -1055,25 +799,12 @@ fn prepare_stream_params_for_message(
     }
 }
 
-enum KeyLoopAction {
-    Continue,
-    Break,
-}
-
 enum SubmissionResult {
     Continue,
     Spawn(StreamParams),
 }
 
-struct PickerEventResult {
-    selection: Option<String>,
-    has_session: bool,
-}
-
-async fn handle_picker_key_event(
-    app: &Arc<Mutex<App>>,
-    key: &event::KeyEvent,
-) -> PickerEventResult {
+async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
     let mut app_guard = app.lock().await;
     let current_picker_mode = app_guard.current_picker_mode();
     let provider_name = app_guard.provider_name.clone();
@@ -1475,28 +1206,13 @@ async fn handle_picker_key_event(
         }
     }
 
-    let has_session = app_guard.picker_session().is_some();
-    PickerEventResult {
-        selection,
-        has_session,
-    }
-}
-
-fn wrap_previous_index(current: usize, total: usize) -> Option<usize> {
-    if total == 0 {
-        None
-    } else if current == 0 {
-        Some(total - 1)
-    } else {
-        Some(current - 1)
-    }
-}
-
-fn wrap_next_index(current: usize, total: usize) -> Option<usize> {
-    if total == 0 {
-        None
-    } else {
-        Some((current + 1) % total)
+    // Theme preview handling
+    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
+        if let Some(selected_id) = selection.as_ref() {
+            if selected_id != "__picker_handled__" {
+                app_guard.preview_theme_by_id(selected_id);
+            }
+        }
     }
 }
 

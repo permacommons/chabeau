@@ -3,9 +3,11 @@
 //! This module contains the main event loop that handles user input, renders the UI,
 //! and manages the chat session.
 
+mod keybindings;
 mod setup;
 mod stream;
 
+use self::keybindings::{handle_arrow_keys, handle_navigation_keys, handle_textarea_editing_keys};
 use self::setup::bootstrap_app;
 use self::stream::{StreamDispatcher, StreamParams, STREAM_END_MARKER};
 
@@ -30,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex};
-use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
+use tui_textarea::{Input as TAInput, Key as TAKey};
 
 fn language_to_extension(lang: Option<&str>) -> &'static str {
     if let Some(l) = lang {
@@ -270,177 +272,50 @@ pub async fn run_chat(
                         }
                     }
 
-                    match key.code {
-                        KeyCode::Home => {
-                            let mut app_guard = app.lock().await;
-                            app_guard.scroll_to_top();
-                        }
-                        KeyCode::End => {
-                            let mut app_guard = app.lock().await;
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(term_size.width);
-                            let available_height = term_size
-                                .height
-                                .saturating_sub(input_area_height + 2)
-                                .saturating_sub(1);
-                            app_guard.scroll_to_bottom_view(available_height, term_size.width);
-                        }
-                        KeyCode::PageUp => {
-                            let mut app_guard = app.lock().await;
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(term_size.width);
-                            let available_height = term_size
-                                .height
-                                .saturating_sub(input_area_height + 2)
-                                .saturating_sub(1);
-                            app_guard.page_up(available_height);
-                        }
-                        KeyCode::PageDown => {
-                            let mut app_guard = app.lock().await;
-                            let input_area_height =
-                                app_guard.calculate_input_area_height(term_size.width);
-                            let available_height = term_size
-                                .height
-                                .saturating_sub(input_area_height + 2)
-                                .saturating_sub(1);
-                            app_guard.page_down(available_height, term_size.width);
-                        }
-                        KeyCode::Char('a')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                    // Handle navigation keys (Home/End/PageUp/PageDown)
+                    {
+                        let mut app_guard = app.lock().await;
+                        if handle_navigation_keys(
+                            &mut app_guard,
+                            key.code,
+                            term_size.width,
+                            term_size.height,
+                        )
+                        .await
                         {
-                            let mut app_guard = app.lock().await;
-                            app_guard.apply_textarea_edit(|ta| {
-                                ta.input(TAInput::from(key));
-                            });
-                            recompute_input_layout_if_due(
-                                &mut app_guard,
-                                term_size.width,
-                                &mut last_input_layout_update,
-                            );
+                            continue;
                         }
-                        KeyCode::Char('e')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                    }
+
+                    // Handle arrow keys (Left/Right/Up/Down)
+                    {
+                        let mut app_guard = app.lock().await;
+                        if handle_arrow_keys(
+                            &mut app_guard,
+                            &key,
+                            term_size.width,
+                            term_size.height,
+                            &mut last_input_layout_update,
+                        )
+                        .await
                         {
-                            let mut app_guard = app.lock().await;
-                            app_guard.apply_textarea_edit(|ta| {
-                                ta.input(TAInput::from(key));
-                            });
-                            recompute_input_layout_if_due(
-                                &mut app_guard,
-                                term_size.width,
-                                &mut last_input_layout_update,
-                            );
+                            continue;
                         }
-                        KeyCode::Left => {
-                            let mut app_guard = app.lock().await;
-                            let compose = app_guard.compose_mode;
-                            let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
-                            if (compose && !shift) || (!compose && shift) {
-                                app_guard
-                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
-                                recompute_input_layout_if_due(
-                                    &mut app_guard,
-                                    term_size.width,
-                                    &mut last_input_layout_update,
-                                );
-                            } else {
-                                app_guard.horizontal_scroll_offset =
-                                    app_guard.horizontal_scroll_offset.saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Right => {
-                            let mut app_guard = app.lock().await;
-                            let compose = app_guard.compose_mode;
-                            let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
-                            if (compose && !shift) || (!compose && shift) {
-                                app_guard
-                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
-                                recompute_input_layout_if_due(
-                                    &mut app_guard,
-                                    term_size.width,
-                                    &mut last_input_layout_update,
-                                );
-                            } else {
-                                app_guard.horizontal_scroll_offset =
-                                    app_guard.horizontal_scroll_offset.saturating_add(1);
-                            }
-                        }
-                        KeyCode::Char(_) => {
-                            let mut app_guard = app.lock().await;
-                            app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                                ta.input(TAInput::from(key));
-                            });
-                        }
-                        KeyCode::Delete => {
-                            let mut app_guard = app.lock().await;
-                            app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                                ta.input_without_shortcuts(TAInput {
-                                    key: TAKey::Delete,
-                                    ctrl: false,
-                                    alt: false,
-                                    shift: false,
-                                });
-                            });
-                        }
-                        KeyCode::Backspace => {
-                            let mut app_guard = app.lock().await;
-                            let input = TAInput::from(key);
-                            app_guard.apply_textarea_edit(|ta| {
-                                ta.input_without_shortcuts(input);
-                            });
-                            recompute_input_layout_if_due(
-                                &mut app_guard,
-                                term_size.width,
-                                &mut last_input_layout_update,
-                            );
-                        }
-                        KeyCode::Up => {
-                            let modifiers = key.modifiers;
-                            let mut app_guard = app.lock().await;
-                            let compose = app_guard.compose_mode;
-                            let shift = modifiers.contains(event::KeyModifiers::SHIFT);
+                    }
 
-                            if (compose && !shift) || (!compose && shift) {
-                                app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
-                                recompute_input_layout_if_due(
-                                    &mut app_guard,
-                                    term_size.width,
-                                    &mut last_input_layout_update,
-                                );
-                            } else {
-                                app_guard.auto_scroll = false;
-                                app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
-                            }
+                    // Handle textarea editing keys (Ctrl+A/E, Delete, Backspace, regular chars)
+                    {
+                        let mut app_guard = app.lock().await;
+                        if handle_textarea_editing_keys(
+                            &mut app_guard,
+                            &key,
+                            term_size.width,
+                            &mut last_input_layout_update,
+                        )
+                        .await
+                        {
+                            continue;
                         }
-                        KeyCode::Down => {
-                            let modifiers = key.modifiers;
-                            let mut app_guard = app.lock().await;
-                            let compose = app_guard.compose_mode;
-                            let shift = modifiers.contains(event::KeyModifiers::SHIFT);
-
-                            if (compose && !shift) || (!compose && shift) {
-                                app_guard
-                                    .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
-                                recompute_input_layout_if_due(
-                                    &mut app_guard,
-                                    term_size.width,
-                                    &mut last_input_layout_update,
-                                );
-                            } else {
-                                app_guard.auto_scroll = false;
-                                let input_area_height =
-                                    app_guard.calculate_input_area_height(term_size.width);
-                                let available_height = term_size
-                                    .height
-                                    .saturating_sub(input_area_height + 2)
-                                    .saturating_sub(1);
-                                let max_scroll = app_guard
-                                    .calculate_max_scroll_offset(available_height, term_size.width);
-                                app_guard.scroll_offset =
-                                    (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
-                            }
-                        }
-                        _ => {}
                     }
                 }
                 Event::Paste(text) => {
@@ -1193,13 +1068,6 @@ enum SubmissionResult {
 struct PickerEventResult {
     selection: Option<String>,
     has_session: bool,
-}
-
-fn recompute_input_layout_if_due(app: &mut App, term_width: u16, last_update: &mut Instant) {
-    if last_update.elapsed() >= Duration::from_millis(16) {
-        app.recompute_input_layout_after_edit(term_width);
-        *last_update = Instant::now();
-    }
 }
 
 async fn handle_picker_key_event(

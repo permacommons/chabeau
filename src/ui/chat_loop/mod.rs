@@ -97,6 +97,37 @@ pub async fn run_chat(
     let (stream_tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
     let stream_dispatcher = Arc::new(StreamDispatcher::new(stream_tx));
 
+    // Channel for async event processing
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+
+    // Spawn async event reader task
+    let event_reader_handle = {
+        let event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                // Use a short timeout to prevent blocking
+                if let Ok(true) = event::poll(Duration::from_millis(10)) {
+                    match event::read() {
+                        Ok(ev) => {
+                            // Send event to processing queue
+                            if event_tx.send(ev).is_err() {
+                                // Channel closed, exit
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            // Error reading event, continue
+                            continue;
+                        }
+                    }
+                } else {
+                    // No events available, yield to other tasks
+                    tokio::task::yield_now().await;
+                }
+            }
+        })
+    };
+
     // Initialize mode-aware keybinding registry
     let mode_registry = build_mode_aware_registry(stream_dispatcher.clone(), terminal.clone());
 
@@ -134,9 +165,8 @@ pub async fn run_chat(
             let terminal_guard = terminal.lock().await;
             terminal_guard.size().unwrap_or_default()
         };
-        // Handle events
-        if event::poll(Duration::from_millis(50))? {
-            let ev = event::read()?;
+        // Handle events from async queue
+        while let Ok(ev) = event_rx.try_recv() {
             match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Determine the current context based on app state
@@ -281,6 +311,9 @@ pub async fn run_chat(
         // End of loop tick: log if this frame was slow
         // end of iteration
     };
+
+    // Clean up event reader task
+    event_reader_handle.abort();
 
     // Restore terminal
     disable_raw_mode()?;

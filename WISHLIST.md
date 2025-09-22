@@ -7,6 +7,10 @@ Items are removed when completed.
 ## Features
 
 - More complete keyboard mapping (Page Up/Dn; Ctrl+D) — [OPEN]
+- Custom styling for system messages — [OPEN]
+  - Add dedicated `RoleKind::System` with configurable styling separate from assistant messages
+  - Allow theme customization of system message colors, prefixes, and formatting
+  - Currently system messages use assistant styling which may not be ideal for all themes
 - Tiny copy/paste affordances — [PARTIAL]
 - Better handling of repeating messages like "Generating..."
   - Deduplicate/compress repeated status lines — [OPEN]
@@ -22,8 +26,6 @@ Items are removed when completed.
 
 ## Code quality
 
-- Refactor `src/ui/chat_loop.rs` into smaller, testable units — [PARTIAL]
-  - Extract input handling, selection mode, picker handling, and streaming dispatch into helpers/modules — [PARTIAL]
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]
 - Centralize help text — [OPEN]

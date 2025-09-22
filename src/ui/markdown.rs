@@ -92,10 +92,18 @@ pub fn render_message_markdown_details_with_policy(
 ) -> RenderedMessageDetails {
     match msg.role.as_str() {
         "system" => {
-            let rendered = render_system_message(&msg.content, theme);
+            // Render system messages with markdown
+            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::Assistant, // Use assistant styling for system messages
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+            );
             RenderedMessageDetails {
-                lines: rendered.lines,
-                codeblock_ranges: Vec::new(),
+                lines,
+                codeblock_ranges: ranges,
             }
         }
         "user" => {
@@ -127,27 +135,6 @@ pub fn render_message_markdown_details_with_policy(
             }
         }
     }
-}
-
-fn render_system_message(content: &str, theme: &Theme) -> RenderedMessage {
-    let mut out: Vec<Line<'static>> = Vec::new();
-    for l in content.lines() {
-        if l.trim().is_empty() {
-            out.push(Line::from(""));
-        } else {
-            let text = detab(l);
-            // Heuristic: if line starts with "Error:", render with error style
-            if text.starts_with("Error:") {
-                out.push(Line::from(Span::styled(text, theme.error_text_style)));
-            } else {
-                out.push(Line::from(Span::styled(text, theme.system_text_style)));
-            }
-        }
-    }
-    if !out.is_empty() {
-        out.push(Line::from(""));
-    }
-    RenderedMessage { lines: out }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -384,8 +371,15 @@ pub fn compute_codeblock_ranges(
     for msg in messages {
         let is_user = msg.role == "user";
         if msg.role == "system" {
-            let rm = render_system_message(&msg.content, theme);
-            offset += rm.lines.len();
+            let (lines, _) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::Assistant,
+                &msg.content,
+                theme,
+                true, // syntax_enabled
+                None, // terminal_width
+                crate::ui::layout::TableOverflowPolicy::WrapCells,
+            );
+            offset += lines.len();
             continue;
         }
         let (lines, ranges) = render_message_with_ranges(is_user, &msg.content, theme);
@@ -862,8 +856,15 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
-                let rm = render_system_message(&msg.content, theme);
-                offset += rm.lines.len();
+                let (lines, _) = render_message_with_ranges_with_width_and_policy(
+                    RoleKind::Assistant,
+                    &msg.content,
+                    theme,
+                    syntax_enabled,
+                    terminal_width,
+                    policy,
+                );
+                offset += lines.len();
             }
             "user" => {
                 let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
@@ -3207,9 +3208,16 @@ pub fn build_plain_display_lines_with_spans(
         let start = lines.len();
         match msg.role.as_str() {
             "system" => {
-                let rendered = render_system_message(&msg.content, theme);
-                let len = rendered.lines.len();
-                lines.extend(rendered.lines);
+                let (rendered_lines, _) = render_message_with_ranges_with_width_and_policy(
+                    RoleKind::Assistant,
+                    &msg.content,
+                    theme,
+                    true, // syntax_enabled
+                    None, // terminal_width
+                    crate::ui::layout::TableOverflowPolicy::WrapCells,
+                );
+                let len = rendered_lines.len();
+                lines.extend(rendered_lines);
                 spans.push(MessageLineSpan { start, len });
             }
             "user" => {

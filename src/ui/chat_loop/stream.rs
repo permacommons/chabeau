@@ -7,6 +7,23 @@ use crate::utils::url::construct_api_url;
 
 pub const STREAM_END_MARKER: &str = "<<STREAM_END>>";
 
+fn format_api_error(error_text: &str) -> String {
+    let trimmed = error_text.trim();
+
+    // Check if it looks like JSON
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        format!("API Error:\n```json\n{}\n```", trimmed)
+    }
+    // Check if it looks like XML
+    else if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        format!("API Error:\n```xml\n{}\n```", trimmed)
+    }
+    // For plain text errors, still wrap in code fences for consistency
+    else {
+        format!("API Error:\n```\n{}\n```", trimmed)
+    }
+}
+
 pub struct StreamParams {
     pub client: reqwest::Client,
     pub base_url: String,
@@ -63,8 +80,9 @@ impl StreamDispatcher {
                                     .text()
                                     .await
                                     .unwrap_or_else(|_| "<no body>".to_string());
+                                let formatted_error = format_api_error(&error_text);
                                 let _ = tx_clone
-                                    .send((format!("<<API_ERROR>>{}", error_text), stream_id));
+                                    .send((format!("<<API_ERROR>>{}", formatted_error), stream_id));
                                 let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                                 return;
                             }
@@ -117,7 +135,8 @@ impl StreamDispatcher {
                             }
                         }
                         Err(e) => {
-                            let _ = tx_clone.send((format!("<<API_ERROR>>{}", e), stream_id));
+                            let formatted_error = format_api_error(&e.to_string());
+                            let _ = tx_clone.send((format!("<<API_ERROR>>{}", formatted_error), stream_id));
                             let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                         }
                     }

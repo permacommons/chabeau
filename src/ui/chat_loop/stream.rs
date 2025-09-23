@@ -28,6 +28,7 @@ pub struct StreamParams {
     pub client: reqwest::Client,
     pub base_url: String,
     pub api_key: String,
+    pub provider_name: String,
     pub model: String,
     pub api_messages: Vec<crate::api::ChatMessage>,
     pub cancel_token: tokio_util::sync::CancellationToken,
@@ -51,6 +52,7 @@ impl StreamDispatcher {
                 client,
                 base_url,
                 api_key,
+                provider_name,
                 model,
                 api_messages,
                 cancel_token,
@@ -66,10 +68,13 @@ impl StreamDispatcher {
             tokio::select! {
                 _ = async {
                     let chat_url = construct_api_url(&base_url, "chat/completions");
-                    match client
+                    let http_request = client
                         .post(chat_url)
-                        .header("Authorization", format!("Bearer {api_key}"))
-                        .header("Content-Type", "application/json")
+                        .header("Content-Type", "application/json");
+
+                    let http_request = crate::utils::auth::add_auth_headers(http_request, &provider_name, &api_key);
+
+                    match http_request
                         .json(&request)
                         .send()
                         .await
@@ -133,6 +138,9 @@ impl StreamDispatcher {
                                     }
                                 }
                             }
+
+                            // Stream ended naturally (connection closed) - send end marker
+                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
                         }
                         Err(e) => {
                             let formatted_error = format_api_error(&e.to_string());

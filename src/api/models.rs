@@ -1,5 +1,4 @@
 use crate::api::ModelsResponse;
-use crate::core::builtin_providers::find_builtin_provider;
 use crate::utils::url::construct_api_url;
 
 pub async fn fetch_models(
@@ -9,24 +8,12 @@ pub async fn fetch_models(
     provider_name: &str,
 ) -> Result<ModelsResponse, Box<dyn std::error::Error>> {
     let models_url = construct_api_url(base_url, "models");
-    let mut request = client
+    let request = client
         .get(models_url)
         .header("Content-Type", "application/json");
 
     // Handle provider-specific authentication headers
-    // Check if this is a built-in provider with special authentication mode
-    if let Some(builtin_provider) = find_builtin_provider(provider_name) {
-        if builtin_provider.is_anthropic_mode() {
-            request = request
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01");
-        } else {
-            request = request.header("Authorization", format!("Bearer {api_key}"));
-        }
-    } else {
-        // For custom providers, default to OpenAI-style authentication
-        request = request.header("Authorization", format!("Bearer {api_key}"));
-    }
+    let request = crate::utils::auth::add_auth_headers(request, provider_name, api_key);
 
     let response = request.send().await?;
 

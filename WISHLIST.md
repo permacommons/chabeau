@@ -33,6 +33,9 @@ Items are removed when completed.
 - Logging durability — [OPEN]
   - Make log rewrites (after truncate/in-place edit) atomic via temp file + rename — [OPEN]
   - Optionally append a log marker indicating manual history edits — [OPEN]
+- Markdown span metadata — [OPEN]
+  - Replace style-based link detection with explicit span metadata (e.g., `SpanKind`) carried through wrapping helpers
+  - Update scroll pre-wrap, selection highlighting, and markdown renderer to consume the richer span information
 - Height/scroll DRYing — [PARTIAL]
   - Prefer `App::calculate_available_height` everywhere; keep a single helper for “scroll selected index into view” (already added) — [PARTIAL]
   - Standardize usage in renderer and chat loop — [OPEN]

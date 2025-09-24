@@ -21,10 +21,7 @@ use crate::core::app::App;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
 use ratatui::crossterm::{
-    event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
-        MouseEventKind,
-    },
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -109,7 +106,6 @@ pub async fn run_chat(
                 if let Ok(true) = event::poll(Duration::from_millis(10)) {
                     match event::read() {
                         Ok(ev) => {
-                            // Send event to processing queue
                             if event_tx.send(ev).is_err() {
                                 // Channel closed, exit
                                 break;
@@ -132,41 +128,45 @@ pub async fn run_chat(
     let mode_registry = build_mode_aware_registry(stream_dispatcher.clone(), terminal.clone());
 
     // Drawing cadence control
-    let _last_draw = Instant::now();
-    let mut _request_redraw = true;
+    let mut last_draw = Instant::now();
+    let mut request_redraw = true;
     let mut last_input_layout_update = Instant::now();
-    let _last_tick_instant = Instant::now();
-    let _last_input_event: Option<Instant> = None;
-    let _pressed_keys: Vec<(String, Instant)> = Vec::new();
-    // Perf sampling window (1s) and maxima
-    let _window_start = Instant::now();
-    let _max_tick_ms: u128 = 0;
-    let _max_draw_ms: u128 = 0;
-    let _max_input_to_draw_ms: u128 = 0;
-    let _max_queue_drain_ms: u128 = 0;
-    let _max_poll_delay_ms: u128 = 0;
-
-    // Performance logger (enabled when CHABEAU_PERF_LOG=1)
-    // Perf logging disabled
+    const MAX_FPS: u64 = 60; // Limit to 60 FPS
+    let frame_duration = Duration::from_millis(1000 / MAX_FPS);
 
     // Main loop
     let result = 'main_loop: loop {
-        let _tick_start = Instant::now();
+        // Check if we need to exit
         {
-            let mut app_guard = app.lock().await;
+            let app_guard = app.lock().await;
             if app_guard.exit_requested {
                 break 'main_loop Ok(());
             }
-            let mut terminal_guard = terminal.lock().await;
-            terminal_guard.draw(|f| ui(f, &mut app_guard))?;
+        }
+
+        // Only draw if we need to redraw and enough time has passed since last draw
+        let now = Instant::now();
+        let should_draw = request_redraw && (now.duration_since(last_draw) >= frame_duration);
+
+        if should_draw {
+            {
+                let mut app_guard = app.lock().await;
+                let mut terminal_guard = terminal.lock().await;
+                terminal_guard.draw(|f| ui(f, &mut app_guard))?;
+            }
+            last_draw = now;
+            request_redraw = false;
         }
         // Cache terminal size for this tick
         let term_size = {
             let terminal_guard = terminal.lock().await;
             terminal_guard.size().unwrap_or_default()
         };
+
         // Handle events from async queue
+        let mut events_processed = false;
         while let Ok(ev) = event_rx.try_recv() {
+            events_processed = true;
             match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Determine the current context based on app state
@@ -185,6 +185,7 @@ pub async fn run_chat(
                         app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
                             ta.input(tui_textarea::Input::from(key));
                         });
+                        request_redraw = true;
                         continue;
                     }
 
@@ -208,7 +209,10 @@ pub async fn run_chat(
                     // Handle registry results
                     match registry_result.result {
                         KeyResult::Exit => break 'main_loop Ok(()),
-                        KeyResult::Continue | KeyResult::Handled => continue,
+                        KeyResult::Continue | KeyResult::Handled => {
+                            request_redraw = true;
+                            continue;
+                        }
                         KeyResult::NotHandled => {
                             // Key not handled by registry - silently ignore
                         }
@@ -233,31 +237,20 @@ pub async fn run_chat(
                         ta.insert_str(&sanitized_text);
                     });
                     last_input_layout_update = Instant::now();
+                    request_redraw = true;
                 }
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollUp => {
-                        let mut app_guard = app.lock().await;
-                        app_guard.auto_scroll = false;
-                        app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        let mut app_guard = app.lock().await;
-                        app_guard.auto_scroll = false;
-                        let input_area_height =
-                            app_guard.calculate_input_area_height(term_size.width);
-                        let available_height = term_size
-                            .height
-                            .saturating_sub(input_area_height + 2)
-                            .saturating_sub(1);
-                        let max_scroll = app_guard
-                            .calculate_max_scroll_offset(available_height, term_size.width);
-                        app_guard.scroll_offset =
-                            (app_guard.scroll_offset.saturating_add(3)).min(max_scroll);
-                    }
-                    _ => {}
-                },
+                Event::Resize(_, _) => {
+                    // Terminal was resized, need to redraw
+                    request_redraw = true;
+                }
+
                 _ => {}
             }
+        }
+
+        // Request redraw if we processed any events
+        if events_processed {
+            request_redraw = true;
         }
 
         // Handle streaming updates - drain all available messages
@@ -305,11 +298,13 @@ pub async fn run_chat(
             }
         }
         if received_any {
-            continue; // Force a redraw after processing all updates
+            request_redraw = true;
         }
 
-        // End of loop tick: log if this frame was slow
-        // end of iteration
+        // If no events were processed and no redraw is needed, yield to prevent busy waiting
+        if !events_processed && !received_any && !request_redraw {
+            tokio::time::sleep(Duration::from_millis(16)).await; // ~60 FPS when idle
+        }
     };
 
     // Clean up event reader task

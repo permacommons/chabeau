@@ -31,7 +31,7 @@ pub fn add_auth_headers(
                 .header("anthropic-version", "2023-06-01");
         }
     }
-    
+
     // Default to OpenAI-style authentication for all other providers
     request.header("Authorization", format!("Bearer {api_key}"))
 }

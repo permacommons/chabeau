@@ -8,6 +8,10 @@ use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
 
+#[path = "markdown_wrap.rs"]
+mod wrap;
+use wrap::wrap_spans_to_width_generic_shared;
+
 #[derive(Clone, Debug)]
 enum ListKind {
     Unordered,
@@ -958,6 +962,7 @@ mod tests {
         render_message_markdown_with_policy, TableState,
     };
     use crate::core::message::Message;
+    use crate::utils::test_utils::SAMPLE_HYPERTEXT_PARAGRAPH;
     use pulldown_cmark::{Options, Parser};
     use ratatui::style::Modifier;
     use ratatui::text::Span;
@@ -1010,6 +1015,75 @@ mod tests {
         assert!(lines.len() > *start + *len);
         assert_eq!(lines[*start], "first");
         assert_eq!(lines[*start + 1], "second");
+    }
+
+    #[test]
+    fn markdown_links_wrap_at_word_boundaries_with_width() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "abcd efgh [hypertext dreams](https://docs.hypertext.org) and more text"
+                .into(),
+        };
+
+        let rendered =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(10));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+        let combined = lines.join("\n");
+
+        assert!(
+            combined.contains("hypertext"),
+            "combined output should include the link text: {:?}",
+            combined
+        );
+        assert!(
+            !combined.contains("hype\nrtext"),
+            "link text should wrap at the space boundary, not mid-word: {:?}",
+            combined
+        );
+
+        let wider =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(15));
+        let wider_text = wider
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !wider_text.contains("hype\nrtext"),
+            "link text should stay intact even when more columns are available: {:?}",
+            wider_text
+        );
+    }
+
+    #[test]
+    fn markdown_links_wrap_in_long_paragraph_without_mid_word_break() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: SAMPLE_HYPERTEXT_PARAGRAPH.to_string(),
+        };
+
+        let rendered =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(158));
+        let combined = rendered
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !combined.contains("hype\nrtext"),
+            "wide layout still broke link mid-word: {:?}",
+            combined
+        );
+        assert!(
+            combined.contains("hypertext dreams"),
+            "link text missing from output: {:?}",
+            combined
+        );
     }
 
     #[test]
@@ -3061,117 +3135,6 @@ fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Sp
 fn detab(s: &str) -> String {
     // Simple, predictable detab: replace tabs with 4 spaces
     s.replace('\t', "    ")
-}
-
-// Shared helper: wrap generic paragraph spans (non-table) to width, preserving styles.
-// Used by both the main renderer and width-aware range computation to ensure consistency.
-fn wrap_spans_to_width_generic_shared(
-    spans: &[Span<'static>],
-    max_width: usize,
-) -> Vec<Vec<Span<'static>>> {
-    const MAX_UNBREAKABLE_LENGTH: usize = 30;
-    if spans.is_empty() {
-        return vec![Vec::new()];
-    }
-    let mut wrapped_lines = Vec::new();
-    let mut current_line: Vec<Span<'static>> = Vec::new();
-    let mut current_width = 0usize;
-    // Break incoming spans into owned (text, style) parts
-    let mut parts: Vec<(String, Style)> = spans
-        .iter()
-        .map(|s| (s.content.to_string(), s.style))
-        .collect();
-    for (mut text, style) in parts.drain(..) {
-        while !text.is_empty() {
-            let mut chars_to_fit = 0usize;
-            let mut width_so_far = 0usize;
-            let mut last_break_pos: Option<(usize, usize)> = None;
-            for (char_pos, ch) in text.char_indices() {
-                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                if current_width + width_so_far + cw <= max_width {
-                    width_so_far += cw;
-                    chars_to_fit = char_pos + ch.len_utf8();
-                    if ch.is_whitespace() {
-                        last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
-                    }
-                } else {
-                    break;
-                }
-            }
-            if chars_to_fit == 0 {
-                // Nothing fits on this line
-                if !current_line.is_empty() {
-                    wrapped_lines.push(std::mem::take(&mut current_line));
-                    current_width = 0;
-                    continue;
-                } else {
-                    // Consider unbreakable word
-                    let next_word_end = text.find(char::is_whitespace).unwrap_or(text.len());
-                    let next_word = &text[..next_word_end];
-                    let ww = UnicodeWidthStr::width(next_word);
-                    if ww <= MAX_UNBREAKABLE_LENGTH {
-                        current_line.push(Span::styled(next_word.to_string(), style));
-                        current_width += ww;
-                        if next_word_end < text.len() {
-                            text = text[next_word_end..].to_string();
-                        } else {
-                            break;
-                        }
-                    } else {
-                        // Hard break the very long token
-                        let mut forced_width = 0usize;
-                        let mut forced_end = text.len();
-                        for (char_pos, ch) in text.char_indices() {
-                            let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                            if forced_width + cw > max_width {
-                                forced_end = char_pos;
-                                break;
-                            }
-                            forced_width += cw;
-                        }
-                        if forced_end > 0 {
-                            let chunk = text[..forced_end].to_string();
-                            current_line.push(Span::styled(chunk, style));
-                            current_width = forced_width;
-                            text = text[forced_end..].to_string();
-                            if !text.is_empty() {
-                                wrapped_lines.push(std::mem::take(&mut current_line));
-                                current_width = 0;
-                            }
-                        } else {
-                            current_line.push(Span::styled(text.clone(), style));
-                            current_width += UnicodeWidthStr::width(text.as_str());
-                            break;
-                        }
-                    }
-                }
-            } else if chars_to_fit >= text.len() {
-                current_line.push(Span::styled(text.clone(), style));
-                current_width += width_so_far;
-                break;
-            } else {
-                let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
-                let left = text[..break_pos].trim_end();
-                if !left.is_empty() {
-                    current_line.push(Span::styled(left.to_string(), style));
-                    current_width += UnicodeWidthStr::width(left);
-                }
-                text = text[break_pos..].trim_start().to_string();
-                if !text.is_empty() {
-                    wrapped_lines.push(std::mem::take(&mut current_line));
-                    current_width = 0;
-                }
-            }
-        }
-    }
-    if !current_line.is_empty() {
-        wrapped_lines.push(current_line);
-    }
-    if wrapped_lines.is_empty() {
-        vec![Vec::new()]
-    } else {
-        wrapped_lines
-    }
 }
 
 /// Build display lines for all messages using markdown rendering

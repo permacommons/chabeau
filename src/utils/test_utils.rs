@@ -75,3 +75,6 @@ pub fn create_test_messages() -> VecDeque<Message> {
     ));
     messages
 }
+
+#[cfg(test)]
+pub const SAMPLE_HYPERTEXT_PARAGRAPH: &str = "The story of hypertext begins not with Tim Berners-Lee's World Wide Web, but with Vannevar Bush's 1945 essay \"As We May Think,\" where he envisioned the Memex - a device that would store books, records, and communications, and mechanically link them together by association. Ted Nelson, inspired by Bush's vision, coined the term \"hypertext\" in 1963 and spent decades developing [the original web proposal](https://www.example.com) - a system that would revolutionize how we think about documents, copyright, and knowledge itself. Nelson's Xanadu wasn't just about linking documents; it was about creating a [hypertext dreams](https://docs.hypertext.org) where every quotation would be automatically linked to its source, authors would be compensated for every use of their work, and the sum of human knowledge would be accessible through an elegant web of associations.";

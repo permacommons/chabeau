@@ -8,6 +8,7 @@ use ratatui::{
     text::Span,
 };
 use std::collections::VecDeque;
+use unicode_width::UnicodeWidthChar;
 
 /// Handles all scroll-related calculations and line building
 pub struct ScrollCalculator;
@@ -37,6 +38,14 @@ impl ScrollCalculator {
         }
 
         let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+
+        // Heuristic: markdown renderers underline links. Use that to detect link spans so we
+        // can treat any whitespace inside them as a safe wrap boundary.
+        let span_is_likely_link = |style: &Style| {
+            (style.add_modifier.contains(Modifier::UNDERLINED)
+                && !style.sub_modifier.contains(Modifier::UNDERLINED))
+                || style.underline_color.is_some()
+        };
 
         for line in lines {
             if line.spans.is_empty() {
@@ -127,8 +136,12 @@ impl ScrollCalculator {
             };
 
             for s in &line.spans {
+                let span_is_link = span_is_likely_link(&s.style);
                 for ch in s.content.chars() {
-                    if ch == ' ' {
+                    let is_plain_space = ch == ' ';
+                    let is_link_break_space = span_is_link && ch.is_whitespace() && !is_plain_space;
+
+                    if is_plain_space || is_link_break_space {
                         // Place accumulated word before handling space
                         flush_word(
                             &mut cur_spans,
@@ -139,15 +152,24 @@ impl ScrollCalculator {
                             &mut word_len,
                         );
 
+                        // Preserve display width: NBSP and other whitespace have visible width.
+                        let space_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+                        if space_width == 0 {
+                            continue;
+                        }
+
                         // Add a single space if it fits; otherwise wrap and skip leading space
-                        if cur_len < width {
-                            append_run(&mut cur_spans, s.style, " ");
-                            cur_len += 1;
+                        if cur_len + space_width <= width {
+                            let mut buf = [0u8; 4];
+                            let piece = ch.encode_utf8(&mut buf);
+                            append_run(&mut cur_spans, s.style, piece);
+                            cur_len += space_width;
                         } else {
                             emit_line(&mut cur_spans, &mut out);
                             emitted_any = true;
                             cur_len = 0;
                         }
+                        continue;
                     } else {
                         // Accumulate into current word, merging by style
                         if let Some((last_text, last_style)) = word_segs.last_mut() {
@@ -600,7 +622,9 @@ impl ScrollCalculator {
 mod tests {
     use super::*;
     use crate::ui::theme::Theme;
-    use crate::utils::test_utils::{create_test_message, create_test_messages};
+    use crate::utils::test_utils::{
+        create_test_message, create_test_messages, SAMPLE_HYPERTEXT_PARAGRAPH,
+    };
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
@@ -761,6 +785,87 @@ mod tests {
         let joined = content_lines.join(" ");
         assert!(!joined.contains('…'));
         assert!(joined.contains("plain text line"));
+    }
+
+    #[test]
+    fn test_markdown_link_wraps_on_spaces() {
+        // Links with ordinary spaces should wrap on word boundaries
+        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let line = Line::from(vec![Span::styled("Rust programming language", style)]);
+
+        let wrapped = ScrollCalculator::prewrap_lines(&[line], 15);
+        let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
+
+        assert_eq!(rendered, vec!["Rust ", "programming ", "language"]);
+    }
+
+    #[test]
+    fn test_markdown_link_wraps_on_nbsp() {
+        // Non-breaking spaces inside markdown links should still allow wrapping
+        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let line = Line::from(vec![Span::styled(
+            "Rust\u{00A0}programming language",
+            style,
+        )]);
+
+        let wrapped = ScrollCalculator::prewrap_lines(&[line], 15);
+        let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
+
+        assert_eq!(rendered, vec!["Rust\u{00A0}", "programming ", "language"]);
+    }
+
+    #[test]
+    fn test_layout_engine_and_prewrap_preserve_link_words() {
+        let theme = Theme::dark_default();
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: SAMPLE_HYPERTEXT_PARAGRAPH.into(),
+        });
+
+        let layout = crate::ui::layout::LayoutEngine::layout_messages(
+            &messages,
+            &theme,
+            &crate::ui::layout::LayoutConfig {
+                width: Some(158),
+                markdown_enabled: true,
+                syntax_enabled: true,
+                table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            },
+        );
+        let prewrapped = ScrollCalculator::prewrap_lines(&layout.lines, 158);
+        let text = prewrapped
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !text.contains("hype\nrtext"),
+            "prewrap still split the link text mid-word: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn test_prewrap_wraps_entire_link_word_when_width_exhausted() {
+        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        // 150 columns of padding plus a space, leaving little room for the link to fit
+        let prefix = "a".repeat(150);
+        let line = Line::from(vec![
+            Span::raw(prefix),
+            Span::raw(" "),
+            Span::styled("hypertext dreams", style),
+        ]);
+        let wrapped = ScrollCalculator::prewrap_lines(&[line], 158);
+        let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
+
+        assert!(rendered.iter().any(|s| s.contains("hypertext dreams")));
+        assert!(
+            !rendered.join("\n").contains("hype\nrtext"),
+            "link word still split mid-line: {:?}",
+            rendered
+        );
     }
 
     #[test]

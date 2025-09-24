@@ -958,6 +958,7 @@ mod tests {
         render_message_markdown_with_policy, TableState,
     };
     use crate::core::message::Message;
+    use crate::utils::test_utils::SAMPLE_HYPERTEXT_PARAGRAPH;
     use pulldown_cmark::{Options, Parser};
     use ratatui::style::Modifier;
     use ratatui::text::Span;
@@ -1010,6 +1011,75 @@ mod tests {
         assert!(lines.len() > *start + *len);
         assert_eq!(lines[*start], "first");
         assert_eq!(lines[*start + 1], "second");
+    }
+
+    #[test]
+    fn markdown_links_wrap_at_word_boundaries_with_width() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "abcd efgh [hypertext dreams](https://docs.hypertext.org) and more text"
+                .into(),
+        };
+
+        let rendered =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(10));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+        let combined = lines.join("\n");
+
+        assert!(
+            combined.contains("hypertext"),
+            "combined output should include the link text: {:?}",
+            combined
+        );
+        assert!(
+            !combined.contains("hype\nrtext"),
+            "link text should wrap at the space boundary, not mid-word: {:?}",
+            combined
+        );
+
+        let wider =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(15));
+        let wider_text = wider
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !wider_text.contains("hype\nrtext"),
+            "link text should stay intact even when more columns are available: {:?}",
+            wider_text
+        );
+    }
+
+    #[test]
+    fn markdown_links_wrap_in_long_paragraph_without_mid_word_break() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: SAMPLE_HYPERTEXT_PARAGRAPH.to_string(),
+        };
+
+        let rendered =
+            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(158));
+        let combined = rendered
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !combined.contains("hype\nrtext"),
+            "wide layout still broke link mid-word: {:?}",
+            combined
+        );
+        assert!(
+            combined.contains("hypertext dreams"),
+            "link text missing from output: {:?}",
+            combined
+        );
     }
 
     #[test]
@@ -3151,10 +3221,24 @@ fn wrap_spans_to_width_generic_shared(
                 break;
             } else {
                 let (break_pos, _bw) = last_break_pos.unwrap_or((chars_to_fit, width_so_far));
+                if last_break_pos.is_none() && current_width > 0 {
+                    // No natural break inside the incoming span; start it on the next line so
+                    // multi-word links and long tokens stay intact.
+                    wrapped_lines.push(std::mem::take(&mut current_line));
+                    current_width = 0;
+                    continue;
+                }
                 let left = text[..break_pos].trim_end();
                 if !left.is_empty() {
-                    current_line.push(Span::styled(left.to_string(), style));
-                    current_width += UnicodeWidthStr::width(left);
+                    let left_width = UnicodeWidthStr::width(left);
+                    if current_width > 0 && current_width + left_width > max_width {
+                        wrapped_lines.push(std::mem::take(&mut current_line));
+                        current_width = 0;
+                    }
+                    if left_width > 0 {
+                        current_line.push(Span::styled(left.to_string(), style));
+                        current_width += left_width;
+                    }
                 }
                 text = text[break_pos..].trim_start().to_string();
                 if !text.is_empty() {

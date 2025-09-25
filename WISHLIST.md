@@ -23,6 +23,8 @@ Items are removed when completed.
 - Basic "push a file into context" support — [OPEN]
 - "Rapid refine" - apply a previously created prompt to an output — [OPEN]
 - Microphone/speaker support? — [OPEN]
+- Emit OSC 8 hyperlinks for rendered links leveraging `SpanKind::Link` metadata — [OPEN]
+- Extend span metadata to code blocks (e.g., `SpanKind::CodeBlock`) to unlock richer TUI interactions — [OPEN]
 
 ## Code quality
 
@@ -33,9 +35,6 @@ Items are removed when completed.
 - Logging durability — [OPEN]
   - Make log rewrites (after truncate/in-place edit) atomic via temp file + rename — [OPEN]
   - Optionally append a log marker indicating manual history edits — [OPEN]
-- Markdown span metadata — [OPEN]
-  - Replace style-based link detection with explicit span metadata (e.g., `SpanKind`) carried through wrapping helpers
-  - Update scroll pre-wrap, selection highlighting, and markdown renderer to consume the richer span information
 - Height/scroll DRYing — [PARTIAL]
   - Prefer `App::calculate_available_height` everywhere; keep a single helper for “scroll selected index into view” (already added) — [PARTIAL]
   - Standardize usage in renderer and chat loop — [OPEN]

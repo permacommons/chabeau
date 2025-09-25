@@ -14,6 +14,13 @@ use unicode_width::UnicodeWidthChar;
 pub struct ScrollCalculator;
 
 impl ScrollCalculator {
+    #[inline]
+    fn span_style_looks_like_link(style: &Style) -> bool {
+        (style.add_modifier.contains(Modifier::UNDERLINED)
+            && !style.sub_modifier.contains(Modifier::UNDERLINED))
+            || style.underline_color.is_some()
+    }
+
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
@@ -41,12 +48,6 @@ impl ScrollCalculator {
 
         // Heuristic: markdown renderers underline links. Use that to detect link spans so we
         // can treat any whitespace inside them as a safe wrap boundary.
-        let span_is_likely_link = |style: &Style| {
-            (style.add_modifier.contains(Modifier::UNDERLINED)
-                && !style.sub_modifier.contains(Modifier::UNDERLINED))
-                || style.underline_color.is_some()
-        };
-
         for line in lines {
             if line.spans.is_empty() {
                 out.push(Line::from(""));
@@ -136,7 +137,7 @@ impl ScrollCalculator {
             };
 
             for s in &line.spans {
-                let span_is_link = span_is_likely_link(&s.style);
+                let span_is_link = Self::span_style_looks_like_link(&s.style);
                 for ch in s.content.chars() {
                     let is_plain_space = ch == ' ';
                     let is_link_break_space = span_is_link && ch.is_whitespace() && !is_plain_space;

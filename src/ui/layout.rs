@@ -168,7 +168,7 @@ impl LayoutEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutConfig, LayoutEngine, SpanKind, Theme};
+    use super::{LayoutConfig, LayoutEngine, Theme};
     use crate::core::message::Message;
     use std::collections::VecDeque;
 
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(layout.lines.len(), layout.span_metadata.len());
         let mut saw_link = false;
         for kinds in &layout.span_metadata {
-            if kinds.iter().any(|k| *k == SpanKind::Link) {
+            if kinds.iter().any(|k| k.is_link()) {
                 saw_link = true;
                 break;
             }
@@ -205,7 +205,7 @@ mod tests {
 
         assert_eq!(layout.lines.len(), layout.span_metadata.len());
         for kinds in &layout.span_metadata {
-            assert!(kinds.iter().all(|k| *k == SpanKind::Text));
+            assert!(kinds.iter().all(|k| k.is_text()));
         }
     }
 }

@@ -62,7 +62,7 @@ impl ScrollCalculator {
                     let kind = span_metadata
                         .and_then(|meta| meta.get(line_idx))
                         .and_then(|kinds| kinds.get(span_idx))
-                        .copied()
+                        .cloned()
                         .unwrap_or(SpanKind::Text);
                     owned_kinds.push(kind);
                 }
@@ -150,7 +150,7 @@ impl ScrollCalculator {
                                 collector_spans,
                                 collector_kinds,
                                 *seg_style,
-                                *seg_kind,
+                                seg_kind.clone(),
                                 &slice,
                             );
                             *out_len += here;
@@ -182,13 +182,13 @@ impl ScrollCalculator {
                 let span_kind = span_metadata
                     .and_then(|meta| meta.get(line_idx))
                     .and_then(|kinds| kinds.get(span_idx))
-                    .copied()
+                    .cloned()
                     .unwrap_or(SpanKind::Text);
 
                 for ch in s.content.chars() {
                     let is_plain_space = ch == ' ';
                     let is_link_break_space =
-                        span_kind == SpanKind::Link && ch.is_whitespace() && !is_plain_space;
+                        span_kind.is_link() && ch.is_whitespace() && !is_plain_space;
 
                     if is_plain_space || is_link_break_space {
                         flush_word(
@@ -234,10 +234,10 @@ impl ScrollCalculator {
                             if *last_style == s.style && *last_kind == span_kind {
                                 last_text.push(ch);
                             } else {
-                                word_segs.push((vec![ch], s.style, span_kind));
+                                word_segs.push((vec![ch], s.style, span_kind.clone()));
                             }
                         } else {
-                            word_segs.push((vec![ch], s.style, span_kind));
+                            word_segs.push((vec![ch], s.style, span_kind.clone()));
                         }
                         word_len += 1;
                     }
@@ -360,7 +360,7 @@ impl ScrollCalculator {
                             let include_empty = offset < span.len.saturating_sub(1);
                             let has_content =
                                 kinds.iter().zip(line.spans.iter()).any(|(kind, span)| {
-                                    *kind != SpanKind::UserPrefix && !span.content.trim().is_empty()
+                                    !kind.is_user_prefix() && !span.content.trim().is_empty()
                                 });
                             if include_empty || has_content {
                                 Self::apply_selection_highlight(
@@ -867,7 +867,7 @@ mod tests {
         // Links with ordinary spaces should wrap on word boundaries
         let style = Style::default();
         let line = Line::from(vec![Span::styled("Rust programming language", style)]);
-        let metadata = vec![vec![SpanKind::Link]];
+        let metadata = vec![vec![SpanKind::link("https://example.com")]];
 
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
@@ -884,7 +884,7 @@ mod tests {
             "Rust\u{00A0}programming language",
             style,
         )]);
-        let metadata = vec![vec![SpanKind::Link]];
+        let metadata = vec![vec![SpanKind::link("https://example.com")]];
 
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
@@ -940,7 +940,11 @@ mod tests {
             Span::raw(" "),
             Span::styled("hypertext dreams", style),
         ]);
-        let metadata = vec![vec![SpanKind::Text, SpanKind::Text, SpanKind::Link]];
+        let metadata = vec![vec![
+            SpanKind::Text,
+            SpanKind::Text,
+            SpanKind::link("https://example.com"),
+        ]];
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 158);
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();

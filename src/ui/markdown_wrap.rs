@@ -19,7 +19,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
     // Break incoming spans into owned (text, style) parts
     let mut parts: Vec<(String, Style, SpanKind)> = spans
         .iter()
-        .map(|(s, kind)| (s.content.to_string(), s.style, *kind))
+        .map(|(s, kind)| (s.content.to_string(), s.style, kind.clone()))
         .collect();
     for (mut text, style, kind) in parts.drain(..) {
         while !text.is_empty() {
@@ -50,7 +50,8 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     let next_word = &text[..next_word_end];
                     let ww = UnicodeWidthStr::width(next_word);
                     if ww <= MAX_UNBREAKABLE_LENGTH {
-                        current_line.push((Span::styled(next_word.to_string(), style), kind));
+                        current_line
+                            .push((Span::styled(next_word.to_string(), style), kind.clone()));
                         current_width += ww;
                         if next_word_end < text.len() {
                             text = text[next_word_end..].to_string();
@@ -71,7 +72,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         }
                         if forced_end > 0 {
                             let chunk = text[..forced_end].to_string();
-                            current_line.push((Span::styled(chunk, style), kind));
+                            current_line.push((Span::styled(chunk, style), kind.clone()));
                             current_width = forced_width;
                             text = text[forced_end..].to_string();
                             if !text.is_empty() {
@@ -79,14 +80,14 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 current_width = 0;
                             }
                         } else {
-                            current_line.push((Span::styled(text.clone(), style), kind));
+                            current_line.push((Span::styled(text.clone(), style), kind.clone()));
                             current_width += UnicodeWidthStr::width(text.as_str());
                             break;
                         }
                     }
                 }
             } else if chars_to_fit >= text.len() {
-                current_line.push((Span::styled(text.clone(), style), kind));
+                current_line.push((Span::styled(text.clone(), style), kind.clone()));
                 current_width += width_so_far;
                 break;
             } else {
@@ -106,7 +107,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         current_width = 0;
                     }
                     if left_width > 0 {
-                        current_line.push((Span::styled(left.to_string(), style), kind));
+                        current_line.push((Span::styled(left.to_string(), style), kind.clone()));
                         current_width += left_width;
                     }
                 }

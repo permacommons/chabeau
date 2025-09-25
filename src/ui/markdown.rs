@@ -439,26 +439,13 @@ fn render_message_with_ranges_with_width_and_policy(
                 }
                 Tag::Heading { level, .. } => {
                     // Flush existing and start heading style
-                    if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        }
-                    } else if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut current_spans,
+                        role,
+                        terminal_width,
+                        true,
+                    );
                     let style = theme.md_heading_style(level as u8);
                     if is_user && !did_prefix_user {
                         current_spans.push(Span::styled("You: ", theme.user_prefix_style));
@@ -474,26 +461,13 @@ fn render_message_with_ranges_with_width_and_policy(
                     });
                 }
                 Tag::Item => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut current_spans,
+                        role,
+                        terminal_width,
+                        true,
+                    );
                     let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
                         ListKind::Unordered => "- ".to_string(),
                         ListKind::Ordered(_n) => {
@@ -542,26 +516,13 @@ fn render_message_with_ranges_with_width_and_policy(
                 ),
                 Tag::Link { .. } => style_stack.push(theme.md_link_style()),
                 Tag::Table(_) => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut current_spans,
+                        role,
+                        terminal_width,
+                        true,
+                    );
                     table_state = Some(TableState::new());
                 }
                 Tag::TableHead => {
@@ -583,26 +544,13 @@ fn render_message_with_ranges_with_width_and_policy(
             },
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
-                    if let Some(w) = terminal_width {
-                        if !current_spans.is_empty() {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        }
-                    } else if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut current_spans,
+                        role,
+                        terminal_width,
+                        true,
+                    );
                     lines.push(Line::from(""));
                 }
                 TagEnd::Heading(_level) => {
@@ -627,26 +575,13 @@ fn render_message_with_ranges_with_width_and_policy(
                     list_stack.pop();
                 }
                 TagEnd::Item => {
-                    if !current_spans.is_empty() {
-                        if let Some(w) = terminal_width {
-                            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                            for (i, segs) in wrapped.into_iter().enumerate() {
-                                if i == 0 {
-                                    lines.push(Line::from(segs));
-                                } else if role == RoleKind::User {
-                                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                    with_indent.push(Span::raw("     "));
-                                    with_indent.extend(segs);
-                                    lines.push(Line::from(with_indent));
-                                } else {
-                                    lines.push(Line::from(segs));
-                                }
-                            }
-                            current_spans.clear();
-                        } else {
-                            lines.push(Line::from(std::mem::take(&mut current_spans)));
-                        }
-                    }
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut current_spans,
+                        role,
+                        terminal_width,
+                        true,
+                    );
                 }
                 TagEnd::CodeBlock => {
                     // Capture start before pushing code block lines
@@ -743,64 +678,34 @@ fn render_message_with_ranges_with_width_and_policy(
                 }
             }
             Event::SoftBreak => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for (i, segs) in wrapped.into_iter().enumerate() {
-                            if i == 0 {
-                                lines.push(Line::from(segs));
-                            } else if role == RoleKind::User {
-                                let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                with_indent.push(Span::raw("     "));
-                                with_indent.extend(segs);
-                                lines.push(Line::from(with_indent));
-                            } else {
-                                lines.push(Line::from(segs));
-                            }
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                push_spans_with_optional_wrap(
+                    &mut lines,
+                    &mut current_spans,
+                    role,
+                    terminal_width,
+                    true,
+                );
                 if role == RoleKind::User && did_prefix_user {
                     current_spans.push(Span::raw("     "));
                 }
             }
             Event::HardBreak => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for (i, segs) in wrapped.into_iter().enumerate() {
-                            if i == 0 {
-                                lines.push(Line::from(segs));
-                            } else if role == RoleKind::User {
-                                let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                                with_indent.push(Span::raw("     "));
-                                with_indent.extend(segs);
-                                lines.push(Line::from(with_indent));
-                            } else {
-                                lines.push(Line::from(segs));
-                            }
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                push_spans_with_optional_wrap(
+                    &mut lines,
+                    &mut current_spans,
+                    role,
+                    terminal_width,
+                    true,
+                );
             }
             Event::Rule => {
-                if let Some(w) = terminal_width {
-                    if !current_spans.is_empty() {
-                        let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-                        for segs in wrapped.into_iter() {
-                            lines.push(Line::from(segs));
-                        }
-                        current_spans.clear();
-                    }
-                } else {
-                    flush_current_line(&mut lines, &mut current_spans);
-                }
+                push_spans_with_optional_wrap(
+                    &mut lines,
+                    &mut current_spans,
+                    role,
+                    terminal_width,
+                    false,
+                );
                 lines.push(Line::from(""));
             }
             Event::TaskListMarker(_checked) => {
@@ -817,25 +722,7 @@ fn render_message_with_ranges_with_width_and_policy(
         }
     }
 
-    if !current_spans.is_empty() {
-        if let Some(w) = terminal_width {
-            let wrapped = wrap_spans_to_width_generic_shared(&current_spans, w);
-            for (i, segs) in wrapped.into_iter().enumerate() {
-                if i == 0 {
-                    lines.push(Line::from(segs));
-                } else if role == RoleKind::User {
-                    let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                    with_indent.push(Span::raw("     "));
-                    with_indent.extend(segs);
-                    lines.push(Line::from(with_indent));
-                } else {
-                    lines.push(Line::from(segs));
-                }
-            }
-        } else {
-            lines.push(Line::from(std::mem::take(&mut current_spans)));
-        }
-    }
+    push_spans_with_optional_wrap(&mut lines, &mut current_spans, role, terminal_width, true);
     if !lines.is_empty()
         && lines
             .last()
@@ -3126,8 +3013,41 @@ fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
     }
 }
 
+#[cfg(test)]
 fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Span<'static>>) {
     if !current_spans.is_empty() {
+        lines.push(Line::from(std::mem::take(current_spans)));
+    }
+}
+
+const USER_CONTINUATION_INDENT: &str = "     ";
+
+fn push_spans_with_optional_wrap(
+    lines: &mut Vec<Line<'static>>,
+    current_spans: &mut Vec<Span<'static>>,
+    role: RoleKind,
+    terminal_width: Option<usize>,
+    indent_user_wraps: bool,
+) {
+    if current_spans.is_empty() {
+        return;
+    }
+
+    if let Some(width) = terminal_width {
+        let wrapped = wrap_spans_to_width_generic_shared(&current_spans[..], width);
+        let indent_wrapped_user_lines = indent_user_wraps && role == RoleKind::User;
+        for (idx, segs) in wrapped.into_iter().enumerate() {
+            if idx == 0 || !indent_wrapped_user_lines {
+                lines.push(Line::from(segs));
+            } else {
+                let mut with_indent = Vec::with_capacity(segs.len() + 1);
+                with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
+                with_indent.extend(segs);
+                lines.push(Line::from(with_indent));
+            }
+        }
+        current_spans.clear();
+    } else {
         lines.push(Line::from(std::mem::take(current_spans)));
     }
 }

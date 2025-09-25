@@ -4,6 +4,7 @@ pub mod chat_loop;
 pub mod help;
 pub mod layout;
 pub mod markdown;
+pub mod osc;
 pub mod picker;
 pub mod renderer;
 pub mod span;

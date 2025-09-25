@@ -208,4 +208,21 @@ mod tests {
             assert!(kinds.iter().all(|k| k.is_text()));
         }
     }
+
+    #[test]
+    fn layout_lines_can_be_encoded_with_osc_links() {
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: "[Rust](https://www.rust-lang.org) and [Go](https://go.dev)".into(),
+        });
+        let theme = Theme::dark_default();
+        let layout = LayoutEngine::layout_messages(&messages, &theme, &LayoutConfig::default());
+        let encoded = crate::ui::osc::encode_lines_with_links(&layout.lines, &layout.span_metadata);
+        let joined = encoded.join("\n");
+        assert!(joined.contains("Rust"));
+        assert!(joined.contains("Go"));
+        assert!(joined.matches("\x1b]8;;").count() >= 4);
+        assert!(joined.matches("\x1b]8;;\x1b\\").count() >= 2);
+    }
 }

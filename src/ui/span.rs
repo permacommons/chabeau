@@ -21,6 +21,14 @@ impl SpanKind {
     }
 
     #[inline]
+    pub fn link_meta(&self) -> Option<&LinkMeta> {
+        match self {
+            SpanKind::Link(meta) => Some(meta),
+            _ => None,
+        }
+    }
+
+    #[inline]
     pub fn is_user_prefix(&self) -> bool {
         matches!(self, SpanKind::UserPrefix)
     }

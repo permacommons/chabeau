@@ -1,6 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 use crate::core::message::Message;
 use crate::ui::layout::MessageLineSpan;
+use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -35,7 +36,15 @@ pub struct RenderedMessage {
 pub struct RenderedMessageDetails {
     pub lines: Vec<Line<'static>>,
     pub codeblock_ranges: Vec<(usize, usize, String)>,
+    #[allow(dead_code)]
+    pub span_metadata: Option<Vec<Vec<SpanKind>>>,
 }
+
+type RenderedLinesWithMetadata = (
+    Vec<Line<'static>>,
+    Vec<(usize, usize, String)>,
+    Vec<Vec<SpanKind>>,
+);
 
 impl RenderedMessageDetails {
     pub fn into_rendered(self) -> RenderedMessage {
@@ -97,7 +106,7 @@ pub fn render_message_markdown_details_with_policy(
     match msg.role.as_str() {
         "system" => {
             // Render system messages with markdown
-            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
                 RoleKind::Assistant, // Use assistant styling for system messages
                 &msg.content,
                 theme,
@@ -108,10 +117,11 @@ pub fn render_message_markdown_details_with_policy(
             RenderedMessageDetails {
                 lines,
                 codeblock_ranges: ranges,
+                span_metadata: Some(metadata),
             }
         }
         "user" => {
-            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
                 RoleKind::User,
                 &msg.content,
                 theme,
@@ -122,10 +132,11 @@ pub fn render_message_markdown_details_with_policy(
             RenderedMessageDetails {
                 lines,
                 codeblock_ranges: ranges,
+                span_metadata: Some(metadata),
             }
         }
         _ => {
-            let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
                 RoleKind::Assistant,
                 &msg.content,
                 theme,
@@ -136,6 +147,7 @@ pub fn render_message_markdown_details_with_policy(
             RenderedMessageDetails {
                 lines,
                 codeblock_ranges: ranges,
+                span_metadata: Some(metadata),
             }
         }
     }
@@ -302,7 +314,10 @@ pub fn render_message_with_ranges(
                             .iter()
                             .map(|ln| ln.to_string())
                             .collect::<Vec<_>>()
-                            .join("\n");
+                            .join(
+                                "
+",
+                            );
                         ranges.push((start, end - start, content));
                     }
                     lines.push(Line::from(""));
@@ -360,7 +375,6 @@ pub fn render_message_with_ranges(
     }
     (lines, ranges)
 }
-
 /// Test-only helper: compute code block ranges across messages using
 /// the simplified width-agnostic renderer. Intended for unit tests to
 /// validate code block extraction and range mapping without involving
@@ -375,7 +389,7 @@ pub fn compute_codeblock_ranges(
     for msg in messages {
         let is_user = msg.role == "user";
         if msg.role == "system" {
-            let (lines, _) = render_message_with_ranges_with_width_and_policy(
+            let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
                 RoleKind::Assistant,
                 &msg.content,
                 theme,
@@ -403,7 +417,7 @@ fn render_message_with_ranges_with_width_and_policy(
     syntax_enabled: bool,
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
-) -> (Vec<Line<'static>>, Vec<(usize, usize, String)>) {
+) -> RenderedLinesWithMetadata {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -412,10 +426,13 @@ fn render_message_with_ranges_with_width_and_policy(
     let parser = Parser::new_ext(content, options);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut span_metadata: Vec<Vec<SpanKind>> = Vec::new();
     let mut ranges: Vec<(usize, usize, String)> = Vec::new();
 
     let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_span_kinds: Vec<SpanKind> = Vec::new();
     let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
+    let mut kind_stack: Vec<SpanKind> = vec![SpanKind::Text];
     let mut list_stack: Vec<ListKind> = Vec::new();
     let mut in_code_block: Option<String> = None;
     let mut code_block_lines: Vec<String> = Vec::new();
@@ -430,10 +447,20 @@ fn render_message_with_ranges_with_width_and_policy(
                 Tag::Paragraph => {
                     if role == RoleKind::User {
                         if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                            push_span_to_buffers(
+                                &mut current_spans,
+                                &mut current_span_kinds,
+                                Span::styled("You: ", theme.user_prefix_style),
+                                SpanKind::UserPrefix,
+                            );
                             did_prefix_user = true;
                         } else {
-                            current_spans.push(Span::raw("     "));
+                            push_span_to_buffers(
+                                &mut current_spans,
+                                &mut current_span_kinds,
+                                Span::raw(USER_CONTINUATION_INDENT),
+                                SpanKind::Text,
+                            );
                         }
                     }
                 }
@@ -441,19 +468,32 @@ fn render_message_with_ranges_with_width_and_policy(
                     // Flush existing and start heading style
                     push_spans_with_optional_wrap(
                         &mut lines,
+                        &mut span_metadata,
                         &mut current_spans,
+                        &mut current_span_kinds,
                         role,
                         terminal_width,
                         true,
                     );
                     let style = theme.md_heading_style(level as u8);
                     if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        push_span_to_buffers(
+                            &mut current_spans,
+                            &mut current_span_kinds,
+                            Span::styled("You: ", theme.user_prefix_style),
+                            SpanKind::UserPrefix,
+                        );
                         did_prefix_user = true;
                     }
                     style_stack.push(style);
+                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    kind_stack.push(current_kind);
                 }
-                Tag::BlockQuote => style_stack.push(theme.md_blockquote_style()),
+                Tag::BlockQuote => {
+                    style_stack.push(theme.md_blockquote_style());
+                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    kind_stack.push(current_kind);
+                }
                 Tag::List(start) => {
                     list_stack.push(match start {
                         Some(n) => ListKind::Ordered(n),
@@ -463,7 +503,9 @@ fn render_message_with_ranges_with_width_and_policy(
                 Tag::Item => {
                     push_spans_with_optional_wrap(
                         &mut lines,
+                        &mut span_metadata,
                         &mut current_spans,
+                        &mut current_span_kinds,
                         role,
                         terminal_width,
                         true,
@@ -481,10 +523,20 @@ fn render_message_with_ranges_with_width_and_policy(
                         }
                     };
                     if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
+                        push_span_to_buffers(
+                            &mut current_spans,
+                            &mut current_span_kinds,
+                            Span::styled("You: ", theme.user_prefix_style),
+                            SpanKind::UserPrefix,
+                        );
                         did_prefix_user = true;
                     }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
+                    push_span_to_buffers(
+                        &mut current_spans,
+                        &mut current_span_kinds,
+                        Span::styled(marker, theme.md_list_marker_style()),
+                        SpanKind::Text,
+                    );
                 }
                 Tag::CodeBlock(kind) => {
                     in_code_block = Some(match kind {
@@ -493,32 +545,46 @@ fn render_message_with_ranges_with_width_and_policy(
                     });
                     code_block_lines.clear();
                 }
-                Tag::Emphasis => style_stack.push(
-                    style_stack
+                Tag::Emphasis => {
+                    let style = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Tag::Strong => style_stack.push(
-                    style_stack
+                        .add_modifier(Modifier::ITALIC);
+                    style_stack.push(style);
+                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    kind_stack.push(current_kind);
+                }
+                Tag::Strong => {
+                    let style = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Tag::Strikethrough => style_stack.push(
-                    style_stack
+                        .add_modifier(Modifier::BOLD);
+                    style_stack.push(style);
+                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    kind_stack.push(current_kind);
+                }
+                Tag::Strikethrough => {
+                    let style = style_stack
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .add_modifier(Modifier::DIM),
-                ),
-                Tag::Link { .. } => style_stack.push(theme.md_link_style()),
+                        .add_modifier(Modifier::DIM);
+                    style_stack.push(style);
+                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    kind_stack.push(current_kind);
+                }
+                Tag::Link { .. } => {
+                    style_stack.push(theme.md_link_style());
+                    kind_stack.push(SpanKind::Link);
+                }
                 Tag::Table(_) => {
                     push_spans_with_optional_wrap(
                         &mut lines,
+                        &mut span_metadata,
                         &mut current_spans,
+                        &mut current_span_kinds,
                         role,
                         terminal_width,
                         true,
@@ -546,38 +612,62 @@ fn render_message_with_ranges_with_width_and_policy(
                 TagEnd::Paragraph => {
                     push_spans_with_optional_wrap(
                         &mut lines,
+                        &mut span_metadata,
                         &mut current_spans,
+                        &mut current_span_kinds,
                         role,
                         terminal_width,
                         true,
                     );
-                    lines.push(Line::from(""));
+                    push_empty_line(&mut lines, &mut span_metadata);
                 }
                 TagEnd::Heading(_level) => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
-                    lines.push(Line::from(""));
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut span_metadata,
+                        &mut current_spans,
+                        &mut current_span_kinds,
+                        role,
+                        terminal_width,
+                        true,
+                    );
+                    push_empty_line(&mut lines, &mut span_metadata);
                     style_stack.pop();
+                    kind_stack.pop();
                 }
                 TagEnd::BlockQuote => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
-                    lines.push(Line::from(""));
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut span_metadata,
+                        &mut current_spans,
+                        &mut current_span_kinds,
+                        role,
+                        terminal_width,
+                        true,
+                    );
+                    push_empty_line(&mut lines, &mut span_metadata);
                     style_stack.pop();
+                    kind_stack.pop();
                 }
                 TagEnd::List(_start) => {
-                    if !current_spans.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current_spans)));
-                    }
-                    lines.push(Line::from(""));
+                    push_spans_with_optional_wrap(
+                        &mut lines,
+                        &mut span_metadata,
+                        &mut current_spans,
+                        &mut current_span_kinds,
+                        role,
+                        terminal_width,
+                        true,
+                    );
+                    push_empty_line(&mut lines, &mut span_metadata);
                     list_stack.pop();
                 }
                 TagEnd::Item => {
                     push_spans_with_optional_wrap(
                         &mut lines,
+                        &mut span_metadata,
                         &mut current_spans,
+                        &mut current_span_kinds,
                         role,
                         terminal_width,
                         true,
@@ -588,19 +678,26 @@ fn render_message_with_ranges_with_width_and_policy(
                     let start = lines.len();
                     let joined = code_block_lines.join("\n");
                     if syntax_enabled {
-                        if let Some(mut hl_lines) = crate::utils::syntax::highlight_code_block(
+                        if let Some(hl_lines) = crate::utils::syntax::highlight_code_block(
                             in_code_block.as_deref().unwrap_or(""),
                             &joined,
                             theme,
                         ) {
-                            lines.append(&mut hl_lines);
+                            for line in hl_lines.into_iter() {
+                                push_line_with_text_kind(&mut lines, &mut span_metadata, line);
+                            }
                         } else {
                             for l in joined.split('\n') {
                                 let mut st = theme.md_codeblock_text_style();
                                 if let Some(bg) = theme.md_codeblock_bg_color() {
                                     st = st.bg(bg);
                                 }
-                                lines.push(Line::from(Span::styled(detab(l), st)));
+                                push_line_with_kinds(
+                                    &mut lines,
+                                    &mut span_metadata,
+                                    vec![Span::styled(detab(l), st)],
+                                    vec![SpanKind::Text],
+                                );
                             }
                         }
                     } else {
@@ -609,28 +706,36 @@ fn render_message_with_ranges_with_width_and_policy(
                             if let Some(bg) = theme.md_codeblock_bg_color() {
                                 st = st.bg(bg);
                             }
-                            lines.push(Line::from(Span::styled(detab(l), st)));
+                            push_line_with_kinds(
+                                &mut lines,
+                                &mut span_metadata,
+                                vec![Span::styled(detab(l), st)],
+                                vec![SpanKind::Text],
+                            );
                         }
                     }
                     let end = lines.len();
                     if end > start {
                         ranges.push((start, end - start, joined));
                     }
-                    lines.push(Line::from(""));
+                    push_empty_line(&mut lines, &mut span_metadata);
                     in_code_block = None;
                 }
                 TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                     style_stack.pop();
+                    kind_stack.pop();
                 }
                 TagEnd::Table => {
                     if let Some(table) = table_state.take() {
-                        let mut table_lines = table.render_table_with_width_policy(
+                        let table_lines = table.render_table_with_width_policy(
                             theme,
                             terminal_width,
                             table_policy,
                         );
-                        lines.append(&mut table_lines);
-                        lines.push(Line::from(""));
+                        for line in table_lines.into_iter() {
+                            push_line_with_text_kind(&mut lines, &mut span_metadata, line);
+                        }
+                        push_empty_line(&mut lines, &mut span_metadata);
                     }
                 }
                 TagEnd::TableHead => {
@@ -662,10 +767,12 @@ fn render_message_with_ranges_with_width_and_policy(
                     );
                     table.add_span(span);
                 } else {
-                    current_spans.push(Span::styled(
+                    let span = Span::styled(
                         detab(&text),
                         *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    ))
+                    );
+                    let kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    push_span_to_buffers(&mut current_spans, &mut current_span_kinds, span, kind);
                 }
             }
             Event::Code(code) => {
@@ -674,25 +781,35 @@ fn render_message_with_ranges_with_width_and_policy(
                 if let Some(ref mut table) = table_state {
                     table.add_span(span);
                 } else {
-                    current_spans.push(span);
+                    let kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    push_span_to_buffers(&mut current_spans, &mut current_span_kinds, span, kind);
                 }
             }
             Event::SoftBreak => {
                 push_spans_with_optional_wrap(
                     &mut lines,
+                    &mut span_metadata,
                     &mut current_spans,
+                    &mut current_span_kinds,
                     role,
                     terminal_width,
                     true,
                 );
                 if role == RoleKind::User && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
+                    push_span_to_buffers(
+                        &mut current_spans,
+                        &mut current_span_kinds,
+                        Span::raw(USER_CONTINUATION_INDENT),
+                        SpanKind::Text,
+                    );
                 }
             }
             Event::HardBreak => {
                 push_spans_with_optional_wrap(
                     &mut lines,
+                    &mut span_metadata,
                     &mut current_spans,
+                    &mut current_span_kinds,
                     role,
                     terminal_width,
                     true,
@@ -701,15 +818,22 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::Rule => {
                 push_spans_with_optional_wrap(
                     &mut lines,
+                    &mut span_metadata,
                     &mut current_spans,
+                    &mut current_span_kinds,
                     role,
                     terminal_width,
                     false,
                 );
-                lines.push(Line::from(""));
+                push_empty_line(&mut lines, &mut span_metadata);
             }
             Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
+                push_span_to_buffers(
+                    &mut current_spans,
+                    &mut current_span_kinds,
+                    Span::styled("[ ] ", theme.md_list_marker_style()),
+                    SpanKind::Text,
+                );
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 if let Some(ref mut table) = table_state {
@@ -722,16 +846,24 @@ fn render_message_with_ranges_with_width_and_policy(
         }
     }
 
-    push_spans_with_optional_wrap(&mut lines, &mut current_spans, role, terminal_width, true);
+    push_spans_with_optional_wrap(
+        &mut lines,
+        &mut span_metadata,
+        &mut current_spans,
+        &mut current_span_kinds,
+        role,
+        terminal_width,
+        true,
+    );
     if !lines.is_empty()
         && lines
             .last()
             .map(|l| !l.to_string().is_empty())
             .unwrap_or(false)
     {
-        lines.push(Line::from(""));
+        push_empty_line(&mut lines, &mut span_metadata);
     }
-    (lines, ranges)
+    (lines, ranges, span_metadata)
 }
 
 /// Compute code block ranges aligned to width-aware rendering and table layout.
@@ -747,7 +879,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
-                let (lines, _) = render_message_with_ranges_with_width_and_policy(
+                let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
                     RoleKind::Assistant,
                     &msg.content,
                     theme,
@@ -758,7 +890,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                 offset += lines.len();
             }
             "user" => {
-                let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+                let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
                     RoleKind::User,
                     &msg.content,
                     theme,
@@ -772,7 +904,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                 offset += lines.len();
             }
             _ => {
-                let (lines, ranges) = render_message_with_ranges_with_width_and_policy(
+                let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
                     RoleKind::Assistant,
                     &msg.content,
                     theme,
@@ -845,16 +977,101 @@ pub fn compute_codeblock_contents_with_lang(
 mod tests {
     #![allow(unused_imports)]
     use super::{
-        compute_codeblock_ranges, render_message_markdown_opts_with_width,
-        render_message_markdown_with_policy, TableState,
+        compute_codeblock_ranges, render_message_markdown_details_with_policy,
+        render_message_markdown_opts_with_width, render_message_markdown_with_policy, TableState,
     };
     use crate::core::message::Message;
+    use crate::ui::span::SpanKind;
     use crate::utils::test_utils::SAMPLE_HYPERTEXT_PARAGRAPH;
     use pulldown_cmark::{Options, Parser};
     use ratatui::style::Modifier;
     use ratatui::text::Span;
     use std::collections::VecDeque;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn markdown_details_metadata_matches_lines_and_tags() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Testing metadata with a [link](https://example.com) inside.".into(),
+        };
+
+        let details = render_message_markdown_details_with_policy(
+            &message,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        let metadata = details.span_metadata.as_ref().expect("metadata present");
+        assert_eq!(metadata.len(), details.lines.len());
+        let mut saw_link = false;
+        for (line, kinds) in details.lines.iter().zip(metadata.iter()) {
+            assert_eq!(line.spans.len(), kinds.len());
+            saw_link |= kinds.iter().any(|k| *k == SpanKind::Link);
+        }
+        assert!(saw_link, "expected link metadata to be captured");
+
+        let legacy = render_message_markdown_with_policy(
+            &message,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        assert_eq!(details.lines, legacy.lines);
+
+        let width = Some(24usize);
+        let details_with_width = render_message_markdown_details_with_policy(
+            &message,
+            &theme,
+            true,
+            width,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        let metadata_wrapped = details_with_width
+            .span_metadata
+            .as_ref()
+            .expect("metadata present for width-aware render");
+        assert_eq!(metadata_wrapped.len(), details_with_width.lines.len());
+        for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
+            assert_eq!(line.spans.len(), kinds.len());
+        }
+
+        let legacy_with_width = render_message_markdown_with_policy(
+            &message,
+            &theme,
+            true,
+            width,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        assert_eq!(details_with_width.lines, legacy_with_width.lines);
+    }
+
+    #[test]
+    fn metadata_marks_user_prefix() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "user".into(),
+            content: "Hello world".into(),
+        };
+
+        let details = render_message_markdown_details_with_policy(
+            &message,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+
+        let metadata = details.span_metadata.expect("metadata present");
+        assert!(!metadata.is_empty());
+        let first_line = &metadata[0];
+        assert!(!first_line.is_empty());
+        assert_eq!(first_line[0], SpanKind::UserPrefix);
+        assert!(first_line.iter().skip(1).all(|k| *k == SpanKind::Text));
+    }
 
     #[test]
     fn codeblock_ranges_map_correctly() {
@@ -3022,9 +3239,45 @@ fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Sp
 
 const USER_CONTINUATION_INDENT: &str = "     ";
 
+fn push_span_to_buffers(
+    current_spans: &mut Vec<Span<'static>>,
+    current_span_kinds: &mut Vec<SpanKind>,
+    span: Span<'static>,
+    kind: SpanKind,
+) {
+    current_spans.push(span);
+    current_span_kinds.push(kind);
+}
+
+fn push_line_with_kinds(
+    lines: &mut Vec<Line<'static>>,
+    metadata: &mut Vec<Vec<SpanKind>>,
+    spans: Vec<Span<'static>>,
+    kinds: Vec<SpanKind>,
+) {
+    debug_assert_eq!(spans.len(), kinds.len());
+    lines.push(Line::from(spans));
+    metadata.push(kinds);
+}
+
+fn push_empty_line(lines: &mut Vec<Line<'static>>, metadata: &mut Vec<Vec<SpanKind>>) {
+    push_line_with_kinds(lines, metadata, Vec::new(), Vec::new());
+}
+
+fn push_line_with_text_kind(
+    lines: &mut Vec<Line<'static>>,
+    metadata: &mut Vec<Vec<SpanKind>>,
+    line: Line<'static>,
+) {
+    metadata.push(vec![SpanKind::Text; line.spans.len()]);
+    lines.push(line);
+}
+
 fn push_spans_with_optional_wrap(
     lines: &mut Vec<Line<'static>>,
+    metadata: &mut Vec<Vec<SpanKind>>,
     current_spans: &mut Vec<Span<'static>>,
+    current_span_kinds: &mut Vec<SpanKind>,
     role: RoleKind,
     terminal_width: Option<usize>,
     indent_user_wraps: bool,
@@ -3034,21 +3287,33 @@ fn push_spans_with_optional_wrap(
     }
 
     if let Some(width) = terminal_width {
-        let wrapped = wrap_spans_to_width_generic_shared(&current_spans[..], width);
+        let zipped: Vec<(Span<'static>, SpanKind)> = current_spans
+            .iter()
+            .cloned()
+            .zip(current_span_kinds.iter().copied())
+            .collect();
+        let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
         let indent_wrapped_user_lines = indent_user_wraps && role == RoleKind::User;
         for (idx, segs) in wrapped.into_iter().enumerate() {
+            let (mut spans_only, mut kinds_only): (Vec<_>, Vec<_>) = segs.into_iter().unzip();
             if idx == 0 || !indent_wrapped_user_lines {
-                lines.push(Line::from(segs));
+                push_line_with_kinds(lines, metadata, spans_only, kinds_only);
             } else {
-                let mut with_indent = Vec::with_capacity(segs.len() + 1);
-                with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
-                with_indent.extend(segs);
-                lines.push(Line::from(with_indent));
+                let mut spans_with_indent = Vec::with_capacity(spans_only.len() + 1);
+                let mut kinds_with_indent = Vec::with_capacity(kinds_only.len() + 1);
+                spans_with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
+                kinds_with_indent.push(SpanKind::Text);
+                spans_with_indent.append(&mut spans_only);
+                kinds_with_indent.append(&mut kinds_only);
+                push_line_with_kinds(lines, metadata, spans_with_indent, kinds_with_indent);
             }
         }
         current_spans.clear();
+        current_span_kinds.clear();
     } else {
-        lines.push(Line::from(std::mem::take(current_spans)));
+        let spans = std::mem::take(current_spans);
+        let kinds = std::mem::take(current_span_kinds);
+        push_line_with_kinds(lines, metadata, spans, kinds);
     }
 }
 
@@ -3091,7 +3356,7 @@ pub fn build_plain_display_lines_with_spans(
         let start = lines.len();
         match msg.role.as_str() {
             "system" => {
-                let (rendered_lines, _) = render_message_with_ranges_with_width_and_policy(
+                let (rendered_lines, _, _) = render_message_with_ranges_with_width_and_policy(
                     RoleKind::Assistant,
                     &msg.content,
                     theme,

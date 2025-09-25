@@ -125,20 +125,27 @@ impl LayoutEngine {
             // width-aware wrapping per message so the layout stays aligned with rendering.
             let (base_lines, base_spans) =
                 crate::ui::markdown::build_plain_display_lines_with_spans(messages, theme);
+            let base_metadata: Vec<Vec<SpanKind>> = base_lines
+                .iter()
+                .map(|line| vec![SpanKind::Text; line.spans.len()])
+                .collect();
             if let Some(w) = cfg.width {
                 let mut lines: Vec<Line<'static>> = Vec::new();
                 let mut span_metadata: Vec<Vec<SpanKind>> = Vec::new();
                 let mut spans: Vec<MessageLineSpan> = Vec::with_capacity(base_spans.len());
                 for span in &base_spans {
                     let slice = &base_lines[span.start..span.start + span.len];
-                    let wrapped =
-                        crate::utils::scroll::ScrollCalculator::prewrap_lines(slice, w as u16);
+                    let slice_meta = &base_metadata[span.start..span.start + span.len];
+                    let (wrapped_lines, wrapped_meta) =
+                        crate::utils::scroll::ScrollCalculator::prewrap_lines_with_metadata(
+                            slice,
+                            Some(slice_meta),
+                            w as u16,
+                        );
                     let start = lines.len();
-                    let len = wrapped.len();
-                    for line in wrapped {
-                        span_metadata.push(vec![SpanKind::Text; line.spans.len()]);
-                        lines.push(line);
-                    }
+                    let len = wrapped_lines.len();
+                    lines.extend(wrapped_lines);
+                    span_metadata.extend(wrapped_meta);
                     spans.push(MessageLineSpan { start, len });
                 }
                 Layout {
@@ -148,13 +155,9 @@ impl LayoutEngine {
                     codeblock_ranges: Vec::new(),
                 }
             } else {
-                let span_metadata = base_lines
-                    .iter()
-                    .map(|line| vec![SpanKind::Text; line.spans.len()])
-                    .collect();
                 Layout {
                     lines: base_lines,
-                    span_metadata,
+                    span_metadata: base_metadata,
                     message_spans: base_spans,
                     codeblock_ranges: Vec::new(),
                 }

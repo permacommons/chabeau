@@ -1,6 +1,7 @@
 use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
+use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -14,58 +15,90 @@ use unicode_width::UnicodeWidthChar;
 pub struct ScrollCalculator;
 
 impl ScrollCalculator {
-    #[inline]
-    fn span_style_looks_like_link(style: &Style) -> bool {
-        (style.add_modifier.contains(Modifier::UNDERLINED)
-            && !style.sub_modifier.contains(Modifier::UNDERLINED))
-            || style.underline_color.is_some()
+    fn push_emitted_line(
+        collector_spans: &mut Vec<Span<'static>>,
+        collector_kinds: &mut Vec<SpanKind>,
+        out_lines: &mut Vec<Line<'static>>,
+        out_metadata: &mut Vec<Vec<SpanKind>>,
+    ) {
+        if collector_spans.is_empty() {
+            out_lines.push(Line::from(""));
+            out_metadata.push(Vec::new());
+        } else {
+            out_lines.push(Line::from(std::mem::take(collector_spans)));
+            out_metadata.push(std::mem::take(collector_kinds));
+        }
     }
 
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
     pub fn prewrap_lines(lines: &[Line], terminal_width: u16) -> Vec<Line<'static>> {
+        Self::prewrap_lines_with_metadata(lines, None, terminal_width).0
+    }
+
+    /// Width-aware prewrap that also threads span metadata through the wrapping process.
+    pub fn prewrap_lines_with_metadata(
+        lines: &[Line],
+        span_metadata: Option<&[Vec<SpanKind>]>,
+        terminal_width: u16,
+    ) -> (Vec<Line<'static>>, Vec<Vec<SpanKind>>) {
         let width = terminal_width as usize;
-        // Fast path: zero width, just clone as owned
+
+        let mut out_lines: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+        let mut out_metadata: Vec<Vec<SpanKind>> = Vec::with_capacity(lines.len());
+
         if width == 0 {
-            let mut out = Vec::with_capacity(lines.len());
-            for line in lines {
+            for (line_idx, line) in lines.iter().enumerate() {
                 if line.spans.is_empty() {
-                    out.push(Line::from(""));
-                } else {
-                    let spans: Vec<Span<'static>> = line
-                        .spans
-                        .iter()
-                        .map(|s| Span::styled(s.content.to_string(), s.style))
-                        .collect();
-                    out.push(Line::from(spans));
+                    out_lines.push(Line::from(""));
+                    out_metadata.push(Vec::new());
+                    continue;
                 }
+                let mut owned_spans = Vec::with_capacity(line.spans.len());
+                let mut owned_kinds = Vec::with_capacity(line.spans.len());
+                for (span_idx, span) in line.spans.iter().enumerate() {
+                    owned_spans.push(Span::styled(span.content.to_string(), span.style));
+                    let kind = span_metadata
+                        .and_then(|meta| meta.get(line_idx))
+                        .and_then(|kinds| kinds.get(span_idx))
+                        .copied()
+                        .unwrap_or(SpanKind::Text);
+                    owned_kinds.push(kind);
+                }
+                out_lines.push(Line::from(owned_spans));
+                out_metadata.push(owned_kinds);
             }
-            return out;
+            return (out_lines, out_metadata);
         }
 
-        let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
-
-        // Heuristic: markdown renderers underline links. Use that to detect link spans so we
-        // can treat any whitespace inside them as a safe wrap boundary.
-        for line in lines {
+        for (line_idx, line) in lines.iter().enumerate() {
             if line.spans.is_empty() {
-                out.push(Line::from(""));
+                out_lines.push(Line::from(""));
+                out_metadata.push(Vec::new());
                 continue;
             }
 
-            // Helpers to manage styled span appends
-            let emit_line = |collector: &mut Vec<Span<'static>>, out: &mut Vec<Line<'static>>| {
-                out.push(Line::from(std::mem::take(collector)));
-            };
-            let append_run = |collector: &mut Vec<Span<'static>>,
-                              style: ratatui::style::Style,
+            let mut cur_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 4);
+            let mut cur_kinds: Vec<SpanKind> = Vec::with_capacity(line.spans.len() + 4);
+            let mut cur_len: usize = 0;
+            let mut emitted_any = false;
+
+            // Current word accumulated as styled segments
+            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style, SpanKind)> =
+                Vec::with_capacity(line.spans.len() + 4);
+            let mut word_len: usize = 0;
+
+            let append_run = |collector_spans: &mut Vec<Span<'static>>,
+                              collector_kinds: &mut Vec<SpanKind>,
+                              style: Style,
+                              kind: SpanKind,
                               text: &str| {
                 if text.is_empty() {
                     return;
                 }
-                if let Some(last) = collector.last_mut() {
-                    if last.style == style {
+                if let Some(last) = collector_spans.last_mut() {
+                    if last.style == style && collector_kinds.last() == Some(&kind) {
                         let mut combined = String::with_capacity(last.content.len() + text.len());
                         combined.push_str(&last.content);
                         combined.push_str(text);
@@ -74,49 +107,53 @@ impl ScrollCalculator {
                         return;
                     }
                 }
-                collector.push(Span::styled(text.to_string(), style));
+                collector_spans.push(Span::styled(text.to_string(), style));
+                collector_kinds.push(kind);
             };
 
-            let mut cur_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 4);
-            let mut cur_len: usize = 0;
-            let mut emitted_any = false;
-
-            // Current word accumulated as styled segments
-            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style)> =
-                Vec::with_capacity(line.spans.len() + 4);
-            let mut word_len: usize = 0;
-
-            let flush_word = |cur_spans: &mut Vec<Span<'static>>,
-                              out: &mut Vec<Line<'static>>,
-                              cur_len: &mut usize,
+            let flush_word = |collector_spans: &mut Vec<Span<'static>>,
+                              collector_kinds: &mut Vec<SpanKind>,
+                              out_lines: &mut Vec<Line<'static>>,
+                              out_metadata: &mut Vec<Vec<SpanKind>>,
+                              out_len: &mut usize,
                               emitted_any: &mut bool,
-                              word_segs: &mut Vec<(Vec<char>, ratatui::style::Style)>,
+                              word_segs: &mut Vec<(Vec<char>, Style, SpanKind)>,
                               word_len: &mut usize| {
                 if *word_len == 0 {
                     return;
                 }
-                // Wrap before word if it doesn't fit
-                if *cur_len > 0 && *cur_len + *word_len > width {
-                    emit_line(cur_spans, out);
+                if *out_len > 0 && *out_len + *word_len > width {
+                    Self::push_emitted_line(
+                        collector_spans,
+                        collector_kinds,
+                        out_lines,
+                        out_metadata,
+                    );
                     *emitted_any = true;
-                    *cur_len = 0;
+                    *out_len = 0;
                 }
-                // Place the word, chunking if needed
+
                 let mut seg_idx = 0usize;
                 let mut seg_pos = 0usize;
                 let mut remaining = *word_len;
                 while remaining > 0 {
-                    let space_left = width.saturating_sub(*cur_len);
+                    let space_left = width.saturating_sub(*out_len);
                     let take = remaining.min(space_left.max(1));
                     let mut to_take = take;
                     while to_take > 0 && seg_idx < word_segs.len() {
-                        let (seg_chars, seg_style) = &word_segs[seg_idx];
+                        let (seg_chars, seg_style, seg_kind) = &word_segs[seg_idx];
                         let seg_rem = seg_chars.len().saturating_sub(seg_pos);
                         let here = to_take.min(seg_rem);
                         if here > 0 {
                             let slice: String = seg_chars[seg_pos..seg_pos + here].iter().collect();
-                            append_run(cur_spans, *seg_style, &slice);
-                            *cur_len += here;
+                            append_run(
+                                collector_spans,
+                                collector_kinds,
+                                *seg_style,
+                                *seg_kind,
+                                &slice,
+                            );
+                            *out_len += here;
                             to_take -= here;
                             seg_pos += here;
                         }
@@ -127,70 +164,91 @@ impl ScrollCalculator {
                     }
                     remaining -= take;
                     if remaining > 0 {
-                        emit_line(cur_spans, out);
+                        Self::push_emitted_line(
+                            collector_spans,
+                            collector_kinds,
+                            out_lines,
+                            out_metadata,
+                        );
                         *emitted_any = true;
-                        *cur_len = 0;
+                        *out_len = 0;
                     }
                 }
                 word_segs.clear();
                 *word_len = 0;
             };
 
-            for s in &line.spans {
-                let span_is_link = Self::span_style_looks_like_link(&s.style);
+            for (span_idx, s) in line.spans.iter().enumerate() {
+                let span_kind = span_metadata
+                    .and_then(|meta| meta.get(line_idx))
+                    .and_then(|kinds| kinds.get(span_idx))
+                    .copied()
+                    .unwrap_or(SpanKind::Text);
+
                 for ch in s.content.chars() {
                     let is_plain_space = ch == ' ';
-                    let is_link_break_space = span_is_link && ch.is_whitespace() && !is_plain_space;
+                    let is_link_break_space =
+                        span_kind == SpanKind::Link && ch.is_whitespace() && !is_plain_space;
 
                     if is_plain_space || is_link_break_space {
-                        // Place accumulated word before handling space
                         flush_word(
                             &mut cur_spans,
-                            &mut out,
+                            &mut cur_kinds,
+                            &mut out_lines,
+                            &mut out_metadata,
                             &mut cur_len,
                             &mut emitted_any,
                             &mut word_segs,
                             &mut word_len,
                         );
 
-                        // Preserve display width: NBSP and other whitespace have visible width.
                         let space_width = UnicodeWidthChar::width(ch).unwrap_or(0);
                         if space_width == 0 {
                             continue;
                         }
 
-                        // Add a single space if it fits; otherwise wrap and skip leading space
                         if cur_len + space_width <= width {
                             let mut buf = [0u8; 4];
                             let piece = ch.encode_utf8(&mut buf);
-                            append_run(&mut cur_spans, s.style, piece);
+                            append_run(
+                                &mut cur_spans,
+                                &mut cur_kinds,
+                                s.style,
+                                SpanKind::Text,
+                                piece,
+                            );
                             cur_len += space_width;
                         } else {
-                            emit_line(&mut cur_spans, &mut out);
+                            Self::push_emitted_line(
+                                &mut cur_spans,
+                                &mut cur_kinds,
+                                &mut out_lines,
+                                &mut out_metadata,
+                            );
                             emitted_any = true;
                             cur_len = 0;
                         }
                         continue;
                     } else {
-                        // Accumulate into current word, merging by style
-                        if let Some((last_text, last_style)) = word_segs.last_mut() {
-                            if *last_style == s.style {
+                        if let Some((last_text, last_style, last_kind)) = word_segs.last_mut() {
+                            if *last_style == s.style && *last_kind == span_kind {
                                 last_text.push(ch);
                             } else {
-                                word_segs.push((vec![ch], s.style));
+                                word_segs.push((vec![ch], s.style, span_kind));
                             }
                         } else {
-                            word_segs.push((vec![ch], s.style));
+                            word_segs.push((vec![ch], s.style, span_kind));
                         }
                         word_len += 1;
                     }
                 }
             }
 
-            // Flush any remaining word and finalize the line
             flush_word(
                 &mut cur_spans,
-                &mut out,
+                &mut cur_kinds,
+                &mut out_lines,
+                &mut out_metadata,
                 &mut cur_len,
                 &mut emitted_any,
                 &mut word_segs,
@@ -198,16 +256,21 @@ impl ScrollCalculator {
             );
 
             if !cur_spans.is_empty() {
-                emit_line(&mut cur_spans, &mut out);
+                Self::push_emitted_line(
+                    &mut cur_spans,
+                    &mut cur_kinds,
+                    &mut out_lines,
+                    &mut out_metadata,
+                );
                 emitted_any = true;
             }
             if !emitted_any {
-                // Preserve a single empty visual line for whitespace-only inputs
-                out.push(Line::from(""));
+                out_lines.push(Line::from(""));
+                out_metadata.push(Vec::new());
             }
         }
 
-        out
+        (out_lines, out_metadata)
     }
     /// Build display lines for all messages (tests only)
     #[cfg(test)]
@@ -286,21 +349,29 @@ impl ScrollCalculator {
                 if msg.role == "user" {
                     if let Some(span) = layout.message_spans.get(sel) {
                         let highlight_style = theme.selection_highlight_style.patch(highlight);
-                        for (offset, line) in layout
+                        for (offset, (line, kinds)) in layout
                             .lines
                             .iter_mut()
                             .skip(span.start)
                             .take(span.len)
+                            .zip(layout.span_metadata.iter().skip(span.start))
                             .enumerate()
                         {
                             let include_empty = offset < span.len.saturating_sub(1);
-                            Self::apply_selection_highlight(
-                                line,
-                                highlight_style,
-                                cfg.width,
-                                include_empty,
-                                theme,
-                            );
+                            let has_content =
+                                kinds.iter().zip(line.spans.iter()).any(|(kind, span)| {
+                                    *kind != SpanKind::UserPrefix && !span.content.trim().is_empty()
+                                });
+                            if include_empty || has_content {
+                                Self::apply_selection_highlight(
+                                    line,
+                                    highlight_style,
+                                    cfg.width,
+                                    include_empty,
+                                    Some(kinds),
+                                    theme,
+                                );
+                            }
                         }
                     }
                 }
@@ -338,6 +409,7 @@ impl ScrollCalculator {
                             highlight_style,
                             cfg.width,
                             true,
+                            None,
                             theme,
                         );
                     }
@@ -566,6 +638,7 @@ impl ScrollCalculator {
         highlight: Style,
         width: Option<usize>,
         include_empty: bool,
+        _kinds: Option<&[SpanKind]>,
         theme: &Theme,
     ) {
         use crate::utils::color::ColorDepth;
@@ -622,6 +695,7 @@ impl ScrollCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::span::SpanKind;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{
         create_test_message, create_test_messages, SAMPLE_HYPERTEXT_PARAGRAPH,
@@ -791,10 +865,12 @@ mod tests {
     #[test]
     fn test_markdown_link_wraps_on_spaces() {
         // Links with ordinary spaces should wrap on word boundaries
-        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let style = Style::default();
         let line = Line::from(vec![Span::styled("Rust programming language", style)]);
+        let metadata = vec![vec![SpanKind::Link]];
 
-        let wrapped = ScrollCalculator::prewrap_lines(&[line], 15);
+        let (wrapped, _) =
+            ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
 
         assert_eq!(rendered, vec!["Rust ", "programming ", "language"]);
@@ -803,13 +879,15 @@ mod tests {
     #[test]
     fn test_markdown_link_wraps_on_nbsp() {
         // Non-breaking spaces inside markdown links should still allow wrapping
-        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let style = Style::default();
         let line = Line::from(vec![Span::styled(
             "Rust\u{00A0}programming language",
             style,
         )]);
+        let metadata = vec![vec![SpanKind::Link]];
 
-        let wrapped = ScrollCalculator::prewrap_lines(&[line], 15);
+        let (wrapped, _) =
+            ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
 
         assert_eq!(rendered, vec!["Rust\u{00A0}", "programming ", "language"]);
@@ -834,7 +912,11 @@ mod tests {
                 table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
             },
         );
-        let prewrapped = ScrollCalculator::prewrap_lines(&layout.lines, 158);
+        let (prewrapped, _) = ScrollCalculator::prewrap_lines_with_metadata(
+            &layout.lines,
+            Some(&layout.span_metadata),
+            158,
+        );
         let text = prewrapped
             .iter()
             .map(|l| l.to_string())
@@ -850,7 +932,7 @@ mod tests {
 
     #[test]
     fn test_prewrap_wraps_entire_link_word_when_width_exhausted() {
-        let style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let style = Style::default();
         // 150 columns of padding plus a space, leaving little room for the link to fit
         let prefix = "a".repeat(150);
         let line = Line::from(vec![
@@ -858,7 +940,9 @@ mod tests {
             Span::raw(" "),
             Span::styled("hypertext dreams", style),
         ]);
-        let wrapped = ScrollCalculator::prewrap_lines(&[line], 158);
+        let metadata = vec![vec![SpanKind::Text, SpanKind::Text, SpanKind::Link]];
+        let (wrapped, _) =
+            ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 158);
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
 
         assert!(rendered.iter().any(|s| s.contains("hypertext dreams")));

@@ -280,6 +280,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "memchr",
+ "once_cell",
  "pulldown-cmark",
  "ratatui",
  "reqwest",

@@ -5,6 +5,8 @@ pub mod help;
 pub mod layout;
 pub mod markdown;
 pub mod osc;
+pub mod osc_backend;
+pub mod osc_state;
 pub mod picker;
 pub mod renderer;
 pub mod span;

@@ -219,10 +219,30 @@ mod tests {
         let theme = Theme::dark_default();
         let layout = LayoutEngine::layout_messages(&messages, &theme, &LayoutConfig::default());
         let encoded = crate::ui::osc::encode_lines_with_links(&layout.lines, &layout.span_metadata);
-        let joined = encoded.join("\n");
+        let joined = encoded
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("Rust"));
         assert!(joined.contains("Go"));
         assert!(joined.matches("\x1b]8;;").count() >= 4);
         assert!(joined.matches("\x1b]8;;\x1b\\").count() >= 2);
+    }
+
+    #[test]
+    fn link_metadata_spans_cover_spaces_within_link_text() {
+        let mut messages = VecDeque::new();
+        messages.push_back(Message {
+            role: "assistant".into(),
+            content: "[associative trails](https://example.com)".into(),
+        });
+        let theme = Theme::dark_default();
+        let layout = LayoutEngine::layout_messages(&messages, &theme, &LayoutConfig::default());
+
+        let first_line = layout.lines.first().expect("line");
+        let first_meta = layout.span_metadata.first().expect("meta");
+        assert_eq!(first_line.spans.len(), first_meta.len());
+        assert!(first_meta.iter().all(|kind| kind.is_link()));
     }
 }

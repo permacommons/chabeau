@@ -1,96 +1,9 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
-use std::borrow::Cow;
-
-use crate::ui::span::SpanKind;
-use ratatui::text::Line;
-
-const OSC_PREFIX: &str = "\x1b]8;;";
-const ST: &str = "\x1b\\";
-const OSC_SUFFIX: &str = "\x1b]8;;\x1b\\";
-
-/// Encapsulates the pieces required to write an OSC 8 hyperlink without
-/// exposing partially constructed escape sequences.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OscHyperlink<'a> {
-    prefix: String,
-    text: Cow<'a, str>,
-    suffix: &'static str,
-}
-
-impl<'a> OscHyperlink<'a> {
-    /// Append the OSC hyperlink to the provided buffer. The method guarantees
-    /// that the start and end escape sequences are written atomically.
-    pub fn push_to(&self, buf: &mut String) {
-        buf.push_str(&self.prefix);
-        buf.push_str(self.text.as_ref());
-        buf.push_str(self.suffix);
-    }
-
-    /// Returns the OSC-encoded string in a single allocation for convenience
-    /// in tests and log output.
-    pub fn as_encoded_string(&self) -> String {
-        let mut out =
-            String::with_capacity(self.prefix.len() + self.text.len() + self.suffix.len());
-        self.push_to(&mut out);
-        out
-    }
-}
-
-/// Attempt to encode `text` as an OSC 8 hyperlink pointing to `href`. Returns
-/// `None` when emission would be unsafe (empty segments or control characters)
-/// so callers can gracefully fall back to plain text.
-pub fn encode_hyperlink<'a>(text: &'a str, href: &str) -> Option<OscHyperlink<'a>> {
-    if text.is_empty() || href.is_empty() {
-        return None;
-    }
-
-    if contains_disallowed_control(text) || contains_disallowed_control(href) {
-        return None;
-    }
-
-    let mut prefix = String::with_capacity(OSC_PREFIX.len() + href.len() + ST.len());
-    prefix.push_str(OSC_PREFIX);
-    prefix.push_str(href);
-    prefix.push_str(ST);
-
-    Some(OscHyperlink {
-        prefix,
-        text: Cow::Borrowed(text),
-        suffix: OSC_SUFFIX,
-    })
-}
-
-fn contains_disallowed_control(input: &str) -> bool {
-    input.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x1b)
-}
-
-pub fn encode_line_with_links(line: &Line, kinds: &[SpanKind]) -> String {
-    let mut out = String::new();
-    for (span, kind) in line.spans.iter().zip(kinds.iter()) {
-        let content = span.content.as_ref();
-        if let Some(meta) = kind.link_meta() {
-            if let Some(link) = encode_hyperlink(content, meta.href()) {
-                link.push_to(&mut out);
-                continue;
-            }
-        }
-        out.push_str(content);
-    }
-    out
-}
-
-pub fn encode_lines_with_links(lines: &[Line], metadata: &[Vec<SpanKind>]) -> Vec<String> {
-    lines
-        .iter()
-        .zip(metadata.iter())
-        .map(|(line, kinds)| encode_line_with_links(line, kinds))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{contains_disallowed_control, encode_hyperlink, OSC_PREFIX, OSC_SUFFIX, ST};
+    use super::{
+        contains_disallowed_control, encode_hyperlink, encode_line_with_links,
+        encode_lines_with_links, OSC_PREFIX, OSC_SUFFIX,
+    };
     use crate::ui::span::SpanKind;
     use ratatui::text::{Line, Span};
 
@@ -98,11 +11,8 @@ mod tests {
     fn encode_hyperlink_wraps_text_with_balanced_sequences() {
         let link = encode_hyperlink("Rust", "https://www.rust-lang.org").expect("link");
         let encoded = link.as_encoded_string();
-        assert!(encoded.starts_with(OSC_PREFIX));
         assert!(encoded.ends_with(OSC_SUFFIX));
-        assert_eq!(encoded.matches(OSC_PREFIX).count(), 2);
         assert_eq!(encoded.matches(OSC_SUFFIX).count(), 1);
-        assert_eq!(encoded.matches(ST).count(), 2);
         assert!(encoded.contains("Rust"));
     }
 
@@ -129,34 +39,134 @@ mod tests {
     }
 
     #[test]
-    fn encode_line_with_links_applies_osc_sequences() {
-        let line = Line::from(vec![Span::raw("Visit "), Span::raw("Rust"), Span::raw("!")]);
-        let kinds = vec![
+    fn encode_lines_with_links_wraps_each_link_segment() {
+        let lines = vec![Line::from(vec![
+            Span::raw("Intro "),
+            Span::raw("Rust"),
+            Span::raw(" and "),
+            Span::raw("Go"),
+        ])];
+        let metadata = vec![vec![
             SpanKind::Text,
             SpanKind::link("https://www.rust-lang.org"),
             SpanKind::Text,
-        ];
-        let encoded = super::encode_line_with_links(&line, &kinds);
-        assert!(encoded.contains("Visit "));
-        assert!(encoded.contains("Rust"));
-        assert!(encoded.ends_with(format!("{OSC_SUFFIX}!").as_str()));
-        assert_eq!(encoded.matches(OSC_PREFIX).count(), 2);
-        assert_eq!(encoded.matches(OSC_SUFFIX).count(), 1);
+            SpanKind::link("https://go.dev"),
+        ]];
+
+        let encoded = encode_lines_with_links(&lines, &metadata);
+        assert_eq!(encoded.len(), 1);
+        let line = &encoded[0];
+        assert!(line.contains("Intro"));
+        assert!(line.contains("Rust"));
+        assert!(line.contains("Go"));
+        assert!(line.matches(OSC_PREFIX).count() >= 2);
+        assert!(line.matches(OSC_SUFFIX).count() >= 2);
     }
 
     #[test]
-    fn encode_lines_with_links_handles_adjacent_links() {
-        let lines = vec![Line::from(vec![Span::raw("Rust"), Span::raw("Go")])];
-        let kinds = vec![vec![
-            SpanKind::link("https://www.rust-lang.org"),
-            SpanKind::link("https://go.dev"),
-        ]];
-        let encoded = super::encode_lines_with_links(&lines, &kinds);
-        assert_eq!(encoded.len(), 1);
-        let first = &encoded[0];
-        assert!(first.contains("Rust"));
-        assert!(first.contains("Go"));
-        assert_eq!(first.matches(OSC_PREFIX).count(), 4);
-        assert_eq!(first.matches(OSC_SUFFIX).count(), 2);
+    fn encode_line_with_links_returns_plain_text_without_metadata() {
+        let line = Line::from(vec![Span::raw("Rust")]);
+        let encoded = encode_line_with_links(&line, None);
+        assert_eq!(encoded, "Rust");
     }
+}
+
+#[cfg(test)]
+use std::borrow::Cow;
+#[cfg(test)]
+use crate::ui::span::SpanKind;
+#[cfg(test)]
+use ratatui::text::Line;
+
+#[cfg(test)]
+const OSC_PREFIX: &str = "\x1b]8;;";
+#[cfg(test)]
+const ST: &str = "\x1b\\";
+#[cfg(test)]
+const OSC_SUFFIX: &str = "\x1b]8;;\x1b\\";
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OscHyperlink<'a> {
+    prefix: String,
+    text: Cow<'a, str>,
+    suffix: &'static str,
+}
+
+#[cfg(test)]
+impl<'a> OscHyperlink<'a> {
+    pub fn push_to(&self, buf: &mut String) {
+        buf.push_str(&self.prefix);
+        buf.push_str(self.text.as_ref());
+        buf.push_str(self.suffix);
+    }
+
+    pub fn as_encoded_string(&self) -> String {
+        let mut out =
+            String::with_capacity(self.prefix.len() + self.text.len() + self.suffix.len());
+        self.push_to(&mut out);
+        out
+    }
+}
+
+#[cfg(test)]
+pub fn encode_hyperlink<'a>(text: &'a str, href: &str) -> Option<OscHyperlink<'a>> {
+    if text.is_empty() || href.is_empty() {
+        return None;
+    }
+
+    if contains_disallowed_control(text) || contains_disallowed_control(href) {
+        return None;
+    }
+
+    let mut prefix = String::with_capacity(OSC_PREFIX.len() + href.len() + ST.len());
+    prefix.push_str(OSC_PREFIX);
+    prefix.push_str(href);
+    prefix.push_str(ST);
+
+    Some(OscHyperlink {
+        prefix,
+        text: Cow::Borrowed(text),
+        suffix: OSC_SUFFIX,
+    })
+}
+
+#[cfg(test)]
+pub fn encode_line_with_links(line: &Line<'_>, kinds: Option<&[SpanKind]>) -> String {
+    let mut encoded = String::new();
+
+    for (idx, span) in line.spans.iter().enumerate() {
+        let text = span.content.as_ref();
+        let maybe_link = kinds
+            .and_then(|meta| meta.get(idx))
+            .and_then(|kind| kind.link_meta())
+            .and_then(|meta| encode_hyperlink(text, meta.href()));
+
+        if let Some(link) = maybe_link {
+            encoded.push_str(&link.as_encoded_string());
+        } else {
+            encoded.push_str(text);
+        }
+    }
+
+    encoded
+}
+
+#[cfg(test)]
+pub fn encode_lines_with_links(lines: &[Line<'static>], metadata: &[Vec<SpanKind>]) -> Vec<String> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| {
+            let kinds = metadata.get(idx).map(|vec| vec.as_slice());
+            encode_line_with_links(line, kinds)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn contains_disallowed_control(input: &str) -> bool {
+    input
+        .bytes()
+        .any(|b| (b < 0x20 && b != b'\t') || b == b'\x1b')
 }

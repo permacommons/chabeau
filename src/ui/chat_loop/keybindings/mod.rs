@@ -21,7 +21,7 @@ pub enum KeyLoopAction {
 pub fn build_mode_aware_registry(
     stream_dispatcher: std::sync::Arc<crate::ui::chat_loop::stream::StreamDispatcher>,
     terminal: std::sync::Arc<
-        tokio::sync::Mutex<ratatui::Terminal<ratatui::prelude::CrosstermBackend<std::io::Stdout>>>,
+        tokio::sync::Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>,
     >,
 ) -> ModeAwareRegistry {
     use handlers::*;

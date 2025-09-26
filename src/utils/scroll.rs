@@ -33,6 +33,7 @@ impl ScrollCalculator {
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn prewrap_lines(lines: &[Line], terminal_width: u16) -> Vec<Line<'static>> {
         Self::prewrap_lines_with_metadata(lines, None, terminal_width).0
     }
@@ -210,11 +211,16 @@ impl ScrollCalculator {
                         if cur_len + space_width <= width {
                             let mut buf = [0u8; 4];
                             let piece = ch.encode_utf8(&mut buf);
+                            let kind_for_space = if span_kind.is_link() {
+                                span_kind.clone()
+                            } else {
+                                SpanKind::Text
+                            };
                             append_run(
                                 &mut cur_spans,
                                 &mut cur_kinds,
                                 s.style,
-                                SpanKind::Text,
+                                kind_for_space,
                                 piece,
                             );
                             cur_len += space_width;
@@ -314,19 +320,34 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        // Route through the unified layout engine so downstream consumers get the same
-        // width-aware line stream everywhere (renderer, scroll math, selection, etc.).
+        Self::build_layout_with_theme_and_flags_and_width(
+            messages,
+            theme,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_theme_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         };
-        let layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
-        layout.lines
+        crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg)
     }
 
     /// Build display lines with selection highlighting and terminal width for table balancing
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn build_display_lines_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,
@@ -336,6 +357,27 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
+        Self::build_layout_with_theme_and_selection_and_flags_and_width(
+            messages,
+            theme,
+            selected_index,
+            highlight,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_theme_and_selection_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        selected_index: Option<usize>,
+        highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
@@ -378,10 +420,11 @@ impl ScrollCalculator {
             }
         }
 
-        layout.lines
+        layout
     }
 
     /// Build display lines with codeblock highlighting and terminal width for table balancing
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn build_display_lines_with_codeblock_highlight_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &crate::ui::theme::Theme,
@@ -391,6 +434,27 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
+        Self::build_layout_with_codeblock_highlight_and_flags_and_width(
+            messages,
+            theme,
+            selected_block,
+            highlight,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_codeblock_highlight_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &crate::ui::theme::Theme,
+        selected_block: Option<usize>,
+        highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
@@ -417,7 +481,7 @@ impl ScrollCalculator {
             }
         }
 
-        layout.lines
+        layout
     }
 
     /// Compute a scroll offset that positions the start of a given logical line index

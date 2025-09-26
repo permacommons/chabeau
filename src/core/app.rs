@@ -6,6 +6,7 @@ use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::appearance::{detect_preferred_appearance, Appearance};
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
 use crate::ui::picker::{PickerItem, PickerState};
+use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use crate::utils::logging::LoggingState;
 use crate::utils::scroll::ScrollCalculator;
@@ -599,80 +600,79 @@ impl App {
         if can_reuse {
             // Up-to-date
         } else if only_last_changed {
-            // Fast path: only last message content changed; update tail of cache
             if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
-                let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts_with_width(
+                if markdown {
+                    let details = crate::ui::markdown::render_message_markdown_details_with_policy(
                         last_msg,
                         &self.theme,
                         syntax,
                         Some(width as usize),
-                    )
-                    .lines
+                        crate::ui::layout::TableOverflowPolicy::WrapCells,
+                    );
+                    let metadata = details.span_metadata.unwrap_or_else(|| {
+                        details
+                            .lines
+                            .iter()
+                            .map(|line| vec![SpanKind::Text; line.spans.len()])
+                            .collect()
+                    });
+                    let start = c.last_start;
+                    let mut new_lines: Vec<Line<'static>> =
+                        Vec::with_capacity(start + details.lines.len());
+                    new_lines.extend_from_slice(&c.lines[..start]);
+                    new_lines.extend_from_slice(&details.lines);
+                    c.lines = new_lines;
+
+                    let mut new_meta: Vec<Vec<SpanKind>> =
+                        Vec::with_capacity(start + metadata.len());
+                    new_meta.extend_from_slice(&c.span_metadata[..start]);
+                    new_meta.extend_from_slice(&metadata);
+                    c.span_metadata = new_meta;
+                    c.last_len = metadata.len();
+                    c.last_msg_hash = last_hash;
                 } else {
-                    // Use the layout engine to obtain width-aware wrapped plain text
                     let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
                         &VecDeque::from([last_msg.clone()]),
                         &self.theme,
                         Some(width as usize),
                         syntax,
                     );
-                    layout.lines
-                };
-                // No additional prewrapping since lines already respect width
-                let start = c.last_start;
-                let old_len = c.last_len;
-                let mut new_buf: Vec<Line<'static>> =
-                    Vec::with_capacity(c.lines.len() - old_len + last_lines.len());
-                new_buf.extend_from_slice(&c.lines[..start]);
-                new_buf.extend_from_slice(&last_lines);
-                c.lines = new_buf;
-                c.last_len = last_lines.len();
-                c.last_msg_hash = last_hash;
+                    let start = c.last_start;
+                    let mut new_lines: Vec<Line<'static>> =
+                        Vec::with_capacity(start + layout.lines.len());
+                    new_lines.extend_from_slice(&c.lines[..start]);
+                    new_lines.extend_from_slice(&layout.lines);
+                    c.lines = new_lines;
+
+                    let mut new_meta: Vec<Vec<SpanKind>> =
+                        Vec::with_capacity(start + layout.span_metadata.len());
+                    new_meta.extend_from_slice(&c.span_metadata[..start]);
+                    new_meta.extend_from_slice(&layout.span_metadata);
+                    c.span_metadata = new_meta;
+                    c.last_len = layout.span_metadata.len();
+                    c.last_msg_hash = last_hash;
+                }
             } else {
-                // Fallback to full rebuild if something unexpected
                 only_last_changed = false;
             }
         }
 
         if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
             // Build lines with proper width constraints - this is the semantic approach
-            // The renderer should handle width constraints correctly without needing post-processing
-            let pre =
-                crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
-                    &self.messages,
-                    &self.theme,
-                    markdown,
-                    syntax,
-                    Some(width as usize),
-                );
-            // Compute last message length to allow fast tail updates
-            let (last_start, last_len) = if let Some(last_msg) = self.messages.back() {
-                let last_lines = if markdown {
-                    crate::ui::markdown::render_message_markdown_opts_with_width(
-                        last_msg,
-                        &self.theme,
-                        syntax,
-                        Some(width as usize),
-                    )
-                    .lines
-                } else {
-                    // Use the layout engine to obtain width-aware wrapped plain text
-                    let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
-                        &VecDeque::from([last_msg.clone()]),
-                        &self.theme,
-                        Some(width as usize),
-                        syntax,
-                    );
-                    layout.lines
-                };
-                // No additional prewrapping needed since lines already respect width
-                let len = last_lines.len();
-                let start = pre.len().saturating_sub(len);
-                (start, len)
-            } else {
-                (0, 0)
+            let cfg = crate::ui::layout::LayoutConfig {
+                width: Some(width as usize),
+                markdown_enabled: markdown,
+                syntax_enabled: syntax,
+                table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
             };
+            let layout =
+                crate::ui::layout::LayoutEngine::layout_messages(&self.messages, &self.theme, &cfg);
+            let last_span = layout.message_spans.last().cloned();
+            let (last_start, last_len) = last_span
+                .map(|span| (span.start, span.len))
+                .unwrap_or((0, 0));
+            let lines = layout.lines;
+            let span_metadata = layout.span_metadata;
             self.prewrap_cache = Some(PrewrapCache {
                 width,
                 markdown_enabled: markdown,
@@ -680,14 +680,20 @@ impl App {
                 theme_sig,
                 messages_len: msg_len,
                 last_msg_hash: last_hash,
+                lines,
+                span_metadata,
                 last_start,
                 last_len,
-                lines: pre,
             });
         }
 
         // Safe unwrap since we just populated if missing
         &self.prewrap_cache.as_ref().unwrap().lines
+    }
+
+    pub fn get_prewrapped_span_metadata_cached(&mut self, width: u16) -> &Vec<Vec<SpanKind>> {
+        self.get_prewrapped_lines_cached(width);
+        &self.prewrap_cache.as_ref().unwrap().span_metadata
     }
 
     pub fn invalidate_prewrap_cache(&mut self) {
@@ -2189,9 +2195,10 @@ pub(crate) struct PrewrapCache {
     theme_sig: u64,
     messages_len: usize,
     last_msg_hash: u64,
+    lines: Vec<Line<'static>>,
+    span_metadata: Vec<Vec<SpanKind>>,
     last_start: usize,
     last_len: usize,
-    lines: Vec<Line<'static>>,
 }
 
 fn hash_last_message(messages: &VecDeque<Message>) -> u64 {

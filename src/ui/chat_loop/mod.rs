@@ -18,6 +18,7 @@ use self::stream::{StreamDispatcher, StreamParams, STREAM_END_MARKER};
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::App;
+use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
 use ratatui::crossterm::{
@@ -25,7 +26,7 @@ use ratatui::crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::Terminal;
 use std::{
     error::Error,
     io,
@@ -87,7 +88,7 @@ pub async fn run_chat(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
-    let backend = CrosstermBackend::new(stdout);
+    let backend = OscBackend::new(stdout);
     let terminal = Arc::new(Mutex::new(Terminal::new(backend)?));
 
     // Channel for streaming updates with stream ID
@@ -531,7 +532,7 @@ async fn handle_block_select_mode_event(
 
 async fn handle_external_editor_shortcut(
     app: &Arc<Mutex<App>>,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Terminal<OscBackend<io::Stdout>>,
     stream_dispatcher: &StreamDispatcher,
     term_width: u16,
     term_height: u16,

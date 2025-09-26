@@ -33,6 +33,7 @@ impl ScrollCalculator {
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn prewrap_lines(lines: &[Line], terminal_width: u16) -> Vec<Line<'static>> {
         Self::prewrap_lines_with_metadata(lines, None, terminal_width).0
     }
@@ -62,7 +63,7 @@ impl ScrollCalculator {
                     let kind = span_metadata
                         .and_then(|meta| meta.get(line_idx))
                         .and_then(|kinds| kinds.get(span_idx))
-                        .copied()
+                        .cloned()
                         .unwrap_or(SpanKind::Text);
                     owned_kinds.push(kind);
                 }
@@ -150,7 +151,7 @@ impl ScrollCalculator {
                                 collector_spans,
                                 collector_kinds,
                                 *seg_style,
-                                *seg_kind,
+                                seg_kind.clone(),
                                 &slice,
                             );
                             *out_len += here;
@@ -182,13 +183,13 @@ impl ScrollCalculator {
                 let span_kind = span_metadata
                     .and_then(|meta| meta.get(line_idx))
                     .and_then(|kinds| kinds.get(span_idx))
-                    .copied()
+                    .cloned()
                     .unwrap_or(SpanKind::Text);
 
                 for ch in s.content.chars() {
                     let is_plain_space = ch == ' ';
                     let is_link_break_space =
-                        span_kind == SpanKind::Link && ch.is_whitespace() && !is_plain_space;
+                        span_kind.is_link() && ch.is_whitespace() && !is_plain_space;
 
                     if is_plain_space || is_link_break_space {
                         flush_word(
@@ -210,11 +211,16 @@ impl ScrollCalculator {
                         if cur_len + space_width <= width {
                             let mut buf = [0u8; 4];
                             let piece = ch.encode_utf8(&mut buf);
+                            let kind_for_space = if span_kind.is_link() {
+                                span_kind.clone()
+                            } else {
+                                SpanKind::Text
+                            };
                             append_run(
                                 &mut cur_spans,
                                 &mut cur_kinds,
                                 s.style,
-                                SpanKind::Text,
+                                kind_for_space,
                                 piece,
                             );
                             cur_len += space_width;
@@ -234,10 +240,10 @@ impl ScrollCalculator {
                             if *last_style == s.style && *last_kind == span_kind {
                                 last_text.push(ch);
                             } else {
-                                word_segs.push((vec![ch], s.style, span_kind));
+                                word_segs.push((vec![ch], s.style, span_kind.clone()));
                             }
                         } else {
-                            word_segs.push((vec![ch], s.style, span_kind));
+                            word_segs.push((vec![ch], s.style, span_kind.clone()));
                         }
                         word_len += 1;
                     }
@@ -314,19 +320,34 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        // Route through the unified layout engine so downstream consumers get the same
-        // width-aware line stream everywhere (renderer, scroll math, selection, etc.).
+        Self::build_layout_with_theme_and_flags_and_width(
+            messages,
+            theme,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_theme_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         };
-        let layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
-        layout.lines
+        crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg)
     }
 
     /// Build display lines with selection highlighting and terminal width for table balancing
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn build_display_lines_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,
@@ -336,6 +357,27 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
+        Self::build_layout_with_theme_and_selection_and_flags_and_width(
+            messages,
+            theme,
+            selected_index,
+            highlight,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_theme_and_selection_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        selected_index: Option<usize>,
+        highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
@@ -360,7 +402,7 @@ impl ScrollCalculator {
                             let include_empty = offset < span.len.saturating_sub(1);
                             let has_content =
                                 kinds.iter().zip(line.spans.iter()).any(|(kind, span)| {
-                                    *kind != SpanKind::UserPrefix && !span.content.trim().is_empty()
+                                    !kind.is_user_prefix() && !span.content.trim().is_empty()
                                 });
                             if include_empty || has_content {
                                 Self::apply_selection_highlight(
@@ -378,10 +420,11 @@ impl ScrollCalculator {
             }
         }
 
-        layout.lines
+        layout
     }
 
     /// Build display lines with codeblock highlighting and terminal width for table balancing
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn build_display_lines_with_codeblock_highlight_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &crate::ui::theme::Theme,
@@ -391,6 +434,27 @@ impl ScrollCalculator {
         syntax_enabled: bool,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
+        Self::build_layout_with_codeblock_highlight_and_flags_and_width(
+            messages,
+            theme,
+            selected_block,
+            highlight,
+            markdown_enabled,
+            syntax_enabled,
+            terminal_width,
+        )
+        .lines
+    }
+
+    pub fn build_layout_with_codeblock_highlight_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &crate::ui::theme::Theme,
+        selected_block: Option<usize>,
+        highlight: ratatui::style::Style,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        terminal_width: Option<usize>,
+    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
@@ -417,7 +481,7 @@ impl ScrollCalculator {
             }
         }
 
-        layout.lines
+        layout
     }
 
     /// Compute a scroll offset that positions the start of a given logical line index
@@ -867,7 +931,7 @@ mod tests {
         // Links with ordinary spaces should wrap on word boundaries
         let style = Style::default();
         let line = Line::from(vec![Span::styled("Rust programming language", style)]);
-        let metadata = vec![vec![SpanKind::Link]];
+        let metadata = vec![vec![SpanKind::link("https://example.com")]];
 
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
@@ -884,7 +948,7 @@ mod tests {
             "Rust\u{00A0}programming language",
             style,
         )]);
-        let metadata = vec![vec![SpanKind::Link]];
+        let metadata = vec![vec![SpanKind::link("https://example.com")]];
 
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 15);
@@ -940,7 +1004,11 @@ mod tests {
             Span::raw(" "),
             Span::styled("hypertext dreams", style),
         ]);
-        let metadata = vec![vec![SpanKind::Text, SpanKind::Text, SpanKind::Link]];
+        let metadata = vec![vec![
+            SpanKind::Text,
+            SpanKind::Text,
+            SpanKind::link("https://example.com"),
+        ]];
         let (wrapped, _) =
             ScrollCalculator::prewrap_lines_with_metadata(&[line], Some(&metadata), 158);
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();

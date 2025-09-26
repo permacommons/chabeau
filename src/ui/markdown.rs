@@ -489,12 +489,12 @@ fn render_message_with_ranges_with_width_and_policy(
                         did_prefix_user = true;
                     }
                     style_stack.push(style);
-                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     kind_stack.push(current_kind);
                 }
                 Tag::BlockQuote => {
                     style_stack.push(theme.md_blockquote_style());
-                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     kind_stack.push(current_kind);
                 }
                 Tag::List(start) => {
@@ -555,7 +555,7 @@ fn render_message_with_ranges_with_width_and_policy(
                         .unwrap_or_default()
                         .add_modifier(Modifier::ITALIC);
                     style_stack.push(style);
-                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     kind_stack.push(current_kind);
                 }
                 Tag::Strong => {
@@ -565,7 +565,7 @@ fn render_message_with_ranges_with_width_and_policy(
                         .unwrap_or_default()
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(style);
-                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     kind_stack.push(current_kind);
                 }
                 Tag::Strikethrough => {
@@ -575,12 +575,12 @@ fn render_message_with_ranges_with_width_and_policy(
                         .unwrap_or_default()
                         .add_modifier(Modifier::DIM);
                     style_stack.push(style);
-                    let current_kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     kind_stack.push(current_kind);
                 }
-                Tag::Link { .. } => {
+                Tag::Link { dest_url, .. } => {
                     style_stack.push(theme.md_link_style());
-                    kind_stack.push(SpanKind::Link);
+                    kind_stack.push(SpanKind::link(dest_url.as_ref()));
                 }
                 Tag::Table(_) => {
                     push_spans_with_optional_wrap(
@@ -769,7 +769,7 @@ fn render_message_with_ranges_with_width_and_policy(
                         detab(&text),
                         *style_stack.last().unwrap_or(&base_text_style(role, theme)),
                     );
-                    let kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                    let kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     if let Some(ref mut table) = table_state {
                         table.add_span(span, kind);
                     } else {
@@ -785,7 +785,7 @@ fn render_message_with_ranges_with_width_and_policy(
             Event::Code(code) => {
                 let s = theme.md_inline_code_style();
                 let span = Span::styled(detab(&code), s);
-                let kind = *kind_stack.last().unwrap_or(&SpanKind::Text);
+                let kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                 if let Some(ref mut table) = table_state {
                     table.add_span(span, kind);
                 } else {
@@ -1016,7 +1016,12 @@ mod tests {
         let mut saw_link = false;
         for (line, kinds) in details.lines.iter().zip(metadata.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
-            saw_link |= kinds.iter().any(|k| *k == SpanKind::Link);
+            for kind in kinds {
+                if let Some(href) = kind.link_href() {
+                    saw_link = true;
+                    assert_eq!(href, "https://example.com");
+                }
+            }
         }
         assert!(saw_link, "expected link metadata to be captured");
 
@@ -1076,8 +1081,8 @@ mod tests {
         assert!(!metadata.is_empty());
         let first_line = &metadata[0];
         assert!(!first_line.is_empty());
-        assert_eq!(first_line[0], SpanKind::UserPrefix);
-        assert!(first_line.iter().skip(1).all(|k| *k == SpanKind::Text));
+        assert!(matches!(first_line[0], SpanKind::UserPrefix));
+        assert!(first_line.iter().skip(1).all(|k| k.is_text()));
     }
 
     #[test]
@@ -1108,11 +1113,14 @@ mod tests {
             let mut line_has_plain = false;
             for (span, kind) in line.spans.iter().zip(kinds.iter()) {
                 let content = span.content.as_ref();
-                if *kind == SpanKind::Link && content.contains("Example") {
+                if matches!(kind, SpanKind::Link(_)) && content.contains("Example") {
                     saw_link = true;
                     line_has_link = true;
+                    if let Some(href) = kind.link_href() {
+                        assert_eq!(href, "https://example.com");
+                    }
                 }
-                if *kind == SpanKind::Text && content.chars().any(|ch| ch.is_alphanumeric()) {
+                if kind.is_text() && content.chars().any(|ch| ch.is_alphanumeric()) {
                     saw_plain = true;
                     line_has_plain = true;
                 }
@@ -2597,7 +2605,7 @@ impl TableState {
                                 style,
                                 kind: prev,
                                 width: w,
-                                span_kind,
+                                span_kind: span_kind.clone(),
                             });
                         }
                         if k == TokKind::BreakChar {
@@ -2607,7 +2615,7 @@ impl TableState {
                                 text: s,
                                 style,
                                 kind: TokKind::BreakChar,
-                                span_kind,
+                                span_kind: span_kind.clone(),
                             });
                             mode = None;
                         } else {
@@ -2622,7 +2630,7 @@ impl TableState {
                             text: s,
                             style,
                             kind: TokKind::BreakChar,
-                            span_kind,
+                            span_kind: span_kind.clone(),
                         });
                         mode = None;
                     }
@@ -2641,7 +2649,7 @@ impl TableState {
                     style,
                     kind: k,
                     width: w,
-                    span_kind,
+                    span_kind: span_kind.clone(),
                 });
             }
             toks
@@ -2654,7 +2662,7 @@ impl TableState {
             if span.content.is_empty() {
                 continue;
             }
-            let mut toks = tokenize(span.content.as_ref(), span.style, *span_kind);
+            let mut toks = tokenize(span.content.as_ref(), span.style, span_kind.clone());
             all_toks.append(&mut toks);
         }
 
@@ -2805,14 +2813,14 @@ impl TableState {
                         text: left_text,
                         style: tok.style,
                         kind: TokKind::Word,
-                        span_kind: tok.span_kind,
+                        span_kind: tok.span_kind.clone(),
                     };
                     let right_tok = Tok {
                         width: str_width(&right_text),
                         text: right_text,
                         style: tok.style,
                         kind: TokKind::Word,
-                        span_kind: tok.span_kind,
+                        span_kind: tok.span_kind.clone(),
                     };
                     cur.push(left_tok);
                     // Emit line immediately
@@ -2835,14 +2843,14 @@ impl TableState {
                     text: left_text,
                     style: tok.style,
                     kind: TokKind::Word,
-                    span_kind: tok.span_kind,
+                    span_kind: tok.span_kind.clone(),
                 };
                 let right_tok = Tok {
                     width: str_width(&right_text),
                     text: right_text,
                     style: tok.style,
                     kind: TokKind::Word,
-                    span_kind: tok.span_kind,
+                    span_kind: tok.span_kind.clone(),
                 };
                 cur.push(left_tok);
                 // Emit line
@@ -3371,7 +3379,7 @@ fn push_spans_with_optional_wrap(
         let zipped: Vec<(Span<'static>, SpanKind)> = current_spans
             .iter()
             .cloned()
-            .zip(current_span_kinds.iter().copied())
+            .zip(current_span_kinds.iter().cloned())
             .collect();
         let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
         let indent_wrapped_user_lines = indent_user_wraps && role == RoleKind::User;

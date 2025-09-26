@@ -617,7 +617,7 @@ impl KeyHandler for CtrlRHandler {
 pub struct CtrlTHandler {
     pub stream_dispatcher: Arc<StreamDispatcher>,
     pub terminal:
-        Arc<Mutex<ratatui::Terminal<ratatui::prelude::CrosstermBackend<std::io::Stdout>>>>,
+        Arc<Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>>,
 }
 
 #[async_trait::async_trait]

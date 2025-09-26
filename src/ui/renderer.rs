@@ -1,5 +1,6 @@
 use crate::core::app::App;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
+use crate::ui::osc_state::{compute_render_state, set_render_state};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -26,11 +27,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let lines = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
-        app.get_prewrapped_lines_cached(chunks[0].width).clone()
+    let (lines, span_metadata) = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
+        let lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
+        let metadata = app
+            .get_prewrapped_span_metadata_cached(chunks[0].width)
+            .clone();
+        (lines, metadata)
     } else if app.in_edit_select_mode() {
         let highlight = Style::default();
-        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
+        let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
             &app.messages,
             &app.theme,
             app.selected_user_message_index(),
@@ -39,10 +44,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
-        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
+        (layout.lines, layout.span_metadata)
     } else if app.in_block_select_mode() {
         let highlight = Style::default().add_modifier(Modifier::BOLD);
-        let built = crate::utils::scroll::ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
+        let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_codeblock_highlight_and_flags_and_width(
             &app.messages,
             &app.theme,
             app.selected_block_index(),
@@ -51,7 +56,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.syntax_enabled,
             Some(chunks[0].width as usize),
         );
-        crate::utils::scroll::ScrollCalculator::prewrap_lines(&built, chunks[0].width)
+        (layout.lines, layout.span_metadata)
     } else {
         unreachable!()
     };
@@ -71,12 +76,23 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Create enhanced title with version, provider, model name and logging status
     let title_text = build_main_title(app);
-    let messages_paragraph = Paragraph::new(lines)
+    let block = Block::default().title(Span::styled(title_text, app.theme.title_style));
+    let inner_area = block.inner(chunks[0]);
+    let messages_paragraph = Paragraph::new(lines.clone())
         .style(Style::default().bg(app.theme.background_color))
-        .block(Block::default().title(Span::styled(title_text, app.theme.title_style)))
+        .block(block)
         .scroll((scroll_offset, app.horizontal_scroll_offset));
 
     f.render_widget(messages_paragraph, chunks[0]);
+
+    let state = compute_render_state(
+        inner_area,
+        &lines,
+        &span_metadata,
+        scroll_offset as usize,
+        app.horizontal_scroll_offset,
+    );
+    set_render_state(state);
 
     // Input area takes full width
 

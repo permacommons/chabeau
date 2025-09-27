@@ -39,7 +39,6 @@ pub struct RenderedMessage {
 pub struct RenderedMessageDetails {
     pub lines: Vec<Line<'static>>,
     pub codeblock_ranges: Vec<(usize, usize, String)>,
-    #[allow(dead_code)]
     pub span_metadata: Option<Vec<Vec<SpanKind>>>,
 }
 
@@ -53,19 +52,6 @@ impl RenderedMessageDetails {
     pub fn into_rendered(self) -> RenderedMessage {
         RenderedMessage { lines: self.lines }
     }
-}
-
-/// Markdown renderer using pulldown-cmark with theming.
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn render_message_markdown(msg: &Message, theme: &Theme) -> RenderedMessage {
-    render_message_markdown_with_policy(
-        msg,
-        theme,
-        true,
-        None,
-        crate::ui::layout::TableOverflowPolicy::WrapCells,
-    )
 }
 
 /// Render markdown with options to enable/disable syntax highlighting and terminal width for table balancing.
@@ -3423,16 +3409,6 @@ pub fn build_markdown_display_lines(
         lines.extend(rendered.lines);
     }
     lines
-}
-
-/// Build display lines for all messages using plain text rendering (tests only)
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn build_plain_display_lines(
-    messages: &VecDeque<Message>,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    build_plain_display_lines_with_spans(messages, theme).0
 }
 
 pub fn build_plain_display_lines_with_spans(

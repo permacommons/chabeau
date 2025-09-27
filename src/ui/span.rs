@@ -4,7 +4,6 @@ use std::sync::Arc;
 /// consumers (scroll, selection, accessibility) to make decisions
 /// without relying on styling heuristics such as underline detection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum SpanKind {
     /// Default text content with no special interaction.
     Text,

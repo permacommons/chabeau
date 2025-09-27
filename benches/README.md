@@ -46,7 +46,7 @@ criterion_main!(benches);
 4) Run benches (includes `render_cache`):
 
 ```
-cargo bench
+cargo bench --features bench
 ```
 
 5) Reports are written under `target/criterion/` (open `report/index.html`).

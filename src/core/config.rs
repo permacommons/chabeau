@@ -163,16 +163,6 @@ impl Config {
         self.custom_providers.iter().collect()
     }
 
-    // Custom themes management (used by tests)
-    #[allow(dead_code)]
-    pub fn add_custom_theme(&mut self, theme: CustomTheme) {
-        self.custom_themes.push(theme);
-    }
-    // Custom themes removal (used by tests)
-    #[allow(dead_code)]
-    pub fn remove_custom_theme(&mut self, id: &str) {
-        self.custom_themes.retain(|t| t.id != id);
-    }
     pub fn get_custom_theme(&self, id: &str) -> Option<&CustomTheme> {
         self.custom_themes
             .iter()
@@ -180,6 +170,14 @@ impl Config {
     }
     pub fn list_custom_themes(&self) -> Vec<&CustomTheme> {
         self.custom_themes.iter().collect()
+    }
+}
+
+#[cfg(test)]
+impl Config {
+    // Custom themes management (used by tests)
+    pub fn add_custom_theme(&mut self, theme: CustomTheme) {
+        self.custom_themes.push(theme);
     }
 }
 

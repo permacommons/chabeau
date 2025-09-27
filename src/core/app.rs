@@ -701,7 +701,7 @@ impl App {
     }
 
     // Used by Criterion benches in `benches/`.
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "bench"))]
     pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
         Self {
             messages: VecDeque::new(),
@@ -2224,6 +2224,9 @@ fn compute_theme_signature(theme: &crate::ui::theme::Theme) -> u64 {
     format!("{:?}", theme.assistant_text_style).hash(&mut h);
     h.finish()
 }
+
+#[cfg(all(feature = "bench", not(test)))]
+const _: fn(Theme, bool, bool) -> App = App::new_bench;
 
 #[cfg(test)]
 mod tests {

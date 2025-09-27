@@ -72,11 +72,11 @@ mod tests {
 }
 
 #[cfg(test)]
-use std::borrow::Cow;
-#[cfg(test)]
 use crate::ui::span::SpanKind;
 #[cfg(test)]
 use ratatui::text::Line;
+#[cfg(test)]
+use std::borrow::Cow;
 
 #[cfg(test)]
 const OSC_PREFIX: &str = "\x1b]8;;";

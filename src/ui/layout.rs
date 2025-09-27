@@ -46,7 +46,6 @@ pub struct MessageLineSpan {
 #[derive(Clone, Debug, Default)]
 pub struct Layout {
     pub lines: Vec<Line<'static>>,
-    #[allow(dead_code)]
     pub span_metadata: Vec<Vec<SpanKind>>,
     pub message_spans: Vec<MessageLineSpan>,
     pub codeblock_ranges: Vec<(usize, usize, String)>,

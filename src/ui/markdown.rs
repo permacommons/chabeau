@@ -3,7 +3,7 @@ use crate::core::message::Message;
 use crate::ui::layout::MessageLineSpan;
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
@@ -237,10 +237,7 @@ pub fn render_message_with_ranges(
                     current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
                 }
                 Tag::CodeBlock(kind) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
+                    in_code_block = Some(language_hint_from_codeblock_kind(kind));
                     code_block_lines.clear();
                 }
                 Tag::Emphasis => style_stack.push(
@@ -289,26 +286,15 @@ pub fn render_message_with_ranges(
                 }
                 TagEnd::Item => flush_current_line(&mut lines, &mut current_spans),
                 TagEnd::CodeBlock => {
-                    let start = lines.len();
-                    for l in code_block_lines.drain(..) {
-                        let mut st = theme.md_codeblock_text_style();
-                        if let Some(bg) = theme.md_codeblock_bg_color() {
-                            st = st.bg(bg);
-                        }
-                        lines.push(Line::from(Span::styled(detab(&l), st)));
-                    }
-                    let end = lines.len();
-                    if end > start {
-                        let content = lines[start..end]
-                            .iter()
-                            .map(|ln| ln.to_string())
-                            .collect::<Vec<_>>()
-                            .join(
-                                "
-",
-                            );
-                        ranges.push((start, end - start, content));
-                    }
+                    flush_code_block_buffer(
+                        &mut code_block_lines,
+                        false,
+                        in_code_block.as_deref(),
+                        theme,
+                        &mut lines,
+                        None,
+                        &mut ranges,
+                    );
                     lines.push(Line::from(""));
                     in_code_block = None;
                 }
@@ -319,9 +305,7 @@ pub fn render_message_with_ranges(
             },
             Event::Text(text) => {
                 if in_code_block.is_some() {
-                    for l in text.lines() {
-                        code_block_lines.push(detab(l).to_string());
-                    }
+                    push_codeblock_text(&mut code_block_lines, &text);
                 } else {
                     current_spans.push(Span::styled(
                         detab(&text),
@@ -528,10 +512,7 @@ fn render_message_with_ranges_with_width_and_policy(
                     );
                 }
                 Tag::CodeBlock(kind) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
+                    in_code_block = Some(language_hint_from_codeblock_kind(kind));
                     code_block_lines.clear();
                 }
                 Tag::Emphasis => {
@@ -663,50 +644,15 @@ fn render_message_with_ranges_with_width_and_policy(
                     );
                 }
                 TagEnd::CodeBlock => {
-                    // Capture start before pushing code block lines
-                    let start = lines.len();
-                    let joined = code_block_lines.join("\n");
-                    if syntax_enabled {
-                        if let Some(hl_lines) = crate::utils::syntax::highlight_code_block(
-                            in_code_block.as_deref().unwrap_or(""),
-                            &joined,
-                            theme,
-                        ) {
-                            for line in hl_lines.into_iter() {
-                                push_line_with_text_kind(&mut lines, &mut span_metadata, line);
-                            }
-                        } else {
-                            for l in joined.split('\n') {
-                                let mut st = theme.md_codeblock_text_style();
-                                if let Some(bg) = theme.md_codeblock_bg_color() {
-                                    st = st.bg(bg);
-                                }
-                                push_line_with_kinds(
-                                    &mut lines,
-                                    &mut span_metadata,
-                                    vec![Span::styled(detab(l), st)],
-                                    vec![SpanKind::Text],
-                                );
-                            }
-                        }
-                    } else {
-                        for l in joined.split('\n') {
-                            let mut st = theme.md_codeblock_text_style();
-                            if let Some(bg) = theme.md_codeblock_bg_color() {
-                                st = st.bg(bg);
-                            }
-                            push_line_with_kinds(
-                                &mut lines,
-                                &mut span_metadata,
-                                vec![Span::styled(detab(l), st)],
-                                vec![SpanKind::Text],
-                            );
-                        }
-                    }
-                    let end = lines.len();
-                    if end > start {
-                        ranges.push((start, end - start, joined));
-                    }
+                    flush_code_block_buffer(
+                        &mut code_block_lines,
+                        syntax_enabled,
+                        in_code_block.as_deref(),
+                        theme,
+                        &mut lines,
+                        Some(&mut span_metadata),
+                        &mut ranges,
+                    );
                     push_empty_line(&mut lines, &mut span_metadata);
                     in_code_block = None;
                 }
@@ -747,9 +693,7 @@ fn render_message_with_ranges_with_width_and_policy(
             },
             Event::Text(text) => {
                 if in_code_block.is_some() {
-                    for l in text.lines() {
-                        code_block_lines.push(detab(l).to_string());
-                    }
+                    push_codeblock_text(&mut code_block_lines, &text);
                 } else {
                     let span = Span::styled(
                         detab(&text),
@@ -934,10 +878,7 @@ pub fn compute_codeblock_contents_with_lang(
         for ev in parser {
             match ev {
                 Event::Start(Tag::CodeBlock(kind)) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
+                    in_code_block = Some(language_hint_from_codeblock_kind(kind));
                     buf.clear();
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -954,9 +895,7 @@ pub fn compute_codeblock_contents_with_lang(
                 }
                 Event::Text(text) => {
                     if in_code_block.is_some() {
-                        for l in text.lines() {
-                            buf.push(detab(l));
-                        }
+                        push_codeblock_text(&mut buf, &text);
                     }
                 }
                 _ => {}
@@ -3339,15 +3278,6 @@ fn push_empty_line(lines: &mut Vec<Line<'static>>, metadata: &mut Vec<Vec<SpanKi
     push_line_with_kinds(lines, metadata, Vec::new(), Vec::new());
 }
 
-fn push_line_with_text_kind(
-    lines: &mut Vec<Line<'static>>,
-    metadata: &mut Vec<Vec<SpanKind>>,
-    line: Line<'static>,
-) {
-    metadata.push(vec![SpanKind::Text; line.spans.len()]);
-    lines.push(line);
-}
-
 fn push_spans_with_optional_wrap(
     lines: &mut Vec<Line<'static>>,
     metadata: &mut Vec<Vec<SpanKind>>,
@@ -3390,6 +3320,69 @@ fn push_spans_with_optional_wrap(
         let kinds = std::mem::take(current_span_kinds);
         push_line_with_kinds(lines, metadata, spans, kinds);
     }
+}
+
+fn language_hint_from_codeblock_kind(kind: CodeBlockKind) -> String {
+    match kind {
+        CodeBlockKind::Fenced(lang) => lang.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn push_codeblock_text(code_block_lines: &mut Vec<String>, text: &str) {
+    for l in text.lines() {
+        code_block_lines.push(detab(l));
+    }
+}
+
+fn plain_codeblock_lines(code_block_lines: &[String], theme: &Theme) -> Vec<Line<'static>> {
+    let mut style = theme.md_codeblock_text_style();
+    if let Some(bg) = theme.md_codeblock_bg_color() {
+        style = style.bg(bg);
+    }
+    code_block_lines
+        .iter()
+        .map(|line| Line::from(vec![Span::styled(line.clone(), style)]))
+        .collect()
+}
+
+fn flush_code_block_buffer(
+    code_block_lines: &mut Vec<String>,
+    syntax_enabled: bool,
+    language_hint: Option<&str>,
+    theme: &Theme,
+    lines: &mut Vec<Line<'static>>,
+    span_metadata: Option<&mut Vec<Vec<SpanKind>>>,
+    ranges: &mut Vec<(usize, usize, String)>,
+) {
+    if code_block_lines.is_empty() {
+        return;
+    }
+
+    let start = lines.len();
+    let joined = code_block_lines.join("\n");
+    let produced_lines = if syntax_enabled {
+        crate::utils::syntax::highlight_code_block(language_hint.unwrap_or(""), &joined, theme)
+            .unwrap_or_else(|| plain_codeblock_lines(code_block_lines, theme))
+    } else {
+        plain_codeblock_lines(code_block_lines, theme)
+    };
+
+    if let Some(metadata) = span_metadata {
+        for line in produced_lines {
+            metadata.push(vec![SpanKind::Text; line.spans.len()]);
+            lines.push(line);
+        }
+    } else {
+        lines.extend(produced_lines);
+    }
+
+    let end = lines.len();
+    if end > start {
+        ranges.push((start, end - start, joined));
+    }
+
+    code_block_lines.clear();
 }
 
 fn detab(s: &str) -> String {

@@ -3,30 +3,21 @@ use crate::core::message::Message;
 use crate::ui::layout::MessageLineSpan;
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
-use unicode_width::UnicodeWidthStr;
-
 #[path = "markdown_wrap.rs"]
 mod wrap;
 use wrap::wrap_spans_to_width_generic_shared;
+
+mod table;
+use table::TableRenderer;
 
 #[derive(Clone, Debug)]
 enum ListKind {
     Unordered,
     Ordered(u64),
-}
-
-type TableCell = Vec<Vec<(Span<'static>, SpanKind)>>;
-type TableLine = (Line<'static>, Vec<SpanKind>);
-
-struct TableState {
-    rows: Vec<Vec<TableCell>>,
-    current_row: Vec<TableCell>,
-    current_cell: TableCell,
-    in_header: bool,
 }
 
 /// Description of a rendered message (line-based), used by the TUI renderer.
@@ -54,37 +45,6 @@ impl RenderedMessageDetails {
     }
 }
 
-/// Render markdown with options to enable/disable syntax highlighting and terminal width for table balancing.
-pub fn render_message_markdown_opts_with_width(
-    msg: &Message,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-) -> RenderedMessage {
-    // Backward-compatible wrapper that uses the default table policy (WrapCells)
-    render_message_markdown_details_with_policy(
-        msg,
-        theme,
-        syntax_enabled,
-        terminal_width,
-        crate::ui::layout::TableOverflowPolicy::WrapCells,
-    )
-    .into_rendered()
-}
-
-/// Render markdown with explicit table overflow policy (tests only).
-#[cfg(test)]
-pub fn render_message_markdown_with_policy(
-    msg: &Message,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-    policy: crate::ui::layout::TableOverflowPolicy,
-) -> RenderedMessage {
-    render_message_markdown_details_with_policy(msg, theme, syntax_enabled, terminal_width, policy)
-        .into_rendered()
-}
-
 pub fn render_message_markdown_details_with_policy(
     msg: &Message,
     theme: &Theme,
@@ -92,60 +52,26 @@ pub fn render_message_markdown_details_with_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessageDetails {
-    match msg.role.as_str() {
-        "system" => {
-            // Render system messages with markdown
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant, // Use assistant styling for system messages
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-        "user" => {
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::User,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-        _ => {
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-    }
+    let cfg = MessageRenderConfig::markdown(syntax_enabled)
+        .with_span_metadata()
+        .with_terminal_width(terminal_width, policy);
+    render_message_with_config(msg, theme, cfg)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoleKind {
     User,
     Assistant,
+}
+
+impl RoleKind {
+    fn from_role(role: &str) -> Self {
+        if role == "user" {
+            RoleKind::User
+        } else {
+            RoleKind::Assistant
+        }
+    }
 }
 
 fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
@@ -155,214 +81,521 @@ fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
     }
 }
 
-/// Render message and also compute local code block ranges (start line index, len, content).
-/// Test-only helper: render a single message and collect code block
-/// ranges (start line index, length, and content) using a simplified
-/// width-agnostic renderer. Useful for focused unit tests that do not
-/// require table layout or terminal-width semantics.
-#[cfg(test)]
-pub fn render_message_with_ranges(
-    is_user: bool,
-    content: &str,
-    theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<(usize, usize, String)>) {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    let parser = Parser::new_ext(content, options);
+/// Configuration for the higher level message renderer abstraction.
+#[derive(Clone, Copy, Debug)]
+pub struct MessageRenderConfig {
+    pub markdown: bool,
+    pub collect_span_metadata: bool,
+    pub syntax_highlighting: bool,
+    pub terminal_width: Option<usize>,
+    pub table_policy: crate::ui::layout::TableOverflowPolicy,
+}
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut ranges: Vec<(usize, usize, String)> = Vec::new();
-    let role = if is_user {
-        RoleKind::User
-    } else {
-        RoleKind::Assistant
-    };
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-    let mut style_stack: Vec<Style> = vec![base_text_style_bool(is_user, theme)];
-    let mut list_stack: Vec<ListKind> = Vec::new();
-    let mut in_code_block: Option<String> = None;
-    let mut code_block_lines: Vec<String> = Vec::new();
-    let mut did_prefix_user = !is_user;
-
-    for event in parser {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    if is_user {
-                        if !did_prefix_user {
-                            current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                            did_prefix_user = true;
-                        } else {
-                            current_spans.push(Span::raw("     "));
-                        }
-                    }
-                }
-                Tag::Heading { level, .. } => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    let style = theme.md_heading_style(level as u8);
-                    if is_user && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                        did_prefix_user = true;
-                    }
-                    style_stack.push(style);
-                }
-                Tag::BlockQuote => style_stack.push(theme.md_blockquote_style()),
-                Tag::List(start) => {
-                    list_stack.push(match start {
-                        Some(n) => ListKind::Ordered(n),
-                        None => ListKind::Unordered,
-                    });
-                }
-                Tag::Item => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
-                        ListKind::Unordered => "- ".to_string(),
-                        ListKind::Ordered(_n) => {
-                            if let Some(ListKind::Ordered(ref mut k)) = list_stack.last_mut() {
-                                let cur = *k;
-                                *k += 1;
-                                format!("{}. ", cur)
-                            } else {
-                                "1. ".to_string()
-                            }
-                        }
-                    };
-                    if role == RoleKind::User && !did_prefix_user {
-                        current_spans.push(Span::styled("You: ", theme.user_prefix_style));
-                        did_prefix_user = true;
-                    }
-                    current_spans.push(Span::styled(marker, theme.md_list_marker_style()));
-                }
-                Tag::CodeBlock(kind) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
-                    code_block_lines.clear();
-                }
-                Tag::Emphasis => style_stack.push(
-                    style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Tag::Strong => style_stack.push(
-                    style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Tag::Strikethrough => style_stack.push(
-                    style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::DIM),
-                ),
-                Tag::Link { .. } => style_stack.push(theme.md_link_style()),
-                _ => {}
-            },
-            Event::End(tag_end) => match tag_end {
-                TagEnd::Paragraph => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                }
-                TagEnd::Heading(_level) => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    style_stack.pop();
-                }
-                TagEnd::BlockQuote => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    style_stack.pop();
-                }
-                TagEnd::List(_start) => {
-                    flush_current_line(&mut lines, &mut current_spans);
-                    lines.push(Line::from(""));
-                    list_stack.pop();
-                }
-                TagEnd::Item => flush_current_line(&mut lines, &mut current_spans),
-                TagEnd::CodeBlock => {
-                    let start = lines.len();
-                    for l in code_block_lines.drain(..) {
-                        let mut st = theme.md_codeblock_text_style();
-                        if let Some(bg) = theme.md_codeblock_bg_color() {
-                            st = st.bg(bg);
-                        }
-                        lines.push(Line::from(Span::styled(detab(&l), st)));
-                    }
-                    let end = lines.len();
-                    if end > start {
-                        let content = lines[start..end]
-                            .iter()
-                            .map(|ln| ln.to_string())
-                            .collect::<Vec<_>>()
-                            .join(
-                                "
-",
-                            );
-                        ranges.push((start, end - start, content));
-                    }
-                    lines.push(Line::from(""));
-                    in_code_block = None;
-                }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
-                    style_stack.pop();
-                }
-                _ => {}
-            },
-            Event::Text(text) => {
-                if in_code_block.is_some() {
-                    for l in text.lines() {
-                        code_block_lines.push(detab(l).to_string());
-                    }
-                } else {
-                    current_spans.push(Span::styled(
-                        detab(&text),
-                        *style_stack
-                            .last()
-                            .unwrap_or(&base_text_style_bool(is_user, theme)),
-                    ))
-                }
-            }
-            Event::Code(code) => {
-                let s = theme.md_inline_code_style();
-                current_spans.push(Span::styled(detab(&code), s));
-            }
-            Event::SoftBreak => {
-                flush_current_line(&mut lines, &mut current_spans);
-                if is_user && did_prefix_user {
-                    current_spans.push(Span::raw("     "));
-                }
-            }
-            Event::HardBreak => flush_current_line(&mut lines, &mut current_spans),
-            Event::Rule => {
-                flush_current_line(&mut lines, &mut current_spans);
-                lines.push(Line::from(""));
-            }
-            Event::TaskListMarker(_checked) => {
-                current_spans.push(Span::styled("[ ] ", theme.md_list_marker_style()));
-            }
-            Event::Html(_) | Event::InlineHtml(_) | Event::FootnoteReference(_) => {}
+impl MessageRenderConfig {
+    pub fn markdown(syntax_highlighting: bool) -> Self {
+        Self {
+            markdown: true,
+            collect_span_metadata: false,
+            syntax_highlighting,
+            terminal_width: None,
+            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
         }
     }
 
-    flush_current_line(&mut lines, &mut current_spans);
-    if !lines.is_empty()
-        && lines
-            .last()
-            .map(|l| !l.to_string().is_empty())
-            .unwrap_or(false)
-    {
-        lines.push(Line::from(""));
+    pub fn plain() -> Self {
+        Self {
+            markdown: false,
+            collect_span_metadata: false,
+            syntax_highlighting: false,
+            terminal_width: None,
+            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+        }
     }
-    (lines, ranges)
+
+    pub fn with_span_metadata(mut self) -> Self {
+        self.collect_span_metadata = true;
+        self
+    }
+
+    pub fn with_terminal_width(
+        mut self,
+        width: Option<usize>,
+        policy: crate::ui::layout::TableOverflowPolicy,
+    ) -> Self {
+        self.terminal_width = width;
+        self.table_policy = policy;
+        self
+    }
+}
+
+/// Configuration options for the markdown renderer abstraction.
+#[derive(Clone, Copy, Debug, Default)]
+struct MarkdownRendererConfig {
+    collect_span_metadata: bool,
+    syntax_highlighting: bool,
+    width: Option<MarkdownWidthConfig>,
+}
+
+/// Width-aware configuration for optional wrapping and table layout.
+#[derive(Clone, Copy, Debug)]
+struct MarkdownWidthConfig {
+    terminal_width: Option<usize>,
+    table_policy: crate::ui::layout::TableOverflowPolicy,
+}
+
+pub fn render_message_with_config(
+    msg: &Message,
+    theme: &Theme,
+    config: MessageRenderConfig,
+) -> RenderedMessageDetails {
+    let role = RoleKind::from_role(&msg.role);
+    let (lines, ranges, metadata) = if config.markdown {
+        let renderer_config = MarkdownRendererConfig {
+            collect_span_metadata: config.collect_span_metadata,
+            syntax_highlighting: config.syntax_highlighting,
+            width: Some(MarkdownWidthConfig {
+                terminal_width: config.terminal_width,
+                table_policy: config.table_policy,
+            }),
+        };
+        MarkdownRenderer::new(role, &msg.content, theme, renderer_config).render()
+    } else {
+        render_plain_message(role, &msg.content, theme, config.collect_span_metadata)
+    };
+    RenderedMessageDetails {
+        lines,
+        codeblock_ranges: ranges,
+        span_metadata: if config.collect_span_metadata {
+            Some(metadata)
+        } else {
+            None
+        },
+    }
+}
+
+struct MarkdownRenderer<'a> {
+    role: RoleKind,
+    content: &'a str,
+    theme: &'a Theme,
+    config: MarkdownRendererConfig,
+    lines: Vec<Line<'static>>,
+    span_metadata: Vec<Vec<SpanKind>>,
+    ranges: Vec<(usize, usize, String)>,
+    current_spans: Vec<Span<'static>>,
+    current_span_kinds: Vec<SpanKind>,
+    style_stack: Vec<Style>,
+    kind_stack: Vec<SpanKind>,
+    list_stack: Vec<ListKind>,
+    in_code_block: Option<String>,
+    code_block_lines: Vec<String>,
+    table_renderer: Option<TableRenderer>,
+    did_prefix_user: bool,
+}
+
+impl<'a> MarkdownRenderer<'a> {
+    fn new(
+        role: RoleKind,
+        content: &'a str,
+        theme: &'a Theme,
+        config: MarkdownRendererConfig,
+    ) -> Self {
+        Self {
+            role,
+            content,
+            theme,
+            config,
+            lines: Vec::new(),
+            span_metadata: Vec::new(),
+            ranges: Vec::new(),
+            current_spans: Vec::new(),
+            current_span_kinds: Vec::new(),
+            style_stack: vec![base_text_style(role, theme)],
+            kind_stack: vec![SpanKind::Text],
+            list_stack: Vec::new(),
+            in_code_block: None,
+            code_block_lines: Vec::new(),
+            table_renderer: None,
+            did_prefix_user: role != RoleKind::User,
+        }
+    }
+
+    fn render(mut self) -> RenderedLinesWithMetadata {
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        let parser = Parser::new_ext(self.content, options);
+
+        for event in parser {
+            match event {
+                Event::Start(tag) => match tag {
+                    Tag::Paragraph => {
+                        if self.role == RoleKind::User {
+                            if !self.did_prefix_user {
+                                self.push_span(
+                                    Span::styled("You: ", self.theme.user_prefix_style),
+                                    SpanKind::UserPrefix,
+                                );
+                                self.did_prefix_user = true;
+                            } else {
+                                self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
+                            }
+                        }
+                    }
+                    Tag::Heading { level, .. } => {
+                        self.flush_current_spans(true);
+                        let style = self.theme.md_heading_style(level as u8);
+                        if self.role == RoleKind::User && !self.did_prefix_user {
+                            self.push_span(
+                                Span::styled("You: ", self.theme.user_prefix_style),
+                                SpanKind::UserPrefix,
+                            );
+                            self.did_prefix_user = true;
+                        }
+                        self.style_stack.push(style);
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
+                    Tag::BlockQuote => {
+                        self.style_stack.push(self.theme.md_blockquote_style());
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
+                    Tag::List(start) => {
+                        self.list_stack.push(match start {
+                            Some(n) => ListKind::Ordered(n),
+                            None => ListKind::Unordered,
+                        });
+                    }
+                    Tag::Item => {
+                        self.flush_current_spans(true);
+                        let marker = match self
+                            .list_stack
+                            .last()
+                            .cloned()
+                            .unwrap_or(ListKind::Unordered)
+                        {
+                            ListKind::Unordered => "- ".to_string(),
+                            ListKind::Ordered(_) => {
+                                if let Some(ListKind::Ordered(ref mut k)) =
+                                    self.list_stack.last_mut()
+                                {
+                                    let cur = *k;
+                                    *k += 1;
+                                    format!("{}. ", cur)
+                                } else {
+                                    "1. ".to_string()
+                                }
+                            }
+                        };
+                        if self.role == RoleKind::User && !self.did_prefix_user {
+                            self.push_span(
+                                Span::styled("You: ", self.theme.user_prefix_style),
+                                SpanKind::UserPrefix,
+                            );
+                            self.did_prefix_user = true;
+                        }
+                        self.push_span(
+                            Span::styled(marker, self.theme.md_list_marker_style()),
+                            SpanKind::Text,
+                        );
+                    }
+                    Tag::CodeBlock(kind) => {
+                        self.in_code_block = Some(language_hint_from_codeblock_kind(kind));
+                        self.code_block_lines.clear();
+                    }
+                    Tag::Emphasis => {
+                        let style = self
+                            .style_stack
+                            .last()
+                            .copied()
+                            .unwrap_or_default()
+                            .add_modifier(Modifier::ITALIC);
+                        self.style_stack.push(style);
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
+                    Tag::Strong => {
+                        let style = self
+                            .style_stack
+                            .last()
+                            .copied()
+                            .unwrap_or_default()
+                            .add_modifier(Modifier::BOLD);
+                        self.style_stack.push(style);
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
+                    Tag::Strikethrough => {
+                        let style = self
+                            .style_stack
+                            .last()
+                            .copied()
+                            .unwrap_or_default()
+                            .add_modifier(Modifier::DIM);
+                        self.style_stack.push(style);
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
+                    Tag::Link { dest_url, .. } => {
+                        self.style_stack.push(self.theme.md_link_style());
+                        self.kind_stack.push(SpanKind::link(dest_url.as_ref()));
+                    }
+                    Tag::Table(_) => {
+                        self.flush_current_spans(true);
+                        if self.config.width.is_some() {
+                            self.table_renderer = Some(TableRenderer::new());
+                        }
+                    }
+                    Tag::TableHead => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.start_header();
+                        }
+                    }
+                    Tag::TableRow => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.start_row();
+                        }
+                    }
+                    Tag::TableCell => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.start_cell();
+                        }
+                    }
+                    _ => {}
+                },
+                Event::End(tag_end) => match tag_end {
+                    TagEnd::Paragraph => {
+                        self.flush_current_spans(true);
+                        self.push_empty_line();
+                    }
+                    TagEnd::Heading(_) => {
+                        self.flush_current_spans(true);
+                        self.push_empty_line();
+                        self.style_stack.pop();
+                        self.kind_stack.pop();
+                    }
+                    TagEnd::BlockQuote => {
+                        self.flush_current_spans(true);
+                        self.push_empty_line();
+                        self.style_stack.pop();
+                        self.kind_stack.pop();
+                    }
+                    TagEnd::List(_) => {
+                        self.flush_current_spans(true);
+                        self.push_empty_line();
+                        self.list_stack.pop();
+                    }
+                    TagEnd::Item => {
+                        self.flush_current_spans(true);
+                    }
+                    TagEnd::CodeBlock => {
+                        if self.config.collect_span_metadata {
+                            flush_code_block_buffer(
+                                &mut self.code_block_lines,
+                                self.config.syntax_highlighting,
+                                self.in_code_block.as_deref(),
+                                self.theme,
+                                &mut self.lines,
+                                Some(&mut self.span_metadata),
+                                &mut self.ranges,
+                            );
+                        } else {
+                            flush_code_block_buffer(
+                                &mut self.code_block_lines,
+                                self.config.syntax_highlighting,
+                                self.in_code_block.as_deref(),
+                                self.theme,
+                                &mut self.lines,
+                                None,
+                                &mut self.ranges,
+                            );
+                        }
+                        self.push_empty_line();
+                        self.in_code_block = None;
+                    }
+                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                        self.style_stack.pop();
+                        self.kind_stack.pop();
+                    }
+                    TagEnd::Table => {
+                        if let Some(table) = self.table_renderer.take() {
+                            if let Some(width_cfg) = self.config.width {
+                                let table_lines = table.finalize(
+                                    self.theme,
+                                    width_cfg.terminal_width,
+                                    width_cfg.table_policy,
+                                );
+                                for (line, kinds) in table_lines {
+                                    self.push_line_direct(line, kinds);
+                                }
+                                self.push_empty_line();
+                            }
+                        }
+                    }
+                    TagEnd::TableHead => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.end_header();
+                        }
+                    }
+                    TagEnd::TableRow => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.end_row();
+                        }
+                    }
+                    TagEnd::TableCell => {
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.end_cell();
+                        }
+                    }
+                    _ => {}
+                },
+                Event::Text(text) => {
+                    if self.in_code_block.is_some() {
+                        push_codeblock_text(&mut self.code_block_lines, &text);
+                    } else {
+                        let span = Span::styled(
+                            detab(&text),
+                            *self
+                                .style_stack
+                                .last()
+                                .unwrap_or(&base_text_style(self.role, self.theme)),
+                        );
+                        let kind = self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        if let Some(ref mut table) = self.table_renderer {
+                            table.add_span(span, kind);
+                        } else {
+                            self.push_span(span, kind);
+                        }
+                    }
+                }
+                Event::Code(code) => {
+                    let span = Span::styled(detab(&code), self.theme.md_inline_code_style());
+                    let kind = self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                    if let Some(ref mut table) = self.table_renderer {
+                        table.add_span(span, kind);
+                    } else {
+                        self.push_span(span, kind);
+                    }
+                }
+                Event::SoftBreak => {
+                    self.flush_current_spans(true);
+                    if self.role == RoleKind::User && self.did_prefix_user {
+                        self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
+                    }
+                }
+                Event::HardBreak => {
+                    self.flush_current_spans(true);
+                }
+                Event::Rule => {
+                    self.flush_current_spans(true);
+                    self.push_empty_line();
+                }
+                Event::TaskListMarker(_checked) => {
+                    self.push_span(
+                        Span::styled("[ ] ", self.theme.md_list_marker_style()),
+                        SpanKind::Text,
+                    );
+                }
+                Event::Html(html) | Event::InlineHtml(html) => {
+                    if let Some(ref mut table) = self.table_renderer {
+                        let trimmed = html.trim();
+                        if trimmed == "<br>" || trimmed == "<br/>" {
+                            table.new_line_in_cell();
+                        }
+                    }
+                }
+                Event::FootnoteReference(_) => {}
+            }
+        }
+
+        self.flush_current_spans(true);
+        if !self.lines.is_empty()
+            && self
+                .lines
+                .last()
+                .map(|l| !l.to_string().is_empty())
+                .unwrap_or(false)
+        {
+            self.push_empty_line();
+        }
+
+        let metadata = if self.config.collect_span_metadata {
+            self.span_metadata
+        } else {
+            Vec::new()
+        };
+
+        (self.lines, self.ranges, metadata)
+    }
+
+    fn push_span(&mut self, span: Span<'static>, kind: SpanKind) {
+        self.current_spans.push(span);
+        self.current_span_kinds.push(kind);
+    }
+
+    fn flush_current_spans(&mut self, indent_user_wraps: bool) {
+        if self.current_spans.is_empty() {
+            return;
+        }
+
+        if let Some(width_cfg) = self.config.width {
+            if let Some(width) = width_cfg.terminal_width {
+                let zipped: Vec<(Span<'static>, SpanKind)> = self
+                    .current_spans
+                    .iter()
+                    .cloned()
+                    .zip(self.current_span_kinds.iter().cloned())
+                    .collect();
+                let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
+                let indent_wrapped_user_lines = indent_user_wraps && self.role == RoleKind::User;
+                for (idx, segs) in wrapped.into_iter().enumerate() {
+                    let (mut spans_only, mut kinds_only): (Vec<_>, Vec<_>) =
+                        segs.into_iter().unzip();
+                    if idx == 0 || !indent_wrapped_user_lines {
+                        self.push_line(spans_only, kinds_only);
+                    } else {
+                        let mut spans_with_indent = Vec::with_capacity(spans_only.len() + 1);
+                        let mut kinds_with_indent = Vec::with_capacity(kinds_only.len() + 1);
+                        spans_with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
+                        kinds_with_indent.push(SpanKind::Text);
+                        spans_with_indent.append(&mut spans_only);
+                        kinds_with_indent.append(&mut kinds_only);
+                        self.push_line(spans_with_indent, kinds_with_indent);
+                    }
+                }
+                self.current_spans.clear();
+                self.current_span_kinds.clear();
+                return;
+            }
+        }
+
+        let spans = std::mem::take(&mut self.current_spans);
+        let kinds = std::mem::take(&mut self.current_span_kinds);
+        self.push_line(spans, kinds);
+    }
+
+    fn push_line(&mut self, spans: Vec<Span<'static>>, kinds: Vec<SpanKind>) {
+        let line = Line::from(spans);
+        self.push_line_direct(line, kinds);
+    }
+
+    fn push_line_direct(&mut self, line: Line<'static>, kinds: Vec<SpanKind>) {
+        if self.config.collect_span_metadata {
+            self.span_metadata.push(kinds);
+        }
+        self.lines.push(line);
+    }
+
+    fn push_empty_line(&mut self) {
+        self.push_line(Vec::new(), Vec::new());
+    }
 }
 /// Test-only helper: compute code block ranges across messages using
 /// the simplified width-agnostic renderer. Intended for unit tests to
@@ -389,7 +622,22 @@ pub fn compute_codeblock_ranges(
             offset += lines.len();
             continue;
         }
-        let (lines, ranges) = render_message_with_ranges(is_user, &msg.content, theme);
+        let role = if is_user {
+            RoleKind::User
+        } else {
+            RoleKind::Assistant
+        };
+        let (lines, ranges, _) = MarkdownRenderer::new(
+            role,
+            &msg.content,
+            theme,
+            MarkdownRendererConfig {
+                collect_span_metadata: false,
+                syntax_highlighting: false,
+                width: None,
+            },
+        )
+        .render();
         for (start, len, content) in ranges {
             out.push((offset + start, len, content));
         }
@@ -407,456 +655,15 @@ fn render_message_with_ranges_with_width_and_policy(
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedLinesWithMetadata {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    let parser = Parser::new_ext(content, options);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut span_metadata: Vec<Vec<SpanKind>> = Vec::new();
-    let mut ranges: Vec<(usize, usize, String)> = Vec::new();
-
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-    let mut current_span_kinds: Vec<SpanKind> = Vec::new();
-    let mut style_stack: Vec<Style> = vec![base_text_style(role, theme)];
-    let mut kind_stack: Vec<SpanKind> = vec![SpanKind::Text];
-    let mut list_stack: Vec<ListKind> = Vec::new();
-    let mut in_code_block: Option<String> = None;
-    let mut code_block_lines: Vec<String> = Vec::new();
-    let mut table_state: Option<TableState> = None;
-
-    let is_user = role == RoleKind::User;
-    let mut did_prefix_user = role != RoleKind::User;
-
-    for event in parser {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    if role == RoleKind::User {
-                        if !did_prefix_user {
-                            push_span_to_buffers(
-                                &mut current_spans,
-                                &mut current_span_kinds,
-                                Span::styled("You: ", theme.user_prefix_style),
-                                SpanKind::UserPrefix,
-                            );
-                            did_prefix_user = true;
-                        } else {
-                            push_span_to_buffers(
-                                &mut current_spans,
-                                &mut current_span_kinds,
-                                Span::raw(USER_CONTINUATION_INDENT),
-                                SpanKind::Text,
-                            );
-                        }
-                    }
-                }
-                Tag::Heading { level, .. } => {
-                    // Flush existing and start heading style
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    let style = theme.md_heading_style(level as u8);
-                    if is_user && !did_prefix_user {
-                        push_span_to_buffers(
-                            &mut current_spans,
-                            &mut current_span_kinds,
-                            Span::styled("You: ", theme.user_prefix_style),
-                            SpanKind::UserPrefix,
-                        );
-                        did_prefix_user = true;
-                    }
-                    style_stack.push(style);
-                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    kind_stack.push(current_kind);
-                }
-                Tag::BlockQuote => {
-                    style_stack.push(theme.md_blockquote_style());
-                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    kind_stack.push(current_kind);
-                }
-                Tag::List(start) => {
-                    list_stack.push(match start {
-                        Some(n) => ListKind::Ordered(n),
-                        None => ListKind::Unordered,
-                    });
-                }
-                Tag::Item => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    let marker = match list_stack.last().cloned().unwrap_or(ListKind::Unordered) {
-                        ListKind::Unordered => "- ".to_string(),
-                        ListKind::Ordered(_n) => {
-                            if let Some(ListKind::Ordered(ref mut k)) = list_stack.last_mut() {
-                                let cur = *k;
-                                *k += 1;
-                                format!("{}. ", cur)
-                            } else {
-                                "1. ".to_string()
-                            }
-                        }
-                    };
-                    if role == RoleKind::User && !did_prefix_user {
-                        push_span_to_buffers(
-                            &mut current_spans,
-                            &mut current_span_kinds,
-                            Span::styled("You: ", theme.user_prefix_style),
-                            SpanKind::UserPrefix,
-                        );
-                        did_prefix_user = true;
-                    }
-                    push_span_to_buffers(
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        Span::styled(marker, theme.md_list_marker_style()),
-                        SpanKind::Text,
-                    );
-                }
-                Tag::CodeBlock(kind) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
-                    code_block_lines.clear();
-                }
-                Tag::Emphasis => {
-                    let style = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::ITALIC);
-                    style_stack.push(style);
-                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    kind_stack.push(current_kind);
-                }
-                Tag::Strong => {
-                    let style = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::BOLD);
-                    style_stack.push(style);
-                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    kind_stack.push(current_kind);
-                }
-                Tag::Strikethrough => {
-                    let style = style_stack
-                        .last()
-                        .copied()
-                        .unwrap_or_default()
-                        .add_modifier(Modifier::DIM);
-                    style_stack.push(style);
-                    let current_kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    kind_stack.push(current_kind);
-                }
-                Tag::Link { dest_url, .. } => {
-                    style_stack.push(theme.md_link_style());
-                    kind_stack.push(SpanKind::link(dest_url.as_ref()));
-                }
-                Tag::Table(_) => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    table_state = Some(TableState::new());
-                }
-                Tag::TableHead => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_header();
-                    }
-                }
-                Tag::TableRow => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_row();
-                    }
-                }
-                Tag::TableCell => {
-                    if let Some(ref mut table) = table_state {
-                        table.start_cell();
-                    }
-                }
-                _ => {}
-            },
-            Event::End(tag_end) => match tag_end {
-                TagEnd::Paragraph => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    push_empty_line(&mut lines, &mut span_metadata);
-                }
-                TagEnd::Heading(_level) => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    push_empty_line(&mut lines, &mut span_metadata);
-                    style_stack.pop();
-                    kind_stack.pop();
-                }
-                TagEnd::BlockQuote => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    push_empty_line(&mut lines, &mut span_metadata);
-                    style_stack.pop();
-                    kind_stack.pop();
-                }
-                TagEnd::List(_start) => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                    push_empty_line(&mut lines, &mut span_metadata);
-                    list_stack.pop();
-                }
-                TagEnd::Item => {
-                    push_spans_with_optional_wrap(
-                        &mut lines,
-                        &mut span_metadata,
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        role,
-                        terminal_width,
-                        true,
-                    );
-                }
-                TagEnd::CodeBlock => {
-                    // Capture start before pushing code block lines
-                    let start = lines.len();
-                    let joined = code_block_lines.join("\n");
-                    if syntax_enabled {
-                        if let Some(hl_lines) = crate::utils::syntax::highlight_code_block(
-                            in_code_block.as_deref().unwrap_or(""),
-                            &joined,
-                            theme,
-                        ) {
-                            for line in hl_lines.into_iter() {
-                                push_line_with_text_kind(&mut lines, &mut span_metadata, line);
-                            }
-                        } else {
-                            for l in joined.split('\n') {
-                                let mut st = theme.md_codeblock_text_style();
-                                if let Some(bg) = theme.md_codeblock_bg_color() {
-                                    st = st.bg(bg);
-                                }
-                                push_line_with_kinds(
-                                    &mut lines,
-                                    &mut span_metadata,
-                                    vec![Span::styled(detab(l), st)],
-                                    vec![SpanKind::Text],
-                                );
-                            }
-                        }
-                    } else {
-                        for l in joined.split('\n') {
-                            let mut st = theme.md_codeblock_text_style();
-                            if let Some(bg) = theme.md_codeblock_bg_color() {
-                                st = st.bg(bg);
-                            }
-                            push_line_with_kinds(
-                                &mut lines,
-                                &mut span_metadata,
-                                vec![Span::styled(detab(l), st)],
-                                vec![SpanKind::Text],
-                            );
-                        }
-                    }
-                    let end = lines.len();
-                    if end > start {
-                        ranges.push((start, end - start, joined));
-                    }
-                    push_empty_line(&mut lines, &mut span_metadata);
-                    in_code_block = None;
-                }
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
-                    style_stack.pop();
-                    kind_stack.pop();
-                }
-                TagEnd::Table => {
-                    if let Some(table) = table_state.take() {
-                        let table_lines = table.render_table_with_width_policy(
-                            theme,
-                            terminal_width,
-                            table_policy,
-                        );
-                        for (line, kinds) in table_lines.into_iter() {
-                            span_metadata.push(kinds);
-                            lines.push(line);
-                        }
-                        push_empty_line(&mut lines, &mut span_metadata);
-                    }
-                }
-                TagEnd::TableHead => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_header();
-                    }
-                }
-                TagEnd::TableRow => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_row();
-                    }
-                }
-                TagEnd::TableCell => {
-                    if let Some(ref mut table) = table_state {
-                        table.end_cell();
-                    }
-                }
-                _ => {}
-            },
-            Event::Text(text) => {
-                if in_code_block.is_some() {
-                    for l in text.lines() {
-                        code_block_lines.push(detab(l).to_string());
-                    }
-                } else {
-                    let span = Span::styled(
-                        detab(&text),
-                        *style_stack.last().unwrap_or(&base_text_style(role, theme)),
-                    );
-                    let kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                    if let Some(ref mut table) = table_state {
-                        table.add_span(span, kind);
-                    } else {
-                        push_span_to_buffers(
-                            &mut current_spans,
-                            &mut current_span_kinds,
-                            span,
-                            kind,
-                        );
-                    }
-                }
-            }
-            Event::Code(code) => {
-                let s = theme.md_inline_code_style();
-                let span = Span::styled(detab(&code), s);
-                let kind = kind_stack.last().cloned().unwrap_or(SpanKind::Text);
-                if let Some(ref mut table) = table_state {
-                    table.add_span(span, kind);
-                } else {
-                    push_span_to_buffers(&mut current_spans, &mut current_span_kinds, span, kind);
-                }
-            }
-            Event::SoftBreak => {
-                push_spans_with_optional_wrap(
-                    &mut lines,
-                    &mut span_metadata,
-                    &mut current_spans,
-                    &mut current_span_kinds,
-                    role,
-                    terminal_width,
-                    true,
-                );
-                if role == RoleKind::User && did_prefix_user {
-                    push_span_to_buffers(
-                        &mut current_spans,
-                        &mut current_span_kinds,
-                        Span::raw(USER_CONTINUATION_INDENT),
-                        SpanKind::Text,
-                    );
-                }
-            }
-            Event::HardBreak => {
-                push_spans_with_optional_wrap(
-                    &mut lines,
-                    &mut span_metadata,
-                    &mut current_spans,
-                    &mut current_span_kinds,
-                    role,
-                    terminal_width,
-                    true,
-                );
-            }
-            Event::Rule => {
-                push_spans_with_optional_wrap(
-                    &mut lines,
-                    &mut span_metadata,
-                    &mut current_spans,
-                    &mut current_span_kinds,
-                    role,
-                    terminal_width,
-                    false,
-                );
-                push_empty_line(&mut lines, &mut span_metadata);
-            }
-            Event::TaskListMarker(_checked) => {
-                push_span_to_buffers(
-                    &mut current_spans,
-                    &mut current_span_kinds,
-                    Span::styled("[ ] ", theme.md_list_marker_style()),
-                    SpanKind::Text,
-                );
-            }
-            Event::Html(html) | Event::InlineHtml(html) => {
-                if let Some(ref mut table) = table_state {
-                    if html.trim() == "<br>" || html.trim() == "<br/>" {
-                        table.new_line_in_cell();
-                    }
-                }
-            }
-            Event::FootnoteReference(_) => {}
-        }
-    }
-
-    push_spans_with_optional_wrap(
-        &mut lines,
-        &mut span_metadata,
-        &mut current_spans,
-        &mut current_span_kinds,
-        role,
-        terminal_width,
-        true,
-    );
-    if !lines.is_empty()
-        && lines
-            .last()
-            .map(|l| !l.to_string().is_empty())
-            .unwrap_or(false)
-    {
-        push_empty_line(&mut lines, &mut span_metadata);
-    }
-    (lines, ranges, span_metadata)
+    let config = MarkdownRendererConfig {
+        collect_span_metadata: true,
+        syntax_highlighting: syntax_enabled,
+        width: Some(MarkdownWidthConfig {
+            terminal_width,
+            table_policy,
+        }),
+    };
+    MarkdownRenderer::new(role, content, theme, config).render()
 }
 
 /// Compute code block ranges aligned to width-aware rendering and table layout.
@@ -934,10 +741,7 @@ pub fn compute_codeblock_contents_with_lang(
         for ev in parser {
             match ev {
                 Event::Start(Tag::CodeBlock(kind)) => {
-                    in_code_block = Some(match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        _ => String::new(),
-                    });
+                    in_code_block = Some(language_hint_from_codeblock_kind(kind));
                     buf.clear();
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -954,9 +758,7 @@ pub fn compute_codeblock_contents_with_lang(
                 }
                 Event::Text(text) => {
                     if in_code_block.is_some() {
-                        for l in text.lines() {
-                            buf.push(detab(l));
-                        }
+                        push_codeblock_text(&mut buf, &text);
                     }
                 }
                 _ => {}
@@ -971,7 +773,9 @@ mod tests {
     #![allow(unused_imports)]
     use super::{
         compute_codeblock_ranges, render_message_markdown_details_with_policy,
-        render_message_markdown_opts_with_width, render_message_markdown_with_policy, TableState,
+        render_message_with_config, render_message_with_ranges_with_width_and_policy,
+        table::TableRenderer, MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig,
+        MessageRenderConfig, RoleKind,
     };
     use crate::core::message::Message;
     use crate::ui::span::SpanKind;
@@ -981,6 +785,17 @@ mod tests {
     use ratatui::text::Span;
     use std::collections::VecDeque;
     use unicode_width::UnicodeWidthStr;
+
+    fn render_markdown_for_test(
+        message: &Message,
+        theme: &crate::ui::theme::Theme,
+        syntax_enabled: bool,
+        width: Option<usize>,
+    ) -> super::RenderedMessage {
+        let cfg = MessageRenderConfig::markdown(syntax_enabled)
+            .with_terminal_width(width, crate::ui::layout::TableOverflowPolicy::WrapCells);
+        render_message_with_config(message, theme, cfg).into_rendered()
+    }
 
     #[test]
     fn markdown_details_metadata_matches_lines_and_tags() {
@@ -1011,15 +826,6 @@ mod tests {
         }
         assert!(saw_link, "expected link metadata to be captured");
 
-        let legacy = render_message_markdown_with_policy(
-            &message,
-            &theme,
-            true,
-            None,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        );
-        assert_eq!(details.lines, legacy.lines);
-
         let width = Some(24usize);
         let details_with_width = render_message_markdown_details_with_policy(
             &message,
@@ -1036,15 +842,6 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
-
-        let legacy_with_width = render_message_markdown_with_policy(
-            &message,
-            &theme,
-            true,
-            width,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        );
-        assert_eq!(details_with_width.lines, legacy_with_width.lines);
     }
 
     #[test]
@@ -1129,6 +926,80 @@ mod tests {
     }
 
     #[test]
+    fn shared_renderer_without_metadata_matches_legacy_ranges() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let content = "Paragraph before\n\n```\nfirst\nsecond\n```\nparagraph after";
+
+        let (legacy_lines, legacy_ranges, _) = render_message_with_ranges_with_width_and_policy(
+            RoleKind::Assistant,
+            content,
+            &theme,
+            false, // syntax_enabled
+            None,  // terminal_width
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+        let (lines, ranges, metadata) = MarkdownRenderer::new(
+            RoleKind::Assistant,
+            content,
+            &theme,
+            MarkdownRendererConfig {
+                collect_span_metadata: false,
+                syntax_highlighting: false,
+                width: None,
+            },
+        )
+        .render();
+
+        assert_eq!(legacy_lines, lines);
+        assert_eq!(legacy_ranges, ranges);
+        assert!(
+            metadata.is_empty(),
+            "metadata should be empty when disabled"
+        );
+    }
+
+    #[test]
+    fn shared_renderer_with_metadata_matches_details_wrapper() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content:
+                "A [link](https://example.com) and a code block.\n\n```rust\nfn main() {}\n```"
+                    .into(),
+        };
+
+        let expected = render_message_markdown_details_with_policy(
+            &message,
+            &theme,
+            true,
+            Some(48),
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+        );
+
+        let (lines, ranges, metadata) = MarkdownRenderer::new(
+            RoleKind::Assistant,
+            &message.content,
+            &theme,
+            MarkdownRendererConfig {
+                collect_span_metadata: true,
+                syntax_highlighting: true,
+                width: Some(MarkdownWidthConfig {
+                    terminal_width: Some(48),
+                    table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+                }),
+            },
+        )
+        .render();
+
+        assert_eq!(expected.lines, lines);
+        assert_eq!(expected.codeblock_ranges, ranges);
+        let expected_metadata = expected
+            .span_metadata
+            .expect("details wrapper should provide metadata");
+        assert_eq!(expected_metadata, metadata);
+    }
+
+    #[test]
     fn codeblock_ranges_map_correctly() {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
@@ -1168,8 +1039,7 @@ mod tests {
 
         // Render the same message with width and ensure the lines at [start..start+len]
         // correspond to the code lines
-        let rendered =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
+        let rendered = render_markdown_for_test(&messages[0], &theme, false, width);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
         assert!(lines.len() > *start + *len);
         assert_eq!(lines[*start], "first");
@@ -1185,8 +1055,7 @@ mod tests {
                 .into(),
         };
 
-        let rendered =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(10));
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(10));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
         let combined = lines.join("\n");
 
@@ -1201,8 +1070,7 @@ mod tests {
             combined
         );
 
-        let wider =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(15));
+        let wider = render_markdown_for_test(&message, &theme, true, Some(15));
         let wider_text = wider
             .lines
             .iter()
@@ -1224,8 +1092,7 @@ mod tests {
             content: SAMPLE_HYPERTEXT_PARAGRAPH.to_string(),
         };
 
-        let rendered =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(158));
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(158));
         let combined = rendered
             .lines
             .iter()
@@ -1274,10 +1141,8 @@ mod tests {
         assert_eq!(content, "alpha\nbeta");
 
         // Build full rendering for both messages and assert selected span matches
-        let rendered0 =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
-        let rendered1 =
-            super::render_message_markdown_opts_with_width(&messages[1], &theme, false, width);
+        let rendered0 = render_markdown_for_test(&messages[0], &theme, false, width);
+        let rendered1 = render_markdown_for_test(&messages[1], &theme, false, width);
         let combined: Vec<String> = rendered0
             .lines
             .iter()
@@ -1321,7 +1186,7 @@ End of table."###
                 .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, None);
 
         // Check that we have table lines with borders
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
@@ -1360,7 +1225,7 @@ End of table."###
             .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, None);
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Extract table lines
@@ -1440,7 +1305,7 @@ End of table."###
     #[test]
     fn test_table_balancing_with_terminal_width() {
         // Manually create a table for testing
-        let mut test_table = TableState::new();
+        let mut test_table = TableRenderer::new();
 
         // Add a header row with long headers
         test_table.start_header();
@@ -1538,7 +1403,7 @@ End of table."###
         const MIN_COL_WIDTH: usize = 8;
 
         // Case 1: Ideal widths fit comfortably — must return exactly the ideals (no need to fill extra space)
-        let ts = TableState::new();
+        let ts = TableRenderer::new();
         let ideal_fit = vec![10, 10, 10];
         let term_width = 80; // plenty of space
         let out = ts.balance_column_widths(
@@ -1554,7 +1419,7 @@ End of table."###
         assert!(out.iter().sum::<usize>() <= available);
 
         // Build a table with content to exercise longest-unbreakable-word minimums
-        let mut ts2 = TableState::new();
+        let mut ts2 = TableRenderer::new();
         // Header
         ts2.start_header();
         ts2.start_cell();
@@ -1644,7 +1509,7 @@ End of table."###
     #[test]
     fn test_table_balancing_performance() {
         // Test performance with large table
-        let table_state = TableState::new();
+        let table_state = TableRenderer::new();
         let ideal_widths: Vec<usize> = (0..50).map(|i| i * 2 + 5).collect();
 
         let start = std::time::Instant::now();
@@ -1679,8 +1544,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Wide terminal - should fit everything without wrapping or truncation
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(150));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(150));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find content lines (not borders)
@@ -1735,8 +1599,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Medium terminal width - should wrap content within cells
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No ellipsis should be present
@@ -1778,7 +1641,7 @@ End of table."###
     #[test]
     fn test_logical_row_continuation() {
         // Test that empty first cells continue the previous logical row
-        let mut test_table = TableState::new();
+        let mut test_table = TableRenderer::new();
 
         // Add header
         test_table.start_header();
@@ -1909,8 +1772,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Use a modest width to force wrapping within the Benefits cell
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Collect only table content lines (skip borders/separators)
@@ -1959,7 +1821,7 @@ End of table."###
     fn cell_wraps_at_space_across_spans() {
         // Ensure wrapping prefers spaces even when they occur across styled spans
         let theme = crate::ui::theme::Theme::dark_default();
-        let ts = TableState::new();
+        let ts = TableRenderer::new();
 
         let bold = theme.md_paragraph_style().add_modifier(Modifier::BOLD);
         let spans = vec![
@@ -1989,7 +1851,7 @@ End of table."###
     fn cell_wraps_after_hyphen() {
         // Ensure hyphen is treated as a soft break opportunity
         let theme = crate::ui::theme::Theme::dark_default();
-        let ts = TableState::new();
+        let ts = TableRenderer::new();
         let style = theme.md_paragraph_style();
         let spans = vec![(Span::styled("decision-making", style), SpanKind::Text)];
 
@@ -2030,8 +1892,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Narrow terminal that requires wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(45));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(45));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Verify no truncation
@@ -2085,8 +1946,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Extremely narrow terminal (20 chars)
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(20));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(20));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Critical: NO truncation even in extreme cases
@@ -2140,8 +2000,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Medium width terminal
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(70));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(70));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No truncation of Unicode content
@@ -2184,12 +2043,7 @@ End of table."###
 
         let theme = crate::ui::theme::Theme::dark_default();
         // Force a narrower width to trigger the column balancing that causes word splits
-        let rendered = render_message_markdown_opts_with_width(
-            messages.front().unwrap(),
-            &theme,
-            true,
-            Some(80),
-        );
+        let rendered = render_markdown_for_test(messages.front().unwrap(), &theme, true, Some(80));
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Extract table content
@@ -2237,8 +2091,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Test with a medium terminal width to force wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(120));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(120));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("=== Government Systems Table Output ===");
@@ -2337,8 +2190,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Test with narrow terminal width (60 chars) to force wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("\nRendered table with width 60:");
@@ -2430,971 +2282,125 @@ End of table."###
     }
 }
 
-#[allow(clippy::items_after_test_module)]
-impl TableState {
-    fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-            current_row: Vec::new(),
-            current_cell: vec![Vec::new()],
-            in_header: false,
-        }
-    }
-
-    fn start_header(&mut self) {
-        self.in_header = true;
-    }
-
-    fn end_header(&mut self) {
-        self.in_header = false;
-        if !self.current_row.is_empty() {
-            self.rows.push(std::mem::take(&mut self.current_row));
-        }
-    }
-
-    fn start_row(&mut self) {
-        // Row already started, just continue
-    }
-
-    fn end_row(&mut self) {
-        if !self.current_row.is_empty() {
-            // Check for logical row continuation (empty first cell continuing previous row)
-            if self.should_continue_previous_row() {
-                self.merge_with_previous_row();
-            } else {
-                self.rows.push(std::mem::take(&mut self.current_row));
-            }
-        }
-    }
-
-    fn start_cell(&mut self) {
-        self.current_cell = vec![Vec::new()];
-    }
-
-    fn end_cell(&mut self) {
-        self.current_row
-            .push(std::mem::take(&mut self.current_cell));
-    }
-
-    fn add_span(&mut self, span: Span<'static>, kind: SpanKind) {
-        if self.current_cell.is_empty() {
-            self.current_cell.push(Vec::new());
-        }
-        self.current_cell.last_mut().unwrap().push((span, kind));
-    }
-
-    fn new_line_in_cell(&mut self) {
-        self.current_cell.push(Vec::new());
-    }
-
-    /// Check if current row should continue the previous logical row
-    /// This happens when the first cell is empty (indicating continuation)
-    fn should_continue_previous_row(&self) -> bool {
-        if self.rows.is_empty() || self.current_row.is_empty() {
-            return false;
-        }
-
-        // Check if first cell is empty or contains only whitespace
-        let first_cell = &self.current_row[0];
-        if first_cell.is_empty() {
-            return true;
-        }
-
-        // Check if first cell contains only empty spans or whitespace
-        first_cell.iter().all(|line| {
-            line.is_empty() || line.iter().all(|(span, _)| span.content.trim().is_empty())
-        })
-    }
-
-    /// Merge current row with the previous row for logical continuation
-    fn merge_with_previous_row(&mut self) {
-        if let Some(previous_row) = self.rows.last_mut() {
-            // For each column in the current row (except the first empty one)
-            for (col_idx, cell) in self.current_row.iter().enumerate().skip(1) {
-                if let Some(prev_cell) = previous_row.get_mut(col_idx) {
-                    // Add the content to the corresponding cell in the previous row
-                    for line in cell {
-                        prev_cell.push(line.clone());
-                    }
-                }
-            }
-        }
-        // Clear the current row since it's been merged
-        self.current_row.clear();
-    }
-
-    /// Wraps spans to a width while preserving all text and styles.
-    /// Breaks at spaces and selected punctuation across span boundaries
-    /// (hyphens, en/em dashes, slash). If no break point exists, splits
-    /// by character as a last resort.
-    fn wrap_spans_to_width(
-        &self,
-        spans: &[(Span<'static>, SpanKind)],
-        max_width: usize,
-        _table_policy: crate::ui::layout::TableOverflowPolicy,
-    ) -> Vec<Vec<(Span<'static>, SpanKind)>> {
-        if spans.is_empty() {
-            return vec![Vec::new()];
-        }
-
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum TokKind {
-            Space,
-            BreakChar, // '-', '–', '—', '/'
-            Word,
-        }
-
-        #[derive(Clone)]
-        struct Tok {
-            text: String,
-            style: Style,
-            kind: TokKind,
-            width: usize,
-            span_kind: SpanKind,
-        }
-
-        fn ch_width(ch: char) -> usize {
-            UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]))
-        }
-
-        fn str_width(s: &str) -> usize {
-            UnicodeWidthStr::width(s)
-        }
-
-        fn is_break_char(ch: char) -> bool {
-            // ASCII hyphen, Unicode hyphen (U+2010), en dash, em dash, slash
-            matches!(ch, '-' | '‐' | '–' | '—' | '/')
-        }
-
-        // Tokenize a span into Space / BreakChar / Word tokens preserving style
-        fn tokenize(text: &str, style: Style, span_kind: SpanKind) -> Vec<Tok> {
-            let mut toks: Vec<Tok> = Vec::new();
-            let mut buf = String::new();
-            let mut mode: Option<TokKind> = None;
-            for ch in text.chars() {
-                let kind = if ch.is_whitespace() {
-                    TokKind::Space
-                } else if is_break_char(ch) {
-                    TokKind::BreakChar
-                } else {
-                    TokKind::Word
-                };
-                match (mode, kind) {
-                    (Some(TokKind::Space), TokKind::Space) => buf.push(ch),
-                    (Some(TokKind::Word), TokKind::Word) => buf.push(ch),
-                    // Any change (including BreakChar which are single-char tokens)
-                    (Some(prev), k) if prev != k => {
-                        if !buf.is_empty() {
-                            let w = str_width(&buf);
-                            toks.push(Tok {
-                                text: std::mem::take(&mut buf),
-                                style,
-                                kind: prev,
-                                width: w,
-                                span_kind: span_kind.clone(),
-                            });
-                        }
-                        if k == TokKind::BreakChar {
-                            let s = ch.to_string();
-                            toks.push(Tok {
-                                width: ch_width(ch),
-                                text: s,
-                                style,
-                                kind: TokKind::BreakChar,
-                                span_kind: span_kind.clone(),
-                            });
-                            mode = None;
-                        } else {
-                            buf.push(ch);
-                            mode = Some(k);
-                        }
-                    }
-                    (None, TokKind::BreakChar) => {
-                        let s = ch.to_string();
-                        toks.push(Tok {
-                            width: ch_width(ch),
-                            text: s,
-                            style,
-                            kind: TokKind::BreakChar,
-                            span_kind: span_kind.clone(),
-                        });
-                        mode = None;
-                    }
-                    (None, k) => {
-                        buf.push(ch);
-                        mode = Some(k);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            if !buf.is_empty() {
-                let k = mode.unwrap_or(TokKind::Word);
-                let w = str_width(&buf);
-                toks.push(Tok {
-                    text: buf,
-                    style,
-                    kind: k,
-                    width: w,
-                    span_kind: span_kind.clone(),
-                });
-            }
-            toks
-        }
-
-        // Prepare token stream
-        let mut all_toks: Vec<Tok> = Vec::new();
-        for (span, span_kind) in spans {
-            // Fast path for empty
-            if span.content.is_empty() {
-                continue;
-            }
-            let mut toks = tokenize(span.content.as_ref(), span.style, span_kind.clone());
-            all_toks.append(&mut toks);
-        }
-
-        if all_toks.is_empty() {
-            return vec![Vec::new()];
-        }
-
-        // Wrap using greedy algorithm with last-break tracking across tokens
-        let mut out_lines: Vec<Vec<(Span<'static>, SpanKind)>> = Vec::new();
-        let mut cur: Vec<Tok> = Vec::new();
-        let mut cur_width: usize = 0;
-        let mut last_break_idx: Option<usize> = None; // boundary AFTER this token index
-
-        let mut i = 0usize;
-        while i < all_toks.len() {
-            let tok = all_toks[i].clone();
-            let w = tok.width;
-
-            let fits = cur_width + w <= max_width;
-            if fits {
-                // Add token
-                if matches!(tok.kind, TokKind::Space) {
-                    // Collapse multiple leading spaces on empty line (do not count as width)
-                    if cur.is_empty() {
-                        // Skip leading spaces at line start
-                        i += 1;
-                        continue;
-                    }
-                }
-                cur_width += w;
-                if matches!(tok.kind, TokKind::Space | TokKind::BreakChar) {
-                    last_break_idx = Some(cur.len() + 1); // after this token
-                }
-                cur.push(tok);
-                i += 1;
-                continue;
-            }
-
-            // Overflow handling
-            if let Some(br) = last_break_idx {
-                // Build line up to break (trim trailing spaces)
-                let mut left = cur[..br.min(cur.len())].to_vec();
-                while left
-                    .last()
-                    .map(|t| t.kind == TokKind::Space)
-                    .unwrap_or(false)
-                {
-                    let last = left.pop().unwrap();
-                    cur_width = cur_width.saturating_sub(last.width);
-                }
-
-                // Emit left
-                if left.is_empty() {
-                    // Nothing meaningful to emit, force split below
-                } else {
-                    let spans_line: Vec<(Span<'static>, SpanKind)> = left
-                        .into_iter()
-                        .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                        .collect();
-                    out_lines.push(spans_line);
-                }
-
-                // Start new line with remainder tokens in cur after break plus current tok
-                let mut right: Vec<Tok> = cur[br.min(cur.len())..].to_vec();
-                // Drop leading spaces on the new line
-                while right
-                    .first()
-                    .map(|t| t.kind == TokKind::Space)
-                    .unwrap_or(false)
-                {
-                    let first = right.remove(0);
-                    let _ = first;
-                }
-                // Reset state
-                cur = right;
-                cur_width = cur.iter().map(|t| t.width).sum();
-                last_break_idx = None;
-                // Retry current token on the fresh line without advancing i
-                continue;
-            }
-
-            // No recorded break op
-            // If the overflowing token is whitespace, flush current line (if any) and drop it
-            if matches!(tok.kind, TokKind::Space) {
-                if !cur.is_empty() {
-                    let line_spans: Vec<(Span<'static>, SpanKind)> = cur
-                        .drain(..)
-                        .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                        .collect();
-                    out_lines.push(line_spans);
-                }
-                cur_width = 0;
-                last_break_idx = None;
-                i += 1; // skip the space
-                continue;
-            }
-
-            // No recorded break op: forced split of current non-space token
-            // Find how many chars of tok.text fit into remaining space
-            let mut acc = 0usize;
-            let mut cut = 0usize; // byte index
-            for (pos, ch) in tok.text.char_indices() {
-                let cw = ch_width(ch);
-                if cur_width + acc + cw > max_width {
-                    break;
-                }
-                acc += cw;
-                cut = pos + ch.len_utf8();
-            }
-
-            if cut == 0 {
-                // Nothing fits on this line, flush current (if any). If token is space, drop it.
-                if !cur.is_empty() {
-                    let line_spans: Vec<(Span<'static>, SpanKind)> = cur
-                        .drain(..)
-                        .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                        .collect();
-                    out_lines.push(line_spans);
-                }
-                cur_width = 0;
-                last_break_idx = None;
-                if matches!(tok.kind, TokKind::Space) {
-                    i += 1; // drop space
-                    continue;
-                }
-                // Now on empty line, try to split token to width
-                let mut acc2 = 0usize;
-                let mut cut2 = 0usize;
-                for (pos, ch) in tok.text.char_indices() {
-                    let cw = ch_width(ch);
-                    if acc2 + cw > max_width {
-                        break;
-                    }
-                    acc2 += cw;
-                    cut2 = pos + ch.len_utf8();
-                }
-                if cut2 == 0 {
-                    // Degenerate case (max_width == 0), avoid infinite loop
-                    // Place token as-is to move forward
-                    cur_width = tok.width;
-                    cur.push(tok);
-                    i += 1;
-                } else {
-                    let left_text = tok.text[..cut2].to_string();
-                    let right_text = tok.text[cut2..].to_string();
-                    let left_tok = Tok {
-                        width: str_width(&left_text),
-                        text: left_text,
-                        style: tok.style,
-                        kind: TokKind::Word,
-                        span_kind: tok.span_kind.clone(),
-                    };
-                    let right_tok = Tok {
-                        width: str_width(&right_text),
-                        text: right_text,
-                        style: tok.style,
-                        kind: TokKind::Word,
-                        span_kind: tok.span_kind.clone(),
-                    };
-                    cur.push(left_tok);
-                    // Emit line immediately
-                    let line_spans: Vec<(Span<'static>, SpanKind)> = cur
-                        .drain(..)
-                        .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                        .collect();
-                    out_lines.push(line_spans);
-                    cur_width = 0;
-                    last_break_idx = None;
-                    // Place remainder for next iteration by replacing current token with right_tok
-                    all_toks[i] = right_tok;
-                }
-            } else {
-                // Split current token into left (fits) and right (remaining)
-                let left_text = tok.text[..cut].to_string();
-                let right_text = tok.text[cut..].to_string();
-                let left_tok = Tok {
-                    width: str_width(&left_text),
-                    text: left_text,
-                    style: tok.style,
-                    kind: TokKind::Word,
-                    span_kind: tok.span_kind.clone(),
-                };
-                let right_tok = Tok {
-                    width: str_width(&right_text),
-                    text: right_text,
-                    style: tok.style,
-                    kind: TokKind::Word,
-                    span_kind: tok.span_kind.clone(),
-                };
-                cur.push(left_tok);
-                // Emit line
-                let line_spans: Vec<(Span<'static>, SpanKind)> = cur
-                    .drain(..)
-                    .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                    .collect();
-                out_lines.push(line_spans);
-                cur_width = 0;
-                last_break_idx = None;
-                // Replace current token with remainder and retry without advancing i
-                all_toks[i] = right_tok;
-            }
-        }
-
-        // Flush last line (trim trailing spaces)
-        while cur
-            .last()
-            .map(|t| t.kind == TokKind::Space)
-            .unwrap_or(false)
-        {
-            let last = cur.pop().unwrap();
-            cur_width = cur_width.saturating_sub(last.width);
-        }
-        if !cur.is_empty() {
-            out_lines.push(
-                cur.into_iter()
-                    .map(|t| (Span::styled(t.text, t.style), t.span_kind))
-                    .collect(),
-            );
-        }
-
-        if out_lines.is_empty() {
-            vec![Vec::new()]
-        } else {
-            out_lines
-        }
-    }
-
-    // Backward-compatible wrapper uses default WrapCells policy
-    #[cfg(test)]
-    fn render_table_with_width(
-        &self,
-        theme: &Theme,
-        terminal_width: Option<usize>,
-    ) -> Vec<TableLine> {
-        self.render_table_with_width_policy(
-            theme,
-            terminal_width,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        )
-    }
-
-    fn render_table_with_width_policy(
-        &self,
-        theme: &Theme,
-        terminal_width: Option<usize>,
-        table_policy: crate::ui::layout::TableOverflowPolicy,
-    ) -> Vec<TableLine> {
-        if self.rows.is_empty() {
-            return Vec::new();
-        }
-
-        let mut lines: Vec<TableLine> = Vec::new();
-        let max_cols = self.rows.iter().map(|row| row.len()).max().unwrap_or(0);
-
-        if max_cols == 0 {
-            return lines;
-        }
-
-        // Calculate ideal column widths based on text content of spans
-        // Also check for unbreakable words that should force expansion
-        let mut ideal_col_widths = vec![0; max_cols];
-        for row in &self.rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < ideal_col_widths.len() {
-                    for line in cell {
-                        let cell_text_width = line
-                            .iter()
-                            .map(|(span, _)| UnicodeWidthStr::width(span.content.as_ref()))
-                            .sum::<usize>();
-                        ideal_col_widths[i] = ideal_col_widths[i].max(cell_text_width);
-
-                        // Check for unbreakable words that should force expansion
-                        for (span, _) in line {
-                            let words = span.content.split_whitespace();
-                            for word in words {
-                                let word_width = UnicodeWidthStr::width(word);
-                                if word_width <= 30 && word_width > ideal_col_widths[i] {
-                                    ideal_col_widths[i] = word_width;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Apply intelligent column width balancing
-        let col_widths =
-            self.balance_column_widths(&ideal_col_widths, terminal_width, table_policy);
-
-        // Pre-process rows to wrap cell content instead of truncating
-        let wrapped_rows = self.wrap_rows_for_rendering(&col_widths, table_policy);
-
-        let table_style = theme.md_paragraph_style();
-
-        // Render header if we have rows
-        if !wrapped_rows.is_empty() {
-            // Top border
-            let top_border = self.create_border_line(&col_widths, "┌", "┬", "┐", "─");
-            let top_line = Line::from(Span::styled(top_border, table_style));
-            let meta = vec![SpanKind::Text; top_line.spans.len()];
-            lines.push((top_line, meta));
-
-            // Header row
-            let header_row = &wrapped_rows[0];
-            let max_lines_in_header = header_row.iter().map(|cell| cell.len()).max().unwrap_or(1);
-            for line_idx in 0..max_lines_in_header {
-                let header_line = self.create_content_line_with_spans(
-                    header_row,
-                    &col_widths,
-                    line_idx,
-                    table_style,
-                );
-                lines.push(header_line);
-            }
-
-            // Header separator
-            let header_sep = self.create_border_line(&col_widths, "├", "┼", "┤", "─");
-            let sep_line = Line::from(Span::styled(header_sep, table_style));
-            let meta = vec![SpanKind::Text; sep_line.spans.len()];
-            lines.push((sep_line, meta));
-
-            // Data rows
-            for row in &wrapped_rows[1..] {
-                let max_lines_in_row = row.iter().map(|cell| cell.len()).max().unwrap_or(1);
-                for line_idx in 0..max_lines_in_row {
-                    let content_line = self.create_content_line_with_spans(
-                        row,
-                        &col_widths,
-                        line_idx,
-                        table_style,
-                    );
-                    lines.push(content_line);
-                }
-            }
-
-            // Bottom border
-            let bottom_border = self.create_border_line(&col_widths, "└", "┴", "┘", "─");
-            let bottom_line = Line::from(Span::styled(bottom_border, table_style));
-            let meta = vec![SpanKind::Text; bottom_line.spans.len()];
-            lines.push((bottom_line, meta));
-        }
-
-        lines
-    }
-
-    /// Wrap all rows for rendering, applying cell wrapping to fit column widths
-    fn wrap_rows_for_rendering(
-        &self,
-        col_widths: &[usize],
-        table_policy: crate::ui::layout::TableOverflowPolicy,
-    ) -> Vec<Vec<TableCell>> {
-        self.rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .enumerate()
-                    .map(|(col_idx, cell)| {
-                        let col_width = col_widths.get(col_idx).copied().unwrap_or(20);
-
-                        // For each line in the cell, wrap it individually
-                        let mut wrapped_cell: TableCell = Vec::new();
-                        for line in cell {
-                            let wrapped_lines =
-                                self.wrap_spans_to_width(line, col_width, table_policy);
-                            wrapped_cell.extend(wrapped_lines);
-                        }
-
-                        if wrapped_cell.is_empty() {
-                            vec![Vec::new()]
-                        } else {
-                            wrapped_cell
-                        }
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn create_border_line(
-        &self,
-        col_widths: &[usize],
-        left: &str,
-        mid: &str,
-        right: &str,
-        fill: &str,
-    ) -> String {
-        let mut line = String::new();
-        line.push_str(left);
-        for (i, &width) in col_widths.iter().enumerate() {
-            line.push_str(&fill.repeat(width + 2)); // +2 for padding
-            if i < col_widths.len() - 1 {
-                line.push_str(mid);
-            }
-        }
-        line.push_str(right);
-        line
-    }
-
-    fn create_content_line_with_spans(
-        &self,
-        row: &[Vec<Vec<(Span<'static>, SpanKind)>>],
-        col_widths: &[usize],
-        line_idx: usize,
-        style: Style,
-    ) -> (Line<'static>, Vec<SpanKind>) {
-        let mut spans = Vec::new();
-        let mut kinds = Vec::new();
-
-        // Left border
-        spans.push(Span::styled("│", style));
-        kinds.push(SpanKind::Text);
-
-        for (i, width) in col_widths.iter().enumerate() {
-            // Left padding
-            spans.push(Span::raw(" "));
-            kinds.push(SpanKind::Text);
-
-            let cell_spans = row
-                .get(i)
-                .and_then(|cell| cell.get(line_idx))
-                .cloned()
-                .unwrap_or_default();
-            let mut cell_text_len: usize = cell_spans
-                .iter()
-                .map(|(span, _)| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum();
-            let mut rendered_cell = cell_spans;
-
-            if cell_text_len > *width {
-                let mut clipped: Vec<(Span<'static>, SpanKind)> = Vec::new();
-                let mut used = 0usize;
-                for (span, kind) in rendered_cell.into_iter() {
-                    let span_width = UnicodeWidthStr::width(span.content.as_ref());
-                    if used + span_width <= *width {
-                        used += span_width;
-                        clipped.push((span, kind));
-                    } else if used < *width {
-                        let remaining = *width - used;
-                        let clipped_text =
-                            self.clip_text_to_width(span.content.as_ref(), remaining);
-                        if !clipped_text.is_empty() {
-                            clipped.push((Span::styled(clipped_text, span.style), kind));
-                            used += remaining;
-                        }
-                        break;
-                    } else {
-                        break;
-                    }
-                }
-                rendered_cell = clipped;
-                cell_text_len = used;
-            }
-
-            if cell_text_len < *width {
-                rendered_cell.push((Span::raw(" ".repeat(width - cell_text_len)), SpanKind::Text));
-            }
-
-            for (span, kind) in rendered_cell.into_iter() {
-                spans.push(span);
-                kinds.push(kind);
-            }
-
-            // Right padding and border
-            spans.push(Span::raw(" "));
-            kinds.push(SpanKind::Text);
-            spans.push(Span::styled("│", style));
-            kinds.push(SpanKind::Text);
-        }
-
-        (Line::from(spans), kinds)
-    }
-
-    /// Balance column widths intelligently with content preservation priority
-    fn balance_column_widths(
-        &self,
-        ideal_widths: &[usize],
-        terminal_width: Option<usize>,
-        _table_policy: crate::ui::layout::TableOverflowPolicy,
-    ) -> Vec<usize> {
-        if ideal_widths.is_empty() {
-            return Vec::new();
-        }
-
-        let num_cols = ideal_widths.len();
-
-        // Set minimum width per column (increased for better wrapping)
-        const MIN_COL_WIDTH: usize = 8;
-
-        // Ensure minimum widths based on ideal widths (which already account for unbreakable words)
-        let col_widths: Vec<usize> = ideal_widths.iter().map(|&w| w.max(MIN_COL_WIDTH)).collect();
-
-        // If no terminal width is provided, use ideal widths
-        let Some(term_width) = terminal_width else {
-            return col_widths;
-        };
-
-        // Calculate table overhead: borders + padding
-        // Each column has left padding (1) + right padding (1) = 2
-        // Plus borders: left border (1) + right borders per column (1) = num_cols + 1
-        let table_overhead = num_cols * 2 + (num_cols + 1);
-
-        if term_width <= table_overhead {
-            // Terminal is too narrow, but still preserve minimum widths for content
-            return vec![MIN_COL_WIDTH; num_cols];
-        }
-
-        let available_width = term_width - table_overhead;
-        // If all ideal widths fit, use them (but ensure minimums based on words and column policy)
-        let total_ideal_width: usize = ideal_widths.iter().sum();
-        if total_ideal_width <= available_width {
-            let mut widths: Vec<usize> = ideal_widths.to_vec();
-            // Enforce MIN_COL_WIDTH and longest-unbreakable-word minimums below after computing min_word_widths
-            // but here we can early exit once we have min_word_widths:
-            // (we compute min_word_widths immediately to clamp widths)
-            // Calculate minimum widths for each column based on longest unbreakable word
-            let mut min_word_widths = vec![MIN_COL_WIDTH; num_cols];
-            for row in &self.rows {
-                for (i, cell) in row.iter().enumerate() {
-                    if i < min_word_widths.len() {
-                        for line in cell {
-                            for (span, _) in line {
-                                for word in span.content.split_whitespace() {
-                                    let ww = UnicodeWidthStr::width(word);
-                                    if ww <= 30 && min_word_widths[i] < ww {
-                                        min_word_widths[i] = ww;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            for i in 0..widths.len() {
-                if widths[i] < MIN_COL_WIDTH {
-                    widths[i] = MIN_COL_WIDTH;
-                }
-                if widths[i] < min_word_widths[i] {
-                    widths[i] = min_word_widths[i];
-                }
-            }
-            return widths;
-        }
-
-        // Calculate minimum widths for each column based on longest unbreakable word
-        let mut min_word_widths = vec![MIN_COL_WIDTH; num_cols];
-        for row in &self.rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < min_word_widths.len() {
-                    for line in cell {
-                        for (span, _) in line {
-                            // Find the longest word in this span
-                            let words = span.content.split_whitespace();
-                            for word in words {
-                                let word_width = UnicodeWidthStr::width(word);
-                                // Only consider words that are reasonable length (not URLs, etc.)
-                                if word_width <= 30 {
-                                    min_word_widths[i] = min_word_widths[i].max(word_width);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Start from the hard minimums
-        let mut base_widths = min_word_widths.clone();
-        // Ensure minimum column width
-        for w in &mut base_widths {
-            if *w < MIN_COL_WIDTH {
-                *w = MIN_COL_WIDTH;
-            }
-        }
-
-        let total_min_width: usize = base_widths.iter().sum();
-
-        // If even the sum of minimum widths exceeds available space, avoid mid-word breaks by
-        // accepting horizontal overflow (borders intact). We return min_word_widths which ensures
-        // each column can hold its longest unbreakable word.
-        if total_min_width > available_width {
-            return min_word_widths;
-        }
-
-        // We have extra space: distribute to columns proportionally toward their ideal widths,
-        // but do not exceed ideal widths (and do not force 100% fill).
-        let extra_space = available_width - total_min_width;
-        let desired_gains: Vec<usize> = ideal_widths
-            .iter()
-            .zip(&base_widths)
-            .map(|(&ideal, &base)| ideal.saturating_sub(base))
-            .collect();
-        let total_desired: usize = desired_gains.iter().sum();
-        let mut final_widths = base_widths.clone();
-        if total_desired == 0 {
-            return final_widths;
-        }
-        let mut allocated = 0usize;
-        for i in 0..final_widths.len() {
-            let prop = desired_gains[i] as f64 / total_desired as f64;
-            let mut add = (extra_space as f64 * prop).floor() as usize;
-            // Cap at ideal width
-            let cap = ideal_widths[i].saturating_sub(final_widths[i]);
-            if add > cap {
-                add = cap;
-            }
-            final_widths[i] += add;
-            allocated += add;
-        }
-        // Assign any remainder, left to right where desire remains, respecting caps
-        let mut rem = extra_space.saturating_sub(allocated);
-        if rem > 0 {
-            for i in 0..final_widths.len() {
-                if rem == 0 {
-                    break;
-                }
-                let cap = ideal_widths[i].saturating_sub(final_widths[i]);
-                if cap > 0 {
-                    final_widths[i] += 1;
-                    rem -= 1;
-                }
-            }
-        }
-        final_widths
-    }
-
-    /// Emergency helper to clip text to width (used as safety net)
-    fn clip_text_to_width(&self, text: &str, max_width: usize) -> String {
-        let mut result = String::new();
-        let mut current_width = 0;
-
-        for ch in text.chars() {
-            let char_width = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-            if current_width + char_width > max_width {
-                break;
-            }
-            result.push(ch);
-            current_width += char_width;
-        }
-
-        result
-    }
-}
-
-/// Test-only helper: choose the base text style for a message role.
-/// Used by the simplified unit-test renderer to avoid depending on
-/// broader rendering context.
-#[cfg(test)]
-fn base_text_style_bool(is_user: bool, theme: &Theme) -> Style {
-    if is_user {
-        theme.user_text_style
-    } else {
-        theme.md_paragraph_style()
-    }
-}
-
-#[cfg(test)]
-fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Span<'static>>) {
-    if !current_spans.is_empty() {
-        lines.push(Line::from(std::mem::take(current_spans)));
-    }
-}
-
 const USER_CONTINUATION_INDENT: &str = "     ";
 
-fn push_span_to_buffers(
-    current_spans: &mut Vec<Span<'static>>,
-    current_span_kinds: &mut Vec<SpanKind>,
-    span: Span<'static>,
-    kind: SpanKind,
-) {
-    current_spans.push(span);
-    current_span_kinds.push(kind);
+fn language_hint_from_codeblock_kind(kind: CodeBlockKind) -> String {
+    match kind {
+        CodeBlockKind::Fenced(lang) => lang.to_string(),
+        _ => String::new(),
+    }
 }
 
-fn push_line_with_kinds(
+fn push_codeblock_text(code_block_lines: &mut Vec<String>, text: &str) {
+    for l in text.lines() {
+        code_block_lines.push(detab(l));
+    }
+}
+
+fn plain_codeblock_lines(code_block_lines: &[String], theme: &Theme) -> Vec<Line<'static>> {
+    let mut style = theme.md_codeblock_text_style();
+    if let Some(bg) = theme.md_codeblock_bg_color() {
+        style = style.bg(bg);
+    }
+    code_block_lines
+        .iter()
+        .map(|line| Line::from(vec![Span::styled(line.clone(), style)]))
+        .collect()
+}
+
+fn flush_code_block_buffer(
+    code_block_lines: &mut Vec<String>,
+    syntax_enabled: bool,
+    language_hint: Option<&str>,
+    theme: &Theme,
     lines: &mut Vec<Line<'static>>,
-    metadata: &mut Vec<Vec<SpanKind>>,
-    spans: Vec<Span<'static>>,
-    kinds: Vec<SpanKind>,
+    span_metadata: Option<&mut Vec<Vec<SpanKind>>>,
+    ranges: &mut Vec<(usize, usize, String)>,
 ) {
-    debug_assert_eq!(spans.len(), kinds.len());
-    lines.push(Line::from(spans));
-    metadata.push(kinds);
-}
-
-fn push_empty_line(lines: &mut Vec<Line<'static>>, metadata: &mut Vec<Vec<SpanKind>>) {
-    push_line_with_kinds(lines, metadata, Vec::new(), Vec::new());
-}
-
-fn push_line_with_text_kind(
-    lines: &mut Vec<Line<'static>>,
-    metadata: &mut Vec<Vec<SpanKind>>,
-    line: Line<'static>,
-) {
-    metadata.push(vec![SpanKind::Text; line.spans.len()]);
-    lines.push(line);
-}
-
-fn push_spans_with_optional_wrap(
-    lines: &mut Vec<Line<'static>>,
-    metadata: &mut Vec<Vec<SpanKind>>,
-    current_spans: &mut Vec<Span<'static>>,
-    current_span_kinds: &mut Vec<SpanKind>,
-    role: RoleKind,
-    terminal_width: Option<usize>,
-    indent_user_wraps: bool,
-) {
-    if current_spans.is_empty() {
+    if code_block_lines.is_empty() {
         return;
     }
 
-    if let Some(width) = terminal_width {
-        let zipped: Vec<(Span<'static>, SpanKind)> = current_spans
-            .iter()
-            .cloned()
-            .zip(current_span_kinds.iter().cloned())
-            .collect();
-        let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
-        let indent_wrapped_user_lines = indent_user_wraps && role == RoleKind::User;
-        for (idx, segs) in wrapped.into_iter().enumerate() {
-            let (mut spans_only, mut kinds_only): (Vec<_>, Vec<_>) = segs.into_iter().unzip();
-            if idx == 0 || !indent_wrapped_user_lines {
-                push_line_with_kinds(lines, metadata, spans_only, kinds_only);
-            } else {
-                let mut spans_with_indent = Vec::with_capacity(spans_only.len() + 1);
-                let mut kinds_with_indent = Vec::with_capacity(kinds_only.len() + 1);
-                spans_with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
-                kinds_with_indent.push(SpanKind::Text);
-                spans_with_indent.append(&mut spans_only);
-                kinds_with_indent.append(&mut kinds_only);
-                push_line_with_kinds(lines, metadata, spans_with_indent, kinds_with_indent);
-            }
-        }
-        current_spans.clear();
-        current_span_kinds.clear();
+    let start = lines.len();
+    let joined = code_block_lines.join("\n");
+    let produced_lines = if syntax_enabled {
+        crate::utils::syntax::highlight_code_block(language_hint.unwrap_or(""), &joined, theme)
+            .unwrap_or_else(|| plain_codeblock_lines(code_block_lines, theme))
     } else {
-        let spans = std::mem::take(current_spans);
-        let kinds = std::mem::take(current_span_kinds);
-        push_line_with_kinds(lines, metadata, spans, kinds);
+        plain_codeblock_lines(code_block_lines, theme)
+    };
+
+    if let Some(metadata) = span_metadata {
+        for line in produced_lines {
+            metadata.push(vec![SpanKind::Text; line.spans.len()]);
+            lines.push(line);
+        }
+    } else {
+        lines.extend(produced_lines);
     }
+
+    let end = lines.len();
+    if end > start {
+        ranges.push((start, end - start, joined));
+    }
+
+    code_block_lines.clear();
 }
 
 fn detab(s: &str) -> String {
     // Simple, predictable detab: replace tabs with 4 spaces
     s.replace('\t', "    ")
+}
+
+fn render_plain_message(
+    role: RoleKind,
+    content: &str,
+    theme: &Theme,
+    collect_span_metadata: bool,
+) -> RenderedLinesWithMetadata {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut metadata: Vec<Vec<SpanKind>> = Vec::new();
+
+    match role {
+        RoleKind::User => {
+            for (idx, line) in content.lines().enumerate() {
+                let mut spans = Vec::new();
+                let mut kinds = Vec::new();
+                if idx == 0 {
+                    spans.push(Span::styled("You: ", theme.user_prefix_style));
+                    kinds.push(SpanKind::UserPrefix);
+                } else {
+                    spans.push(Span::raw(USER_CONTINUATION_INDENT));
+                    kinds.push(SpanKind::Text);
+                }
+                spans.push(Span::styled(detab(line), theme.user_text_style));
+                kinds.push(SpanKind::Text);
+                if collect_span_metadata {
+                    metadata.push(kinds);
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        RoleKind::Assistant => {
+            let style = base_text_style(role, theme);
+            for line in content.lines() {
+                let span = Span::styled(detab(line), style);
+                if collect_span_metadata {
+                    metadata.push(vec![SpanKind::Text]);
+                }
+                lines.push(Line::from(span));
+            }
+        }
+    }
+
+    if !content.is_empty() {
+        if collect_span_metadata {
+            metadata.push(vec![SpanKind::Text]);
+        }
+        lines.push(Line::from(""));
+    }
+
+    (lines, Vec::new(), metadata)
 }
 
 /// Build display lines for all messages using markdown rendering
@@ -3405,7 +2411,8 @@ pub fn build_markdown_display_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for msg in messages {
-        let rendered = render_message_markdown_opts_with_width(msg, theme, true, None);
+        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::markdown(true))
+            .into_rendered();
         lines.extend(rendered.lines);
     }
     lines
@@ -3419,58 +2426,10 @@ pub fn build_plain_display_lines_with_spans(
     let mut spans = Vec::with_capacity(messages.len());
     for msg in messages {
         let start = lines.len();
-        match msg.role.as_str() {
-            "system" => {
-                let (rendered_lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                    RoleKind::Assistant,
-                    &msg.content,
-                    theme,
-                    true, // syntax_enabled
-                    None, // terminal_width
-                    crate::ui::layout::TableOverflowPolicy::WrapCells,
-                );
-                let len = rendered_lines.len();
-                lines.extend(rendered_lines);
-                spans.push(MessageLineSpan { start, len });
-            }
-            "user" => {
-                for (i, line) in msg.content.lines().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled("You: ", theme.user_prefix_style),
-                            Span::styled(detab(line), theme.user_text_style),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("     "),
-                            Span::styled(detab(line), theme.user_text_style),
-                        ]));
-                    }
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
-                spans.push(MessageLineSpan {
-                    start,
-                    len: lines.len().saturating_sub(start),
-                });
-            }
-            _ => {
-                for line in msg.content.lines() {
-                    lines.push(Line::from(Span::styled(
-                        detab(line),
-                        theme.md_paragraph_style(),
-                    )));
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
-                spans.push(MessageLineSpan {
-                    start,
-                    len: lines.len().saturating_sub(start),
-                });
-            }
-        }
+        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::plain());
+        let len = rendered.lines.len();
+        lines.extend(rendered.lines);
+        spans.push(MessageLineSpan { start, len });
     }
     (lines, spans)
 }

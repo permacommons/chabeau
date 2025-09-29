@@ -536,12 +536,12 @@ impl ScrollCalculator {
                 break;
             }
             let rendered = if markdown_enabled {
-                crate::ui::markdown::render_message_markdown_opts_with_width(
-                    msg,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                )
+                let cfg = crate::ui::markdown::MessageRenderConfig::markdown(syntax_enabled)
+                    .with_terminal_width(
+                        terminal_width,
+                        crate::ui::layout::TableOverflowPolicy::WrapCells,
+                    );
+                crate::ui::markdown::render_message_with_config(msg, theme, cfg).into_rendered()
             } else {
                 // Route plain text through the layout engine to apply width-aware wrapping
                 let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
@@ -1182,13 +1182,12 @@ mod tests {
         let scroll_line_count = display_lines.len();
 
         // Now render using markdown with the same terminal width
-        use crate::ui::markdown::render_message_markdown_opts_with_width;
-        let rendered = render_message_markdown_opts_with_width(
-            &messages[0],
-            &theme,
-            true,
+        let cfg = crate::ui::markdown::MessageRenderConfig::markdown(true).with_terminal_width(
             Some(terminal_width as usize),
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
         );
+        let rendered = crate::ui::markdown::render_message_with_config(&messages[0], &theme, cfg)
+            .into_rendered();
         let rendered_line_count = rendered.lines.len();
 
         // Key assertion: line counts should match since both use the same width constraint

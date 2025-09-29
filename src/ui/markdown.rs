@@ -45,24 +45,6 @@ impl RenderedMessageDetails {
     }
 }
 
-/// Render markdown with options to enable/disable syntax highlighting and terminal width for table balancing.
-pub fn render_message_markdown_opts_with_width(
-    msg: &Message,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-) -> RenderedMessage {
-    // Backward-compatible wrapper that uses the default table policy (WrapCells)
-    render_message_markdown_details_with_policy(
-        msg,
-        theme,
-        syntax_enabled,
-        terminal_width,
-        crate::ui::layout::TableOverflowPolicy::WrapCells,
-    )
-    .into_rendered()
-}
-
 pub fn render_message_markdown_details_with_policy(
     msg: &Message,
     theme: &Theme,
@@ -70,54 +52,10 @@ pub fn render_message_markdown_details_with_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessageDetails {
-    match msg.role.as_str() {
-        "system" => {
-            // Render system messages with markdown
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant, // Use assistant styling for system messages
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-        "user" => {
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::User,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-        _ => {
-            let (lines, ranges, metadata) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-            );
-            RenderedMessageDetails {
-                lines,
-                codeblock_ranges: ranges,
-                span_metadata: Some(metadata),
-            }
-        }
-    }
+    let cfg = MessageRenderConfig::markdown(syntax_enabled)
+        .with_span_metadata()
+        .with_terminal_width(terminal_width, policy);
+    render_message_with_config(msg, theme, cfg)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,10 +64,67 @@ pub enum RoleKind {
     Assistant,
 }
 
+impl RoleKind {
+    fn from_role(role: &str) -> Self {
+        if role == "user" {
+            RoleKind::User
+        } else {
+            RoleKind::Assistant
+        }
+    }
+}
+
 fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
     match role {
         RoleKind::User => theme.user_text_style,
         RoleKind::Assistant => theme.md_paragraph_style(),
+    }
+}
+
+/// Configuration for the higher level message renderer abstraction.
+#[derive(Clone, Copy, Debug)]
+pub struct MessageRenderConfig {
+    pub markdown: bool,
+    pub collect_span_metadata: bool,
+    pub syntax_highlighting: bool,
+    pub terminal_width: Option<usize>,
+    pub table_policy: crate::ui::layout::TableOverflowPolicy,
+}
+
+impl MessageRenderConfig {
+    pub fn markdown(syntax_highlighting: bool) -> Self {
+        Self {
+            markdown: true,
+            collect_span_metadata: false,
+            syntax_highlighting,
+            terminal_width: None,
+            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+        }
+    }
+
+    pub fn plain() -> Self {
+        Self {
+            markdown: false,
+            collect_span_metadata: false,
+            syntax_highlighting: false,
+            terminal_width: None,
+            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+        }
+    }
+
+    pub fn with_span_metadata(mut self) -> Self {
+        self.collect_span_metadata = true;
+        self
+    }
+
+    pub fn with_terminal_width(
+        mut self,
+        width: Option<usize>,
+        policy: crate::ui::layout::TableOverflowPolicy,
+    ) -> Self {
+        self.terminal_width = width;
+        self.table_policy = policy;
+        self
     }
 }
 
@@ -146,6 +141,36 @@ struct MarkdownRendererConfig {
 struct MarkdownWidthConfig {
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
+}
+
+pub fn render_message_with_config(
+    msg: &Message,
+    theme: &Theme,
+    config: MessageRenderConfig,
+) -> RenderedMessageDetails {
+    let role = RoleKind::from_role(&msg.role);
+    let (lines, ranges, metadata) = if config.markdown {
+        let renderer_config = MarkdownRendererConfig {
+            collect_span_metadata: config.collect_span_metadata,
+            syntax_highlighting: config.syntax_highlighting,
+            width: Some(MarkdownWidthConfig {
+                terminal_width: config.terminal_width,
+                table_policy: config.table_policy,
+            }),
+        };
+        MarkdownRenderer::new(role, &msg.content, theme, renderer_config).render()
+    } else {
+        render_plain_message(role, &msg.content, theme, config.collect_span_metadata)
+    };
+    RenderedMessageDetails {
+        lines,
+        codeblock_ranges: ranges,
+        span_metadata: if config.collect_span_metadata {
+            Some(metadata)
+        } else {
+            None
+        },
+    }
 }
 
 struct MarkdownRenderer<'a> {
@@ -748,9 +773,9 @@ mod tests {
     #![allow(unused_imports)]
     use super::{
         compute_codeblock_ranges, render_message_markdown_details_with_policy,
-        render_message_markdown_opts_with_width, render_message_with_ranges_with_width_and_policy,
+        render_message_with_config, render_message_with_ranges_with_width_and_policy,
         table::TableRenderer, MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig,
-        RoleKind,
+        MessageRenderConfig, RoleKind,
     };
     use crate::core::message::Message;
     use crate::ui::span::SpanKind;
@@ -760,6 +785,17 @@ mod tests {
     use ratatui::text::Span;
     use std::collections::VecDeque;
     use unicode_width::UnicodeWidthStr;
+
+    fn render_markdown_for_test(
+        message: &Message,
+        theme: &crate::ui::theme::Theme,
+        syntax_enabled: bool,
+        width: Option<usize>,
+    ) -> super::RenderedMessage {
+        let cfg = MessageRenderConfig::markdown(syntax_enabled)
+            .with_terminal_width(width, crate::ui::layout::TableOverflowPolicy::WrapCells);
+        render_message_with_config(message, theme, cfg).into_rendered()
+    }
 
     #[test]
     fn markdown_details_metadata_matches_lines_and_tags() {
@@ -1003,8 +1039,7 @@ mod tests {
 
         // Render the same message with width and ensure the lines at [start..start+len]
         // correspond to the code lines
-        let rendered =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
+        let rendered = render_markdown_for_test(&messages[0], &theme, false, width);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
         assert!(lines.len() > *start + *len);
         assert_eq!(lines[*start], "first");
@@ -1020,8 +1055,7 @@ mod tests {
                 .into(),
         };
 
-        let rendered =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(10));
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(10));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
         let combined = lines.join("\n");
 
@@ -1036,8 +1070,7 @@ mod tests {
             combined
         );
 
-        let wider =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(15));
+        let wider = render_markdown_for_test(&message, &theme, true, Some(15));
         let wider_text = wider
             .lines
             .iter()
@@ -1059,8 +1092,7 @@ mod tests {
             content: SAMPLE_HYPERTEXT_PARAGRAPH.to_string(),
         };
 
-        let rendered =
-            super::render_message_markdown_opts_with_width(&message, &theme, true, Some(158));
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(158));
         let combined = rendered
             .lines
             .iter()
@@ -1109,10 +1141,8 @@ mod tests {
         assert_eq!(content, "alpha\nbeta");
 
         // Build full rendering for both messages and assert selected span matches
-        let rendered0 =
-            super::render_message_markdown_opts_with_width(&messages[0], &theme, false, width);
-        let rendered1 =
-            super::render_message_markdown_opts_with_width(&messages[1], &theme, false, width);
+        let rendered0 = render_markdown_for_test(&messages[0], &theme, false, width);
+        let rendered1 = render_markdown_for_test(&messages[1], &theme, false, width);
         let combined: Vec<String> = rendered0
             .lines
             .iter()
@@ -1156,7 +1186,7 @@ End of table."###
                 .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, None);
 
         // Check that we have table lines with borders
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
@@ -1195,7 +1225,7 @@ End of table."###
             .into(),
         });
         let theme = crate::ui::theme::Theme::dark_default();
-        let rendered = render_message_markdown_opts_with_width(&messages[0], &theme, true, None);
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, None);
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Extract table lines
@@ -1514,8 +1544,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Wide terminal - should fit everything without wrapping or truncation
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(150));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(150));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find content lines (not borders)
@@ -1570,8 +1599,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Medium terminal width - should wrap content within cells
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No ellipsis should be present
@@ -1744,8 +1772,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Use a modest width to force wrapping within the Benefits cell
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Collect only table content lines (skip borders/separators)
@@ -1865,8 +1892,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Narrow terminal that requires wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(45));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(45));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Verify no truncation
@@ -1920,8 +1946,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Extremely narrow terminal (20 chars)
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(20));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(20));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Critical: NO truncation even in extreme cases
@@ -1975,8 +2000,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Medium width terminal
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(70));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(70));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // No truncation of Unicode content
@@ -2019,12 +2043,7 @@ End of table."###
 
         let theme = crate::ui::theme::Theme::dark_default();
         // Force a narrower width to trigger the column balancing that causes word splits
-        let rendered = render_message_markdown_opts_with_width(
-            messages.front().unwrap(),
-            &theme,
-            true,
-            Some(80),
-        );
+        let rendered = render_markdown_for_test(messages.front().unwrap(), &theme, true, Some(80));
         let lines_str: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Extract table content
@@ -2072,8 +2091,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Test with a medium terminal width to force wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(120));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(120));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("=== Government Systems Table Output ===");
@@ -2172,8 +2190,7 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
 
         // Test with narrow terminal width (60 chars) to force wrapping
-        let rendered =
-            render_message_markdown_opts_with_width(&messages[0], &theme, true, Some(60));
+        let rendered = render_markdown_for_test(&messages[0], &theme, true, Some(60));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         println!("\nRendered table with width 60:");
@@ -2335,6 +2352,57 @@ fn detab(s: &str) -> String {
     s.replace('\t', "    ")
 }
 
+fn render_plain_message(
+    role: RoleKind,
+    content: &str,
+    theme: &Theme,
+    collect_span_metadata: bool,
+) -> RenderedLinesWithMetadata {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut metadata: Vec<Vec<SpanKind>> = Vec::new();
+
+    match role {
+        RoleKind::User => {
+            for (idx, line) in content.lines().enumerate() {
+                let mut spans = Vec::new();
+                let mut kinds = Vec::new();
+                if idx == 0 {
+                    spans.push(Span::styled("You: ", theme.user_prefix_style));
+                    kinds.push(SpanKind::UserPrefix);
+                } else {
+                    spans.push(Span::raw(USER_CONTINUATION_INDENT));
+                    kinds.push(SpanKind::Text);
+                }
+                spans.push(Span::styled(detab(line), theme.user_text_style));
+                kinds.push(SpanKind::Text);
+                if collect_span_metadata {
+                    metadata.push(kinds);
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        RoleKind::Assistant => {
+            let style = base_text_style(role, theme);
+            for line in content.lines() {
+                let span = Span::styled(detab(line), style);
+                if collect_span_metadata {
+                    metadata.push(vec![SpanKind::Text]);
+                }
+                lines.push(Line::from(span));
+            }
+        }
+    }
+
+    if !content.is_empty() {
+        if collect_span_metadata {
+            metadata.push(vec![SpanKind::Text]);
+        }
+        lines.push(Line::from(""));
+    }
+
+    (lines, Vec::new(), metadata)
+}
+
 /// Build display lines for all messages using markdown rendering
 #[cfg(test)]
 pub fn build_markdown_display_lines(
@@ -2343,7 +2411,8 @@ pub fn build_markdown_display_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for msg in messages {
-        let rendered = render_message_markdown_opts_with_width(msg, theme, true, None);
+        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::markdown(true))
+            .into_rendered();
         lines.extend(rendered.lines);
     }
     lines
@@ -2357,58 +2426,10 @@ pub fn build_plain_display_lines_with_spans(
     let mut spans = Vec::with_capacity(messages.len());
     for msg in messages {
         let start = lines.len();
-        match msg.role.as_str() {
-            "system" => {
-                let (rendered_lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                    RoleKind::Assistant,
-                    &msg.content,
-                    theme,
-                    true, // syntax_enabled
-                    None, // terminal_width
-                    crate::ui::layout::TableOverflowPolicy::WrapCells,
-                );
-                let len = rendered_lines.len();
-                lines.extend(rendered_lines);
-                spans.push(MessageLineSpan { start, len });
-            }
-            "user" => {
-                for (i, line) in msg.content.lines().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled("You: ", theme.user_prefix_style),
-                            Span::styled(detab(line), theme.user_text_style),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("     "),
-                            Span::styled(detab(line), theme.user_text_style),
-                        ]));
-                    }
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
-                spans.push(MessageLineSpan {
-                    start,
-                    len: lines.len().saturating_sub(start),
-                });
-            }
-            _ => {
-                for line in msg.content.lines() {
-                    lines.push(Line::from(Span::styled(
-                        detab(line),
-                        theme.md_paragraph_style(),
-                    )));
-                }
-                if !msg.content.is_empty() {
-                    lines.push(Line::from(""));
-                }
-                spans.push(MessageLineSpan {
-                    start,
-                    len: lines.len().saturating_sub(start),
-                });
-            }
-        }
+        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::plain());
+        let len = rendered.lines.len();
+        lines.extend(rendered.lines);
+        spans.push(MessageLineSpan { start, len });
     }
     (lines, spans)
 }

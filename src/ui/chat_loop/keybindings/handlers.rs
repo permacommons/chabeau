@@ -14,12 +14,12 @@ use crate::ui::chat_loop::stream::StreamDispatcher;
 use crate::ui::chat_loop::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
     handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event,
-    handle_retry_shortcut, KeyLoopAction,
+    handle_retry_shortcut, KeyLoopAction, UiEvent,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc::UnboundedSender, Mutex};
 use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 
 // ============================================================================
@@ -511,6 +511,7 @@ impl KeyHandler for CtrlPHandler {
 /// Handler for Ctrl+J (send in compose mode, newline otherwise)
 pub struct CtrlJHandler {
     pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
@@ -531,6 +532,7 @@ impl KeyHandler for CtrlJHandler {
             term_height,
             &self.stream_dispatcher,
             &mut layout_time,
+            &self.event_tx,
         )
         .await
         {
@@ -545,6 +547,7 @@ impl KeyHandler for CtrlJHandler {
 /// Handler for Enter key (submit message)
 pub struct EnterHandler {
     pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
@@ -557,7 +560,16 @@ impl KeyHandler for EnterHandler {
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
-        match handle_enter_key(app, key, term_width, term_height, &self.stream_dispatcher).await {
+        match handle_enter_key(
+            app,
+            key,
+            term_width,
+            term_height,
+            &self.stream_dispatcher,
+            &self.event_tx,
+        )
+        .await
+        {
             Ok(Some(KeyLoopAction::Break)) => KeyResult::Exit,
             Ok(Some(KeyLoopAction::Continue)) => KeyResult::Continue,
             Ok(None) => KeyResult::Handled,
@@ -569,6 +581,7 @@ impl KeyHandler for EnterHandler {
 /// Handler for Alt+Enter key (context-dependent behavior)
 pub struct AltEnterHandler {
     pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
@@ -581,7 +594,16 @@ impl KeyHandler for AltEnterHandler {
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
-        match handle_enter_key(app, key, term_width, term_height, &self.stream_dispatcher).await {
+        match handle_enter_key(
+            app,
+            key,
+            term_width,
+            term_height,
+            &self.stream_dispatcher,
+            &self.event_tx,
+        )
+        .await
+        {
             Ok(Some(KeyLoopAction::Break)) => KeyResult::Exit,
             Ok(Some(KeyLoopAction::Continue)) => KeyResult::Continue,
             Ok(None) => KeyResult::Handled,
@@ -698,7 +720,9 @@ impl KeyHandler for BlockSelectHandler {
 }
 
 /// Handler for picker navigation (model/theme selection)
-pub struct PickerHandler;
+pub struct PickerHandler {
+    pub event_tx: UnboundedSender<UiEvent>,
+}
 
 #[async_trait::async_trait]
 impl KeyHandler for PickerHandler {
@@ -716,7 +740,7 @@ impl KeyHandler for PickerHandler {
             app_guard.picker_session().is_some()
         };
 
-        handle_picker_key_event(app, key).await;
+        handle_picker_key_event(app, key, &self.event_tx).await;
 
         // If we had a picker session before, then the key was handled by the picker
         // (even if it resulted in closing the picker, like Esc does)

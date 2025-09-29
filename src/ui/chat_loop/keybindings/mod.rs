@@ -23,6 +23,7 @@ pub fn build_mode_aware_registry(
     terminal: std::sync::Arc<
         tokio::sync::Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>,
     >,
+    event_tx: tokio::sync::mpsc::UnboundedSender<crate::ui::chat_loop::UiEvent>,
 ) -> ModeAwareRegistry {
     use handlers::*;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -210,6 +211,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::ctrl(KeyCode::Char('j')),
             Box::new(CtrlJHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         .register_for_context(
@@ -217,6 +219,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         .register_for_context(
@@ -224,6 +227,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
             Box::new(AltEnterHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         // Enter handlers for FilePrompt and InPlaceEdit modes
@@ -232,6 +236,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         .register_for_context(
@@ -239,6 +244,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
             Box::new(AltEnterHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         .register_for_context(
@@ -246,6 +252,7 @@ pub fn build_mode_aware_registry(
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
                 stream_dispatcher: stream_dispatcher.clone(),
+                event_tx: event_tx.clone(),
             }),
         )
         .register_for_context(
@@ -309,7 +316,9 @@ pub fn build_mode_aware_registry(
         .register_for_context(
             KeyContext::Picker,
             KeyPattern::any(),
-            Box::new(PickerHandler),
+            Box::new(PickerHandler {
+                event_tx: event_tx.clone(),
+            }),
         )
         .build()
 }

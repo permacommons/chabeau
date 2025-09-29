@@ -35,6 +35,12 @@ use std::{
 };
 use tokio::sync::{mpsc, Mutex};
 
+#[derive(Debug)]
+pub enum UiEvent {
+    Crossterm(Event),
+    RequestRedraw,
+}
+
 fn language_to_extension(lang: Option<&str>) -> &'static str {
     if let Some(l) = lang {
         let l = l.trim().to_ascii_lowercase();
@@ -96,7 +102,7 @@ pub async fn run_chat(
     let stream_dispatcher = Arc::new(StreamDispatcher::new(stream_tx));
 
     // Channel for async event processing
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<UiEvent>();
 
     // Spawn async event reader task
     let event_reader_handle = {
@@ -107,7 +113,7 @@ pub async fn run_chat(
                 if let Ok(true) = event::poll(Duration::from_millis(10)) {
                     match event::read() {
                         Ok(ev) => {
-                            if event_tx.send(ev).is_err() {
+                            if event_tx.send(UiEvent::Crossterm(ev)).is_err() {
                                 // Channel closed, exit
                                 break;
                             }
@@ -126,7 +132,11 @@ pub async fn run_chat(
     };
 
     // Initialize mode-aware keybinding registry
-    let mode_registry = build_mode_aware_registry(stream_dispatcher.clone(), terminal.clone());
+    let mode_registry = build_mode_aware_registry(
+        stream_dispatcher.clone(),
+        terminal.clone(),
+        event_tx.clone(),
+    );
 
     // Drawing cadence control
     let mut last_draw = Instant::now();
@@ -169,7 +179,11 @@ pub async fn run_chat(
         while let Ok(ev) = event_rx.try_recv() {
             events_processed = true;
             match ev {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                UiEvent::RequestRedraw => {
+                    request_redraw = true;
+                    continue;
+                }
+                UiEvent::Crossterm(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     // Determine the current context based on app state
                     let context = {
                         let app_guard = app.lock().await;
@@ -219,7 +233,7 @@ pub async fn run_chat(
                         }
                     }
                 }
-                Event::Paste(text) => {
+                UiEvent::Crossterm(Event::Paste(text)) => {
                     // Handle paste events - sanitize and add the pasted text to input
                     let mut app_guard = app.lock().await;
 
@@ -240,12 +254,12 @@ pub async fn run_chat(
                     last_input_layout_update = Instant::now();
                     request_redraw = true;
                 }
-                Event::Resize(_, _) => {
+                UiEvent::Crossterm(Event::Resize(_, _)) => {
                     // Terminal was resized, need to redraw
                     request_redraw = true;
                 }
 
-                _ => {}
+                UiEvent::Crossterm(_) => {}
             }
         }
 
@@ -583,6 +597,7 @@ async fn process_input_submission(
     input_text: String,
     term_width: u16,
     term_height: u16,
+    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> SubmissionResult {
     let mut app_guard = app.lock().await;
 
@@ -598,10 +613,14 @@ async fn process_input_submission(
             if let Err(e) = app_guard.open_model_picker().await {
                 app_guard.set_status(format!("Model picker error: {}", e));
             }
+            drop(app_guard);
+            let _ = event_tx.send(UiEvent::RequestRedraw);
             SubmissionResult::Continue
         }
         CommandResult::OpenProviderPicker => {
             app_guard.open_provider_picker();
+            drop(app_guard);
+            let _ = event_tx.send(UiEvent::RequestRedraw);
             SubmissionResult::Continue
         }
         CommandResult::ProcessAsMessage(message) => {
@@ -618,6 +637,7 @@ async fn handle_enter_key(
     term_width: u16,
     term_height: u16,
     stream_dispatcher: &StreamDispatcher,
+    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
 
@@ -716,7 +736,7 @@ async fn handle_enter_key(
         text
     };
 
-    match process_input_submission(app, input_text, term_width, term_height).await {
+    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_dispatcher.spawn(params);
@@ -731,6 +751,7 @@ async fn handle_ctrl_j_shortcut(
     term_height: u16,
     stream_dispatcher: &StreamDispatcher,
     last_input_layout_update: &mut Instant,
+    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let send_now = {
         let app_guard = app.lock().await;
@@ -756,7 +777,7 @@ async fn handle_ctrl_j_shortcut(
         text
     };
 
-    match process_input_submission(app, input_text, term_width, term_height).await {
+    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_dispatcher.spawn(params);
@@ -835,10 +856,15 @@ enum SubmissionResult {
     Spawn(StreamParams),
 }
 
-async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
+async fn handle_picker_key_event(
+    app: &Arc<Mutex<App>>,
+    key: &event::KeyEvent,
+    event_tx: &mpsc::UnboundedSender<UiEvent>,
+) {
     let mut app_guard = app.lock().await;
     let current_picker_mode = app_guard.current_picker_mode();
     let provider_name = app_guard.provider_name.clone();
+    let mut should_request_redraw = false;
 
     let selection = if let Some(picker) = app_guard.picker_state_mut() {
         match key.code {
@@ -863,6 +889,7 @@ async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
                                 app_guard.api_key.clear();
                                 app_guard.base_url.clear();
                                 app_guard.open_provider_picker();
+                                should_request_redraw = true;
                             } else {
                                 // Exit app if no alternative provider
                                 app_guard.exit_requested = true;
@@ -1025,9 +1052,15 @@ async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
                                         app_guard.startup_requires_model = true;
                                     }
                                     let app_clone = app.clone();
+                                    let event_tx = event_tx.clone();
                                     tokio::spawn(async move {
                                         let mut app_guard = app_clone.lock().await;
-                                        let _ = app_guard.open_model_picker().await;
+                                        if let Err(e) = app_guard.open_model_picker().await {
+                                            app_guard
+                                                .set_status(format!("Model picker error: {}", e));
+                                        }
+                                        drop(app_guard);
+                                        let _ = event_tx.send(UiEvent::RequestRedraw);
                                     });
                                 }
                             }
@@ -1102,9 +1135,17 @@ async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
                                     app_guard.close_picker();
                                     if should_open_model_picker {
                                         let app_clone = app.clone();
+                                        let event_tx = event_tx.clone();
                                         tokio::spawn(async move {
                                             let mut app_guard = app_clone.lock().await;
-                                            let _ = app_guard.open_model_picker().await;
+                                            if let Err(e) = app_guard.open_model_picker().await {
+                                                app_guard.set_status(format!(
+                                                    "Model picker error: {}",
+                                                    e
+                                                ));
+                                            }
+                                            drop(app_guard);
+                                            let _ = event_tx.send(UiEvent::RequestRedraw);
                                         });
                                     }
                                 }
@@ -1145,16 +1186,26 @@ async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
                                     Some(crate::core::app::PickerMode::Model) => {
                                         // Store app reference for async refresh
                                         let app_clone = app.clone();
+                                        let event_tx = event_tx.clone();
                                         tokio::spawn(async move {
                                             let mut app_guard = app_clone.lock().await;
-                                            let _ = app_guard.open_model_picker().await;
+                                            if let Err(e) = app_guard.open_model_picker().await {
+                                                app_guard.set_status(format!(
+                                                    "Model picker error: {}",
+                                                    e
+                                                ));
+                                            }
+                                            drop(app_guard);
+                                            let _ = event_tx.send(UiEvent::RequestRedraw);
                                         });
                                     }
                                     Some(crate::core::app::PickerMode::Theme) => {
                                         app_guard.open_theme_picker();
+                                        should_request_redraw = true;
                                     }
                                     Some(crate::core::app::PickerMode::Provider) => {
                                         app_guard.open_provider_picker();
+                                        should_request_redraw = true;
                                     }
                                     _ => {}
                                 }
@@ -1244,6 +1295,11 @@ async fn handle_picker_key_event(app: &Arc<Mutex<App>>, key: &event::KeyEvent) {
                 app_guard.preview_theme_by_id(selected_id);
             }
         }
+    }
+
+    drop(app_guard);
+    if should_request_redraw {
+        let _ = event_tx.send(UiEvent::RequestRedraw);
     }
 }
 

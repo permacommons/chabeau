@@ -292,6 +292,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tui-textarea",
+ "unicode-segmentation",
  "unicode-width 0.2.0",
  "vergen",
  "vergen-git2",

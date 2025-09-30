@@ -294,19 +294,15 @@ pub async fn run_chat(
                 app_guard.is_streaming = false;
                 // Ensure the new system message is visible
                 let input_area_height = app_guard.calculate_input_area_height(term_size.width);
-                let available_height = term_size
-                    .height
-                    .saturating_sub(input_area_height + 2)
-                    .saturating_sub(1);
+                let available_height =
+                    app_guard.calculate_available_height(term_size.height, input_area_height);
                 app_guard.update_scroll_position(available_height, term_size.width);
                 drop(app_guard);
                 received_any = true;
             } else {
                 let input_area_height = app_guard.calculate_input_area_height(term_size.width);
-                let available_height = term_size
-                    .height
-                    .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-                    .saturating_sub(1); // 1 for title
+                let available_height =
+                    app_guard.calculate_available_height(term_size.height, input_area_height);
                 app_guard.append_to_response(&content, available_height, term_size.width);
                 drop(app_guard);
                 received_any = true;
@@ -502,9 +498,8 @@ async fn handle_block_select_mode_event(
                     app_guard.exit_block_select_mode();
                     app_guard.auto_scroll = true;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
-                    let available_height = term_height
-                        .saturating_sub(input_area_height + 2)
-                        .saturating_sub(1);
+                    let available_height =
+                        app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
@@ -532,9 +527,8 @@ async fn handle_block_select_mode_event(
                     app_guard.exit_block_select_mode();
                     app_guard.auto_scroll = true;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
-                    let available_height = term_height
-                        .saturating_sub(input_area_height + 2)
-                        .saturating_sub(1);
+                    let available_height =
+                        app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
                 }
             }
@@ -572,9 +566,8 @@ async fn handle_external_editor_shortcut(
         Ok(None) => {
             let mut app_guard = app.lock().await;
             let input_area_height = app_guard.calculate_input_area_height(term_width);
-            let available_height = term_height
-                .saturating_sub(input_area_height + 2)
-                .saturating_sub(1);
+            let available_height =
+                app_guard.calculate_available_height(term_height, input_area_height);
             app_guard.update_scroll_position(available_height, term_width);
             Ok(Some(KeyLoopAction::Continue))
         }
@@ -583,9 +576,8 @@ async fn handle_external_editor_shortcut(
             let mut app_guard = app.lock().await;
             app_guard.set_status(format!("Editor error: {}", error_msg));
             let input_area_height = app_guard.calculate_input_area_height(term_width);
-            let available_height = term_height
-                .saturating_sub(input_area_height + 2)
-                .saturating_sub(1);
+            let available_height =
+                app_guard.calculate_available_height(term_height, input_area_height);
             app_guard.update_scroll_position(available_height, term_width);
             Ok(Some(KeyLoopAction::Continue))
         }

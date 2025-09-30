@@ -2321,6 +2321,24 @@ mod tests {
     }
 
     #[test]
+    fn calculate_available_height_matches_expected_layout_rules() {
+        let app = create_test_app();
+
+        let cases = [
+            (30, 5, 22), // 30 - (5 + 2) - 1
+            (10, 8, 0),  // Saturating at zero when chat area would be negative
+            (5, 0, 2),   // Just borders and title removed
+        ];
+
+        for (term_height, input_height, expected) in cases {
+            assert_eq!(
+                app.calculate_available_height(term_height, input_height),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn default_sort_mode_helper_behaviour() {
         let mut app = create_test_app();
         // Theme picker prefers alphabetical → Name

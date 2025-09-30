@@ -62,9 +62,7 @@ pub fn scroll_block_into_view(
             Some(term_width as usize),
         );
     let input_area_height = app_guard.calculate_input_area_height(term_width);
-    let available_height = term_height
-        .saturating_sub(input_area_height + 2)
-        .saturating_sub(1);
+    let available_height = app_guard.calculate_available_height(term_height, input_area_height);
     let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
         &lines,
         term_width,
@@ -228,25 +226,22 @@ impl KeyHandler for NavigationHandler {
             }
             KeyCode::End => {
                 let input_area_height = app_guard.calculate_input_area_height(term_width);
-                let available_height = term_height
-                    .saturating_sub(input_area_height + 2)
-                    .saturating_sub(1);
+                let available_height =
+                    app_guard.calculate_available_height(term_height, input_area_height);
                 app_guard.scroll_to_bottom_view(available_height, term_width);
                 KeyResult::Handled
             }
             KeyCode::PageUp => {
                 let input_area_height = app_guard.calculate_input_area_height(term_width);
-                let available_height = term_height
-                    .saturating_sub(input_area_height + 2)
-                    .saturating_sub(1);
+                let available_height =
+                    app_guard.calculate_available_height(term_height, input_area_height);
                 app_guard.page_up(available_height);
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
                 let input_area_height = app_guard.calculate_input_area_height(term_width);
-                let available_height = term_height
-                    .saturating_sub(input_area_height + 2)
-                    .saturating_sub(1);
+                let available_height =
+                    app_guard.calculate_available_height(term_height, input_area_height);
                 app_guard.page_down(available_height, term_width);
                 KeyResult::Handled
             }
@@ -319,9 +314,8 @@ impl KeyHandler for ArrowKeyHandler {
                 } else {
                     app_guard.auto_scroll = false;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
-                    let available_height = term_height
-                        .saturating_sub(input_area_height + 2)
-                        .saturating_sub(1);
+                    let available_height =
+                        app_guard.calculate_available_height(term_height, input_area_height);
                     let max_scroll =
                         app_guard.calculate_max_scroll_offset(available_height, term_width);
                     app_guard.scroll_offset =

@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use once_cell::sync::Lazy;
 use ratatui::{layout::Rect, text::Line};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::span::{LinkMeta, SpanKind};
 
@@ -75,14 +76,14 @@ pub fn compute_render_state(
                 .cloned()
                 .unwrap_or(SpanKind::Text);
 
-            for ch in span.content.chars() {
-                let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-                if ch_width == 0 {
+            for grapheme in span.content.graphemes(true) {
+                let grapheme_width = UnicodeWidthStr::width(grapheme);
+                if grapheme_width == 0 {
                     continue;
                 }
 
                 let char_start = absolute_col;
-                let char_end = absolute_col + ch_width;
+                let char_end = absolute_col + grapheme_width;
                 let visible_start = char_start.max(start_col);
                 let visible_end = char_end.min(end_col);
                 let is_visible = visible_start < visible_end;
@@ -168,5 +169,18 @@ mod tests {
         assert_eq!(*span.x_range.start(), 6);
         assert_eq!(*span.x_range.end(), 9);
         assert_eq!(span.href.href(), "https://www.rust-lang.org");
+    }
+
+    #[test]
+    fn compute_render_state_accounts_for_emoji_presentation_sequences() {
+        let line = Line::from(vec![Span::raw("⚠️ "), Span::raw("Beta program")]);
+        let metadata = vec![SpanKind::Text, SpanKind::link("https://beta.example.com")];
+        let area = Rect::new(0, 0, 32, 1);
+        let state = compute_render_state(area, &[line], &[metadata], 0, 0);
+        assert_eq!(state.spans.len(), 1);
+        let span = &state.spans[0];
+        assert_eq!(*span.x_range.start(), 3);
+        assert_eq!(*span.x_range.end(), 14);
+        assert_eq!(span.href.href(), "https://beta.example.com");
     }
 }

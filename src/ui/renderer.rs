@@ -1,6 +1,7 @@
 use crate::core::app::App;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
-use crate::ui::osc_state::{compute_render_state, set_render_state};
+use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
+use crate::ui::span::SpanKind;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -78,21 +79,40 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let title_text = build_main_title(app);
     let block = Block::default().title(Span::styled(title_text, app.theme.title_style));
     let inner_area = block.inner(chunks[0]);
-    let messages_paragraph = Paragraph::new(lines.clone())
+    let picker_active = app.picker_state().is_some();
+
+    let mut messages_lines = lines.clone();
+    if picker_active {
+        for (line, kinds) in messages_lines.iter_mut().zip(span_metadata.iter()) {
+            for (span, kind) in line.spans.iter_mut().zip(kinds.iter()) {
+                if matches!(kind, SpanKind::Link(_)) {
+                    span.style = span.style.remove_modifier(
+                        Modifier::UNDERLINED | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK,
+                    );
+                }
+            }
+        }
+    }
+
+    let messages_paragraph = Paragraph::new(messages_lines)
         .style(Style::default().bg(app.theme.background_color))
         .block(block)
         .scroll((scroll_offset, app.horizontal_scroll_offset));
 
     f.render_widget(messages_paragraph, chunks[0]);
 
-    let state = compute_render_state(
-        inner_area,
-        &lines,
-        &span_metadata,
-        scroll_offset as usize,
-        app.horizontal_scroll_offset,
-    );
-    set_render_state(state);
+    if picker_active {
+        set_render_state(OscRenderState::default());
+    } else {
+        let state = compute_render_state(
+            inner_area,
+            &lines,
+            &span_metadata,
+            scroll_offset as usize,
+            app.horizontal_scroll_offset,
+        );
+        set_render_state(state);
+    }
 
     // Input area takes full width
 

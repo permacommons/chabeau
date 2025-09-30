@@ -46,3 +46,5 @@ Items are removed when completed.
   - Add tests for `/markdown` and `/syntax` commands by injecting a test config path or IO layer — [OPEN]
   - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
   - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
+- Picker OSC8 state handling — [OPEN]
+  - Investigate replacing the temporary clone used to strip link modifiers with a render-time style mask so we reuse the cached transcript buffer and toggle hyperlink styling without allocating new `Line` vectors when pickers open/close.

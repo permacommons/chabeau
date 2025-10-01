@@ -873,12 +873,12 @@ impl App {
         if let Some(retry_index) = self.retrying_message_index {
             if let Some(msg) = self.messages.get_mut(retry_index) {
                 if msg.role == "assistant" {
-                    msg.content = self.current_response.clone();
+                    msg.content.push_str(content);
                 }
             }
         } else if let Some(last_msg) = self.messages.back_mut() {
             if last_msg.role == "assistant" {
-                last_msg.content = self.current_response.clone();
+                last_msg.content.push_str(content);
             }
         }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use ratatui::{
@@ -23,8 +23,11 @@ use crate::ui::osc_state::take_render_state;
 #[derive(Debug)]
 pub struct OscBackend<W: Write> {
     inner: CrosstermBackend<W>,
+    cached_cells: HashMap<(u16, u16), Cell>,
+    prev_links: LinkEvents,
 }
 
+#[derive(Debug, Clone, Default)]
 struct LinkEvents {
     starts: HashMap<(u16, u16), Vec<String>>,
     ends: HashMap<(u16, u16), Vec<String>>,
@@ -34,9 +37,14 @@ impl<W> OscBackend<W>
 where
     W: Write,
 {
-    pub const fn new(writer: W) -> Self {
+    pub fn new(writer: W) -> Self {
         Self {
             inner: CrosstermBackend::new(writer),
+            cached_cells: HashMap::new(),
+            prev_links: LinkEvents {
+                starts: HashMap::new(),
+                ends: HashMap::new(),
+            },
         }
     }
 
@@ -89,17 +97,91 @@ where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         let events = self.hyperlink_events();
+        let prev_links = std::mem::take(&mut self.prev_links);
+
+        let mut forced_cells: HashSet<(u16, u16)> = HashSet::new();
+        let mut pre_prefix_closures: HashMap<(u16, u16), usize> = HashMap::new();
+
+        for position in prev_links
+            .starts
+            .keys()
+            .chain(events.starts.keys())
+            .copied()
+        {
+            if prev_links.starts.get(&position) != events.starts.get(&position) {
+                forced_cells.insert(position);
+            }
+        }
+
+        for position in prev_links.ends.keys().chain(events.ends.keys()).copied() {
+            if prev_links.ends.get(&position) != events.ends.get(&position) {
+                forced_cells.insert(position);
+            }
+        }
+
+        for (position, prev_hrefs) in &prev_links.ends {
+            let mut prev_counts: HashMap<&str, usize> = HashMap::new();
+            for href in prev_hrefs {
+                *prev_counts.entry(href.as_str()).or_insert(0) += 1;
+            }
+
+            if let Some(next_hrefs) = events.ends.get(position) {
+                for href in next_hrefs {
+                    if let Some(count) = prev_counts.get_mut(href.as_str()) {
+                        if *count > 0 {
+                            *count -= 1;
+                        }
+                    }
+                }
+            }
+
+            let leftover = prev_counts.values().copied().sum::<usize>();
+            if leftover > 0 {
+                forced_cells.insert(*position);
+                pre_prefix_closures.insert(*position, leftover);
+            }
+        }
+
+        let mut changed_cells: Vec<(u16, u16, Cell)> = content
+            .map(|(x, y, cell)| {
+                let cell_clone = cell.clone();
+                self.cached_cells.insert((x, y), cell_clone.clone());
+                (x, y, cell_clone)
+            })
+            .collect();
+
+        let mut changed_positions: HashSet<(u16, u16)> =
+            changed_cells.iter().map(|(x, y, _)| (*x, *y)).collect();
+
+        for position in forced_cells {
+            if changed_positions.contains(&position) {
+                continue;
+            }
+
+            if let Some(cell) = self.cached_cells.get(&position).cloned() {
+                changed_cells.push((position.0, position.1, cell));
+                changed_positions.insert(position);
+            }
+        }
+
+        changed_cells.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
 
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;
         let mut modifier = Modifier::empty();
         let mut last_pos: Option<Position> = None;
 
-        for (x, y, cell) in content {
+        for (x, y, cell) in changed_cells {
             if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
                 queue!(self.inner, MoveTo(x, y))?;
             }
             last_pos = Some(Position { x, y });
+
+            if let Some(count) = pre_prefix_closures.get(&(x, y)) {
+                for _ in 0..*count {
+                    self.queue_suffix()?;
+                }
+            }
 
             if let Some(hrefs) = events.starts.get(&(x, y)) {
                 for href in hrefs {
@@ -130,7 +212,11 @@ where
                     self.queue_suffix()?;
                 }
             }
+
+            self.cached_cells.insert((x, y), cell.clone());
         }
+
+        self.prev_links = events;
 
         queue!(
             self.inner,
@@ -253,5 +339,107 @@ impl ModifierDiff {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::osc_state::{set_render_state, OscRenderState, OscSpan};
+    use crate::ui::span::LinkMeta;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    fn cell_with_symbol(symbol: &str) -> Cell {
+        let mut cell = Cell::default();
+        cell.set_symbol(symbol);
+        cell
+    }
+
+    #[derive(Clone)]
+    struct RecordingWriter(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn backend_with_recorder() -> (OscBackend<RecordingWriter>, Rc<RefCell<Vec<u8>>>) {
+        let storage = Rc::new(RefCell::new(Vec::new()));
+        let writer = RecordingWriter(storage.clone());
+        (OscBackend::new(writer), storage)
+    }
+
+    fn span(href: &str, x: u16, y: u16) -> OscSpan {
+        OscSpan {
+            href: Arc::new(LinkMeta::new(href)),
+            y,
+            x_range: x..=x,
+        }
+    }
+
+    #[test]
+    fn redraws_cell_when_hyperlink_changes_without_buffer_diff() {
+        let (mut backend, storage) = backend_with_recorder();
+        let cell = cell_with_symbol("A");
+
+        set_render_state(OscRenderState {
+            spans: vec![span("https://old.example", 0, 0)],
+        });
+
+        let cells = [(0u16, 0u16, cell.clone())];
+        backend
+            .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+
+        storage.borrow_mut().clear();
+
+        set_render_state(OscRenderState {
+            spans: vec![span("https://new.example", 0, 0)],
+        });
+
+        backend
+            .draw(std::iter::empty::<(u16, u16, &Cell)>())
+            .unwrap();
+
+        let output = storage.borrow();
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("\x1b]8;;https://new.example\x1b\\"));
+        assert!(output.contains("\x1b]8;;\x1b\\"));
+    }
+
+    #[test]
+    fn closes_stale_hyperlink_even_without_cell_diff() {
+        let (mut backend, storage) = backend_with_recorder();
+        let cell = cell_with_symbol("A");
+
+        set_render_state(OscRenderState {
+            spans: vec![span("https://old.example", 0, 0)],
+        });
+
+        let cells = [(0u16, 0u16, cell.clone())];
+        backend
+            .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+
+        storage.borrow_mut().clear();
+
+        set_render_state(OscRenderState { spans: Vec::new() });
+
+        backend
+            .draw(std::iter::empty::<(u16, u16, &Cell)>())
+            .unwrap();
+
+        let output = storage.borrow();
+        let output = String::from_utf8_lossy(&output);
+        assert!(!output.contains("https://old.example"));
+        assert!(output.contains("\x1b]8;;\x1b\\"));
     }
 }

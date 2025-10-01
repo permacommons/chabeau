@@ -597,61 +597,25 @@ impl App {
             }
         }
 
+        let layout_cfg = crate::ui::layout::LayoutConfig {
+            width: Some(width as usize),
+            markdown_enabled: markdown,
+            syntax_enabled: syntax,
+            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+        };
+
         if can_reuse {
             // Up-to-date
         } else if only_last_changed {
             if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
-                if markdown {
-                    let details = crate::ui::markdown::render_message_markdown_details_with_policy(
-                        last_msg,
-                        &self.theme,
-                        syntax,
-                        Some(width as usize),
-                        crate::ui::layout::TableOverflowPolicy::WrapCells,
-                    );
-                    let metadata = details.span_metadata.unwrap_or_else(|| {
-                        details
-                            .lines
-                            .iter()
-                            .map(|line| vec![SpanKind::Text; line.spans.len()])
-                            .collect()
-                    });
-                    let start = c.last_start;
-                    let mut new_lines: Vec<Line<'static>> =
-                        Vec::with_capacity(start + details.lines.len());
-                    new_lines.extend_from_slice(&c.lines[..start]);
-                    new_lines.extend_from_slice(&details.lines);
-                    c.lines = new_lines;
-
-                    let mut new_meta: Vec<Vec<SpanKind>> =
-                        Vec::with_capacity(start + metadata.len());
-                    new_meta.extend_from_slice(&c.span_metadata[..start]);
-                    new_meta.extend_from_slice(&metadata);
-                    c.span_metadata = new_meta;
-                    c.last_len = metadata.len();
-                    c.last_msg_hash = last_hash;
-                } else {
-                    let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
-                        &VecDeque::from([last_msg.clone()]),
-                        &self.theme,
-                        Some(width as usize),
-                        syntax,
-                    );
-                    let start = c.last_start;
-                    let mut new_lines: Vec<Line<'static>> =
-                        Vec::with_capacity(start + layout.lines.len());
-                    new_lines.extend_from_slice(&c.lines[..start]);
-                    new_lines.extend_from_slice(&layout.lines);
-                    c.lines = new_lines;
-
-                    let mut new_meta: Vec<Vec<SpanKind>> =
-                        Vec::with_capacity(start + layout.span_metadata.len());
-                    new_meta.extend_from_slice(&c.span_metadata[..start]);
-                    new_meta.extend_from_slice(&layout.span_metadata);
-                    c.span_metadata = new_meta;
-                    c.last_len = layout.span_metadata.len();
-                    c.last_msg_hash = last_hash;
-                }
+                let mut last_only = VecDeque::with_capacity(1);
+                last_only.push_back(last_msg.clone());
+                let layout = crate::ui::layout::LayoutEngine::layout_messages(
+                    &last_only,
+                    &self.theme,
+                    &layout_cfg,
+                );
+                Self::splice_last_message_layout(c, layout, last_hash);
             } else {
                 only_last_changed = false;
             }
@@ -659,14 +623,11 @@ impl App {
 
         if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
             // Build lines with proper width constraints - this is the semantic approach
-            let cfg = crate::ui::layout::LayoutConfig {
-                width: Some(width as usize),
-                markdown_enabled: markdown,
-                syntax_enabled: syntax,
-                table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
-            };
-            let layout =
-                crate::ui::layout::LayoutEngine::layout_messages(&self.messages, &self.theme, &cfg);
+            let layout = crate::ui::layout::LayoutEngine::layout_messages(
+                &self.messages,
+                &self.theme,
+                &layout_cfg,
+            );
             let last_span = layout.message_spans.last().cloned();
             let (last_start, last_len) = last_span
                 .map(|span| (span.start, span.len))
@@ -689,6 +650,29 @@ impl App {
 
         // Safe unwrap since we just populated if missing
         &self.prewrap_cache.as_ref().unwrap().lines
+    }
+
+    fn splice_last_message_layout(
+        cache: &mut PrewrapCache,
+        layout: crate::ui::layout::Layout,
+        last_msg_hash: u64,
+    ) {
+        let start = cache.last_start;
+        let mut new_lines: Vec<Line<'static>> = Vec::with_capacity(start + layout.lines.len());
+        new_lines.extend_from_slice(&cache.lines[..start]);
+        new_lines.extend_from_slice(&layout.lines);
+        cache.lines = new_lines;
+
+        let mut new_meta: Vec<Vec<SpanKind>> =
+            Vec::with_capacity(start + layout.span_metadata.len());
+        new_meta.extend_from_slice(&cache.span_metadata[..start]);
+        new_meta.extend_from_slice(&layout.span_metadata);
+        cache.span_metadata = new_meta;
+
+        let last_span = layout.message_spans.last().cloned().unwrap_or_default();
+        cache.last_start = start;
+        cache.last_len = last_span.len;
+        cache.last_msg_hash = last_msg_hash;
     }
 
     pub fn get_prewrapped_span_metadata_cached(&mut self, width: u16) -> &Vec<Vec<SpanKind>> {
@@ -2429,6 +2413,63 @@ mod tests {
         let p2 = app.get_prewrapped_lines_cached(120);
         let ptr2 = p2.as_ptr();
         assert_ne!(ptr1, ptr2, "cache should invalidate on width change");
+    }
+
+    #[test]
+    fn prewrap_cache_updates_metadata_for_markdown_last_message() {
+        let mut app = create_test_app();
+        app.messages
+            .push_back(create_test_message("user", "This is the opening line."));
+        app.messages.push_back(create_test_message(
+            "assistant",
+            "Initial response that will be replaced.",
+        ));
+
+        let width = 72;
+        let initial_lines = app.get_prewrapped_lines_cached(width).clone();
+        let initial_meta = app.get_prewrapped_span_metadata_cached(width).clone();
+        assert_eq!(initial_lines.len(), initial_meta.len());
+
+        if let Some(last) = app.messages.back_mut() {
+            last.content = "Here's an updated reply with a [link](https://example.com).".into();
+        }
+
+        let updated_lines = app.get_prewrapped_lines_cached(width).clone();
+        let updated_meta = app.get_prewrapped_span_metadata_cached(width).clone();
+        assert_eq!(updated_lines.len(), updated_meta.len());
+        assert!(updated_meta
+            .iter()
+            .any(|kinds| kinds.iter().any(|kind| kind.is_link())));
+    }
+
+    #[test]
+    fn prewrap_cache_updates_metadata_for_plain_text_last_message() {
+        let mut app = create_test_app();
+        app.markdown_enabled = false;
+        app.syntax_enabled = false;
+        app.messages
+            .push_back(create_test_message("user", "Plain intro from the user."));
+        app.messages.push_back(create_test_message(
+            "assistant",
+            "A short reply that will expand into a much longer paragraph after the update.",
+        ));
+
+        let width = 40;
+        let initial_lines = app.get_prewrapped_lines_cached(width).clone();
+        let initial_meta = app.get_prewrapped_span_metadata_cached(width).clone();
+        assert_eq!(initial_lines.len(), initial_meta.len());
+
+        if let Some(last) = app.messages.back_mut() {
+            last.content = "Now the assistant responds with a deliberately long piece of plain text that should wrap across multiple terminal lines once re-rendered.".into();
+        }
+
+        let updated_lines = app.get_prewrapped_lines_cached(width).clone();
+        let updated_meta = app.get_prewrapped_span_metadata_cached(width).clone();
+        assert_eq!(updated_lines.len(), updated_meta.len());
+        assert!(updated_meta
+            .iter()
+            .flat_map(|kinds| kinds.iter())
+            .all(|kind| kind.is_text()));
     }
 
     #[test]

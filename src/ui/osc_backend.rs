@@ -31,6 +31,13 @@ pub struct OscBackend<W: Write> {
 struct LinkEvents {
     starts: HashMap<(u16, u16), Vec<String>>,
     ends: HashMap<(u16, u16), Vec<String>>,
+    spans: HashSet<LinkSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LinkSpan {
+    href: String,
+    end: (u16, u16),
 }
 
 impl<W> OscBackend<W>
@@ -44,6 +51,7 @@ where
             prev_links: LinkEvents {
                 starts: HashMap::new(),
                 ends: HashMap::new(),
+                spans: HashSet::new(),
             },
         }
     }
@@ -52,16 +60,22 @@ where
         let state = take_render_state();
         let mut starts: HashMap<(u16, u16), Vec<String>> = HashMap::new();
         let mut ends: HashMap<(u16, u16), Vec<String>> = HashMap::new();
+        let mut spans: HashSet<LinkSpan> = HashSet::new();
 
         for span in state.spans {
             let start = (*span.x_range.start(), span.y);
             let end = (*span.x_range.end(), span.y);
             let href = span.href.href().to_string();
             starts.entry(start).or_default().push(href.clone());
-            ends.entry(end).or_default().push(href);
+            ends.entry(end).or_default().push(href.clone());
+            spans.insert(LinkSpan { href, end });
         }
 
-        LinkEvents { starts, ends }
+        LinkEvents {
+            starts,
+            ends,
+            spans,
+        }
     }
 
     fn queue_prefix(&mut self, href: &str) -> io::Result<()> {
@@ -101,6 +115,17 @@ where
 
         let mut forced_cells: HashSet<(u16, u16)> = HashSet::new();
         let mut pre_prefix_closures: HashMap<(u16, u16), usize> = HashMap::new();
+        let mut stale_closure_counts: HashMap<(u16, u16), usize> = HashMap::new();
+
+        let mut stale_spans: Vec<LinkSpan> = prev_links
+            .spans
+            .difference(&events.spans)
+            .cloned()
+            .collect();
+        stale_spans.sort_by(|a, b| (a.end.1, a.end.0).cmp(&(b.end.1, b.end.0)));
+        for span in &stale_spans {
+            *stale_closure_counts.entry(span.end).or_insert(0) += 1;
+        }
 
         for position in prev_links
             .starts
@@ -142,6 +167,17 @@ where
             }
         }
 
+        for (position, count) in &stale_closure_counts {
+            if let Some(existing) = pre_prefix_closures.get_mut(position) {
+                if *existing > *count {
+                    *existing -= *count;
+                } else {
+                    *existing = 0;
+                }
+            }
+        }
+        pre_prefix_closures.retain(|_, count| *count > 0);
+
         let mut changed_cells: Vec<(u16, u16, Cell)> = content
             .map(|(x, y, cell)| {
                 let cell_clone = cell.clone();
@@ -170,6 +206,18 @@ where
         let mut bg = Color::Reset;
         let mut modifier = Modifier::empty();
         let mut last_pos: Option<Position> = None;
+
+        for span in &stale_spans {
+            let position = Position {
+                x: span.end.0,
+                y: span.end.1,
+            };
+            if !matches!(last_pos, Some(p) if p.x == position.x && p.y == position.y) {
+                queue!(self.inner, MoveTo(position.x, position.y))?;
+            }
+            last_pos = Some(position);
+            self.queue_suffix()?;
+        }
 
         for (x, y, cell) in changed_cells {
             if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
@@ -440,6 +488,35 @@ mod tests {
         let output = storage.borrow();
         let output = String::from_utf8_lossy(&output);
         assert!(!output.contains("https://old.example"));
+        assert!(output.contains("\x1b]8;;\x1b\\"));
+    }
+
+    #[test]
+    fn closes_hyperlink_removed_by_scroll_without_touching_endpoint() {
+        let (mut backend, storage) = backend_with_recorder();
+        let top_cell = cell_with_symbol("A");
+        let scrolled_cell = cell_with_symbol("B");
+
+        set_render_state(OscRenderState {
+            spans: vec![span("https://scroll.example", 0, 0)],
+        });
+
+        let initial_cells = [(0u16, 0u16, top_cell.clone())];
+        backend
+            .draw(initial_cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+
+        storage.borrow_mut().clear();
+
+        set_render_state(OscRenderState { spans: Vec::new() });
+
+        let scrolled_cells = [(0u16, 1u16, scrolled_cell.clone())];
+        backend
+            .draw(scrolled_cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+
+        let output = storage.borrow();
+        let output = String::from_utf8_lossy(&output);
         assert!(output.contains("\x1b]8;;\x1b\\"));
     }
 }

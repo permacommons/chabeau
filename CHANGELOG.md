@@ -1,5 +1,18 @@
 # Changelog
 
+## [Not yet released]
+
+### Added
+- Compose mode toggled with F4 (Enter inserts newlines; Alt+Enter/Ctrl+J send) to make long-form drafting easier (`src/ui/chat_loop`, `src/ui/builtin_help.md`).
+- OSC 8 hyperlink rendering across chat, tables, and pickers via span metadata and a custom Crossterm backend (`src/ui/osc_backend.rs`, `src/ui/osc_state.rs`, `src/ui/osc.rs`).
+- Adaptive color fallback that detects truecolor/256/16-color terminals and exposes a `CHABEAU_COLOR` override (`src/utils/color.rs`, `src/core/app.rs`).
+- In-app provider picker and config persistence so `/provider` mirrors `/model` for discovery and defaults (`src/ui/picker.rs`, `src/ui/chat_loop`, `src/ui/builtin_help.md`).
+- `--env` startup mode to force environment-based credentials when providers are configured (`src/core/app.rs`, `src/cli/mod.rs`).
+
+### Changed
+- Introduced a shared width-aware layout engine and span metadata pipeline for Markdown/plain rendering, enabling horizontal table scrolling and consistent wrapping (`src/ui/layout.rs`, `src/ui/markdown.rs`, `src/utils/scroll.rs`).
+- Modularized the chat loop with a keybinding registry, centralized redraw/height management, and event-driven rendering for smoother selection and paging (`src/ui/chat_loop`, `src/core/app.rs`).
+
 ## 0.3.5
 
 ### Added

@@ -6,7 +6,6 @@ Items are removed when completed.
 
 ## Features
 
-- More complete keyboard mapping (Page Up/Dn; Ctrl+D) — [OPEN]
 - Custom styling for system messages — [OPEN]
   - Add dedicated `RoleKind::System` with configurable styling separate from assistant messages
   - Allow theme customization of system message colors, prefixes, and formatting
@@ -14,7 +13,6 @@ Items are removed when completed.
 - Tiny copy/paste affordances — [PARTIAL]
 - Better handling of repeating messages like "Generating..."
   - Deduplicate/compress repeated status lines — [OPEN]
-- In-TUI provider selector — [OPEN]
 - In-TUI default picker — [OPEN]
 - Tab completion for commands — [OPEN]
 - Support common "character cards" — [OPEN]
@@ -23,7 +21,6 @@ Items are removed when completed.
 - Basic "push a file into context" support — [OPEN]
 - "Rapid refine" - apply a previously created prompt to an output — [OPEN]
 - Microphone/speaker support? — [OPEN]
-- Emit OSC 8 hyperlinks for rendered links leveraging `SpanKind::Link` metadata — [OPEN]
 - Extend span metadata to code blocks (e.g., `SpanKind::CodeBlock`) to unlock richer TUI interactions — [OPEN]
 
 ## Code quality

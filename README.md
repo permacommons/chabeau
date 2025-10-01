@@ -16,11 +16,12 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Efficient byte-level parsing for smooth streaming output
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly)
+- Compose mode for drafting long prompts (F4 toggles Enter vs. send, Ctrl+J mirrors Alt+Enter)
 - Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
-- Interactive theme and model pickers with filtering and sorting
+- Interactive provider, model, and theme pickers with filtering, sorting, and config persistence
 - Message retry and external editor support
 - Conversation logging with pause/resume
-- Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code)
+- Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code) with clickable OSC 8 hyperlinks
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
 
@@ -158,8 +159,8 @@ See [the built-in help](src/ui/builtin_help.md) for a full list of keyboard cont
 
 Most should be intuitive. A couple of choices may be a bit jarring at first:
 
-- Alt+Enter to start a new line: We've found this to be most reliable across terminals.
-- Shift+Cursor to move around in input: This is so the cursor keys can be used at any time to scroll in the output area.
+- Alt+Enter (or Ctrl+J) to start a new line: We've found this to be most reliable across terminals.
+- Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
 
 Feedback and suggestions are always welcome!
 
@@ -195,11 +196,15 @@ Modular design with focused components:
   - `models.rs` - Model fetching and sorting functionality
 - `ui/` - Terminal interface rendering
   - `mod.rs` - UI module declarations
-  - `chat_loop.rs` - Main chat event loop and UI rendering
-  - `renderer.rs` - Terminal interface rendering
-  - `markdown.rs` - Lightweight Markdown rendering tuned for terminals
+  - `chat_loop/` - Mode-aware chat loop with setup, streaming, and keybinding registries
+  - `layout.rs` - Shared width-aware layout engine for Markdown and plain text
+  - `markdown.rs` / `markdown_wrap.rs` - Markdown renderer and wrapping helpers that emit span metadata
+  - `renderer.rs` - Terminal interface rendering (chat area, input, pickers)
+  - `osc_backend.rs` / `osc_state.rs` / `osc.rs` - Crossterm backend wrapper that emits OSC 8 hyperlinks
+  - `picker.rs` / `appearance.rs` / `theme.rs` - Picker controls and theming utilities
 - `utils/` - Utility functions and helpers
   - `mod.rs` - Utility module declarations
+  - `color.rs` - Terminal color detection and palette quantization
   - `editor.rs` - External editor integration
   - `logging.rs` - Chat logging functionality
   - `scroll.rs` - Text wrapping and scroll calculations

@@ -3,6 +3,7 @@ use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 type TableCell = Vec<Vec<(Span<'static>, SpanKind)>>;
@@ -765,15 +766,39 @@ impl TableRenderer {
         let mut result = String::new();
         let mut current_width = 0;
 
-        for ch in text.chars() {
-            let char_width = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-            if current_width + char_width > max_width {
+        for grapheme in text.graphemes(true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            if grapheme_width == 0 {
+                continue;
+            }
+
+            if current_width + grapheme_width > max_width {
                 break;
             }
-            result.push(ch);
-            current_width += char_width;
+
+            result.push_str(grapheme);
+            current_width += grapheme_width;
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_text_to_width_keeps_entire_graphemes() {
+        let renderer = TableRenderer::new();
+        let clipped = renderer.clip_text_to_width("👩‍💻", 2);
+        assert_eq!(clipped, "👩‍💻");
+    }
+
+    #[test]
+    fn clip_text_to_width_allows_mixed_text_and_emoji() {
+        let renderer = TableRenderer::new();
+        let clipped = renderer.clip_text_to_width("A👩‍💻 docs", 3);
+        assert_eq!(clipped, "A👩‍💻");
     }
 }

@@ -6,6 +6,7 @@ use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
+use crate::core::providers::ProviderResolutionError;
 use chrono::{DateTime, Utc};
 use std::error::Error;
 
@@ -61,8 +62,25 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
     };
 
     // Use the shared authentication resolution function
-    let (api_key, base_url, _, display_name) =
-        auth_manager.resolve_authentication(Some(&provider_name), &config)?;
+    let (api_key, base_url, provider_internal_name, display_name) =
+        match auth_manager.resolve_authentication(Some(&provider_name), &config) {
+            Ok(values) => values,
+            Err(err) => {
+                if let Some(resolution_error) = err.downcast_ref::<ProviderResolutionError>() {
+                    eprintln!("{}", resolution_error);
+                    let fixes = resolution_error.quick_fixes();
+                    if !fixes.is_empty() {
+                        eprintln!();
+                        eprintln!("💡 Quick fixes:");
+                        for fix in fixes {
+                            eprintln!("  • {fix}");
+                        }
+                    }
+                    std::process::exit(resolution_error.exit_code());
+                }
+                return Err(err);
+            }
+        };
 
     println!("🤖 Available Models for {display_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -136,7 +154,7 @@ pub async fn pick_default_model(provider: Option<String>) -> Result<(), Box<dyn 
     }
 
     let selected_model = &models[choice - 1].id;
-    config.set_default_model(provider_name.to_lowercase(), selected_model.clone());
+    config.set_default_model(provider_internal_name, selected_model.clone());
     config.save()?;
 
     println!("✅ Set default model for provider to: {selected_model}");

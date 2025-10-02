@@ -5,6 +5,7 @@
 use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
+use crate::core::providers::ProviderResolutionError;
 use chrono::{DateTime, Utc};
 use std::error::Error;
 
@@ -13,21 +14,41 @@ pub async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>>
     let config = Config::load()?;
 
     // Use the shared authentication resolution function
-    let (api_key, base_url, _, provider_name) =
-        auth_manager.resolve_authentication(provider.as_deref(), &config)?;
+    let (api_key, base_url, provider_internal_name, provider_display_name) =
+        match auth_manager.resolve_authentication(provider.as_deref(), &config) {
+            Ok(values) => values,
+            Err(err) => {
+                if let Some(resolution_error) = err.downcast_ref::<ProviderResolutionError>() {
+                    eprintln!("{}", resolution_error);
+                    let fixes = resolution_error.quick_fixes();
+                    if !fixes.is_empty() {
+                        eprintln!();
+                        eprintln!("💡 Quick fixes:");
+                        for fix in fixes {
+                            eprintln!("  • {fix}");
+                        }
+                    }
+                    std::process::exit(resolution_error.exit_code());
+                }
+                return Err(err);
+            }
+        };
+
+    let provider_name = provider_display_name.clone();
 
     println!("🤖 Available Models for {provider_name}");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
     // Show default model for this provider if set
-    if let Some(default_model) = config.get_default_model(&provider_name) {
+    if let Some(default_model) = config.get_default_model(&provider_internal_name) {
         println!("🎯 Default model for this provider: {default_model} (from config)");
         println!();
     }
 
     let client = reqwest::Client::new();
-    let models_response = fetch_models(&client, &base_url, &api_key, &provider_name).await?;
+    let models_response =
+        fetch_models(&client, &base_url, &api_key, &provider_internal_name).await?;
 
     if models_response.data.is_empty() {
         println!("No models found for this provider.");

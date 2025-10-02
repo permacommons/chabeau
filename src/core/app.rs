@@ -363,29 +363,24 @@ impl App {
         log_file: Option<String>,
         provider: Option<String>,
         env_only: bool,
+        config: &Config,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        use crate::core::providers::{resolve_env_session, resolve_session, ResolveSessionError};
+
         let auth_manager = AuthManager::new();
-        let config = Config::load()?;
 
         // Resolve authentication: if env_only, force env vars; otherwise use shared resolution
-        let (api_key, base_url, provider_name, provider_display_name) = if env_only {
-            let api_key = std::env::var("OPENAI_API_KEY")
-                .map_err(|_| "❌ --env used but OPENAI_API_KEY environment variable not set")?;
-            let default_base = "https://api.openai.com/v1".to_string();
-            let base_url =
-                std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
-            let (prov, display) = if base_url == default_base {
-                ("openai".to_string(), "OpenAI".to_string())
-            } else {
-                (
-                    "openai-compatible".to_string(),
-                    "OpenAI-compatible".to_string(),
-                )
-            };
-            (api_key, base_url, prov, display)
+        let session = if env_only {
+            resolve_env_session().map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?
         } else {
-            auth_manager.resolve_authentication(provider.as_deref(), &config)?
+            match resolve_session(&auth_manager, config, provider.as_deref()) {
+                Ok(session) => session,
+                Err(ResolveSessionError::Provider(err)) => return Err(Box::new(err)),
+                Err(ResolveSessionError::Source(err)) => return Err(err),
+            }
         };
+
+        let (api_key, base_url, provider_name, provider_display_name) = session.into_tuple();
 
         // Determine the model to use:
         // 1. If a specific model was requested (not "default"), use that

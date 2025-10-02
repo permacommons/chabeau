@@ -4,7 +4,10 @@ use tokio::sync::Mutex;
 
 use crate::{
     auth::AuthManager,
-    core::{app::App, builtin_providers::load_builtin_providers, config::Config},
+    core::{
+        app::App, builtin_providers::load_builtin_providers, config::Config,
+        providers::ProviderResolutionError,
+    },
 };
 
 /// Build the application state for the chat loop, including startup picker flows.
@@ -83,21 +86,28 @@ pub async fn bootstrap_app(
         app
     } else {
         let app = Arc::new(Mutex::new(
-            match App::new_with_auth(model.clone(), log.clone(), selected_provider, env_only).await
+            match App::new_with_auth(
+                model.clone(),
+                log.clone(),
+                selected_provider,
+                env_only,
+                &config,
+            )
+            .await
             {
                 Ok(app) => app,
                 Err(e) => {
-                    let error_msg = e.to_string();
-                    if error_msg.contains("No authentication")
-                        || error_msg.contains("OPENAI_API_KEY")
-                    {
-                        eprintln!("{error_msg}");
-                        eprintln!();
-                        eprintln!("💡 Quick fixes:");
-                        eprintln!("  • chabeau auth                    # Interactive setup");
-                        eprintln!("  • chabeau -p                      # Check provider status");
-                        eprintln!("  • export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)");
-                        std::process::exit(2);
+                    if let Some(resolution_error) = e.downcast_ref::<ProviderResolutionError>() {
+                        eprintln!("{}", resolution_error);
+                        let fixes = resolution_error.quick_fixes();
+                        if !fixes.is_empty() {
+                            eprintln!();
+                            eprintln!("💡 Quick fixes:");
+                            for fix in fixes {
+                                eprintln!("  • {fix}");
+                            }
+                        }
+                        std::process::exit(resolution_error.exit_code());
                     } else {
                         eprintln!("❌ Error: {e}");
                         std::process::exit(1);

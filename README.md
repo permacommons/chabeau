@@ -127,7 +127,7 @@ Chabeau includes built-in themes to customize the TUI appearance.
 Auto-detection: when no theme is set in your config, Chabeau tries to infer a sensible default from the OS preference (e.g., macOS, Windows, GNOME). If no hint is available, it defaults to the dark theme.
 
 Custom themes:
-- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see [src/builtin_themes.toml](src/builtin_themes.toml) for examples).
+- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see [src/builtins/themes.toml](src/builtins/themes.toml) for examples).
 - Once added, set them with `chabeau set theme <your-theme-id>`.
 
 ### Preferences
@@ -155,7 +155,7 @@ You can force a mode with `CHABEAU_COLOR=truecolor|256|16` if needed.
 
 ## Interface Controls
 
-See [the built-in help](src/ui/builtin_help.md) for a full list of keyboard controls and commands.
+See [the built-in help](src/builtins/help.md) for a full list of keyboard controls and commands.
 
 Most should be intuitive. A couple of choices may be a bit jarring at first:
 
@@ -176,7 +176,10 @@ export EDITOR="code --wait" # VS Code with wait
 Modular design with focused components:
 
 - `main.rs` - Entry point
-- `builtin_models.toml` - Build-time configuration for supported providers
+- `builtins/` - Build-time assets embedded into the binary
+  - `models.toml` - Supported provider definitions
+  - `themes.toml` - Built-in UI themes
+  - `help.md` - In-app keyboard shortcut and command reference
 - `cli/` - Command-line interface parsing and handling
   - `mod.rs` - CLI argument parsing and command dispatching
   - `model_list.rs` - Model listing functionality
@@ -186,7 +189,7 @@ Modular design with focused components:
 - `core/` - Core application components
   - `mod.rs` - Core module declarations
   - `app.rs` - Core application state
-  - `builtin_providers.rs` - Built-in provider configuration (loads from `builtin_models.toml`)
+  - `builtin_providers.rs` - Built-in provider configuration (loads from `builtins/models.toml`)
   - `config.rs` - Configuration management
   - `message.rs` - Message data structures
 - `auth/` - Authentication and provider management
@@ -214,7 +217,7 @@ Modular design with focused components:
 
 ### Built-in Provider Configuration
 
-Chabeau uses a build-time configuration system for built-in providers. The `builtin_models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes.
+Chabeau uses a build-time configuration system for built-in providers. The `builtins/models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes.
 
 This configuration is embedded into the binary at compile time, eliminating runtime file dependencies while allowing easy modification of supported providers during development.
 

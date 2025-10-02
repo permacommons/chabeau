@@ -3,10 +3,10 @@
 ## [Not yet released]
 
 ### Added
-- Compose mode toggled with F4 (Enter inserts newlines; Alt+Enter/Ctrl+J send) to make long-form drafting easier (`src/ui/chat_loop`, `src/ui/builtin_help.md`).
+- Compose mode toggled with F4 (Enter inserts newlines; Alt+Enter/Ctrl+J send) to make long-form drafting easier (`src/ui/chat_loop`, `src/builtins/help.md`).
 - OSC 8 hyperlink rendering across chat, tables, and pickers via span metadata and a custom Crossterm backend (`src/ui/osc_backend.rs`, `src/ui/osc_state.rs`, `src/ui/osc.rs`).
 - Adaptive color fallback that detects truecolor/256/16-color terminals and exposes a `CHABEAU_COLOR` override (`src/utils/color.rs`, `src/core/app.rs`).
-- In-app provider picker and config persistence so `/provider` mirrors `/model` for discovery and defaults (`src/ui/picker.rs`, `src/ui/chat_loop`, `src/ui/builtin_help.md`).
+- In-app provider picker and config persistence so `/provider` mirrors `/model` for discovery and defaults (`src/ui/picker.rs`, `src/ui/chat_loop`, `src/builtins/help.md`).
 - `--env` startup mode to force environment-based credentials when providers are configured (`src/core/app.rs`, `src/cli/mod.rs`).
 
 ### Changed
@@ -51,7 +51,7 @@
 
 ### Added
 - URL normalization utilities to prevent API endpoint issues (`src/utils/url.rs`)
-- Support for additional built-in providers: Venice AI, Groq, Mistral, Cerebras (`builtin_models.toml`)
+- Support for additional built-in providers: Venice AI, Groq, Mistral, Cerebras (`src/builtins/models.toml`)
 - Multi-line cursor navigation with Shift+Up/Down in input area (`src/ui/chat_loop.rs`)
 - Token input masking with partial reveal toggle (F2) during authentication (`src/auth/mod.rs`)
 

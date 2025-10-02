@@ -261,21 +261,43 @@ pub fn xterm256_to_rgb(i: u8) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[test]
     fn detects_truecolor_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_colorterm = std::env::var("COLORTERM").ok();
         std::env::set_var("COLORTERM", "truecolor");
         assert_eq!(detect_color_depth(), ColorDepth::Truecolor);
-        std::env::remove_var("COLORTERM");
+        if let Some(prev) = prev_colorterm {
+            std::env::set_var("COLORTERM", prev);
+        } else {
+            std::env::remove_var("COLORTERM");
+        }
     }
 
     #[test]
     fn detects_256_from_term() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_colorterm = std::env::var("COLORTERM").ok();
+        let prev_term = std::env::var("TERM").ok();
         // Ensure COLORTERM doesn't force truecolor in this environment
         std::env::remove_var("COLORTERM");
         std::env::set_var("TERM", "xterm-256color");
         assert_eq!(detect_color_depth(), ColorDepth::X256);
-        std::env::remove_var("TERM");
+        if let Some(prev) = prev_colorterm {
+            std::env::set_var("COLORTERM", prev);
+        } else {
+            std::env::remove_var("COLORTERM");
+        }
+        if let Some(prev) = prev_term {
+            std::env::set_var("TERM", prev);
+        } else {
+            std::env::remove_var("TERM");
+        }
     }
 
     #[test]

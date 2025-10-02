@@ -3,6 +3,7 @@
 //! This module handles loading and managing built-in provider configurations
 //! from the builtin_models.toml file at build time.
 
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,21 +31,30 @@ impl BuiltinProvider {
     }
 }
 
-/// Load built-in providers from the embedded configuration
-pub fn load_builtin_providers() -> Vec<BuiltinProvider> {
-    const CONFIG_CONTENT: &str = include_str!("../builtin_models.toml");
+const CONFIG_CONTENT: &str = include_str!("../builtin_models.toml");
 
+static BUILTIN_PROVIDERS: Lazy<Vec<BuiltinProvider>> = Lazy::new(|| {
     let config: BuiltinProvidersConfig =
         toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtin_models.toml");
 
     config.providers
+});
+
+fn builtin_providers() -> &'static [BuiltinProvider] {
+    BUILTIN_PROVIDERS.as_slice()
+}
+
+/// Load built-in providers from the embedded configuration
+pub fn load_builtin_providers() -> Vec<BuiltinProvider> {
+    builtin_providers().to_vec()
 }
 
 /// Find a built-in provider by ID (case-insensitive)
 pub fn find_builtin_provider(id: &str) -> Option<BuiltinProvider> {
-    load_builtin_providers()
-        .into_iter()
+    builtin_providers()
+        .iter()
         .find(|p| p.id.eq_ignore_ascii_case(id))
+        .cloned()
 }
 
 #[cfg(test)]
@@ -62,6 +72,14 @@ mod tests {
         assert!(provider_ids.contains(&"anthropic"));
         assert!(provider_ids.contains(&"openrouter"));
         assert!(provider_ids.contains(&"poe"));
+    }
+
+    #[test]
+    fn test_builtin_providers_cached_slice() {
+        let first_ptr = builtin_providers() as *const [BuiltinProvider];
+        let second_ptr = builtin_providers() as *const [BuiltinProvider];
+
+        assert_eq!(first_ptr, second_ptr);
     }
 
     #[test]

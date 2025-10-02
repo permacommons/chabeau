@@ -46,10 +46,22 @@ mod tests {
         let request = client.get("https://example.com");
 
         let request_with_auth = add_auth_headers(request, "anthropic", "test-key");
+        let final_request = request_with_auth.build().unwrap();
+        let headers = final_request.headers();
 
-        // We can't easily inspect the headers in a RequestBuilder, but we can test
-        // that the function doesn't panic and returns a RequestBuilder
-        let _final_request = request_with_auth.build().unwrap();
+        assert_eq!(
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("test-key")
+        );
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert!(headers.get("Authorization").is_none());
     }
 
     #[test]
@@ -58,8 +70,17 @@ mod tests {
         let request = client.get("https://example.com");
 
         let request_with_auth = add_auth_headers(request, "openai", "test-key");
+        let final_request = request_with_auth.build().unwrap();
+        let headers = final_request.headers();
 
-        let _final_request = request_with_auth.build().unwrap();
+        assert_eq!(
+            headers
+                .get("Authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-key")
+        );
+        assert!(headers.get("x-api-key").is_none());
+        assert!(headers.get("anthropic-version").is_none());
     }
 
     #[test]
@@ -68,7 +89,16 @@ mod tests {
         let request = client.get("https://example.com");
 
         let request_with_auth = add_auth_headers(request, "custom-provider", "test-key");
+        let final_request = request_with_auth.build().unwrap();
+        let headers = final_request.headers();
 
-        let _final_request = request_with_auth.build().unwrap();
+        assert_eq!(
+            headers
+                .get("Authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-key")
+        );
+        assert!(headers.get("x-api-key").is_none());
+        assert!(headers.get("anthropic-version").is_none());
     }
 }

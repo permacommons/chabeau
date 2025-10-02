@@ -21,6 +21,7 @@ pub use picker::{
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
+#[allow(unused_imports)]
 pub use ui_state::{UiMode, UiState};
 
 pub async fn new_with_auth(
@@ -366,93 +367,6 @@ impl App {
         let available_height = self.calculate_available_height(term_height, input_area_height);
         self.ui.scroll_offset =
             self.calculate_scroll_to_message(index, term_width, available_height);
-    }
-
-    /// Find the last user-authored message index
-    pub fn last_user_message_index(&self) -> Option<usize> {
-        self.ui
-            .messages
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, m)| m.role == "user")
-            .map(|(i, _)| i)
-    }
-
-    /// Find previous user message index before `from_index` (exclusive)
-    pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
-        if from_index == 0 {
-            return None;
-        }
-        self.ui
-            .messages
-            .iter()
-            .enumerate()
-            .take(from_index)
-            .rev()
-            .find(|(_, m)| m.role == "user")
-            .map(|(i, _)| i)
-    }
-
-    /// Find next user message index after `from_index` (exclusive)
-    pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
-        self.ui
-            .messages
-            .iter()
-            .enumerate()
-            .skip(from_index + 1)
-            .find(|(_, m)| m.role == "user")
-            .map(|(i, _)| i)
-    }
-
-    /// Find the first user-authored message index
-    pub fn first_user_message_index(&self) -> Option<usize> {
-        self.ui
-            .messages
-            .iter()
-            .enumerate()
-            .find(|(_, m)| m.role == "user")
-            .map(|(i, _)| i)
-    }
-
-    /// Enter edit-select mode: lock input and select most recent user message
-    pub fn enter_edit_select_mode(&mut self) {
-        if let Some(idx) = self.last_user_message_index() {
-            self.ui.set_mode(UiMode::EditSelect {
-                selected_index: idx,
-            });
-        }
-    }
-
-    /// Exit edit-select mode
-    pub fn exit_edit_select_mode(&mut self) {
-        if self.ui.in_edit_select_mode() {
-            self.ui.set_mode(UiMode::Typing);
-        }
-    }
-
-    /// Begin in-place edit of a user message at `index`
-    pub fn start_in_place_edit(&mut self, index: usize) {
-        self.ui.set_mode(UiMode::InPlaceEdit { index });
-    }
-
-    /// Cancel in-place edit (does not modify history)
-    pub fn cancel_in_place_edit(&mut self) {
-        if self.ui.in_place_edit_index().is_some() {
-            self.ui.set_mode(UiMode::Typing);
-        }
-    }
-
-    /// Enter block select mode: lock input and set selected block index
-    pub fn enter_block_select_mode(&mut self, index: usize) {
-        self.ui.set_mode(UiMode::BlockSelect { block_index: index });
-    }
-
-    /// Exit block select mode and unlock input
-    pub fn exit_block_select_mode(&mut self) {
-        if self.ui.in_block_select_mode() {
-            self.ui.set_mode(UiMode::Typing);
-        }
     }
 
     pub fn prepare_retry(
@@ -1345,8 +1259,8 @@ mod tests {
     fn test_last_and_first_user_message_index() {
         let mut app = create_test_app();
         // No messages
-        assert_eq!(app.last_user_message_index(), None);
-        assert_eq!(app.first_user_message_index(), None);
+        assert_eq!(app.ui.last_user_message_index(), None);
+        assert_eq!(app.ui.first_user_message_index(), None);
 
         // Add messages: user, assistant, user
         app.ui.messages.push_back(create_test_message("user", "u1"));
@@ -1355,8 +1269,8 @@ mod tests {
             .push_back(create_test_message("assistant", "a1"));
         app.ui.messages.push_back(create_test_message("user", "u2"));
 
-        assert_eq!(app.first_user_message_index(), Some(0));
-        assert_eq!(app.last_user_message_index(), Some(2));
+        assert_eq!(app.ui.first_user_message_index(), Some(0));
+        assert_eq!(app.ui.last_user_message_index(), Some(2));
     }
 
     #[test]
@@ -1655,13 +1569,13 @@ Some additional text after the table."#;
         app.ui.messages.push_back(create_test_message("user", "u2"));
 
         // From index 3 (user) prev should be 0 (skipping non-user)
-        assert_eq!(app.prev_user_message_index(3), Some(0));
+        assert_eq!(app.ui.prev_user_message_index(3), Some(0));
         // From index 0 next should be 3 (skipping non-user)
-        assert_eq!(app.next_user_message_index(0), Some(3));
+        assert_eq!(app.ui.next_user_message_index(0), Some(3));
         // From index 1 prev should be 0
-        assert_eq!(app.prev_user_message_index(1), Some(0));
+        assert_eq!(app.ui.prev_user_message_index(1), Some(0));
         // From index 1 next should be 3
-        assert_eq!(app.next_user_message_index(1), Some(3));
+        assert_eq!(app.ui.next_user_message_index(1), Some(3));
     }
 
     #[test]

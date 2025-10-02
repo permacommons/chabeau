@@ -161,7 +161,7 @@ impl KeyHandler for EscapeHandler {
             return KeyResult::Handled;
         }
         if app_guard.ui.in_place_edit_index().is_some() {
-            app_guard.cancel_in_place_edit();
+            app_guard.ui.cancel_in_place_edit();
             app_guard.ui.clear_input();
             return KeyResult::Handled;
         }
@@ -461,7 +461,7 @@ impl KeyHandler for CtrlBHandler {
             app_guard.set_status("No code blocks");
         } else {
             let last = blocks.len().saturating_sub(1);
-            app_guard.enter_block_select_mode(last);
+            app_guard.ui.enter_block_select_mode(last);
             if let Some((start, _len, _)) = blocks.get(last) {
                 scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
             }
@@ -486,25 +486,27 @@ impl KeyHandler for CtrlPHandler {
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
 
-        if app_guard.last_user_message_index().is_none() {
+        if app_guard.ui.last_user_message_index().is_none() {
             app_guard.set_status("No user messages");
             return KeyResult::Handled;
         }
 
         if app_guard.ui.in_edit_select_mode() {
             if let Some(current) = app_guard.ui.selected_user_message_index() {
-                if let Some(prev) = app_guard
-                    .prev_user_message_index(current)
-                    .or_else(|| app_guard.last_user_message_index())
-                {
+                let prev = {
+                    let ui = &app_guard.ui;
+                    ui.prev_user_message_index(current)
+                        .or_else(|| ui.last_user_message_index())
+                };
+                if let Some(prev) = prev {
                     app_guard.ui.set_selected_user_message_index(prev);
                 }
-            } else if let Some(last) = app_guard.last_user_message_index() {
+            } else if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
             }
         } else {
-            app_guard.enter_edit_select_mode();
-            if let Some(last) = app_guard.last_user_message_index() {
+            app_guard.ui.enter_edit_select_mode();
+            if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
             }
         }

@@ -99,6 +99,80 @@ impl UiState {
         }
     }
 
+    pub fn last_user_message_index(&self) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
+        if from_index == 0 {
+            return None;
+        }
+
+        self.messages
+            .iter()
+            .enumerate()
+            .take(from_index)
+            .rev()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .skip(from_index + 1)
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    pub fn first_user_message_index(&self) -> Option<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+    }
+
+    pub fn enter_edit_select_mode(&mut self) {
+        if let Some(idx) = self.last_user_message_index() {
+            self.set_mode(UiMode::EditSelect {
+                selected_index: idx,
+            });
+        }
+    }
+
+    pub fn exit_edit_select_mode(&mut self) {
+        if self.in_edit_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
+    }
+
+    pub fn start_in_place_edit(&mut self, index: usize) {
+        self.set_mode(UiMode::InPlaceEdit { index });
+    }
+
+    pub fn cancel_in_place_edit(&mut self) {
+        if self.in_place_edit_index().is_some() {
+            self.set_mode(UiMode::Typing);
+        }
+    }
+
+    pub fn enter_block_select_mode(&mut self, index: usize) {
+        self.set_mode(UiMode::BlockSelect { block_index: index });
+    }
+
+    pub fn exit_block_select_mode(&mut self) {
+        if self.in_block_select_mode() {
+            self.set_mode(UiMode::Typing);
+        }
+    }
+
     pub fn in_place_edit_index(&self) -> Option<usize> {
         if let UiMode::InPlaceEdit { index } = self.mode {
             Some(index)

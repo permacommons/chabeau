@@ -541,6 +541,66 @@ impl UiState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{UiMode, UiState};
+    use crate::ui::theme::Theme;
+    use crate::utils::test_utils::create_test_message;
+
+    #[test]
+    fn enter_edit_select_mode_focuses_last_user_message() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+        ui.messages
+            .push_back(create_test_message("assistant", "ignore"));
+        ui.messages.push_back(create_test_message("user", "first"));
+        ui.messages
+            .push_back(create_test_message("assistant", "still ignore"));
+        ui.messages.push_back(create_test_message("user", "last"));
+
+        ui.enter_edit_select_mode();
+
+        match ui.mode {
+            UiMode::EditSelect { selected_index } => assert_eq!(selected_index, 3),
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exit_edit_select_mode_returns_to_typing() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+        ui.set_mode(UiMode::EditSelect { selected_index: 0 });
+
+        ui.exit_edit_select_mode();
+
+        assert!(matches!(ui.mode, UiMode::Typing));
+    }
+
+    #[test]
+    fn block_select_mode_transitions_round_trip() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+
+        ui.enter_block_select_mode(2);
+        match ui.mode {
+            UiMode::BlockSelect { block_index } => assert_eq!(block_index, 2),
+            other => panic!("expected block select mode, got {other:?}"),
+        }
+
+        ui.exit_block_select_mode();
+        assert!(matches!(ui.mode, UiMode::Typing));
+    }
+
+    #[test]
+    fn cancel_in_place_edit_returns_to_typing() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+
+        ui.start_in_place_edit(1);
+        assert!(matches!(ui.mode, UiMode::InPlaceEdit { index: 1 }));
+
+        ui.cancel_in_place_edit();
+        assert!(matches!(ui.mode, UiMode::Typing));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PrewrapCache {
     width: u16,

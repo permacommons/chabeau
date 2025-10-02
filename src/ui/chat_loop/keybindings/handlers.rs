@@ -781,3 +781,22 @@ impl KeyHandler for PickerHandler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{wrap_next_index, wrap_previous_index};
+
+    #[test]
+    fn wrap_previous_index_wraps_to_end() {
+        assert_eq!(wrap_previous_index(0, 0), None);
+        assert_eq!(wrap_previous_index(0, 3), Some(2));
+        assert_eq!(wrap_previous_index(2, 3), Some(1));
+    }
+
+    #[test]
+    fn wrap_next_index_wraps_to_start() {
+        assert_eq!(wrap_next_index(0, 0), None);
+        assert_eq!(wrap_next_index(2, 3), Some(0));
+        assert_eq!(wrap_next_index(1, 3), Some(2));
+    }
+}

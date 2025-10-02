@@ -1,5 +1,8 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::{suggest_provider_id, Config, CustomProvider};
+use crate::core::providers::{
+    resolve_session, ProviderAuthSource, ProviderMetadata, ResolveSessionError,
+};
 use crate::utils::input::sanitize_text_input;
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
@@ -105,170 +108,10 @@ impl AuthManager {
         provider: Option<&str>,
         config: &Config,
     ) -> Result<(String, String, String, String), Box<dyn std::error::Error>> {
-        // Handle the case where provider is specified but empty (""), meaning use config default
-        if let Some(provider_name) = provider {
-            if provider_name.is_empty() {
-                // User specified -p without a value, use config default if available
-                if let Some(ref default_provider) = config.default_provider {
-                    if let Some((base_url, api_key)) =
-                        self.get_auth_for_provider(default_provider)?
-                    {
-                        let display_name = self
-                            .find_provider_by_name(default_provider)
-                            .map(|p| p.display_name.clone())
-                            .unwrap_or_else(|| default_provider.clone());
-                        Ok((
-                            api_key,
-                            base_url,
-                            default_provider.to_lowercase(),
-                            display_name,
-                        ))
-                    } else {
-                        Err(format!("No authentication found for default provider '{default_provider}'. Run 'chabeau auth' to set up authentication.").into())
-                    }
-                } else {
-                    // Try to find any available authentication (skip when keyring disabled)
-                    if !self.use_keyring {
-                        // Fall back directly to environment variables when keyring is disabled (tests)
-                        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                            "❌ No authentication configured and OPENAI_API_KEY environment variable not set
-
-Please either:
-1. Run 'chabeau auth' to set up authentication, or
-2. Set environment variables:
-   export OPENAI_API_KEY=\"your-api-key-here\"
-   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
-                        })?;
-
-                        let base_url = std::env::var("OPENAI_BASE_URL")
-                            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-
-                        return Ok((
-                            api_key,
-                            base_url,
-                            "openai".to_string(),
-                            "OpenAI".to_string(),
-                        ));
-                    }
-                    if let Some((provider, api_key)) = self.find_first_available_auth() {
-                        Ok((
-                            api_key,
-                            provider.base_url,
-                            provider.name.to_lowercase(),
-                            provider.display_name,
-                        ))
-                    } else {
-                        // Fall back to environment variables
-                        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                            "❌ No authentication configured and OPENAI_API_KEY environment variable not set
-
-Please either:
-1. Run 'chabeau auth' to set up authentication, or
-2. Set environment variables:
-   export OPENAI_API_KEY=\"your-api-key-here\"
-   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
-                        })?;
-
-                        let base_url = std::env::var("OPENAI_BASE_URL")
-                            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-
-                        Ok((
-                            api_key,
-                            base_url,
-                            "openai".to_string(),
-                            "OpenAI".to_string(),
-                        ))
-                    }
-                }
-            } else {
-                // User specified a provider - normalize to lowercase for consistent config lookup
-                let normalized_provider_name = provider_name.to_lowercase();
-                if let Some((base_url, api_key)) = self.get_auth_for_provider(provider_name)? {
-                    let display_name = self
-                        .find_provider_by_name(provider_name)
-                        .map(|p| p.display_name.clone())
-                        .unwrap_or_else(|| provider_name.to_string());
-                    Ok((api_key, base_url, normalized_provider_name, display_name))
-                } else {
-                    Err(format!("No authentication found for provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into())
-                }
-            }
-        } else if let Some(ref provider_name) = config.default_provider {
-            // Config specifies a default provider
-            if let Some((base_url, api_key)) = self.get_auth_for_provider(provider_name)? {
-                let display_name = self
-                    .find_provider_by_name(provider_name)
-                    .map(|p| p.display_name.clone())
-                    .unwrap_or_else(|| provider_name.clone());
-                Ok((
-                    api_key,
-                    base_url,
-                    provider_name.to_lowercase(),
-                    display_name,
-                ))
-            } else {
-                Err(format!("No authentication found for default provider '{provider_name}'. Run 'chabeau auth' to set up authentication.").into())
-            }
-        } else {
-            // Try to find any available authentication (skip when keyring disabled)
-            if !self.use_keyring {
-                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                    "❌ No authentication configured and OPENAI_API_KEY environment variable not set
-
-Please either:
-1. Run 'chabeau auth' to set up authentication, or
-2. Set environment variables:
-   export OPENAI_API_KEY=\"your-api-key-here\"
-   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
-                })?;
-
-                let default_base = "https://api.openai.com/v1".to_string();
-                let base_url =
-                    std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
-                let (prov, display) = if base_url == default_base {
-                    ("openai".to_string(), "OpenAI".to_string())
-                } else {
-                    (
-                        "openai-compatible".to_string(),
-                        "OpenAI-compatible".to_string(),
-                    )
-                };
-
-                return Ok((api_key, base_url, prov, display));
-            }
-            if let Some((provider, api_key)) = self.find_first_available_auth() {
-                Ok((
-                    api_key,
-                    provider.base_url,
-                    provider.name.to_lowercase(),
-                    provider.display_name,
-                ))
-            } else {
-                // Fall back to environment variables
-                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                    "❌ No authentication configured and OPENAI_API_KEY environment variable not set
-
-Please either:
-1. Run 'chabeau auth' to set up authentication, or
-2. Set environment variables:
-   export OPENAI_API_KEY=\"your-api-key-here\"
-   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
-                })?;
-
-                let default_base = "https://api.openai.com/v1".to_string();
-                let base_url =
-                    std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base.clone());
-                let (prov, display) = if base_url == default_base {
-                    ("openai".to_string(), "OpenAI".to_string())
-                } else {
-                    (
-                        "openai-compatible".to_string(),
-                        "OpenAI-compatible".to_string(),
-                    )
-                };
-
-                Ok((api_key, base_url, prov, display))
-            }
+        match resolve_session(self, config, provider) {
+            Ok(session) => Ok(session.into_tuple()),
+            Err(ResolveSessionError::Provider(err)) => Err(Box::new(err)),
+            Err(ResolveSessionError::Source(err)) => Err(err),
         }
     }
 
@@ -797,6 +640,49 @@ Please either:
         while !input.is_empty() && !input.ends_with(' ') {
             input.pop();
         }
+    }
+}
+
+impl ProviderAuthSource for AuthManager {
+    fn uses_keyring(&self) -> bool {
+        self.use_keyring
+    }
+
+    fn find_provider_metadata(&self, provider: &str) -> Option<ProviderMetadata> {
+        if let Some(builtin) = self.find_provider_by_name(provider) {
+            return Some(ProviderMetadata {
+                id: builtin.name.clone(),
+                display_name: builtin.display_name.clone(),
+                base_url: builtin.base_url.clone(),
+            });
+        }
+
+        self.get_custom_provider(provider)
+            .map(|custom| ProviderMetadata {
+                id: custom.id.clone(),
+                display_name: custom.display_name.clone(),
+                base_url: custom.base_url.clone(),
+            })
+    }
+
+    fn get_auth_for_provider(
+        &self,
+        provider: &str,
+    ) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+        AuthManager::get_auth_for_provider(self, provider)
+    }
+
+    fn find_first_available_auth(&self) -> Option<(ProviderMetadata, String)> {
+        AuthManager::find_first_available_auth(self).map(|(provider, token)| {
+            (
+                ProviderMetadata {
+                    id: provider.name,
+                    display_name: provider.display_name,
+                    base_url: provider.base_url,
+                },
+                token,
+            )
+        })
     }
 }
 

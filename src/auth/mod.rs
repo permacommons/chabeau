@@ -27,6 +27,8 @@ pub struct Provider {
     pub display_name: String,
 }
 
+type ConfiguredProviderEntry = (String, String, bool);
+
 impl Provider {
     pub fn new(
         name: String,
@@ -399,26 +401,9 @@ impl AuthManager {
         println!();
 
         // Collect all configured providers
-        let mut configured_providers = Vec::new();
-
-        // Check built-in providers
-        for provider in &self.providers {
-            if self.get_token(&provider.name)?.is_some() {
-                configured_providers.push((
-                    provider.name.clone(),
-                    provider.display_name.clone(),
-                    false,
-                ));
-            }
-        }
-
-        // Check custom providers
-        let custom_providers = self.list_custom_providers();
-        for (id, display_name, _url, has_token) in custom_providers {
-            if has_token {
-                configured_providers.push((id, display_name, true));
-            }
-        }
+        let configured_providers = self.collect_configured_providers(|name| {
+            self.get_token(name).map(|token| token.is_some())
+        })?;
 
         if configured_providers.is_empty() {
             println!("No configured providers found.");
@@ -476,6 +461,42 @@ impl AuthManager {
 
         println!("✅ Authentication removed for {display_name}");
         Ok(())
+    }
+
+    fn collect_configured_providers<F>(
+        &self,
+        mut has_token: F,
+    ) -> Result<Vec<ConfiguredProviderEntry>, Box<dyn std::error::Error>>
+    where
+        F: FnMut(&str) -> Result<bool, Box<dyn std::error::Error>>,
+    {
+        let mut configured_providers: Vec<ConfiguredProviderEntry> = Vec::new();
+
+        for provider in &self.providers {
+            if self.get_custom_provider(&provider.name).is_some() {
+                continue;
+            }
+
+            if has_token(&provider.name)? {
+                configured_providers.push((
+                    provider.name.clone(),
+                    provider.display_name.clone(),
+                    false,
+                ));
+            }
+        }
+
+        for custom_provider in self.config.list_custom_providers() {
+            if has_token(&custom_provider.id)? {
+                configured_providers.push((
+                    custom_provider.id.clone(),
+                    custom_provider.display_name.clone(),
+                    true,
+                ));
+            }
+        }
+
+        Ok(configured_providers)
     }
 
     fn remove_provider_auth(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -693,6 +714,54 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn collect_configured_providers_skips_duplicate_custom_entries() {
+        let mut config = Config::default();
+        config.add_custom_provider(CustomProvider::new(
+            "custom".to_string(),
+            "Custom Provider".to_string(),
+            "https://example.com".to_string(),
+            None,
+        ));
+
+        let providers = vec![
+            Provider::new(
+                "anthropic".to_string(),
+                "https://api.anthropic.com".to_string(),
+                "Anthropic".to_string(),
+                None,
+            ),
+            Provider::new(
+                "custom".to_string(),
+                "https://example.com".to_string(),
+                "Custom Provider".to_string(),
+                None,
+            ),
+        ];
+
+        let manager = AuthManager {
+            providers,
+            config,
+            use_keyring: false,
+        };
+
+        let configured = manager
+            .collect_configured_providers(|name| {
+                Ok::<bool, Box<dyn std::error::Error>>(matches!(name, "anthropic" | "custom"))
+            })
+            .expect("configured providers should be collected");
+
+        assert_eq!(configured.len(), 2);
+        assert_eq!(
+            configured[0],
+            ("anthropic".to_string(), "Anthropic".to_string(), false)
+        );
+        assert_eq!(
+            configured[1],
+            ("custom".to_string(), "Custom Provider".to_string(), true,)
+        );
+    }
 
     fn create_test_auth_manager() -> AuthManager {
         AuthManager::new_with_keyring(false)

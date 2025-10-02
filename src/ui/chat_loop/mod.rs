@@ -381,19 +381,21 @@ async fn handle_edit_select_mode_event(
 
     match key.code {
         KeyCode::Esc => {
-            app_guard.exit_edit_select_mode();
+            app_guard.ui.exit_edit_select_mode();
             true
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(current) = app_guard.ui.selected_user_message_index() {
-                if let Some(prev) = app_guard
-                    .prev_user_message_index(current)
-                    .or_else(|| app_guard.last_user_message_index())
-                {
+                let prev = {
+                    let ui = &app_guard.ui;
+                    ui.prev_user_message_index(current)
+                        .or_else(|| ui.last_user_message_index())
+                };
+                if let Some(prev) = prev {
                     app_guard.ui.set_selected_user_message_index(prev);
                     app_guard.scroll_index_into_view(prev, term_width, term_height);
                 }
-            } else if let Some(last) = app_guard.last_user_message_index() {
+            } else if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
             }
             true
@@ -401,14 +403,16 @@ async fn handle_edit_select_mode_event(
 
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(current) = app_guard.ui.selected_user_message_index() {
-                if let Some(next) = app_guard
-                    .next_user_message_index(current)
-                    .or_else(|| app_guard.first_user_message_index())
-                {
+                let next = {
+                    let ui = &app_guard.ui;
+                    ui.next_user_message_index(current)
+                        .or_else(|| ui.first_user_message_index())
+                };
+                if let Some(next) = next {
                     app_guard.ui.set_selected_user_message_index(next);
                     app_guard.scroll_index_into_view(next, term_width, term_height);
                 }
-            } else if let Some(last) = app_guard.last_user_message_index() {
+            } else if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
             }
             true
@@ -425,7 +429,7 @@ async fn handle_edit_select_mode_event(
                         .logging
                         .rewrite_log_without_last_response(&app_guard.ui.messages);
                     app_guard.ui.set_input_text(content);
-                    app_guard.exit_edit_select_mode();
+                    app_guard.ui.exit_edit_select_mode();
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
@@ -439,8 +443,8 @@ async fn handle_edit_select_mode_event(
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     let content = app_guard.ui.messages[idx].content.clone();
                     app_guard.ui.set_input_text(content);
-                    app_guard.start_in_place_edit(idx);
-                    app_guard.exit_edit_select_mode();
+                    app_guard.ui.start_in_place_edit(idx);
+                    app_guard.ui.exit_edit_select_mode();
                 }
             }
             true
@@ -455,7 +459,7 @@ async fn handle_edit_select_mode_event(
                         .session
                         .logging
                         .rewrite_log_without_last_response(&app_guard.ui.messages);
-                    app_guard.exit_edit_select_mode();
+                    app_guard.ui.exit_edit_select_mode();
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
@@ -490,7 +494,7 @@ async fn handle_block_select_mode_event(
 
     match key.code {
         KeyCode::Esc => {
-            app_guard.exit_block_select_mode();
+            app_guard.ui.exit_block_select_mode();
             true
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -529,7 +533,7 @@ async fn handle_block_select_mode_event(
                         Ok(()) => app_guard.set_status("Copied code block"),
                         Err(_e) => app_guard.set_status("Clipboard error"),
                     }
-                    app_guard.exit_block_select_mode();
+                    app_guard.ui.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
@@ -561,7 +565,7 @@ async fn handle_block_select_mode_event(
                             Err(_e) => app_guard.set_status("Error saving code block"),
                         }
                     }
-                    app_guard.exit_block_select_mode();
+                    app_guard.ui.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =

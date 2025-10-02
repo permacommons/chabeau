@@ -5,7 +5,9 @@ use tokio::sync::Mutex;
 use crate::{
     auth::AuthManager,
     core::{
-        app::App, builtin_providers::load_builtin_providers, config::Config,
+        app::{self, App},
+        builtin_providers::load_builtin_providers,
+        config::Config,
         providers::ProviderResolutionError,
     },
 };
@@ -75,7 +77,7 @@ pub async fn bootstrap_app(
 
     let app = if open_provider_picker {
         let app = Arc::new(Mutex::new(
-            App::new_uninitialized(log.clone()).await.expect("init app"),
+            app::new_uninitialized(log.clone()).await.expect("init app"),
         ));
         {
             let mut app_guard = app.lock().await;
@@ -86,7 +88,7 @@ pub async fn bootstrap_app(
         app
     } else {
         let app = Arc::new(Mutex::new(
-            match App::new_with_auth(
+            match app::new_with_auth(
                 model.clone(),
                 log.clone(),
                 selected_provider,

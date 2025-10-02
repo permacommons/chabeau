@@ -1,7 +1,7 @@
 //! Built-in provider configuration
 //!
 //! This module handles loading and managing built-in provider configurations
-//! from the builtin_models.toml file at build time.
+//! from the builtins/models.toml file at build time.
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -31,11 +31,11 @@ impl BuiltinProvider {
     }
 }
 
-const CONFIG_CONTENT: &str = include_str!("../builtin_models.toml");
+const CONFIG_CONTENT: &str = include_str!("../builtins/models.toml");
 
 static BUILTIN_PROVIDERS: Lazy<Vec<BuiltinProvider>> = Lazy::new(|| {
     let config: BuiltinProvidersConfig =
-        toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtin_models.toml");
+        toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtins/models.toml");
 
     config.providers
 });

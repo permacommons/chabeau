@@ -40,9 +40,9 @@ struct BuiltinThemesConfig {
 }
 
 pub fn load_builtin_themes() -> Vec<ThemeSpec> {
-    const CONFIG_CONTENT: &str = include_str!("../builtin_themes.toml");
+    const CONFIG_CONTENT: &str = include_str!("../builtins/themes.toml");
     let config: BuiltinThemesConfig =
-        toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtin_themes.toml");
+        toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtins/themes.toml");
     config.themes
 }
 

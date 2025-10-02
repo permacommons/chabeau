@@ -262,6 +262,13 @@ fn initialize_logging(
     Ok(logging)
 }
 
+fn theme_from_appearance(appearance: Appearance) -> Theme {
+    match appearance {
+        Appearance::Light => Theme::light(),
+        Appearance::Dark => Theme::dark_default(),
+    }
+}
+
 fn resolve_theme(config: &Config) -> Theme {
     let resolved_theme = match &config.theme {
         Some(name) => {
@@ -273,11 +280,9 @@ fn resolve_theme(config: &Config) -> Theme {
                 Theme::from_name(name)
             }
         }
-        None => match detect_preferred_appearance() {
-            Some(Appearance::Light) => Theme::light(),
-            Some(Appearance::Dark) => Theme::dark_default(),
-            None => Theme::dark_default(),
-        },
+        None => detect_preferred_appearance()
+            .map(theme_from_appearance)
+            .unwrap_or_else(Theme::dark_default),
     };
 
     crate::utils::color::quantize_theme_for_current_terminal(resolved_theme)
@@ -2212,6 +2217,37 @@ mod tests {
     use super::*;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
+
+    #[test]
+    fn theme_from_appearance_matches_light_theme() {
+        let theme = theme_from_appearance(Appearance::Light);
+        assert_eq!(theme.background_color, Theme::light().background_color);
+    }
+
+    #[test]
+    fn theme_from_appearance_matches_dark_theme() {
+        let theme = theme_from_appearance(Appearance::Dark);
+        assert_eq!(
+            theme.background_color,
+            Theme::dark_default().background_color
+        );
+    }
+
+    #[test]
+    fn resolve_theme_prefers_configured_theme() {
+        let config = Config {
+            theme: Some("light".to_string()),
+            ..Default::default()
+        };
+
+        let resolved_theme = resolve_theme(&config);
+        let expected_theme =
+            crate::utils::color::quantize_theme_for_current_terminal(Theme::light());
+        assert_eq!(
+            resolved_theme.background_color,
+            expected_theme.background_color
+        );
+    }
 
     #[test]
     fn theme_picker_highlights_active_theme_over_default() {

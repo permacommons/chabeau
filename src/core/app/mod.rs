@@ -1,9 +1,8 @@
-use crate::auth::AuthManager;
 use crate::core::config::Config;
 use crate::core::message::Message;
-use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
 use crate::ui::picker::PickerState;
 use crate::ui::span::SpanKind;
+#[cfg(any(test, feature = "bench"))]
 use crate::ui::theme::Theme;
 use crate::utils::scroll::ScrollCalculator;
 use ratatui::text::Line;
@@ -13,6 +12,7 @@ use tui_textarea::TextArea;
 
 pub mod picker;
 pub mod session;
+pub mod settings;
 pub mod ui_state;
 
 #[cfg_attr(not(test), allow(unused_imports))]
@@ -21,6 +21,7 @@ pub use picker::{
     ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
+pub use settings::{ProviderController, ThemeController};
 pub use ui_state::{FilePrompt, FilePromptKind, UiMode, UiState};
 
 pub async fn new_with_auth(
@@ -205,6 +206,14 @@ impl App {
 
     pub fn provider_picker_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
         self.picker.provider_state_mut()
+    }
+
+    pub fn theme_controller(&mut self) -> ThemeController<'_> {
+        ThemeController::new(&mut self.ui, &mut self.picker)
+    }
+
+    pub fn provider_controller(&mut self) -> ProviderController<'_> {
+        ProviderController::new(&mut self.session, &mut self.picker)
     }
 
     /// Close any active picker session.
@@ -760,65 +769,22 @@ impl App {
     }
 
     /// Apply theme by id (custom or built-in) and persist in config
+    #[allow(dead_code)]
     pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
-        let cfg = Config::load_test_safe();
-        let theme = if let Some(ct) = cfg.get_custom_theme(id) {
-            Theme::from_spec(&theme_spec_from_custom(ct))
-        } else if let Some(spec) = find_builtin_theme(id) {
-            Theme::from_spec(&spec)
-        } else {
-            return Err(format!("Unknown theme: {}", id));
-        };
-        // Quantize to terminal color depth
-        self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
-        self.ui.current_theme_id = Some(id.to_string());
-        self.configure_textarea_appearance();
-
-        let mut cfg = Config::load_test_safe();
-        cfg.theme = Some(id.to_string());
-        cfg.save_test_safe().map_err(|e| e.to_string())?;
-        if let Some(state) = self.theme_picker_state_mut() {
-            state.before_theme = None;
-            state.before_theme_id = None;
-        }
-        Ok(())
+        let mut controller = self.theme_controller();
+        controller.apply_theme_by_id(id)
     }
 
     /// Apply theme temporarily for preview (does not persist config)
     pub fn preview_theme_by_id(&mut self, id: &str) {
-        // Try custom then built-in then no-op
-        let cfg = Config::load_test_safe();
-        if let Some(ct) = cfg.get_custom_theme(id) {
-            self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(
-                Theme::from_spec(&theme_spec_from_custom(ct)),
-            );
-            self.configure_textarea_appearance();
-            return;
-        }
-        if let Some(spec) = find_builtin_theme(id) {
-            self.ui.theme =
-                crate::utils::color::quantize_theme_for_current_terminal(Theme::from_spec(&spec));
-            self.configure_textarea_appearance();
-        }
+        let mut controller = self.theme_controller();
+        controller.preview_theme_by_id(id);
     }
 
     /// Revert theme to the one before opening picker (on cancel)
     pub fn revert_theme_preview(&mut self) {
-        let previous_theme = self
-            .theme_picker_state()
-            .and_then(|state| state.before_theme.clone());
-
-        if let Some(state) = self.theme_picker_state_mut() {
-            state.before_theme = None;
-            state.before_theme_id = None;
-            state.search_filter.clear();
-            state.all_items.clear();
-        }
-
-        if let Some(prev) = previous_theme {
-            self.ui.theme = prev;
-            self.configure_textarea_appearance();
-        }
+        let mut controller = self.theme_controller();
+        controller.revert_theme_preview();
     }
 
     /// Open a model picker modal with available models from current provider
@@ -851,15 +817,10 @@ impl App {
         self.picker.update_title();
     }
     /// Apply model by id and persist in current session (not config)
+    #[allow(dead_code)]
     pub fn apply_model_by_id(&mut self, model_id: &str) {
-        self.session.model = model_id.to_string();
-        if let Some(state) = self.model_picker_state_mut() {
-            state.before_model = None;
-        }
-        // Complete provider->model transition if we were in one
-        if self.picker.in_provider_model_transition {
-            self.complete_provider_model_transition();
-        }
+        let mut controller = self.provider_controller();
+        controller.apply_model_by_id(model_id);
     }
 
     /// Revert model to the one before opening picker (on cancel)
@@ -896,51 +857,10 @@ impl App {
     /// Returns a tuple with (Result, bool), where:
     /// - Result<(), String> indicates success or failure of the provider change
     /// - bool indicates whether a model picker should be opened after changing provider
+    #[allow(dead_code)]
     pub fn apply_provider_by_id(&mut self, provider_id: &str) -> (Result<(), String>, bool) {
-        let auth_manager = AuthManager::new();
-        let config = Config::load_test_safe();
-
-        // Use the shared authentication resolution function to get provider info
-        match auth_manager.resolve_authentication(Some(provider_id), &config) {
-            Ok((api_key, base_url, provider_name, provider_display_name)) => {
-                // Check if there's a default model for this provider
-                let open_model_picker =
-                    if let Some(default_model) = config.get_default_model(&provider_name) {
-                        // Apply the default model immediately
-                        self.session.api_key = api_key;
-                        self.session.base_url = base_url;
-                        self.session.provider_name = provider_name.clone();
-                        self.session.provider_display_name = provider_display_name;
-                        self.session.model = default_model.clone();
-                        false // No need to open model picker
-                    } else {
-                        // No default model found, need to save state before changing provider
-                        // so we can revert if model picker is cancelled
-                        self.picker.in_provider_model_transition = true;
-                        self.picker.provider_model_transition_state = Some((
-                            self.session.provider_name.clone(),
-                            self.session.provider_display_name.clone(),
-                            self.session.model.clone(),
-                            self.session.api_key.clone(),
-                            self.session.base_url.clone(),
-                        ));
-
-                        // Apply the new provider
-                        self.session.api_key = api_key;
-                        self.session.base_url = base_url;
-                        self.session.provider_name = provider_name.clone();
-                        self.session.provider_display_name = provider_display_name;
-                        true // Need to open model picker
-                    };
-
-                if let Some(state) = self.provider_picker_state_mut() {
-                    state.before_provider = None;
-                }
-
-                (Ok(()), open_model_picker)
-            }
-            Err(e) => (Err(e.to_string()), false),
-        }
+        let mut controller = self.provider_controller();
+        controller.apply_provider_by_id(provider_id)
     }
 
     /// Apply provider by id and persist as default provider in config
@@ -948,23 +868,14 @@ impl App {
     /// Returns a tuple with (Result, bool), where:
     /// - Result<(), String> indicates success or failure of the provider change
     /// - bool indicates whether a model picker should be opened after changing provider
+    #[allow(dead_code)]
     pub fn apply_provider_by_id_persistent(
         &mut self,
         provider_id: &str,
     ) -> (Result<(), String>, bool) {
         // First apply the provider change
-        let (result, open_model_picker) = self.apply_provider_by_id(provider_id);
-        if let Err(e) = result {
-            return (Err(e), false);
-        }
-
-        // Then persist to config
-        let mut config = Config::load_test_safe();
-        config.default_provider = Some(provider_id.to_string());
-        match config.save_test_safe() {
-            Ok(_) => (Ok(()), open_model_picker),
-            Err(e) => (Err(e.to_string()), false),
-        }
+        let mut controller = self.provider_controller();
+        controller.apply_provider_by_id_persistent(provider_id)
     }
 
     /// Revert provider to the one before opening picker (on cancel)
@@ -1013,61 +924,39 @@ impl App {
     }
 
     /// Apply model by id and persist as default model for current provider in config
+    #[allow(dead_code)]
     pub fn apply_model_by_id_persistent(&mut self, model_id: &str) -> Result<(), String> {
         // First apply the model change (this will complete the transition)
-        self.apply_model_by_id(model_id);
-
-        // Then persist to config
-        let mut config = Config::load_test_safe();
-        config.set_default_model(self.session.provider_name.clone(), model_id.to_string());
-        config.save_test_safe().map_err(|e| e.to_string())?;
-
-        Ok(())
+        let mut controller = self.provider_controller();
+        controller.apply_model_by_id_persistent(model_id)
     }
 
     /// Apply theme by id for session only (does not persist to config)
+    #[allow(dead_code)]
     pub fn apply_theme_by_id_session_only(&mut self, id: &str) -> Result<(), String> {
-        let cfg = Config::load_test_safe();
-        let theme = if let Some(ct) = cfg.get_custom_theme(id) {
-            Theme::from_spec(&theme_spec_from_custom(ct))
-        } else if let Some(spec) = find_builtin_theme(id) {
-            Theme::from_spec(&spec)
-        } else {
-            return Err(format!("Unknown theme: {}", id));
-        };
-        // Quantize to terminal color depth
-        self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
-        self.ui.current_theme_id = Some(id.to_string());
-        self.configure_textarea_appearance();
-        if let Some(state) = self.theme_picker_state_mut() {
-            state.before_theme = None;
-            state.before_theme_id = None;
-        }
-        Ok(())
+        let mut controller = self.theme_controller();
+        controller.apply_theme_by_id_session_only(id)
     }
 
     /// Unset the default model for a specific provider
+    #[allow(dead_code)]
     pub fn unset_default_model(&mut self, provider: &str) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.unset_default_model(provider);
-        config.save_test_safe().map_err(|e| e.to_string())?;
-        Ok(())
+        let mut controller = self.provider_controller();
+        controller.unset_default_model(provider)
     }
 
     /// Unset the default theme
+    #[allow(dead_code)]
     pub fn unset_default_theme(&mut self) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.theme = None;
-        config.save_test_safe().map_err(|e| e.to_string())?;
-        Ok(())
+        let mut controller = self.theme_controller();
+        controller.unset_default_theme()
     }
 
     /// Unset the default provider
+    #[allow(dead_code)]
     pub fn unset_default_provider(&mut self) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.default_provider = None;
-        config.save_test_safe().map_err(|e| e.to_string())?;
-        Ok(())
+        let mut controller = self.provider_controller();
+        controller.unset_default_provider()
     }
 }
 

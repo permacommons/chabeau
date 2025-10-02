@@ -16,7 +16,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     f.render_widget(bg_block, f.area());
 
     // Calculate dynamic input area height based on content
-    let input_area_height = app.calculate_input_area_height(f.area().width);
+    let input_area_height = app.ui.calculate_input_area_height(f.area().width);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -28,30 +28,31 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let (lines, span_metadata) = if !app.in_edit_select_mode() && !app.in_block_select_mode() {
+    let (lines, span_metadata) = if !app.ui.in_edit_select_mode() && !app.ui.in_block_select_mode()
+    {
         let lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
         let metadata = app
             .get_prewrapped_span_metadata_cached(chunks[0].width)
             .clone();
         (lines, metadata)
-    } else if app.in_edit_select_mode() {
+    } else if app.ui.in_edit_select_mode() {
         let highlight = Style::default();
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
             &app.ui.messages,
             &app.ui.theme,
-            app.selected_user_message_index(),
+            app.ui.selected_user_message_index(),
             highlight,
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
         );
         (layout.lines, layout.span_metadata)
-    } else if app.in_block_select_mode() {
+    } else if app.ui.in_block_select_mode() {
         let highlight = Style::default().add_modifier(Modifier::BOLD);
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_codeblock_highlight_and_flags_and_width(
             &app.ui.messages,
             &app.ui.theme,
-            app.selected_block_index(),
+            app.ui.selected_block_index(),
             highlight,
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
@@ -131,9 +132,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ""
     };
 
-    let base_title = if app.in_edit_select_mode() {
+    let base_title = if app.ui.in_edit_select_mode() {
         "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
-    } else if app.in_block_select_mode() {
+    } else if app.ui.in_block_select_mode() {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
     } else if app.picker_session().is_some() {
         // Show specific prompt for picker mode with global shortcuts
@@ -149,9 +150,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
         }
-    } else if app.file_prompt().is_some() {
+    } else if app.ui.file_prompt().is_some() {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
-    } else if app.in_place_edit_index().is_some() {
+    } else if app.ui.in_place_edit_index().is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
     } else if app.ui.compose_mode {
         "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
@@ -270,7 +271,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     // Wrap one character earlier to avoid cursor touching the border
     let available_width = inner.width.saturating_sub(1);
     let config = WrapConfig::new(available_width as usize);
-    let wrapped_text = TextWrapper::wrap_text(app.get_input_text(), &config);
+    let wrapped_text = TextWrapper::wrap_text(app.ui.get_input_text(), &config);
     let paragraph = Paragraph::new(wrapped_text)
         .style(
             app.ui
@@ -284,9 +285,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Set cursor based on wrapped text and linear cursor position
     // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
-    if app.is_input_active() && available_width > 0 && app.picker_session().is_none() {
+    if app.ui.is_input_active() && available_width > 0 && app.picker_session().is_none() {
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            app.get_input_text(),
+            app.ui.get_input_text(),
             app.ui.input_cursor_position,
             &config,
         );

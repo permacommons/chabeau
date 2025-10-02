@@ -67,7 +67,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                         let msg = e.to_string();
                         if msg.contains("already exists") {
                             app.set_status("Log file already exists.");
-                            app.start_file_prompt_dump(filename);
+                            app.ui.start_file_prompt_dump(filename);
                             CommandResult::Continue
                         } else {
                             handle_dump_result(app, Err(e), &filename)

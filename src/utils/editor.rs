@@ -24,7 +24,7 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
     let temp_path = temp_file.path().to_path_buf();
 
     // Write current input to the temp file if there's any
-    let current_text = app.get_input_text();
+    let current_text = app.ui.get_input_text();
     if !current_text.is_empty() {
         fs::write(&temp_path, current_text)?;
     }
@@ -63,7 +63,7 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
         Ok(None)
     } else {
         // Clear the input and return the content to be sent immediately
-        app.clear_input();
+        app.ui.clear_input();
         let message = content.trim_end().to_string(); // Remove trailing newlines but preserve internal formatting
         Ok(Some(message))
     }

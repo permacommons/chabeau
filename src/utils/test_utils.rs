@@ -1,5 +1,7 @@
 #[cfg(test)]
-use crate::core::app::{App, PickerController, SessionContext, UiState};
+use crate::core::app::ui_state::UiState;
+#[cfg(test)]
+use crate::core::app::{App, PickerController, SessionContext};
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]

@@ -205,13 +205,6 @@ impl App {
         self.picker.open_theme_picker(&mut self.ui);
     }
 
-    /// Apply theme by id (custom or built-in) and persist in config
-    #[allow(dead_code)]
-    pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
-        let mut controller = self.theme_controller();
-        controller.apply_theme_by_id(id)
-    }
-
     /// Apply theme temporarily for preview (does not persist config)
     pub fn preview_theme_by_id(&mut self, id: &str) {
         let mut controller = self.theme_controller();
@@ -253,13 +246,6 @@ impl App {
     pub fn update_picker_title(&mut self) {
         self.picker.update_title();
     }
-    /// Apply model by id and persist in current session (not config)
-    #[allow(dead_code)]
-    pub fn apply_model_by_id(&mut self, model_id: &str) {
-        let mut controller = self.provider_controller();
-        controller.apply_model_by_id(model_id);
-    }
-
     /// Revert model to the one before opening picker (on cancel)
     pub fn revert_model_preview(&mut self) {
         self.picker.revert_model_preview(&mut self.session);
@@ -270,32 +256,6 @@ impl App {
         if let Err(message) = self.picker.open_provider_picker(&self.session) {
             self.conversation().set_status(message);
         }
-    }
-
-    /// Apply provider by id and update auth configuration (session-only)
-    ///
-    /// Returns a tuple with (Result, bool), where:
-    /// - Result<(), String> indicates success or failure of the provider change
-    /// - bool indicates whether a model picker should be opened after changing provider
-    #[allow(dead_code)]
-    pub fn apply_provider_by_id(&mut self, provider_id: &str) -> (Result<(), String>, bool) {
-        let mut controller = self.provider_controller();
-        controller.apply_provider_by_id(provider_id)
-    }
-
-    /// Apply provider by id and persist as default provider in config
-    ///
-    /// Returns a tuple with (Result, bool), where:
-    /// - Result<(), String> indicates success or failure of the provider change
-    /// - bool indicates whether a model picker should be opened after changing provider
-    #[allow(dead_code)]
-    pub fn apply_provider_by_id_persistent(
-        &mut self,
-        provider_id: &str,
-    ) -> (Result<(), String>, bool) {
-        // First apply the provider change
-        let mut controller = self.provider_controller();
-        controller.apply_provider_by_id_persistent(provider_id)
     }
 
     /// Revert provider to the one before opening picker (on cancel)
@@ -312,42 +272,6 @@ impl App {
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
         self.picker.complete_provider_model_transition();
-    }
-
-    /// Apply model by id and persist as default model for current provider in config
-    #[allow(dead_code)]
-    pub fn apply_model_by_id_persistent(&mut self, model_id: &str) -> Result<(), String> {
-        // First apply the model change (this will complete the transition)
-        let mut controller = self.provider_controller();
-        controller.apply_model_by_id_persistent(model_id)
-    }
-
-    /// Apply theme by id for session only (does not persist to config)
-    #[allow(dead_code)]
-    pub fn apply_theme_by_id_session_only(&mut self, id: &str) -> Result<(), String> {
-        let mut controller = self.theme_controller();
-        controller.apply_theme_by_id_session_only(id)
-    }
-
-    /// Unset the default model for a specific provider
-    #[allow(dead_code)]
-    pub fn unset_default_model(&mut self, provider: &str) -> Result<(), String> {
-        let mut controller = self.provider_controller();
-        controller.unset_default_model(provider)
-    }
-
-    /// Unset the default theme
-    #[allow(dead_code)]
-    pub fn unset_default_theme(&mut self) -> Result<(), String> {
-        let mut controller = self.theme_controller();
-        controller.unset_default_theme()
-    }
-
-    /// Unset the default provider
-    #[allow(dead_code)]
-    pub fn unset_default_provider(&mut self) -> Result<(), String> {
-        let mut controller = self.provider_controller();
-        controller.unset_default_provider()
     }
 }
 

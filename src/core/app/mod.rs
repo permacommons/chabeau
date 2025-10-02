@@ -8,7 +8,6 @@ use crate::utils::scroll::ScrollCalculator;
 use ratatui::text::Line;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tui_textarea::TextArea;
 
 pub mod picker;
 pub mod session;
@@ -22,7 +21,7 @@ pub use picker::{
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
-pub use ui_state::{FilePrompt, FilePromptKind, UiMode, UiState};
+pub use ui_state::{UiMode, UiState};
 
 pub async fn new_with_auth(
     model: String,
@@ -43,7 +42,7 @@ pub async fn new_with_auth(
         picker: PickerController::new(),
     };
 
-    app.set_input_text(String::new());
+    app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
 
     if startup_requires_provider {
@@ -74,7 +73,7 @@ pub async fn new_uninitialized(
         picker,
     };
 
-    app.set_input_text(String::new());
+    app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
 
     Ok(app)
@@ -87,82 +86,6 @@ pub struct App {
 }
 
 impl App {
-    pub fn is_input_active(&self) -> bool {
-        matches!(
-            self.ui.mode,
-            UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
-        )
-    }
-
-    pub fn in_edit_select_mode(&self) -> bool {
-        matches!(self.ui.mode, UiMode::EditSelect { .. })
-    }
-
-    pub fn selected_user_message_index(&self) -> Option<usize> {
-        if let UiMode::EditSelect { selected_index } = self.ui.mode {
-            Some(selected_index)
-        } else {
-            None
-        }
-    }
-
-    pub fn set_selected_user_message_index(&mut self, index: usize) {
-        if let UiMode::EditSelect { selected_index } = &mut self.ui.mode {
-            *selected_index = index;
-        }
-    }
-
-    pub fn in_block_select_mode(&self) -> bool {
-        matches!(self.ui.mode, UiMode::BlockSelect { .. })
-    }
-
-    pub fn selected_block_index(&self) -> Option<usize> {
-        if let UiMode::BlockSelect { block_index } = self.ui.mode {
-            Some(block_index)
-        } else {
-            None
-        }
-    }
-
-    pub fn set_selected_block_index(&mut self, index: usize) {
-        if let UiMode::BlockSelect { block_index } = &mut self.ui.mode {
-            *block_index = index;
-        }
-    }
-
-    pub fn in_place_edit_index(&self) -> Option<usize> {
-        if let UiMode::InPlaceEdit { index } = self.ui.mode {
-            Some(index)
-        } else {
-            None
-        }
-    }
-
-    fn set_mode(&mut self, mode: UiMode) {
-        self.ui.mode = mode;
-    }
-
-    pub fn file_prompt(&self) -> Option<&FilePrompt> {
-        if let UiMode::FilePrompt(ref prompt) = self.ui.mode {
-            Some(prompt)
-        } else {
-            None
-        }
-    }
-
-    pub fn take_in_place_edit_index(&mut self) -> Option<usize> {
-        if let UiMode::InPlaceEdit { index } = self.ui.mode {
-            self.set_mode(UiMode::Typing);
-            Some(index)
-        } else {
-            None
-        }
-    }
-
-    pub fn toggle_compose_mode(&mut self) {
-        self.ui.compose_mode = !self.ui.compose_mode;
-    }
-
     pub fn picker_session(&self) -> Option<&PickerSession> {
         self.picker.session()
     }
@@ -263,47 +186,6 @@ impl App {
         }
     }
 
-    pub fn calculate_wrapped_line_count(&mut self, terminal_width: u16) -> u16 {
-        self.ui.calculate_wrapped_line_count(terminal_width)
-    }
-
-    pub fn calculate_max_scroll_offset(
-        &mut self,
-        available_height: u16,
-        terminal_width: u16,
-    ) -> u16 {
-        self.ui
-            .calculate_max_scroll_offset(available_height, terminal_width)
-    }
-
-    /// Scroll to the very top of the output area and disable auto-scroll.
-    pub fn scroll_to_top(&mut self) {
-        self.ui.auto_scroll = false;
-        self.ui.scroll_offset = 0;
-    }
-
-    /// Scroll to the very bottom of the output area and enable auto-scroll.
-    pub fn scroll_to_bottom_view(&mut self, available_height: u16, terminal_width: u16) {
-        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
-        self.ui.scroll_offset = max_scroll;
-        self.ui.auto_scroll = true;
-    }
-
-    /// Page up by one full output area (minus one line overlap). Disables auto-scroll.
-    pub fn page_up(&mut self, available_height: u16) {
-        self.ui.auto_scroll = false;
-        let step = available_height.saturating_sub(1);
-        self.ui.scroll_offset = self.ui.scroll_offset.saturating_sub(step);
-    }
-
-    /// Page down by one full output area (minus one line overlap). Disables auto-scroll.
-    pub fn page_down(&mut self, available_height: u16, terminal_width: u16) {
-        self.ui.auto_scroll = false;
-        let step = available_height.saturating_sub(1);
-        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
-        self.ui.scroll_offset = (self.ui.scroll_offset.saturating_add(step)).min(max_scroll);
-    }
-
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
         // Clear any ephemeral status when the user sends a message
         self.clear_status();
@@ -355,29 +237,6 @@ impl App {
         self.ui.status_set_at = None;
     }
 
-    pub fn start_file_prompt_dump(&mut self, filename: String) {
-        self.set_mode(UiMode::FilePrompt(FilePrompt {
-            kind: FilePromptKind::Dump,
-            content: None,
-        }));
-        self.set_input_text(filename);
-    }
-
-    pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
-        self.set_mode(UiMode::FilePrompt(FilePrompt {
-            kind: FilePromptKind::SaveCodeBlock,
-            content: Some(content),
-        }));
-        self.set_input_text(filename);
-    }
-
-    pub fn cancel_file_prompt(&mut self) {
-        if let UiMode::FilePrompt(_) = self.ui.mode {
-            self.set_mode(UiMode::Typing);
-        }
-        self.clear_input();
-    }
-
     pub fn append_to_response(
         &mut self,
         content: &str,
@@ -425,7 +284,7 @@ impl App {
     pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {
         // Auto-scroll to bottom when new content is added, but only if auto_scroll is enabled
         if self.ui.auto_scroll {
-            let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
+            let total_wrapped_lines = self.ui.calculate_wrapped_line_count(terminal_width);
             if total_wrapped_lines > available_height {
                 self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
             } else {
@@ -503,7 +362,7 @@ impl App {
 
     /// Scroll so that the given message index is visible.
     pub fn scroll_index_into_view(&mut self, index: usize, term_width: u16, term_height: u16) {
-        let input_area_height = self.calculate_input_area_height(term_width);
+        let input_area_height = self.ui.calculate_input_area_height(term_width);
         let available_height = self.calculate_available_height(term_height, input_area_height);
         self.ui.scroll_offset =
             self.calculate_scroll_to_message(index, term_width, available_height);
@@ -559,7 +418,7 @@ impl App {
     /// Enter edit-select mode: lock input and select most recent user message
     pub fn enter_edit_select_mode(&mut self) {
         if let Some(idx) = self.last_user_message_index() {
-            self.set_mode(UiMode::EditSelect {
+            self.ui.set_mode(UiMode::EditSelect {
                 selected_index: idx,
             });
         }
@@ -567,32 +426,32 @@ impl App {
 
     /// Exit edit-select mode
     pub fn exit_edit_select_mode(&mut self) {
-        if self.in_edit_select_mode() {
-            self.set_mode(UiMode::Typing);
+        if self.ui.in_edit_select_mode() {
+            self.ui.set_mode(UiMode::Typing);
         }
     }
 
     /// Begin in-place edit of a user message at `index`
     pub fn start_in_place_edit(&mut self, index: usize) {
-        self.set_mode(UiMode::InPlaceEdit { index });
+        self.ui.set_mode(UiMode::InPlaceEdit { index });
     }
 
     /// Cancel in-place edit (does not modify history)
     pub fn cancel_in_place_edit(&mut self) {
-        if matches!(self.ui.mode, UiMode::InPlaceEdit { .. }) {
-            self.set_mode(UiMode::Typing);
+        if self.ui.in_place_edit_index().is_some() {
+            self.ui.set_mode(UiMode::Typing);
         }
     }
 
     /// Enter block select mode: lock input and set selected block index
     pub fn enter_block_select_mode(&mut self, index: usize) {
-        self.set_mode(UiMode::BlockSelect { block_index: index });
+        self.ui.set_mode(UiMode::BlockSelect { block_index: index });
     }
 
     /// Exit block select mode and unlock input
     pub fn exit_block_select_mode(&mut self) {
-        if self.in_block_select_mode() {
-            self.set_mode(UiMode::Typing);
+        if self.ui.in_block_select_mode() {
+            self.ui.set_mode(UiMode::Typing);
         }
     }
 
@@ -695,68 +554,11 @@ impl App {
 
     /// Calculate how many lines the input text will wrap to using word wrapping
     #[allow(dead_code)]
-    pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
-        self.ui.calculate_input_wrapped_lines(width)
-    }
-
-    /// Calculate the input area height based on content
-    pub fn calculate_input_area_height(&self, width: u16) -> u16 {
-        self.ui.calculate_input_area_height(width)
-    }
-
-    /// Update input scroll offset to keep cursor visible
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        self.ui.update_input_scroll(input_area_height, width);
-    }
-
-    /// Recompute input layout after editing: height + scroll
-    pub fn recompute_input_layout_after_edit(&mut self, terminal_width: u16) {
-        self.ui.recompute_input_layout_after_edit(terminal_width);
-    }
-
-    /// Apply a mutation to the textarea, then sync the string state
-    pub fn apply_textarea_edit<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut TextArea<'static>),
-    {
-        self.ui.apply_textarea_edit(f);
-    }
-
-    /// Apply a mutation to the textarea, then sync and recompute layout
-    pub fn apply_textarea_edit_and_recompute<F>(&mut self, terminal_width: u16, f: F)
-    where
-        F: FnOnce(&mut TextArea<'static>),
-    {
-        self.ui.apply_textarea_edit_and_recompute(terminal_width, f);
-    }
-
     /// Calculate available chat height given terminal height and input area height
     pub fn calculate_available_height(&self, term_height: u16, input_area_height: u16) -> u16 {
         term_height
             .saturating_sub(input_area_height + 2) // Dynamic input area + borders
             .saturating_sub(1) // 1 for title
-    }
-
-    /// Clear input and reset cursor
-    pub fn clear_input(&mut self) {
-        self.ui.clear_input();
-    }
-
-    /// Get full input text (textarea is the source of truth; kept in sync with `input`)
-    pub fn get_input_text(&self) -> &str {
-        self.ui.get_input_text()
-    }
-
-    /// Set input text into both the string and the textarea
-    pub fn set_input_text(&mut self, text: String) {
-        self.ui.set_input_text(text);
-    }
-
-    /// Sync `input` from the textarea state. Cursor linear position is best-effort.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn sync_input_from_textarea(&mut self) {
-        self.ui.sync_input_from_textarea();
     }
 
     fn configure_textarea_appearance(&mut self) {
@@ -1363,16 +1165,16 @@ mod tests {
         let mut app = create_test_app();
 
         // Single line: move to end
-        app.set_input_text("hello world".to_string());
+        app.ui.set_input_text("hello world".to_string());
         app.ui.textarea.move_cursor(CursorMove::End);
-        app.sync_input_from_textarea();
-        assert_eq!(app.get_input_text(), "hello world");
+        app.ui.sync_input_from_textarea();
+        assert_eq!(app.ui.get_input_text(), "hello world");
         assert_eq!(app.ui.input_cursor_position, 11);
 
         // Multi-line: jump to (row=1, col=3) => after "wor" on second line
-        app.set_input_text("hello\nworld".to_string());
+        app.ui.set_input_text("hello\nworld".to_string());
         app.ui.textarea.move_cursor(CursorMove::Jump(1, 3));
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         // 5 (hello) + 1 (\n) + 3 = 9
         assert_eq!(app.ui.input_cursor_position, 9);
     }
@@ -1380,7 +1182,7 @@ mod tests {
     #[test]
     fn test_backspace_at_start_noop() {
         let mut app = create_test_app();
-        app.set_input_text("abc".to_string());
+        app.ui.set_input_text("abc".to_string());
         // Move to head of line
         app.ui.textarea.move_cursor(CursorMove::Head);
         // Simulate backspace (always single-char via input_without_shortcuts)
@@ -1390,15 +1192,15 @@ mod tests {
             alt: false,
             shift: false,
         });
-        app.sync_input_from_textarea();
-        assert_eq!(app.get_input_text(), "abc");
+        app.ui.sync_input_from_textarea();
+        assert_eq!(app.ui.get_input_text(), "abc");
         assert_eq!(app.ui.input_cursor_position, 0);
     }
 
     #[test]
     fn test_backspace_at_line_start_joins_lines() {
         let mut app = create_test_app();
-        app.set_input_text("hello\nworld".to_string());
+        app.ui.set_input_text("hello\nworld".to_string());
         // Move to start of second line
         app.ui.textarea.move_cursor(CursorMove::Jump(1, 0));
         // Backspace should join lines; use input_without_shortcuts to ensure single-char delete
@@ -1408,8 +1210,8 @@ mod tests {
             alt: false,
             shift: false,
         });
-        app.sync_input_from_textarea();
-        assert_eq!(app.get_input_text(), "helloworld");
+        app.ui.sync_input_from_textarea();
+        assert_eq!(app.ui.get_input_text(), "helloworld");
         // Cursor should be at end of former first line (index 5)
         assert_eq!(app.ui.input_cursor_position, 5);
     }
@@ -1417,7 +1219,7 @@ mod tests {
     #[test]
     fn test_backspace_with_alt_modifier_deletes_single_char() {
         let mut app = create_test_app();
-        app.set_input_text("hello world".to_string());
+        app.ui.set_input_text("hello world".to_string());
         app.ui.textarea.move_cursor(CursorMove::End);
         // Simulate Alt+Backspace; with input_without_shortcuts it should still delete one char
         app.ui.textarea.input_without_shortcuts(Input {
@@ -1426,8 +1228,8 @@ mod tests {
             alt: true,
             shift: false,
         });
-        app.sync_input_from_textarea();
-        assert_eq!(app.get_input_text(), "hello worl");
+        app.ui.sync_input_from_textarea();
+        assert_eq!(app.ui.get_input_text(), "hello worl");
         assert_eq!(app.ui.input_cursor_position, "hello worl".chars().count());
     }
 
@@ -1436,13 +1238,13 @@ mod tests {
         let mut app = create_test_app();
         // Long line that wraps at width 10 into multiple lines
         let text = "one two three four five six seven eight nine ten";
-        app.set_input_text(text.to_string());
+        app.ui.set_input_text(text.to_string());
         // Simulate small input area: width=20 total => inner available width accounts in method
         let width: u16 = 10; // small terminal width to force wrapping (inner ~4)
         let input_area_height: u16 = 2; // only 2 lines visible
                                         // Place cursor near end
         app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
-        app.update_input_scroll(input_area_height, width);
+        app.ui.update_input_scroll(input_area_height, width);
         // With cursor near end, scroll offset should be > 0 to bring cursor into view
         assert!(app.ui.input_scroll_offset > 0);
     }
@@ -1452,19 +1254,19 @@ mod tests {
         let mut app = create_test_app();
         // Build text with many blank lines
         let text = "top\n\n\n\n\n\n\n\n\n\nbottom";
-        app.set_input_text(text.to_string());
+        app.ui.set_input_text(text.to_string());
         // Jump to bottom line, col=3 (after 'bot')
         let bottom_row_usize = app.ui.textarea.lines().len().saturating_sub(1);
         let bottom_row = bottom_row_usize as u16;
         app.ui.textarea.move_cursor(CursorMove::Jump(bottom_row, 3));
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let (row_before, col_before) = app.ui.textarea.cursor();
         assert_eq!(row_before, bottom_row as usize);
         assert!(col_before <= app.ui.textarea.lines()[bottom_row_usize].chars().count());
 
         // Move up exactly one line
         app.ui.textarea.move_cursor(CursorMove::Up);
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let (row_after_up, col_after_up) = app.ui.textarea.cursor();
         assert_eq!(row_after_up, bottom_row_usize.saturating_sub(1));
         // Column should clamp reasonably; we just assert it's within line bounds
@@ -1472,7 +1274,7 @@ mod tests {
 
         // Move down exactly one line
         app.ui.textarea.move_cursor(CursorMove::Down);
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let (row_after_down, _col_after_down) = app.ui.textarea.cursor();
         assert_eq!(row_after_down, bottom_row_usize);
     }
@@ -1480,17 +1282,17 @@ mod tests {
     #[test]
     fn test_shift_like_left_right_moves_one_char() {
         let mut app = create_test_app();
-        app.set_input_text("hello".to_string());
+        app.ui.set_input_text("hello".to_string());
         // Move to end, then back by one, then forward by one
         app.ui.textarea.move_cursor(CursorMove::End);
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let end_pos = app.ui.input_cursor_position;
         app.ui.textarea.move_cursor(CursorMove::Back);
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let back_pos = app.ui.input_cursor_position;
         assert_eq!(back_pos, end_pos.saturating_sub(1));
         app.ui.textarea.move_cursor(CursorMove::Forward);
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         let forward_pos = app.ui.input_cursor_position;
         assert_eq!(forward_pos, end_pos);
     }
@@ -1499,18 +1301,18 @@ mod tests {
     fn test_cursor_mapping_blankline_insert_no_desync() {
         let mut app = create_test_app();
         let text = "asdf\n\nasdf\n\nasdf";
-        app.set_input_text(text.to_string());
+        app.ui.set_input_text(text.to_string());
         // Jump to blank line 2 (0-based row 3), column 0
         app.ui.textarea.move_cursor(CursorMove::Jump(3, 0));
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
         // Insert a character on the blank line
         app.ui.textarea.insert_str("x");
-        app.sync_input_from_textarea();
+        app.ui.sync_input_from_textarea();
 
         // Compute wrapped position using same wrapper logic (no wrapping with wide width)
         let config = WrapConfig::new(120);
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            app.get_input_text(),
+            app.ui.get_input_text(),
             app.ui.input_cursor_position,
             &config,
         );
@@ -1525,17 +1327,17 @@ mod tests {
         let mut app = create_test_app();
         // Make text long enough to wrap
         let text = "one two three four five six seven eight nine ten";
-        app.set_input_text(text.to_string());
+        app.ui.set_input_text(text.to_string());
         // Place cursor near end
         app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
         // Very small terminal width to force heavy wrapping; method accounts for borders and margin
         let width: u16 = 6;
-        app.recompute_input_layout_after_edit(width);
+        app.ui.recompute_input_layout_after_edit(width);
         // With cursor near end on a heavily wrapped input, expect some scroll
         assert!(app.ui.input_scroll_offset > 0);
         // Changing cursor position to start should reduce or reset scroll
         app.ui.input_cursor_position = 0;
-        app.recompute_input_layout_after_edit(width);
+        app.ui.recompute_input_layout_after_edit(width);
         assert_eq!(app.ui.input_scroll_offset, 0);
     }
 
@@ -1584,7 +1386,7 @@ mod tests {
         };
 
         // Get the height that scroll calculations currently use
-        let scroll_height = app.calculate_wrapped_line_count(width);
+        let scroll_height = app.ui.calculate_wrapped_line_count(width);
 
         // These should match - if they don't, scroll targeting will be off
         assert_eq!(
@@ -1621,7 +1423,7 @@ mod tests {
 
         // After each append, if we're auto-scrolling, we should be at the bottom
         if app.ui.auto_scroll {
-            let expected_max_scroll = app.calculate_max_scroll_offset(available_height, width);
+            let expected_max_scroll = app.ui.calculate_max_scroll_offset(available_height, width);
             assert_eq!(
                 app.ui.scroll_offset, expected_max_scroll,
                 "Auto-scroll should keep us at bottom. Current offset: {}, Expected max: {}",
@@ -1723,7 +1525,7 @@ Some additional text after the table."#;
         };
 
         // Get the height that scroll calculations currently use (widthless, then scroll heuristic)
-        let scroll_height = app.calculate_wrapped_line_count(width);
+        let scroll_height = app.ui.calculate_wrapped_line_count(width);
 
         // This should expose the mismatch if it exists
         assert_eq!(
@@ -1762,14 +1564,14 @@ Some additional text after the table."#;
         for chunk in table_chunks {
             // Before append: get current scroll state
             let _scroll_before = app.ui.scroll_offset;
-            let _max_scroll_before = app.calculate_max_scroll_offset(available_height, width);
+            let _max_scroll_before = app.ui.calculate_max_scroll_offset(available_height, width);
 
             // Append content (this invalidates prewrap cache)
             app.append_to_response(chunk, available_height, width);
 
             // After append: check scroll consistency
             let scroll_after = app.ui.scroll_offset;
-            let max_scroll_after = app.calculate_max_scroll_offset(available_height, width);
+            let max_scroll_after = app.ui.calculate_max_scroll_offset(available_height, width);
 
             // During streaming with auto_scroll=true, we should always be at bottom
             if app.ui.auto_scroll {
@@ -1781,7 +1583,7 @@ Some additional text after the table."#;
 
             // The key test: prewrap cache and scroll calculation should give same height
             let prewrap_height = app.get_prewrapped_lines_cached(width).len() as u16;
-            let scroll_calc_height = app.calculate_wrapped_line_count(width);
+            let scroll_calc_height = app.ui.calculate_wrapped_line_count(width);
 
             assert_eq!(
                 prewrap_height, scroll_calc_height,
@@ -1807,7 +1609,7 @@ Some additional text after the table."#;
         let available_height = app.calculate_available_height(term_height, input_area_height);
 
         // Sanity: have some scrollable height
-        let max_scroll = app.calculate_max_scroll_offset(available_height, width);
+        let max_scroll = app.ui.calculate_max_scroll_offset(available_height, width);
         assert!(max_scroll > 0);
 
         // Start in the middle
@@ -1816,25 +1618,25 @@ Some additional text after the table."#;
 
         // Page up reduces by step, not below 0
         let before = app.ui.scroll_offset;
-        app.page_up(available_height);
+        app.ui.page_up(available_height);
         let after_up = app.ui.scroll_offset;
         assert_eq!(after_up, before.saturating_sub(step));
         assert!(!app.ui.auto_scroll);
 
         // Page down increases by step, clamped to max
-        app.page_down(available_height, width);
+        app.ui.page_down(available_height, width);
         let after_down = app.ui.scroll_offset;
         assert!(after_down >= after_up);
         assert!(after_down <= max_scroll);
         assert!(!app.ui.auto_scroll);
 
         // Home goes to top and disables auto-scroll
-        app.scroll_to_top();
+        app.ui.scroll_to_top();
         assert_eq!(app.ui.scroll_offset, 0);
         assert!(!app.ui.auto_scroll);
 
         // End goes to bottom and enables auto-scroll
-        app.scroll_to_bottom_view(available_height, width);
+        app.ui.scroll_to_bottom_view(available_height, width);
         assert_eq!(app.ui.scroll_offset, max_scroll);
         assert!(app.ui.auto_scroll);
     }
@@ -1866,7 +1668,7 @@ Some additional text after the table."#;
     fn test_set_input_text_places_cursor_at_end() {
         let mut app = create_test_app();
         let text = String::from("line1\nline2");
-        app.set_input_text(text.clone());
+        app.ui.set_input_text(text.clone());
         // Linear cursor at end
         assert_eq!(app.ui.input_cursor_position, text.chars().count());
         // Textarea cursor at end (last row/col)

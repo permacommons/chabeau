@@ -61,7 +61,7 @@ pub fn scroll_block_into_view(
             app_guard.ui.syntax_enabled,
             Some(term_width as usize),
         );
-    let input_area_height = app_guard.calculate_input_area_height(term_width);
+    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
     let available_height = app_guard.calculate_available_height(term_height, input_area_height);
     let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
         &lines,
@@ -69,14 +69,16 @@ pub fn scroll_block_into_view(
         available_height,
         block_start,
     );
-    let max_scroll = app_guard.calculate_max_scroll_offset(available_height, term_width);
+    let max_scroll = app_guard
+        .ui
+        .calculate_max_scroll_offset(available_height, term_width);
     app_guard.ui.scroll_offset = desired.min(max_scroll);
 }
 
 /// Helper function to recompute input layout if enough time has passed
 fn recompute_input_layout_if_due(app: &mut App, term_width: u16, last_update: &mut Instant) {
     if last_update.elapsed() >= Duration::from_millis(16) {
-        app.recompute_input_layout_after_edit(term_width);
+        app.ui.recompute_input_layout_after_edit(term_width);
         *last_update = Instant::now();
     }
 }
@@ -135,7 +137,7 @@ impl KeyHandler for F4Handler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
-        app_guard.toggle_compose_mode();
+        app_guard.ui.toggle_compose_mode();
         KeyResult::Handled
     }
 }
@@ -154,13 +156,13 @@ impl KeyHandler for EscapeHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
-        if app_guard.file_prompt().is_some() {
-            app_guard.cancel_file_prompt();
+        if app_guard.ui.file_prompt().is_some() {
+            app_guard.ui.cancel_file_prompt();
             return KeyResult::Handled;
         }
-        if app_guard.in_place_edit_index().is_some() {
+        if app_guard.ui.in_place_edit_index().is_some() {
             app_guard.cancel_in_place_edit();
-            app_guard.clear_input();
+            app_guard.ui.clear_input();
             return KeyResult::Handled;
         }
         if app_guard.ui.is_streaming {
@@ -185,17 +187,19 @@ impl KeyHandler for CtrlDHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
-        if app_guard.get_input_text().is_empty() {
+        if app_guard.ui.get_input_text().is_empty() {
             KeyLoopAction::Break.into()
         } else {
-            app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-                ta.input_without_shortcuts(TAInput {
-                    key: TAKey::Delete,
-                    ctrl: false,
-                    alt: false,
-                    shift: false,
+            app_guard
+                .ui
+                .apply_textarea_edit_and_recompute(term_width, |ta| {
+                    ta.input_without_shortcuts(TAInput {
+                        key: TAKey::Delete,
+                        ctrl: false,
+                        alt: false,
+                        shift: false,
+                    });
                 });
-            });
             KeyLoopAction::Continue.into()
         }
     }
@@ -221,28 +225,30 @@ impl KeyHandler for NavigationHandler {
         let mut app_guard = app.lock().await;
         match key.code {
             KeyCode::Home => {
-                app_guard.scroll_to_top();
+                app_guard.ui.scroll_to_top();
                 KeyResult::Handled
             }
             KeyCode::End => {
-                let input_area_height = app_guard.calculate_input_area_height(term_width);
+                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                 let available_height =
                     app_guard.calculate_available_height(term_height, input_area_height);
-                app_guard.scroll_to_bottom_view(available_height, term_width);
+                app_guard
+                    .ui
+                    .scroll_to_bottom_view(available_height, term_width);
                 KeyResult::Handled
             }
             KeyCode::PageUp => {
-                let input_area_height = app_guard.calculate_input_area_height(term_width);
+                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                 let available_height =
                     app_guard.calculate_available_height(term_height, input_area_height);
-                app_guard.page_up(available_height);
+                app_guard.ui.page_up(available_height);
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
-                let input_area_height = app_guard.calculate_input_area_height(term_width);
+                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                 let available_height =
                     app_guard.calculate_available_height(term_height, input_area_height);
-                app_guard.page_down(available_height, term_width);
+                app_guard.ui.page_down(available_height, term_width);
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
@@ -271,7 +277,9 @@ impl KeyHandler for ArrowKeyHandler {
                 let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
+                    app_guard
+                        .ui
+                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
                     app_guard.ui.horizontal_scroll_offset =
@@ -283,7 +291,9 @@ impl KeyHandler for ArrowKeyHandler {
                 let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
+                    app_guard
+                        .ui
+                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
                     app_guard.ui.horizontal_scroll_offset =
@@ -296,7 +306,9 @@ impl KeyHandler for ArrowKeyHandler {
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
+                    app_guard
+                        .ui
+                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
                     app_guard.ui.auto_scroll = false;
@@ -309,15 +321,18 @@ impl KeyHandler for ArrowKeyHandler {
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
+                    app_guard
+                        .ui
+                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
                     app_guard.ui.auto_scroll = false;
-                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
-                    let max_scroll =
-                        app_guard.calculate_max_scroll_offset(available_height, term_width);
+                    let max_scroll = app_guard
+                        .ui
+                        .calculate_max_scroll_offset(available_height, term_width);
                     app_guard.ui.scroll_offset =
                         (app_guard.ui.scroll_offset.saturating_add(1)).min(max_scroll);
                 }
@@ -350,14 +365,14 @@ impl KeyHandler for TextEditingHandler {
 
         match key.code {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.apply_textarea_edit(|ta| {
+                app_guard.ui.apply_textarea_edit(|ta| {
                     ta.input(TAInput::from(*key));
                 });
                 recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 KeyResult::Handled
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.apply_textarea_edit(|ta| {
+                app_guard.ui.apply_textarea_edit(|ta| {
                     ta.input(TAInput::from(*key));
                 });
                 recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
@@ -368,25 +383,29 @@ impl KeyHandler for TextEditingHandler {
                 if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return KeyResult::NotHandled;
                 }
-                app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-                    ta.input(TAInput::from(*key));
-                });
+                app_guard
+                    .ui
+                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                        ta.input(TAInput::from(*key));
+                    });
                 KeyResult::Handled
             }
             KeyCode::Delete => {
-                app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-                    ta.input_without_shortcuts(TAInput {
-                        key: TAKey::Delete,
-                        ctrl: false,
-                        alt: false,
-                        shift: false,
+                app_guard
+                    .ui
+                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                        ta.input_without_shortcuts(TAInput {
+                            key: TAKey::Delete,
+                            ctrl: false,
+                            alt: false,
+                            shift: false,
+                        });
                     });
-                });
                 KeyResult::Handled
             }
             KeyCode::Backspace => {
                 let input = TAInput::from(*key);
-                app_guard.apply_textarea_edit(|ta| {
+                app_guard.ui.apply_textarea_edit(|ta| {
                     ta.input_without_shortcuts(input);
                 });
                 recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
@@ -428,11 +447,11 @@ impl KeyHandler for CtrlBHandler {
             app_guard.ui.syntax_enabled,
         );
 
-        if app_guard.in_block_select_mode() {
-            if let Some(cur) = app_guard.selected_block_index() {
+        if app_guard.ui.in_block_select_mode() {
+            if let Some(cur) = app_guard.ui.selected_block_index() {
                 let total = blocks.len();
                 if let Some(next) = wrap_previous_index(cur, total) {
-                    app_guard.set_selected_block_index(next);
+                    app_guard.ui.set_selected_block_index(next);
                     if let Some((start, _len, _)) = blocks.get(next) {
                         scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
                     }
@@ -472,25 +491,25 @@ impl KeyHandler for CtrlPHandler {
             return KeyResult::Handled;
         }
 
-        if app_guard.in_edit_select_mode() {
-            if let Some(current) = app_guard.selected_user_message_index() {
+        if app_guard.ui.in_edit_select_mode() {
+            if let Some(current) = app_guard.ui.selected_user_message_index() {
                 if let Some(prev) = app_guard
                     .prev_user_message_index(current)
                     .or_else(|| app_guard.last_user_message_index())
                 {
-                    app_guard.set_selected_user_message_index(prev);
+                    app_guard.ui.set_selected_user_message_index(prev);
                 }
             } else if let Some(last) = app_guard.last_user_message_index() {
-                app_guard.set_selected_user_message_index(last);
+                app_guard.ui.set_selected_user_message_index(last);
             }
         } else {
             app_guard.enter_edit_select_mode();
             if let Some(last) = app_guard.last_user_message_index() {
-                app_guard.set_selected_user_message_index(last);
+                app_guard.ui.set_selected_user_message_index(last);
             }
         }
 
-        if let Some(idx) = app_guard.selected_user_message_index() {
+        if let Some(idx) = app_guard.ui.selected_user_message_index() {
             app_guard.scroll_index_into_view(idx, term_width, term_height);
         }
 

@@ -56,6 +56,70 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn is_input_active(&self) -> bool {
+        matches!(
+            self.mode,
+            UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
+        )
+    }
+
+    pub fn in_edit_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::EditSelect { .. })
+    }
+
+    pub fn selected_user_message_index(&self) -> Option<usize> {
+        if let UiMode::EditSelect { selected_index } = self.mode {
+            Some(selected_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_selected_user_message_index(&mut self, index: usize) {
+        if let UiMode::EditSelect { selected_index } = &mut self.mode {
+            *selected_index = index;
+        }
+    }
+
+    pub fn in_block_select_mode(&self) -> bool {
+        matches!(self.mode, UiMode::BlockSelect { .. })
+    }
+
+    pub fn selected_block_index(&self) -> Option<usize> {
+        if let UiMode::BlockSelect { block_index } = self.mode {
+            Some(block_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_selected_block_index(&mut self, index: usize) {
+        if let UiMode::BlockSelect { block_index } = &mut self.mode {
+            *block_index = index;
+        }
+    }
+
+    pub fn in_place_edit_index(&self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn take_in_place_edit_index(&mut self) -> Option<usize> {
+        if let UiMode::InPlaceEdit { index } = self.mode {
+            self.set_mode(UiMode::Typing);
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn toggle_compose_mode(&mut self) {
+        self.compose_mode = !self.compose_mode;
+    }
+
     pub(crate) fn new_basic(
         theme: Theme,
         markdown_enabled: bool,
@@ -235,6 +299,65 @@ impl UiState {
         self.recompute_input_layout_after_edit(terminal_width);
     }
 
+    pub fn file_prompt(&self) -> Option<&FilePrompt> {
+        if let UiMode::FilePrompt(ref prompt) = self.mode {
+            Some(prompt)
+        } else {
+            None
+        }
+    }
+
+    pub fn start_file_prompt_dump(&mut self, filename: String) {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
+            kind: FilePromptKind::Dump,
+            content: None,
+        }));
+        self.set_input_text(filename);
+    }
+
+    pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
+        self.set_mode(UiMode::FilePrompt(FilePrompt {
+            kind: FilePromptKind::SaveCodeBlock,
+            content: Some(content),
+        }));
+        self.set_input_text(filename);
+    }
+
+    pub fn cancel_file_prompt(&mut self) {
+        if let UiMode::FilePrompt(_) = self.mode {
+            self.set_mode(UiMode::Typing);
+        }
+        self.clear_input();
+    }
+
+    /// Scroll to the very top of the output area and disable auto-scroll.
+    pub fn scroll_to_top(&mut self) {
+        self.auto_scroll = false;
+        self.scroll_offset = 0;
+    }
+
+    /// Scroll to the very bottom of the output area and enable auto-scroll.
+    pub fn scroll_to_bottom_view(&mut self, available_height: u16, terminal_width: u16) {
+        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
+        self.scroll_offset = max_scroll;
+        self.auto_scroll = true;
+    }
+
+    /// Page up by one full output area (minus one line overlap). Disables auto-scroll.
+    pub fn page_up(&mut self, available_height: u16) {
+        self.auto_scroll = false;
+        let step = available_height.saturating_sub(1);
+        self.scroll_offset = self.scroll_offset.saturating_sub(step);
+    }
+
+    /// Page down by one full output area (minus one line overlap). Disables auto-scroll.
+    pub fn page_down(&mut self, available_height: u16, terminal_width: u16) {
+        self.auto_scroll = false;
+        let step = available_height.saturating_sub(1);
+        let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
+        self.scroll_offset = (self.scroll_offset.saturating_add(step)).min(max_scroll);
+    }
+
     pub fn calculate_wrapped_line_count(&mut self, terminal_width: u16) -> u16 {
         let lines = self.get_prewrapped_lines_cached(terminal_width);
         lines.len() as u16
@@ -337,6 +460,10 @@ impl UiState {
 
     pub fn invalidate_prewrap_cache(&mut self) {
         self.prewrap_cache = None;
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: UiMode) {
+        self.mode = mode;
     }
 }
 

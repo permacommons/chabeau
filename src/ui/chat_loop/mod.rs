@@ -198,9 +198,11 @@ pub async fn run_chat(
                     if mode_registry.should_handle_as_text_input(&key, &context) {
                         // Direct text input - bypass registry and go straight to tui-textarea
                         let mut app_guard = app.lock().await;
-                        app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                            ta.input(tui_textarea::Input::from(key));
-                        });
+                        app_guard
+                            .ui
+                            .apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                                ta.input(tui_textarea::Input::from(key));
+                            });
                         request_redraw = true;
                         continue;
                     }
@@ -249,9 +251,11 @@ pub async fn run_chat(
                             c == '\n' || !c.is_control()
                         })
                         .collect::<String>();
-                    app_guard.apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                        ta.insert_str(&sanitized_text);
-                    });
+                    app_guard
+                        .ui
+                        .apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                            ta.insert_str(&sanitized_text);
+                        });
                     last_input_layout_update = Instant::now();
                     request_redraw = true;
                 }
@@ -339,7 +343,7 @@ fn append_coalesced_chunk(app: &mut App, chunk: String, term_width: u16, term_he
         return;
     }
 
-    let input_area_height = app.calculate_input_area_height(term_width);
+    let input_area_height = app.ui.calculate_input_area_height(term_width);
     let available_height = app.calculate_available_height(term_height, input_area_height);
     app.append_to_response(&chunk, available_height, term_width);
 }
@@ -353,7 +357,7 @@ fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16,
             let error_message = format!("Error: {}", err.trim());
             app.add_system_message(error_message);
             app.ui.is_streaming = false;
-            let input_area_height = app.calculate_input_area_height(term_width);
+            let input_area_height = app.ui.calculate_input_area_height(term_width);
             let available_height = app.calculate_available_height(term_height, input_area_height);
             app.update_scroll_position(available_height, term_width);
         }
@@ -371,7 +375,7 @@ async fn handle_edit_select_mode_event(
     term_height: u16,
 ) -> bool {
     let mut app_guard = app.lock().await;
-    if !app_guard.in_edit_select_mode() {
+    if !app_guard.ui.in_edit_select_mode() {
         return false;
     }
 
@@ -381,36 +385,36 @@ async fn handle_edit_select_mode_event(
             true
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(current) = app_guard.selected_user_message_index() {
+            if let Some(current) = app_guard.ui.selected_user_message_index() {
                 if let Some(prev) = app_guard
                     .prev_user_message_index(current)
                     .or_else(|| app_guard.last_user_message_index())
                 {
-                    app_guard.set_selected_user_message_index(prev);
+                    app_guard.ui.set_selected_user_message_index(prev);
                     app_guard.scroll_index_into_view(prev, term_width, term_height);
                 }
             } else if let Some(last) = app_guard.last_user_message_index() {
-                app_guard.set_selected_user_message_index(last);
+                app_guard.ui.set_selected_user_message_index(last);
             }
             true
         }
 
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(current) = app_guard.selected_user_message_index() {
+            if let Some(current) = app_guard.ui.selected_user_message_index() {
                 if let Some(next) = app_guard
                     .next_user_message_index(current)
                     .or_else(|| app_guard.first_user_message_index())
                 {
-                    app_guard.set_selected_user_message_index(next);
+                    app_guard.ui.set_selected_user_message_index(next);
                     app_guard.scroll_index_into_view(next, term_width, term_height);
                 }
             } else if let Some(last) = app_guard.last_user_message_index() {
-                app_guard.set_selected_user_message_index(last);
+                app_guard.ui.set_selected_user_message_index(last);
             }
             true
         }
         KeyCode::Enter => {
-            if let Some(idx) = app_guard.selected_user_message_index() {
+            if let Some(idx) = app_guard.ui.selected_user_message_index() {
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     let content = app_guard.ui.messages[idx].content.clone();
                     app_guard.cancel_current_stream();
@@ -420,9 +424,9 @@ async fn handle_edit_select_mode_event(
                         .session
                         .logging
                         .rewrite_log_without_last_response(&app_guard.ui.messages);
-                    app_guard.set_input_text(content);
+                    app_guard.ui.set_input_text(content);
                     app_guard.exit_edit_select_mode();
-                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
@@ -431,10 +435,10 @@ async fn handle_edit_select_mode_event(
             true
         }
         KeyCode::Char('E') | KeyCode::Char('e') => {
-            if let Some(idx) = app_guard.selected_user_message_index() {
+            if let Some(idx) = app_guard.ui.selected_user_message_index() {
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     let content = app_guard.ui.messages[idx].content.clone();
-                    app_guard.set_input_text(content);
+                    app_guard.ui.set_input_text(content);
                     app_guard.start_in_place_edit(idx);
                     app_guard.exit_edit_select_mode();
                 }
@@ -442,7 +446,7 @@ async fn handle_edit_select_mode_event(
             true
         }
         KeyCode::Delete => {
-            if let Some(idx) = app_guard.selected_user_message_index() {
+            if let Some(idx) = app_guard.ui.selected_user_message_index() {
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     app_guard.cancel_current_stream();
                     app_guard.ui.messages.truncate(idx);
@@ -452,7 +456,7 @@ async fn handle_edit_select_mode_event(
                         .logging
                         .rewrite_log_without_last_response(&app_guard.ui.messages);
                     app_guard.exit_edit_select_mode();
-                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
@@ -472,7 +476,7 @@ async fn handle_block_select_mode_event(
     term_height: u16,
 ) -> bool {
     let mut app_guard = app.lock().await;
-    if !app_guard.in_block_select_mode() {
+    if !app_guard.ui.in_block_select_mode() {
         return false;
     }
 
@@ -490,36 +494,36 @@ async fn handle_block_select_mode_event(
             true
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(cur) = app_guard.selected_block_index() {
+            if let Some(cur) = app_guard.ui.selected_block_index() {
                 let total = ranges.len();
                 if let Some(next) = wrap_previous_index(cur, total) {
-                    app_guard.set_selected_block_index(next);
+                    app_guard.ui.set_selected_block_index(next);
                     if let Some((start, _len, _)) = ranges.get(next) {
                         scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
                     }
                 }
             } else if !ranges.is_empty() {
-                app_guard.set_selected_block_index(0);
+                app_guard.ui.set_selected_block_index(0);
             }
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(cur) = app_guard.selected_block_index() {
+            if let Some(cur) = app_guard.ui.selected_block_index() {
                 let total = ranges.len();
                 if let Some(next) = wrap_next_index(cur, total) {
-                    app_guard.set_selected_block_index(next);
+                    app_guard.ui.set_selected_block_index(next);
                     if let Some((start, _len, _)) = ranges.get(next) {
                         scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
                     }
                 }
             } else if !ranges.is_empty() {
-                app_guard.set_selected_block_index(0);
+                app_guard.ui.set_selected_block_index(0);
             }
             true
         }
 
         KeyCode::Char('c') | KeyCode::Char('C') => {
-            if let Some(cur) = app_guard.selected_block_index() {
+            if let Some(cur) = app_guard.ui.selected_block_index() {
                 if let Some((_start, _len, content)) = ranges.get(cur) {
                     match crate::utils::clipboard::copy_to_clipboard(content) {
                         Ok(()) => app_guard.set_status("Copied code block"),
@@ -527,7 +531,7 @@ async fn handle_block_select_mode_event(
                     }
                     app_guard.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
-                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
@@ -536,7 +540,7 @@ async fn handle_block_select_mode_event(
             true
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
-            if let Some(cur) = app_guard.selected_block_index() {
+            if let Some(cur) = app_guard.ui.selected_block_index() {
                 let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(
                     &app_guard.ui.messages,
                 );
@@ -548,7 +552,9 @@ async fn handle_block_select_mode_event(
                     let filename = format!("chabeau-block-{}.{}", date, ext);
                     if std::path::Path::new(&filename).exists() {
                         app_guard.set_status("File already exists.");
-                        app_guard.start_file_prompt_save_block(filename, content.clone());
+                        app_guard
+                            .ui
+                            .start_file_prompt_save_block(filename, content.clone());
                     } else {
                         match fs::write(&filename, content) {
                             Ok(()) => app_guard.set_status(format!("Saved to {}", filename)),
@@ -557,7 +563,7 @@ async fn handle_block_select_mode_event(
                     }
                     app_guard.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
-                    let input_area_height = app_guard.calculate_input_area_height(term_width);
+                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
                     app_guard.update_scroll_position(available_height, term_width);
@@ -596,7 +602,7 @@ async fn handle_external_editor_shortcut(
         }
         Ok(None) => {
             let mut app_guard = app.lock().await;
-            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
             let available_height =
                 app_guard.calculate_available_height(term_height, input_area_height);
             app_guard.update_scroll_position(available_height, term_width);
@@ -606,7 +612,7 @@ async fn handle_external_editor_shortcut(
             let error_msg = e.to_string();
             let mut app_guard = app.lock().await;
             app_guard.set_status(format!("Editor error: {}", error_msg));
-            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
             let available_height =
                 app_guard.calculate_available_height(term_height, input_area_height);
             app_guard.update_scroll_position(available_height, term_width);
@@ -626,7 +632,7 @@ async fn process_input_submission(
 
     match process_input(&mut app_guard, &input_text) {
         CommandResult::Continue => {
-            let input_area_height = app_guard.calculate_input_area_height(term_width);
+            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
             let available_height =
                 app_guard.calculate_available_height(term_height, input_area_height);
             app_guard.update_scroll_position(available_height, term_width);
@@ -666,8 +672,8 @@ async fn handle_enter_key(
 
     {
         let mut app_guard = app.lock().await;
-        if let Some(prompt) = app_guard.file_prompt().cloned() {
-            let filename = app_guard.get_input_text().trim().to_string();
+        if let Some(prompt) = app_guard.ui.file_prompt().cloned() {
+            let filename = app_guard.ui.get_input_text().trim().to_string();
             if filename.is_empty() {
                 return Ok(Some(KeyLoopAction::Continue));
             }
@@ -680,7 +686,7 @@ async fn handle_enter_key(
                     match res {
                         Ok(()) => {
                             app_guard.set_status(format!("Dumped: {}", filename));
-                            app_guard.cancel_file_prompt();
+                            app_guard.ui.cancel_file_prompt();
                         }
                         Err(e) => {
                             let msg = e.to_string();
@@ -701,7 +707,7 @@ async fn handle_enter_key(
                         match fs::write(&filename, content) {
                             Ok(()) => {
                                 app_guard.set_status(format!("Saved to {}", filename));
-                                app_guard.cancel_file_prompt();
+                                app_guard.ui.cancel_file_prompt();
                             }
                             Err(_e) => {
                                 app_guard.set_status("Error saving code block");
@@ -727,17 +733,19 @@ async fn handle_enter_key(
 
     if should_insert_newline {
         let mut app_guard = app.lock().await;
-        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-            ta.insert_str("\n");
-        });
+        app_guard
+            .ui
+            .apply_textarea_edit_and_recompute(term_width, |ta| {
+                ta.insert_str("\n");
+            });
         return Ok(Some(KeyLoopAction::Continue));
     }
 
     {
         let mut app_guard = app.lock().await;
-        if let Some(idx) = app_guard.take_in_place_edit_index() {
+        if let Some(idx) = app_guard.ui.take_in_place_edit_index() {
             if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                let new_text = app_guard.get_input_text().to_string();
+                let new_text = app_guard.ui.get_input_text().to_string();
                 app_guard.ui.messages[idx].content = new_text;
                 app_guard.invalidate_prewrap_cache();
                 let _ = app_guard
@@ -745,18 +753,18 @@ async fn handle_enter_key(
                     .logging
                     .rewrite_log_without_last_response(&app_guard.ui.messages);
             }
-            app_guard.clear_input();
+            app_guard.ui.clear_input();
             return Ok(Some(KeyLoopAction::Continue));
         }
     }
 
     let input_text = {
         let mut app_guard = app.lock().await;
-        if app_guard.get_input_text().trim().is_empty() {
+        if app_guard.ui.get_input_text().trim().is_empty() {
             return Ok(Some(KeyLoopAction::Continue));
         }
-        let text = app_guard.get_input_text().to_string();
-        app_guard.clear_input();
+        let text = app_guard.ui.get_input_text().to_string();
+        app_guard.ui.clear_input();
         text
     };
 
@@ -779,25 +787,27 @@ async fn handle_ctrl_j_shortcut(
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let send_now = {
         let app_guard = app.lock().await;
-        app_guard.ui.compose_mode && app_guard.file_prompt().is_none()
+        app_guard.ui.compose_mode && app_guard.ui.file_prompt().is_none()
     };
 
     if !send_now {
         let mut app_guard = app.lock().await;
-        app_guard.apply_textarea_edit_and_recompute(term_width, |ta| {
-            ta.insert_str("\n");
-        });
+        app_guard
+            .ui
+            .apply_textarea_edit_and_recompute(term_width, |ta| {
+                ta.insert_str("\n");
+            });
         *last_input_layout_update = Instant::now();
         return Ok(Some(KeyLoopAction::Continue));
     }
 
     let input_text = {
         let mut app_guard = app.lock().await;
-        if app_guard.get_input_text().trim().is_empty() {
+        if app_guard.ui.get_input_text().trim().is_empty() {
             return Ok(Some(KeyLoopAction::Continue));
         }
-        let text = app_guard.get_input_text().to_string();
-        app_guard.clear_input();
+        let text = app_guard.ui.get_input_text().to_string();
+        app_guard.ui.clear_input();
         text
     };
 
@@ -827,7 +837,7 @@ async fn handle_retry_shortcut(
             return true;
         }
 
-        let input_area_height = app_guard.calculate_input_area_height(term_width);
+        let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
         let available_height = app_guard.calculate_available_height(term_height, input_area_height);
 
         app_guard
@@ -863,7 +873,7 @@ fn prepare_stream_params_for_message(
     app_guard.ui.auto_scroll = true;
     let (cancel_token, stream_id) = app_guard.start_new_stream();
     let api_messages = app_guard.add_user_message(message);
-    let input_area_height = app_guard.calculate_input_area_height(term_width);
+    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
     let available_height = app_guard.calculate_available_height(term_height, input_area_height);
     app_guard.update_scroll_position(available_height, term_width);
 
@@ -1423,7 +1433,7 @@ mod tests {
         });
 
         for chunk in &chunks {
-            let input_area_height = sequential_app.calculate_input_area_height(TERM_WIDTH);
+            let input_area_height = sequential_app.ui.calculate_input_area_height(TERM_WIDTH);
             let available_height =
                 sequential_app.calculate_available_height(TERM_HEIGHT, input_area_height);
             sequential_app.append_to_response(chunk, available_height, TERM_WIDTH);

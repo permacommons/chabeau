@@ -1,4 +1,3 @@
-use super::PickerMode;
 use super::{SessionContext, UiState};
 use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
@@ -7,6 +6,13 @@ use crate::core::config::Config;
 use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerMode {
+    Theme,
+    Model,
+    Provider,
+}
 
 #[derive(Debug, Clone)]
 pub struct ThemePickerState {

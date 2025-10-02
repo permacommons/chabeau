@@ -553,6 +553,69 @@ impl PickerController {
         }
     }
 
+    pub fn revert_model_preview(&mut self, session: &mut SessionContext) {
+        let previous_model = self
+            .model_state()
+            .and_then(|state| state.before_model.clone());
+
+        if let Some(state) = self.model_state_mut() {
+            state.before_model = None;
+            state.search_filter.clear();
+            state.all_items.clear();
+            state.has_dates = false;
+        }
+
+        if let Some(prev) = previous_model {
+            session.model = prev;
+        }
+
+        if self.in_provider_model_transition {
+            self.revert_provider_model_transition(session);
+        }
+    }
+
+    pub fn revert_provider_preview(&mut self, session: &mut SessionContext) {
+        let previous_provider = self
+            .provider_state()
+            .and_then(|state| state.before_provider.clone());
+
+        if let Some(state) = self.provider_state_mut() {
+            state.before_provider = None;
+            state.search_filter.clear();
+            state.all_items.clear();
+        }
+
+        if let Some((prev_name, prev_display)) = previous_provider {
+            session.provider_name = prev_name;
+            session.provider_display_name = prev_display;
+        }
+    }
+
+    pub fn revert_provider_model_transition(&mut self, session: &mut SessionContext) {
+        if let Some((
+            prev_provider_name,
+            prev_provider_display,
+            prev_model,
+            prev_api_key,
+            prev_base_url,
+        )) = self.provider_model_transition_state.take()
+        {
+            session.provider_name = prev_provider_name;
+            session.provider_display_name = prev_provider_display;
+            session.model = prev_model;
+            session.api_key = prev_api_key;
+            session.base_url = prev_base_url;
+        }
+
+        self.in_provider_model_transition = false;
+        self.provider_model_transition_state = None;
+    }
+
+    pub fn complete_provider_model_transition(&mut self) {
+        self.in_provider_model_transition = false;
+        self.provider_model_transition_state = None;
+    }
+
     pub fn sort_items(&mut self) {
         let prefers_alpha = self.prefers_alphabetical();
         if let Some(session) = self.session_mut() {

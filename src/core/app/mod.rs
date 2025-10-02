@@ -541,24 +541,7 @@ impl App {
 
     /// Revert model to the one before opening picker (on cancel)
     pub fn revert_model_preview(&mut self) {
-        let previous_model = self
-            .model_picker_state()
-            .and_then(|state| state.before_model.clone());
-
-        if let Some(state) = self.model_picker_state_mut() {
-            state.before_model = None;
-            state.search_filter.clear();
-            state.all_items.clear();
-            state.has_dates = false;
-        }
-
-        if let Some(prev) = previous_model {
-            self.session.model = prev;
-        }
-        // Check if we're in a provider->model transition and need to revert
-        if self.picker.in_provider_model_transition {
-            self.revert_provider_model_transition();
-        }
+        self.picker.revert_model_preview(&mut self.session);
     }
 
     /// Open a provider picker modal with available providers
@@ -596,47 +579,18 @@ impl App {
 
     /// Revert provider to the one before opening picker (on cancel)
     pub fn revert_provider_preview(&mut self) {
-        let previous_provider = self
-            .provider_picker_state()
-            .and_then(|state| state.before_provider.clone());
-
-        if let Some(state) = self.provider_picker_state_mut() {
-            state.before_provider = None;
-            state.search_filter.clear();
-            state.all_items.clear();
-        }
-
-        if let Some((prev_name, prev_display)) = previous_provider {
-            self.session.provider_name = prev_name;
-            self.session.provider_display_name = prev_display;
-            // Note: We don't revert api_key and base_url as they should stay consistent with provider
-        }
+        self.picker.revert_provider_preview(&mut self.session);
     }
 
     /// Revert provider and model to previous state during provider->model transition cancellation
     pub fn revert_provider_model_transition(&mut self) {
-        if let Some((
-            prev_provider_name,
-            prev_provider_display,
-            prev_model,
-            prev_api_key,
-            prev_base_url,
-        )) = self.picker.provider_model_transition_state.take()
-        {
-            self.session.provider_name = prev_provider_name;
-            self.session.provider_display_name = prev_provider_display;
-            self.session.model = prev_model;
-            self.session.api_key = prev_api_key;
-            self.session.base_url = prev_base_url;
-        }
-        self.picker.in_provider_model_transition = false;
-        self.picker.provider_model_transition_state = None;
+        self.picker
+            .revert_provider_model_transition(&mut self.session);
     }
 
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
-        self.picker.in_provider_model_transition = false;
-        self.picker.provider_model_transition_state = None;
+        self.picker.complete_provider_model_transition();
     }
 
     /// Apply model by id and persist as default model for current provider in config
@@ -762,7 +716,7 @@ mod tests {
         ));
 
         // Cancelling model picker should revert provider/model/api_key/base_url
-        app.revert_model_preview();
+        app.picker.revert_model_preview(&mut app.session);
 
         assert_eq!(app.session.provider_name, "oldprov");
         assert_eq!(app.session.provider_display_name, "OldProv");

@@ -49,7 +49,7 @@ fn bench_render_cache(c: &mut Criterion) {
         // ~200 and ~800 messages
         let messages = make_messages(pairs, base);
         let mut app = App::new_bench(theme.clone(), markdown, syntax);
-        app.messages = messages.clone();
+        app.ui.messages = messages.clone();
 
         let built = ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
             &messages, &theme, markdown, syntax, None,
@@ -77,7 +77,7 @@ fn bench_render_cache(c: &mut Criterion) {
             last.content.push_str(" start");
         }
         let mut app_stream = App::new_bench(theme.clone(), markdown, syntax);
-        app_stream.messages = messages_stream.clone();
+        app_stream.ui.messages = messages_stream.clone();
 
         group.bench_function(BenchmarkId::new("no_cache_stream", width_small), |b| {
             b.iter(|| {
@@ -89,7 +89,7 @@ fn bench_render_cache(c: &mut Criterion) {
         });
         group.bench_function(BenchmarkId::new("with_cache_stream", width_small), |b| {
             b.iter(|| {
-                if let Some(last) = app_stream.messages.back_mut() {
+                if let Some(last) = app_stream.ui.messages.back_mut() {
                     last.content.push('.');
                 }
                 redraw_with_cache(&mut app_stream, width_small)

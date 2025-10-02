@@ -118,16 +118,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     // Input area takes full width
 
     // Pulsing indicator rendered in the title for simplicity
+    const STREAMING_FRAMES: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
+    const ROTATIONS_PER_SECOND: f32 = 0.5;
+
     let indicator = if app.ui.is_streaming {
-        let elapsed = app.ui.pulse_start.elapsed().as_millis() as f32 / 1000.0;
-        let phase = (elapsed * 2.0) % 2.0;
-        if phase < 0.33 {
-            "○"
-        } else if phase < 0.66 {
-            "◐"
-        } else {
-            "●"
-        }
+        let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
+        let total_frames =
+            (elapsed * ROTATIONS_PER_SECOND * STREAMING_FRAMES.len() as f32).floor() as usize;
+        STREAMING_FRAMES[total_frames % STREAMING_FRAMES.len()]
     } else {
         ""
     };

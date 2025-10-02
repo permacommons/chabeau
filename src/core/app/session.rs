@@ -4,7 +4,6 @@ use chrono::Utc;
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
-use super::{App, PickerController, UiState};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
 use crate::core::providers::{resolve_env_session, resolve_session, ResolveSessionError};
@@ -28,6 +27,19 @@ pub struct SessionContext {
     pub last_retry_time: Instant,
     pub retrying_message_index: Option<usize>,
     pub startup_env_only: bool,
+}
+
+pub struct SessionBootstrap {
+    pub session: SessionContext,
+    pub theme: Theme,
+    pub startup_requires_provider: bool,
+}
+
+pub struct UninitializedSessionBootstrap {
+    pub session: SessionContext,
+    pub theme: Theme,
+    pub config: Config,
+    pub startup_requires_provider: bool,
 }
 
 pub(crate) fn initialize_logging(
@@ -69,13 +81,13 @@ pub(crate) fn resolve_theme(config: &Config) -> Theme {
     quantize_theme_for_current_terminal(resolved_theme)
 }
 
-pub(crate) async fn new_with_auth(
+pub(crate) async fn prepare_with_auth(
     model: String,
     log_file: Option<String>,
     provider: Option<String>,
     env_only: bool,
     config: &Config,
-) -> Result<App, Box<dyn std::error::Error>> {
+) -> Result<SessionBootstrap, Box<dyn std::error::Error>> {
     let auth_manager = AuthManager::new();
 
     let session = if env_only {
@@ -118,21 +130,16 @@ pub(crate) async fn new_with_auth(
         startup_env_only: false,
     };
 
-    let mut app = App {
+    Ok(SessionBootstrap {
         session,
-        ui: UiState::from_config(resolved_theme, config),
-        picker: PickerController::new(),
-    };
-
-    app.set_input_text(String::new());
-    app.configure_textarea_appearance();
-
-    Ok(app)
+        theme: resolved_theme,
+        startup_requires_provider: false,
+    })
 }
 
-pub(crate) async fn new_uninitialized(
+pub(crate) async fn prepare_uninitialized(
     log_file: Option<String>,
-) -> Result<App, Box<dyn std::error::Error>> {
+) -> Result<UninitializedSessionBootstrap, Box<dyn std::error::Error>> {
     let config = Config::load()?;
 
     let logging = initialize_logging(log_file)?;
@@ -153,18 +160,12 @@ pub(crate) async fn new_uninitialized(
         startup_env_only: false,
     };
 
-    let mut picker = PickerController::new();
-    picker.startup_requires_provider = true;
-
-    let mut app = App {
+    Ok(UninitializedSessionBootstrap {
         session,
-        ui: UiState::from_config(resolved_theme, &config),
-        picker,
-    };
-
-    app.set_input_text(String::new());
-    app.configure_textarea_appearance();
-    Ok(app)
+        theme: resolved_theme,
+        config,
+        startup_requires_provider: true,
+    })
 }
 
 #[cfg(test)]

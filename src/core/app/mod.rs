@@ -20,7 +20,7 @@ pub use picker::{
     ModelPickerState, PickerController, PickerData, PickerSession, ProviderPickerState,
     ThemePickerState,
 };
-pub use session::SessionContext;
+pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use ui_state::{FilePrompt, FilePromptKind, UiMode, UiState};
 
 pub async fn new_with_auth(
@@ -30,13 +30,53 @@ pub async fn new_with_auth(
     env_only: bool,
     config: &Config,
 ) -> Result<App, Box<dyn std::error::Error>> {
-    session::new_with_auth(model, log_file, provider, env_only, config).await
+    let SessionBootstrap {
+        session,
+        theme,
+        startup_requires_provider,
+    } = session::prepare_with_auth(model, log_file, provider, env_only, config).await?;
+
+    let mut app = App {
+        session,
+        ui: UiState::from_config(theme, config),
+        picker: PickerController::new(),
+    };
+
+    app.set_input_text(String::new());
+    app.configure_textarea_appearance();
+
+    if startup_requires_provider {
+        app.picker.startup_requires_provider = true;
+    }
+
+    Ok(app)
 }
 
 pub async fn new_uninitialized(
     log_file: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
-    session::new_uninitialized(log_file).await
+    let UninitializedSessionBootstrap {
+        session,
+        theme,
+        config,
+        startup_requires_provider,
+    } = session::prepare_uninitialized(log_file).await?;
+
+    let mut picker = PickerController::new();
+    if startup_requires_provider {
+        picker.startup_requires_provider = true;
+    }
+
+    let mut app = App {
+        session,
+        ui: UiState::from_config(theme, &config),
+        picker,
+    };
+
+    app.set_input_text(String::new());
+    app.configure_textarea_appearance();
+
+    Ok(app)
 }
 
 pub struct App {

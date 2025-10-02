@@ -62,7 +62,10 @@ pub fn scroll_block_into_view(
             Some(term_width as usize),
         );
     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-    let available_height = app_guard.calculate_available_height(term_height, input_area_height);
+    let available_height = {
+        let conversation = app_guard.conversation();
+        conversation.calculate_available_height(term_height, input_area_height)
+    };
     let desired = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
         &lines,
         term_width,
@@ -118,7 +121,7 @@ impl KeyHandler for CtrlLHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
-        app_guard.clear_status();
+        app_guard.conversation().clear_status();
         KeyResult::Handled
     }
 }
@@ -166,7 +169,7 @@ impl KeyHandler for EscapeHandler {
             return KeyResult::Handled;
         }
         if app_guard.ui.is_streaming {
-            app_guard.cancel_current_stream();
+            app_guard.conversation().cancel_current_stream();
             return KeyResult::Handled;
         }
         KeyResult::NotHandled
@@ -230,8 +233,10 @@ impl KeyHandler for NavigationHandler {
             }
             KeyCode::End => {
                 let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                let available_height =
-                    app_guard.calculate_available_height(term_height, input_area_height);
+                let available_height = {
+                    let conversation = app_guard.conversation();
+                    conversation.calculate_available_height(term_height, input_area_height)
+                };
                 app_guard
                     .ui
                     .scroll_to_bottom_view(available_height, term_width);
@@ -239,15 +244,19 @@ impl KeyHandler for NavigationHandler {
             }
             KeyCode::PageUp => {
                 let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                let available_height =
-                    app_guard.calculate_available_height(term_height, input_area_height);
+                let available_height = {
+                    let conversation = app_guard.conversation();
+                    conversation.calculate_available_height(term_height, input_area_height)
+                };
                 app_guard.ui.page_up(available_height);
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
                 let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                let available_height =
-                    app_guard.calculate_available_height(term_height, input_area_height);
+                let available_height = {
+                    let conversation = app_guard.conversation();
+                    conversation.calculate_available_height(term_height, input_area_height)
+                };
                 app_guard.ui.page_down(available_height, term_width);
                 KeyResult::Handled
             }
@@ -328,8 +337,10 @@ impl KeyHandler for ArrowKeyHandler {
                 } else {
                     app_guard.ui.auto_scroll = false;
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    let available_height =
-                        app_guard.calculate_available_height(term_height, input_area_height);
+                    let available_height = {
+                        let conversation = app_guard.conversation();
+                        conversation.calculate_available_height(term_height, input_area_height)
+                    };
                     let max_scroll = app_guard
                         .ui
                         .calculate_max_scroll_offset(available_height, term_width);
@@ -435,7 +446,9 @@ impl KeyHandler for CtrlBHandler {
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
         if !app_guard.ui.markdown_enabled {
-            app_guard.set_status("Markdown disabled (/markdown on)");
+            app_guard
+                .conversation()
+                .set_status("Markdown disabled (/markdown on)");
             return KeyResult::Handled;
         }
 
@@ -458,7 +471,7 @@ impl KeyHandler for CtrlBHandler {
                 }
             }
         } else if blocks.is_empty() {
-            app_guard.set_status("No code blocks");
+            app_guard.conversation().set_status("No code blocks");
         } else {
             let last = blocks.len().saturating_sub(1);
             app_guard.ui.enter_block_select_mode(last);
@@ -487,7 +500,7 @@ impl KeyHandler for CtrlPHandler {
         let mut app_guard = app.lock().await;
 
         if app_guard.ui.last_user_message_index().is_none() {
-            app_guard.set_status("No user messages");
+            app_guard.conversation().set_status("No user messages");
             return KeyResult::Handled;
         }
 
@@ -512,7 +525,9 @@ impl KeyHandler for CtrlPHandler {
         }
 
         if let Some(idx) = app_guard.ui.selected_user_message_index() {
-            app_guard.scroll_index_into_view(idx, term_width, term_height);
+            app_guard
+                .conversation()
+                .scroll_index_into_view(idx, term_width, term_height);
         }
 
         KeyResult::Handled

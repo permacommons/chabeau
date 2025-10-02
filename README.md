@@ -187,8 +187,12 @@ Modular design with focused components:
   - `pick_default_model.rs` - Default model configuration
   - `pick_default_provider.rs` - Default provider configuration
 - `core/` - Core application components
-  - `mod.rs` - Core module declarations
-  - `app.rs` - Core application state
+  - `app/` - Application state and controllers
+    - `mod.rs` - App struct and module exports
+    - `conversation.rs` - Conversation controller for chat flow, retries, and streaming helpers
+    - `session.rs` - Session bootstrap and provider/model state
+    - `settings.rs` - Theme and provider controllers
+    - `ui_state.rs` - UI state management and text input helpers
   - `builtin_providers.rs` - Built-in provider configuration (loads from `builtins/models.toml`)
   - `config.rs` - Configuration management
   - `message.rs` - Message data structures

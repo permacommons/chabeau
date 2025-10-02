@@ -15,7 +15,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
 
     if trimmed.starts_with("/help") {
         let help_md = crate::ui::help::builtin_help_md();
-        app.add_system_message(help_md.to_string());
+        app.conversation().add_system_message(help_md.to_string());
         CommandResult::Continue
     } else if trimmed.starts_with("/log") {
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -25,11 +25,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 // Just "/log" - toggle logging if file is set
                 match app.session.logging.toggle_logging() {
                     Ok(message) => {
-                        app.set_status(message);
+                        app.conversation().set_status(message);
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.set_status(format!("Log error: {}", e));
+                        app.conversation().set_status(format!("Log error: {}", e));
                         CommandResult::Continue
                     }
                 }
@@ -39,17 +39,18 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 let filename = parts[1];
                 match app.session.logging.set_log_file(filename.to_string()) {
                     Ok(message) => {
-                        app.set_status(message);
+                        app.conversation().set_status(message);
                         CommandResult::Continue
                     }
                     Err(e) => {
-                        app.set_status(format!("Logfile error: {}", e));
+                        app.conversation()
+                            .set_status(format!("Logfile error: {}", e));
                         CommandResult::Continue
                     }
                 }
             }
             _ => {
-                app.set_status("Usage: /log [filename]");
+                app.conversation().set_status("Usage: /log [filename]");
                 CommandResult::Continue
             }
         }
@@ -66,7 +67,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                     Err(e) => {
                         let msg = e.to_string();
                         if msg.contains("already exists") {
-                            app.set_status("Log file already exists.");
+                            app.conversation().set_status("Log file already exists.");
                             app.ui.start_file_prompt_dump(filename);
                             CommandResult::Continue
                         } else {
@@ -81,7 +82,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 handle_dump_result(app, dump_conversation(app, filename), filename)
             }
             _ => {
-                app.set_status("Usage: /dump [filename]");
+                app.conversation().set_status("Usage: /dump [filename]");
                 CommandResult::Continue
             }
         }
@@ -102,11 +103,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 };
                 match res {
                     Ok(_) => {
-                        app.set_status(format!("Theme set: {}", id));
+                        app.conversation().set_status(format!("Theme set: {}", id));
                         CommandResult::Continue
                     }
                     Err(_e) => {
-                        app.set_status("Theme error");
+                        app.conversation().set_status("Theme error");
                         CommandResult::Continue
                     }
                 }
@@ -126,7 +127,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                     let mut controller = app.provider_controller();
                     controller.apply_model_by_id(model_id);
                 }
-                app.set_status(format!("Model set: {}", model_id));
+                app.conversation()
+                    .set_status(format!("Model set: {}", model_id));
                 CommandResult::Continue
             }
         }
@@ -146,7 +148,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 };
                 match result {
                     Ok(_) => {
-                        app.set_status(format!("Provider set: {}", provider_id));
+                        app.conversation()
+                            .set_status(format!("Provider set: {}", provider_id));
                         if should_open_model_picker {
                             // Return special command to trigger model picker
                             CommandResult::OpenModelPicker
@@ -155,7 +158,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                         }
                     }
                     Err(e) => {
-                        app.set_status(format!("Provider error: {}", e));
+                        app.conversation()
+                            .set_status(format!("Provider error: {}", e));
                         CommandResult::Continue
                     }
                 }
@@ -170,7 +174,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "off" => new_state = false,
             "toggle" | "" => new_state = !new_state,
             _ => {
-                app.set_status("Usage: /markdown [on|off|toggle]");
+                app.conversation()
+                    .set_status("Usage: /markdown [on|off|toggle]");
                 return CommandResult::Continue;
             }
         }
@@ -181,19 +186,19 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 cfg.markdown = Some(new_state);
                 if let Err(e) = cfg.save() {
                     let _ = e; // keep detail out of status
-                    app.set_status(format!(
+                    app.conversation().set_status(format!(
                         "Markdown {} (unsaved)",
                         if new_state { "enabled" } else { "disabled" }
                     ));
                 } else {
-                    app.set_status(format!(
+                    app.conversation().set_status(format!(
                         "Markdown {}",
                         if new_state { "enabled" } else { "disabled" }
                     ));
                 }
             }
             Err(_e) => {
-                app.set_status(format!(
+                app.conversation().set_status(format!(
                     "Markdown {}",
                     if new_state { "enabled" } else { "disabled" }
                 ));
@@ -209,7 +214,8 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             "off" => new_state = false,
             "toggle" | "" => new_state = !new_state,
             _ => {
-                app.set_status("Usage: /syntax [on|off|toggle]");
+                app.conversation()
+                    .set_status("Usage: /syntax [on|off|toggle]");
                 return CommandResult::Continue;
             }
         }
@@ -220,16 +226,18 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 cfg.syntax = Some(new_state);
                 if let Err(e) = cfg.save() {
                     let _ = e;
-                    app.set_status(format!(
+                    app.conversation().set_status(format!(
                         "Syntax {} (unsaved)",
                         if new_state { "on" } else { "off" }
                     ));
                 } else {
-                    app.set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
+                    app.conversation()
+                        .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
                 }
             }
             Err(_e) => {
-                app.set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
+                app.conversation()
+                    .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
             }
         }
         CommandResult::Continue
@@ -291,11 +299,12 @@ fn handle_dump_result(
 ) -> CommandResult {
     match result {
         Ok(_) => {
-            app.set_status(format!("Dumped: {}", filename));
+            app.conversation()
+                .set_status(format!("Dumped: {}", filename));
             CommandResult::Continue
         }
         Err(e) => {
-            app.set_status(format!("Dump error: {}", e));
+            app.conversation().set_status(format!("Dump error: {}", e));
             CommandResult::Continue
         }
     }

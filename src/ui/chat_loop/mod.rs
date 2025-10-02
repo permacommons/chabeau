@@ -344,8 +344,9 @@ fn append_coalesced_chunk(app: &mut App, chunk: String, term_width: u16, term_he
     }
 
     let input_area_height = app.ui.calculate_input_area_height(term_width);
-    let available_height = app.calculate_available_height(term_height, input_area_height);
-    app.append_to_response(&chunk, available_height, term_width);
+    let mut conversation = app.conversation();
+    let available_height = conversation.calculate_available_height(term_height, input_area_height);
+    conversation.append_to_response(&chunk, available_height, term_width);
 }
 
 fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16, term_height: u16) {
@@ -355,14 +356,21 @@ fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16,
         }
         StreamMessage::Error(err) => {
             let error_message = format!("Error: {}", err.trim());
-            app.add_system_message(error_message);
-            app.ui.is_streaming = false;
             let input_area_height = app.ui.calculate_input_area_height(term_width);
-            let available_height = app.calculate_available_height(term_height, input_area_height);
-            app.update_scroll_position(available_height, term_width);
+            {
+                let mut conversation = app.conversation();
+                conversation.add_system_message(error_message);
+                let available_height =
+                    conversation.calculate_available_height(term_height, input_area_height);
+                conversation.update_scroll_position(available_height, term_width);
+            }
+            app.ui.is_streaming = false;
         }
         StreamMessage::End => {
-            app.finalize_response();
+            {
+                let mut conversation = app.conversation();
+                conversation.finalize_response();
+            }
             app.ui.is_streaming = false;
         }
     }
@@ -393,7 +401,9 @@ async fn handle_edit_select_mode_event(
                 };
                 if let Some(prev) = prev {
                     app_guard.ui.set_selected_user_message_index(prev);
-                    app_guard.scroll_index_into_view(prev, term_width, term_height);
+                    app_guard
+                        .conversation()
+                        .scroll_index_into_view(prev, term_width, term_height);
                 }
             } else if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
@@ -410,7 +420,9 @@ async fn handle_edit_select_mode_event(
                 };
                 if let Some(next) = next {
                     app_guard.ui.set_selected_user_message_index(next);
-                    app_guard.scroll_index_into_view(next, term_width, term_height);
+                    app_guard
+                        .conversation()
+                        .scroll_index_into_view(next, term_width, term_height);
                 }
             } else if let Some(last) = app_guard.ui.last_user_message_index() {
                 app_guard.ui.set_selected_user_message_index(last);
@@ -421,7 +433,10 @@ async fn handle_edit_select_mode_event(
             if let Some(idx) = app_guard.ui.selected_user_message_index() {
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     let content = app_guard.ui.messages[idx].content.clone();
-                    app_guard.cancel_current_stream();
+                    {
+                        let mut conversation = app_guard.conversation();
+                        conversation.cancel_current_stream();
+                    }
                     app_guard.ui.messages.truncate(idx);
                     app_guard.invalidate_prewrap_cache();
                     let _ = app_guard
@@ -431,9 +446,12 @@ async fn handle_edit_select_mode_event(
                     app_guard.ui.set_input_text(content);
                     app_guard.ui.exit_edit_select_mode();
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    let available_height =
-                        app_guard.calculate_available_height(term_height, input_area_height);
-                    app_guard.update_scroll_position(available_height, term_width);
+                    {
+                        let mut conversation = app_guard.conversation();
+                        let available_height =
+                            conversation.calculate_available_height(term_height, input_area_height);
+                        conversation.update_scroll_position(available_height, term_width);
+                    }
                 }
             }
             true
@@ -452,7 +470,10 @@ async fn handle_edit_select_mode_event(
         KeyCode::Delete => {
             if let Some(idx) = app_guard.ui.selected_user_message_index() {
                 if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                    app_guard.cancel_current_stream();
+                    {
+                        let mut conversation = app_guard.conversation();
+                        conversation.cancel_current_stream();
+                    }
                     app_guard.ui.messages.truncate(idx);
                     app_guard.invalidate_prewrap_cache();
                     let _ = app_guard
@@ -461,9 +482,12 @@ async fn handle_edit_select_mode_event(
                         .rewrite_log_without_last_response(&app_guard.ui.messages);
                     app_guard.ui.exit_edit_select_mode();
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    let available_height =
-                        app_guard.calculate_available_height(term_height, input_area_height);
-                    app_guard.update_scroll_position(available_height, term_width);
+                    {
+                        let mut conversation = app_guard.conversation();
+                        let available_height =
+                            conversation.calculate_available_height(term_height, input_area_height);
+                        conversation.update_scroll_position(available_height, term_width);
+                    }
                 }
             }
             true
@@ -530,15 +554,18 @@ async fn handle_block_select_mode_event(
             if let Some(cur) = app_guard.ui.selected_block_index() {
                 if let Some((_start, _len, content)) = ranges.get(cur) {
                     match crate::utils::clipboard::copy_to_clipboard(content) {
-                        Ok(()) => app_guard.set_status("Copied code block"),
-                        Err(_e) => app_guard.set_status("Clipboard error"),
+                        Ok(()) => app_guard.conversation().set_status("Copied code block"),
+                        Err(_e) => app_guard.conversation().set_status("Clipboard error"),
                     }
                     app_guard.ui.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    let available_height =
-                        app_guard.calculate_available_height(term_height, input_area_height);
-                    app_guard.update_scroll_position(available_height, term_width);
+                    {
+                        let mut conversation = app_guard.conversation();
+                        let available_height =
+                            conversation.calculate_available_height(term_height, input_area_height);
+                        conversation.update_scroll_position(available_height, term_width);
+                    }
                 }
             }
             true
@@ -555,22 +582,29 @@ async fn handle_block_select_mode_event(
                     let ext = language_to_extension(lang.as_deref());
                     let filename = format!("chabeau-block-{}.{}", date, ext);
                     if std::path::Path::new(&filename).exists() {
-                        app_guard.set_status("File already exists.");
+                        app_guard.conversation().set_status("File already exists.");
                         app_guard
                             .ui
                             .start_file_prompt_save_block(filename, content.clone());
                     } else {
                         match fs::write(&filename, content) {
-                            Ok(()) => app_guard.set_status(format!("Saved to {}", filename)),
-                            Err(_e) => app_guard.set_status("Error saving code block"),
+                            Ok(()) => app_guard
+                                .conversation()
+                                .set_status(format!("Saved to {}", filename)),
+                            Err(_e) => app_guard
+                                .conversation()
+                                .set_status("Error saving code block"),
                         }
                     }
                     app_guard.ui.exit_block_select_mode();
                     app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    let available_height =
-                        app_guard.calculate_available_height(term_height, input_area_height);
-                    app_guard.update_scroll_position(available_height, term_width);
+                    {
+                        let mut conversation = app_guard.conversation();
+                        let available_height =
+                            conversation.calculate_available_height(term_height, input_area_height);
+                        conversation.update_scroll_position(available_height, term_width);
+                    }
                 }
             }
             true
@@ -607,19 +641,27 @@ async fn handle_external_editor_shortcut(
         Ok(None) => {
             let mut app_guard = app.lock().await;
             let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            let available_height =
-                app_guard.calculate_available_height(term_height, input_area_height);
-            app_guard.update_scroll_position(available_height, term_width);
+            {
+                let mut conversation = app_guard.conversation();
+                let available_height =
+                    conversation.calculate_available_height(term_height, input_area_height);
+                conversation.update_scroll_position(available_height, term_width);
+            }
             Ok(Some(KeyLoopAction::Continue))
         }
         Err(e) => {
             let error_msg = e.to_string();
             let mut app_guard = app.lock().await;
-            app_guard.set_status(format!("Editor error: {}", error_msg));
+            app_guard
+                .conversation()
+                .set_status(format!("Editor error: {}", error_msg));
             let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            let available_height =
-                app_guard.calculate_available_height(term_height, input_area_height);
-            app_guard.update_scroll_position(available_height, term_width);
+            {
+                let mut conversation = app_guard.conversation();
+                let available_height =
+                    conversation.calculate_available_height(term_height, input_area_height);
+                conversation.update_scroll_position(available_height, term_width);
+            }
             Ok(Some(KeyLoopAction::Continue))
         }
     }
@@ -637,14 +679,19 @@ async fn process_input_submission(
     match process_input(&mut app_guard, &input_text) {
         CommandResult::Continue => {
             let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            let available_height =
-                app_guard.calculate_available_height(term_height, input_area_height);
-            app_guard.update_scroll_position(available_height, term_width);
+            {
+                let mut conversation = app_guard.conversation();
+                let available_height =
+                    conversation.calculate_available_height(term_height, input_area_height);
+                conversation.update_scroll_position(available_height, term_width);
+            }
             SubmissionResult::Continue
         }
         CommandResult::OpenModelPicker => {
             if let Err(e) = app_guard.open_model_picker().await {
-                app_guard.set_status(format!("Model picker error: {}", e));
+                app_guard
+                    .conversation()
+                    .set_status(format!("Model picker error: {}", e));
             }
             drop(app_guard);
             let _ = event_tx.send(UiEvent::RequestRedraw);
@@ -689,15 +736,21 @@ async fn handle_enter_key(
                     );
                     match res {
                         Ok(()) => {
-                            app_guard.set_status(format!("Dumped: {}", filename));
+                            app_guard
+                                .conversation()
+                                .set_status(format!("Dumped: {}", filename));
                             app_guard.ui.cancel_file_prompt();
                         }
                         Err(e) => {
                             let msg = e.to_string();
                             if msg.contains("exists") && !overwrite {
-                                app_guard.set_status("File exists (Alt+Enter to overwrite)");
+                                app_guard
+                                    .conversation()
+                                    .set_status("File exists (Alt+Enter to overwrite)");
                             } else {
-                                app_guard.set_status(format!("Dump error: {}", msg));
+                                app_guard
+                                    .conversation()
+                                    .set_status(format!("Dump error: {}", msg));
                             }
                         }
                     }
@@ -706,15 +759,19 @@ async fn handle_enter_key(
                     use std::fs;
                     let exists = std::path::Path::new(&filename).exists();
                     if exists && !overwrite {
-                        app_guard.set_status("File already exists.");
+                        app_guard.conversation().set_status("File already exists.");
                     } else if let Some(content) = prompt.content {
                         match fs::write(&filename, content) {
                             Ok(()) => {
-                                app_guard.set_status(format!("Saved to {}", filename));
+                                app_guard
+                                    .conversation()
+                                    .set_status(format!("Saved to {}", filename));
                                 app_guard.ui.cancel_file_prompt();
                             }
                             Err(_e) => {
-                                app_guard.set_status("Error saving code block");
+                                app_guard
+                                    .conversation()
+                                    .set_status("Error saving code block");
                             }
                         }
                     }
@@ -842,23 +899,28 @@ async fn handle_retry_shortcut(
         }
 
         let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-        let available_height = app_guard.calculate_available_height(term_height, input_area_height);
+        let maybe_stream = {
+            let mut conversation = app_guard.conversation();
+            let available_height =
+                conversation.calculate_available_height(term_height, input_area_height);
+            conversation
+                .prepare_retry(available_height, term_width)
+                .map(|api_messages| {
+                    let (cancel_token, stream_id) = conversation.start_new_stream();
+                    (api_messages, cancel_token, stream_id)
+                })
+        };
 
-        app_guard
-            .prepare_retry(available_height, term_width)
-            .map(|api_messages| {
-                let (cancel_token, stream_id) = app_guard.start_new_stream();
-                StreamParams {
-                    client: app_guard.session.client.clone(),
-                    base_url: app_guard.session.base_url.clone(),
-                    api_key: app_guard.session.api_key.clone(),
-                    provider_name: app_guard.session.provider_name.clone(),
-                    model: app_guard.session.model.clone(),
-                    api_messages,
-                    cancel_token,
-                    stream_id,
-                }
-            })
+        maybe_stream.map(|(api_messages, cancel_token, stream_id)| StreamParams {
+            client: app_guard.session.client.clone(),
+            base_url: app_guard.session.base_url.clone(),
+            api_key: app_guard.session.api_key.clone(),
+            provider_name: app_guard.session.provider_name.clone(),
+            model: app_guard.session.model.clone(),
+            api_messages,
+            cancel_token,
+            stream_id,
+        })
     };
 
     if let Some(params) = maybe_params {
@@ -875,11 +937,15 @@ fn prepare_stream_params_for_message(
     term_height: u16,
 ) -> StreamParams {
     app_guard.ui.auto_scroll = true;
-    let (cancel_token, stream_id) = app_guard.start_new_stream();
-    let api_messages = app_guard.add_user_message(message);
     let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-    let available_height = app_guard.calculate_available_height(term_height, input_area_height);
-    app_guard.update_scroll_position(available_height, term_width);
+    let (cancel_token, stream_id, api_messages) = {
+        let mut conversation = app_guard.conversation();
+        let (cancel_token, stream_id) = conversation.start_new_stream();
+        let api_messages = conversation.add_user_message(message);
+        let available_height = conversation.calculate_available_height(term_height, input_area_height);
+        conversation.update_scroll_position(available_height, term_width);
+        (cancel_token, stream_id, api_messages)
+    };
 
     StreamParams {
         client: app_guard.session.client.clone(),
@@ -940,7 +1006,7 @@ async fn handle_picker_key_event(
                             app_guard.revert_model_preview();
                             if app_guard.picker.in_provider_model_transition {
                                 app_guard.revert_provider_model_transition();
-                                app_guard.set_status("Selection cancelled");
+                                app_guard.conversation().set_status("Selection cancelled");
                             }
                             app_guard.close_picker();
                         }
@@ -1038,12 +1104,12 @@ async fn handle_picker_key_event(
                             }
                         };
                         match res {
-                            Ok(_) => app_guard.set_status(format!(
+                            Ok(_) => app_guard.conversation().set_status(format!(
                                 "Theme set: {}{}",
                                 id,
                                 status_suffix(is_persistent)
                             )),
-                            Err(_e) => app_guard.set_status("Theme error"),
+                            Err(_e) => app_guard.conversation().set_status("Theme error"),
                         }
                     }
                     app_guard.close_picker();
@@ -1062,7 +1128,7 @@ async fn handle_picker_key_event(
                         };
                         match res {
                             Ok(_) => {
-                                app_guard.set_status(format!(
+                                app_guard.conversation().set_status(format!(
                                     "Model set: {}{}",
                                     id,
                                     status_suffix(persist)
@@ -1074,7 +1140,9 @@ async fn handle_picker_key_event(
                                     app_guard.picker.startup_requires_model = false;
                                 }
                             }
-                            Err(e) => app_guard.set_status(format!("Model error: {}", e)),
+                            Err(e) => app_guard
+                                .conversation()
+                                .set_status(format!("Model error: {}", e)),
                         }
                     }
                     app_guard.close_picker();
@@ -1091,7 +1159,7 @@ async fn handle_picker_key_event(
                         };
                         match res {
                             Ok(_) => {
-                                app_guard.set_status(format!(
+                                app_guard.conversation().set_status(format!(
                                     "Provider set: {}{}",
                                     id,
                                     status_suffix(is_persistent)
@@ -1108,6 +1176,7 @@ async fn handle_picker_key_event(
                                         let mut app_guard = app_clone.lock().await;
                                         if let Err(e) = app_guard.open_model_picker().await {
                                             app_guard
+                                                .conversation()
                                                 .set_status(format!("Model picker error: {}", e));
                                         }
                                         drop(app_guard);
@@ -1116,7 +1185,9 @@ async fn handle_picker_key_event(
                                 }
                             }
                             Err(e) => {
-                                app_guard.set_status(format!("Provider error: {}", e));
+                                app_guard
+                                    .conversation()
+                                    .set_status(format!("Provider error: {}", e));
                                 app_guard.close_picker();
                             }
                         }
@@ -1136,12 +1207,12 @@ async fn handle_picker_key_event(
                                 controller.apply_theme_by_id(&id)
                             };
                             match res {
-                                Ok(_) => app_guard.set_status(format!(
+                                Ok(_) => app_guard.conversation().set_status(format!(
                                     "Theme set: {}{}",
                                     id,
                                     status_suffix(true)
                                 )),
-                                Err(_e) => app_guard.set_status("Theme error"),
+                                Err(_e) => app_guard.conversation().set_status("Theme error"),
                             }
                         }
                         app_guard.close_picker();
@@ -1161,7 +1232,7 @@ async fn handle_picker_key_event(
                             };
                             match res {
                                 Ok(_) => {
-                                    app_guard.set_status(format!(
+                                    app_guard.conversation().set_status(format!(
                                         "Model set: {}{}",
                                         id,
                                         status_suffix(persist)
@@ -1173,7 +1244,9 @@ async fn handle_picker_key_event(
                                         app_guard.picker.startup_requires_model = false;
                                     }
                                 }
-                                Err(e) => app_guard.set_status(format!("Model error: {}", e)),
+                                Err(e) => app_guard
+                                    .conversation()
+                                    .set_status(format!("Model error: {}", e)),
                             }
                         }
                         app_guard.close_picker();
@@ -1187,7 +1260,7 @@ async fn handle_picker_key_event(
                             };
                             match res {
                                 Ok(_) => {
-                                    app_guard.set_status(format!(
+                                    app_guard.conversation().set_status(format!(
                                         "Provider set: {}{}",
                                         id,
                                         status_suffix(true)
@@ -1199,7 +1272,7 @@ async fn handle_picker_key_event(
                                         tokio::spawn(async move {
                                             let mut app_guard = app_clone.lock().await;
                                             if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.set_status(format!(
+                                                app_guard.conversation().set_status(format!(
                                                     "Model picker error: {}",
                                                     e
                                                 ));
@@ -1209,7 +1282,9 @@ async fn handle_picker_key_event(
                                         });
                                     }
                                 }
-                                Err(e) => app_guard.set_status(format!("Provider error: {}", e)),
+                                Err(e) => app_guard
+                                    .conversation()
+                                    .set_status(format!("Provider error: {}", e)),
                             }
                         }
                         Some("__picker_handled__".to_string())
@@ -1243,7 +1318,9 @@ async fn handle_picker_key_event(
                         };
                         match result {
                             Ok(_) => {
-                                app_guard.set_status(format!("Removed default: {}", item_id));
+                                app_guard
+                                    .conversation()
+                                    .set_status(format!("Removed default: {}", item_id));
                                 // Refresh the picker to remove the asterisk
                                 match current_picker_mode {
                                     Some(crate::core::app::PickerMode::Model) => {
@@ -1253,7 +1330,7 @@ async fn handle_picker_key_event(
                                         tokio::spawn(async move {
                                             let mut app_guard = app_clone.lock().await;
                                             if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.set_status(format!(
+                                                app_guard.conversation().set_status(format!(
                                                     "Model picker error: {}",
                                                     e
                                                 ));
@@ -1274,11 +1351,15 @@ async fn handle_picker_key_event(
                                 }
                             }
                             Err(e) => {
-                                app_guard.set_status(format!("Error removing default: {}", e));
+                                app_guard
+                                    .conversation()
+                                    .set_status(format!("Error removing default: {}", e));
                             }
                         }
                     } else {
-                        app_guard.set_status("Del key only works on default items (marked with *)");
+                        app_guard
+                            .conversation()
+                            .set_status("Del key only works on default items (marked with *)");
                     }
                 }
                 None
@@ -1438,9 +1519,12 @@ mod tests {
 
         for chunk in &chunks {
             let input_area_height = sequential_app.ui.calculate_input_area_height(TERM_WIDTH);
-            let available_height =
-                sequential_app.calculate_available_height(TERM_HEIGHT, input_area_height);
-            sequential_app.append_to_response(chunk, available_height, TERM_WIDTH);
+            {
+                let mut conversation = sequential_app.conversation();
+                let available_height =
+                    conversation.calculate_available_height(TERM_HEIGHT, input_area_height);
+                conversation.append_to_response(chunk, available_height, TERM_WIDTH);
+            }
         }
 
         let mut coalesced_app = setup_app();

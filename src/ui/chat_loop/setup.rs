@@ -131,7 +131,9 @@ pub async fn bootstrap_app(
             let env_only = has_env_openai && token_providers.is_empty();
             app_guard.session.startup_env_only = env_only;
             if let Err(e) = app_guard.open_model_picker().await {
-                app_guard.set_status(format!("Model picker error: {}", e));
+                app_guard
+                    .conversation()
+                    .set_status(format!("Model picker error: {}", e));
             }
         }
         app

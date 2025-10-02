@@ -1,20 +1,21 @@
 use crate::core::config::Config;
+#[cfg(test)]
 use crate::core::message::Message;
 use crate::ui::picker::PickerState;
 use crate::ui::span::SpanKind;
 #[cfg(any(test, feature = "bench"))]
 use crate::ui::theme::Theme;
-use crate::utils::scroll::ScrollCalculator;
 use ratatui::text::Line;
-use std::time::Instant;
-use tokio_util::sync::CancellationToken;
 
+pub mod conversation;
 pub mod picker;
 pub mod session;
 pub mod settings;
 pub mod ui_state;
 
 #[cfg_attr(not(test), allow(unused_imports))]
+pub use conversation::ConversationController;
+#[allow(unused_imports)]
 pub use picker::{
     ModelPickerState, PickerController, PickerData, PickerMode, PickerSession, ProviderPickerState,
     ThemePickerState,
@@ -140,6 +141,10 @@ impl App {
         ProviderController::new(&mut self.session, &mut self.picker)
     }
 
+    pub fn conversation(&mut self) -> ConversationController<'_> {
+        ConversationController::new(&mut self.session, &mut self.ui)
+    }
+
     /// Close any active picker session.
     pub fn close_picker(&mut self) {
         self.picker.close();
@@ -187,292 +192,8 @@ impl App {
         }
     }
 
-    pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
-        // Clear any ephemeral status when the user sends a message
-        self.clear_status();
-
-        let user_message = Message {
-            role: "user".to_string(),
-            content: content.clone(),
-        };
-
-        // Log the user message if logging is active
-        if let Err(e) = self.session.logging.log_message(&format!("You: {content}")) {
-            eprintln!("Failed to log message: {e}");
-        }
-
-        self.ui.messages.push_back(user_message);
-
-        // Start assistant message
-        let assistant_message = Message {
-            role: "assistant".to_string(),
-            content: String::new(),
-        };
-        self.ui.messages.push_back(assistant_message);
-        self.ui.current_response.clear();
-
-        // Clear retry state since we're starting a new conversation
-        self.session.retrying_message_index = None;
-
-        // Prepare messages for API (excluding the empty assistant message we just added and system messages)
-        let mut api_messages = Vec::new();
-        for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
-            // Only include user and assistant messages in API calls, exclude system messages
-            if msg.role == "user" || msg.role == "assistant" {
-                api_messages.push(crate::api::ChatMessage {
-                    role: msg.role.clone(),
-                    content: msg.content.clone(),
-                });
-            }
-        }
-        api_messages
-    }
-
-    pub fn set_status<S: Into<String>>(&mut self, s: S) {
-        self.ui.status = Some(s.into());
-        self.ui.status_set_at = Some(Instant::now());
-    }
-
-    pub fn clear_status(&mut self) {
-        self.ui.status = None;
-        self.ui.status_set_at = None;
-    }
-
-    pub fn append_to_response(
-        &mut self,
-        content: &str,
-        available_height: u16,
-        terminal_width: u16,
-    ) {
-        self.ui.current_response.push_str(content);
-
-        // Update the message being retried, or the last message if not retrying
-        if let Some(retry_index) = self.session.retrying_message_index {
-            if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                if msg.role == "assistant" {
-                    msg.content.push_str(content);
-                }
-            }
-        } else if let Some(last_msg) = self.ui.messages.back_mut() {
-            if last_msg.role == "assistant" {
-                last_msg.content.push_str(content);
-            }
-        }
-
-        let total_wrapped_lines = {
-            let lines = self.get_prewrapped_lines_cached(terminal_width);
-            lines.len() as u16
-        };
-
-        // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
-        if self.ui.auto_scroll {
-            if total_wrapped_lines > available_height {
-                self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
-            } else {
-                self.ui.scroll_offset = 0;
-            }
-        }
-    }
-
-    pub fn add_system_message(&mut self, content: String) {
-        let system_message = Message {
-            role: "system".to_string(),
-            content,
-        };
-        self.ui.messages.push_back(system_message);
-    }
-
-    pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {
-        // Auto-scroll to bottom when new content is added, but only if auto_scroll is enabled
-        if self.ui.auto_scroll {
-            let total_wrapped_lines = self.ui.calculate_wrapped_line_count(terminal_width);
-            if total_wrapped_lines > available_height {
-                self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
-            } else {
-                self.ui.scroll_offset = 0;
-            }
-        }
-    }
-
     pub fn get_logging_status(&self) -> String {
         self.session.logging.get_status_string()
-    }
-
-    pub fn can_retry(&self) -> bool {
-        // Can retry if there's at least one assistant message (even if currently streaming)
-        self.ui
-            .messages
-            .iter()
-            .any(|msg| msg.role == "assistant" && !msg.content.is_empty())
-    }
-
-    pub fn cancel_current_stream(&mut self) {
-        if let Some(token) = &self.session.stream_cancel_token {
-            token.cancel();
-        }
-        self.session.stream_cancel_token = None;
-        self.ui.is_streaming = false;
-        self.ui.stream_interrupted = true;
-    }
-
-    pub fn start_new_stream(&mut self) -> (CancellationToken, u64) {
-        // Cancel any existing stream first
-        self.cancel_current_stream();
-
-        // Increment stream ID to distinguish this stream from previous ones
-        self.session.current_stream_id += 1;
-
-        // Create new cancellation token
-        let token = CancellationToken::new();
-        self.session.stream_cancel_token = Some(token.clone());
-        self.ui.is_streaming = true;
-        self.ui.stream_interrupted = false;
-        self.ui.pulse_start = Instant::now();
-
-        (token, self.session.current_stream_id)
-    }
-
-    pub fn calculate_scroll_to_message(
-        &self,
-        message_index: usize,
-        terminal_width: u16,
-        available_height: u16,
-    ) -> u16 {
-        ScrollCalculator::calculate_scroll_to_message_with_flags(
-            &self.ui.messages,
-            &self.ui.theme,
-            self.ui.markdown_enabled,
-            self.ui.syntax_enabled,
-            message_index,
-            terminal_width,
-            available_height,
-        )
-    }
-
-    pub fn finalize_response(&mut self) {
-        // Log the complete assistant response if logging is active
-        if !self.ui.current_response.is_empty() {
-            if let Err(e) = self.session.logging.log_message(&self.ui.current_response) {
-                eprintln!("Failed to log response: {e}");
-            }
-        }
-
-        // Clear retry state since response is now complete
-        self.session.retrying_message_index = None;
-    }
-
-    /// Scroll so that the given message index is visible.
-    pub fn scroll_index_into_view(&mut self, index: usize, term_width: u16, term_height: u16) {
-        let input_area_height = self.ui.calculate_input_area_height(term_width);
-        let available_height = self.calculate_available_height(term_height, input_area_height);
-        self.ui.scroll_offset =
-            self.calculate_scroll_to_message(index, term_width, available_height);
-    }
-
-    pub fn prepare_retry(
-        &mut self,
-        available_height: u16,
-        terminal_width: u16,
-    ) -> Option<Vec<crate::api::ChatMessage>> {
-        if !self.can_retry() {
-            return None;
-        }
-
-        // Update retry time (debounce is now handled at event level)
-        self.session.last_retry_time = Instant::now();
-
-        // Check if we're already retrying a specific message
-        if let Some(retry_index) = self.session.retrying_message_index {
-            // We're already retrying a specific message - just clear its content
-            if retry_index < self.ui.messages.len() {
-                if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                    if msg.role == "assistant" {
-                        msg.content.clear();
-                        self.ui.current_response.clear();
-                    }
-                }
-            }
-        } else {
-            // Not currently retrying - find the last assistant message to retry
-            let mut target_index = None;
-
-            // Find the last assistant message with content
-            for (i, msg) in self.ui.messages.iter().enumerate().rev() {
-                if msg.role == "assistant" && !msg.content.is_empty() {
-                    target_index = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(index) = target_index {
-                // Mark this message as being retried
-                self.session.retrying_message_index = Some(index);
-
-                // Clear the content of this specific message
-                if let Some(msg) = self.ui.messages.get_mut(index) {
-                    msg.content.clear();
-                    self.ui.current_response.clear();
-                }
-
-                // Rewrite the log file to remove the last assistant response
-                if let Err(e) = self
-                    .session
-                    .logging
-                    .rewrite_log_without_last_response(&self.ui.messages)
-                {
-                    eprintln!("Failed to rewrite log file: {e}");
-                }
-            } else {
-                return None;
-            }
-        }
-
-        // Set scroll position to show the user message that corresponds to the retry
-        if let Some(retry_index) = self.session.retrying_message_index {
-            // Find the user message that precedes this assistant message
-            if retry_index > 0 {
-                let user_message_index = retry_index - 1;
-                self.ui.scroll_offset = self.calculate_scroll_to_message(
-                    user_message_index,
-                    terminal_width,
-                    available_height,
-                );
-            } else {
-                self.ui.scroll_offset = 0;
-            }
-        }
-
-        // Re-enable auto-scroll for the new response
-        self.ui.auto_scroll = true;
-
-        // Prepare messages for API (excluding the message being retried and system messages)
-        let mut api_messages = Vec::new();
-        if let Some(retry_index) = self.session.retrying_message_index {
-            for (i, msg) in self.ui.messages.iter().enumerate() {
-                if i < retry_index {
-                    // Only include user and assistant messages in API calls, exclude system messages
-                    if msg.role == "user" || msg.role == "assistant" {
-                        api_messages.push(crate::api::ChatMessage {
-                            role: msg.role.clone(),
-                            content: msg.content.clone(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Some(api_messages)
-    }
-
-    // fetch_newest_model was removed in favor of explicit model selection via the TUI picker
-
-    /// Calculate how many lines the input text will wrap to using word wrapping
-    #[allow(dead_code)]
-    /// Calculate available chat height given terminal height and input area height
-    pub fn calculate_available_height(&self, term_height: u16, input_area_height: u16) -> u16 {
-        term_height
-            .saturating_sub(input_area_height + 2) // Dynamic input area + borders
-            .saturating_sub(1) // 1 for title
     }
 
     fn configure_textarea_appearance(&mut self) {
@@ -547,7 +268,7 @@ impl App {
     /// Open a provider picker modal with available providers
     pub fn open_provider_picker(&mut self) {
         if let Err(message) = self.picker.open_provider_picker(&self.session) {
-            self.set_status(message);
+            self.conversation().set_status(message);
         }
     }
 
@@ -729,7 +450,7 @@ mod tests {
 
     #[test]
     fn calculate_available_height_matches_expected_layout_rules() {
-        let app = create_test_app();
+        let mut app = create_test_app();
 
         let cases = [
             (30, 5, 22), // 30 - (5 + 2) - 1
@@ -739,7 +460,8 @@ mod tests {
 
         for (term_height, input_height, expected) in cases {
             assert_eq!(
-                app.calculate_available_height(term_height, input_height),
+                app.conversation()
+                    .calculate_available_height(term_height, input_height),
                 expected
             );
         }
@@ -903,82 +625,6 @@ mod tests {
             .iter()
             .flat_map(|kinds| kinds.iter())
             .all(|kind| kind.is_text()));
-    }
-
-    #[test]
-    fn test_system_messages_excluded_from_api() {
-        // Create a mock app with some messages
-        let mut app = create_test_app();
-
-        // Add a user message
-        app.ui
-            .messages
-            .push_back(create_test_message("user", "Hello"));
-
-        // Add a system message (like from /help command)
-        app.add_system_message(
-            "This is a system message that should not be sent to API".to_string(),
-        );
-
-        // Add an assistant message
-        app.ui
-            .messages
-            .push_back(create_test_message("assistant", "Hi there!"));
-
-        // Add another system message
-        app.add_system_message("Another system message".to_string());
-
-        // Test add_user_message - should exclude system messages
-        let api_messages = app.add_user_message("How are you?".to_string());
-
-        // Should include: first user message, assistant message, and the new user message
-        // (the new empty assistant message gets excluded by take())
-        assert_eq!(api_messages.len(), 3);
-        assert_eq!(api_messages[0].role, "user");
-        assert_eq!(api_messages[0].content, "Hello");
-        assert_eq!(api_messages[1].role, "assistant");
-        assert_eq!(api_messages[1].content, "Hi there!");
-        assert_eq!(api_messages[2].role, "user");
-        assert_eq!(api_messages[2].content, "How are you?");
-
-        // Verify system messages are not included
-        for msg in &api_messages {
-            assert_ne!(msg.role, "system");
-        }
-    }
-
-    #[test]
-    fn test_prepare_retry_excludes_system_messages() {
-        let mut app = create_test_app();
-
-        // Add messages in order: user, system, assistant
-        app.ui.messages.push_back(Message {
-            role: "user".to_string(),
-            content: "Test question".to_string(),
-        });
-
-        app.add_system_message("System message between user and assistant".to_string());
-
-        app.ui.messages.push_back(Message {
-            role: "assistant".to_string(),
-            content: "Test response".to_string(),
-        });
-
-        // Set up retry state
-        app.session.retrying_message_index = Some(2); // Retry the assistant message at index 2
-
-        // Test prepare_retry
-        let api_messages = app.prepare_retry(10, 80).unwrap();
-
-        // Should only include the user message, excluding the system message
-        assert_eq!(api_messages.len(), 1);
-        assert_eq!(api_messages[0].role, "user");
-        assert_eq!(api_messages[0].content, "Test question");
-
-        // Verify no system messages are included
-        for msg in &api_messages {
-            assert_ne!(msg.role, "system");
-        }
     }
 
     #[test]
@@ -1270,24 +916,28 @@ mod tests {
         let mut app = create_test_app();
 
         // Start with a user message
-        app.add_user_message("Generate a table".to_string());
-
         let width = 80u16;
         let available_height = 20u16;
 
-        // Start streaming a table in chunks
-        let table_start = "Here's a government systems table:\n\n";
-        app.append_to_response(table_start, available_height, width);
+        {
+            let mut conversation = app.conversation();
+            conversation.add_user_message("Generate a table".to_string());
 
-        let table_header = "| Government System | Definition | Key Properties |\n|-------------------|------------|----------------|\n";
-        app.append_to_response(table_header, available_height, width);
+            // Start streaming a table in chunks
+            let table_start = "Here's a government systems table:\n\n";
+            conversation.append_to_response(table_start, available_height, width);
 
-        // Add table rows that will cause wrapping and potentially height changes
-        let row1 = "| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections |\n";
-        app.append_to_response(row1, available_height, width);
+            let table_header =
+                "| Government System | Definition | Key Properties |\n|-------------------|------------|----------------|\n";
+            conversation.append_to_response(table_header, available_height, width);
 
-        let row2 = "| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |\n";
-        app.append_to_response(row2, available_height, width);
+            // Add table rows that will cause wrapping and potentially height changes
+            let row1 = "| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections |\n";
+            conversation.append_to_response(row1, available_height, width);
+
+            let row2 = "| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |\n";
+            conversation.append_to_response(row2, available_height, width);
+        }
 
         // After each append, if we're auto-scrolling, we should be at the bottom
         if app.ui.auto_scroll {
@@ -1412,7 +1062,10 @@ Some additional text after the table."#;
         let available_height = 20u16;
 
         // Start with user message and empty assistant response
-        app.add_user_message("Generate a large comparison table".to_string());
+        {
+            let mut conversation = app.conversation();
+            conversation.add_user_message("Generate a large comparison table".to_string());
+        }
 
         // Simulate streaming a large table piece by piece, with cache invalidation
         let table_chunks = vec![
@@ -1435,7 +1088,10 @@ Some additional text after the table."#;
             let _max_scroll_before = app.ui.calculate_max_scroll_offset(available_height, width);
 
             // Append content (this invalidates prewrap cache)
-            app.append_to_response(chunk, available_height, width);
+            {
+                let mut conversation = app.conversation();
+                conversation.append_to_response(chunk, available_height, width);
+            }
 
             // After append: check scroll consistency
             let scroll_after = app.ui.scroll_offset;
@@ -1474,7 +1130,10 @@ Some additional text after the table."#;
         let width: u16 = 80;
         let input_area_height = 3u16; // pretend a small input area
         let term_height = 24u16;
-        let available_height = app.calculate_available_height(term_height, input_area_height);
+        let available_height = {
+            let conversation = app.conversation();
+            conversation.calculate_available_height(term_height, input_area_height)
+        };
 
         // Sanity: have some scrollable height
         let max_scroll = app.ui.calculate_max_scroll_offset(available_height, width);

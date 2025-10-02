@@ -942,7 +942,8 @@ fn prepare_stream_params_for_message(
         let mut conversation = app_guard.conversation();
         let (cancel_token, stream_id) = conversation.start_new_stream();
         let api_messages = conversation.add_user_message(message);
-        let available_height = conversation.calculate_available_height(term_height, input_area_height);
+        let available_height =
+            conversation.calculate_available_height(term_height, input_area_height);
         conversation.update_scroll_position(available_height, term_width);
         (cancel_token, stream_id, api_messages)
     };

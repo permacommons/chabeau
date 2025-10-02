@@ -12,6 +12,46 @@ pub enum StreamMessage {
     End,
 }
 
+fn extract_data_payload(line: &str) -> Option<&str> {
+    line.strip_prefix("data:").map(str::trim_start)
+}
+
+fn handle_data_payload(
+    payload: &str,
+    tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
+    stream_id: u64,
+) -> bool {
+    if payload == "[DONE]" {
+        let _ = tx.send((StreamMessage::End, stream_id));
+        return true;
+    }
+
+    match serde_json::from_str::<ChatResponse>(payload) {
+        Ok(response) => {
+            if let Some(choice) = response.choices.first() {
+                if let Some(content) = &choice.delta.content {
+                    let _ = tx.send((StreamMessage::Chunk(content.clone()), stream_id));
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to parse JSON: {e} - Data: {payload}");
+        }
+    }
+
+    false
+}
+
+fn process_sse_line(
+    line: &str,
+    tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
+    stream_id: u64,
+) -> bool {
+    extract_data_payload(line)
+        .map(|payload| handle_data_payload(payload, tx, stream_id))
+        .unwrap_or(false)
+}
+
 fn format_api_error(error_text: &str) -> String {
     let trimmed = error_text.trim();
 
@@ -118,32 +158,15 @@ impl StreamDispatcher {
                                             }
                                         };
 
-                                        if let Some(data) = line_str.strip_prefix("data: ") {
-                                            if data == "[DONE]" {
-                                                let _ = tx_clone
-                                                    .send((StreamMessage::End, stream_id));
-                                                return;
-                                            }
-
-                                            match serde_json::from_str::<ChatResponse>(data) {
-                                                Ok(response) => {
-                                                    if let Some(choice) = response.choices.first() {
-                                                        if let Some(content) = &choice.delta.content {
-                                                            let _ = tx_clone.send((
-                                                                StreamMessage::Chunk(
-                                                                    content.clone(),
-                                                                ),
-                                                                stream_id,
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Failed to parse JSON: {e} - Data: {data}");
-                                                }
-                                            }
-                                        }
+                                        let should_end = process_sse_line(
+                                            line_str,
+                                            &tx_clone,
+                                            stream_id,
+                                        );
                                         buffer.drain(..=newline_pos);
+                                        if should_end {
+                                            return;
+                                        }
                                     }
                                 }
                             }
@@ -169,5 +192,46 @@ impl StreamDispatcher {
 impl StreamDispatcher {
     pub fn send_for_test(&self, message: StreamMessage, stream_id: u64) {
         let _ = self.tx.send((message, stream_id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_sse_line_handles_spacing_variants() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let variants = [
+            (
+                r#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#,
+                "Hello",
+                "data: [DONE]",
+            ),
+            (
+                r#"data:{"choices":[{"delta":{"content":"World"}}]}"#,
+                "World",
+                "data:[DONE]",
+            ),
+        ];
+
+        for (index, (chunk_line, expected_chunk, done_line)) in variants.iter().enumerate() {
+            let stream_id = (index + 1) as u64;
+
+            assert!(!process_sse_line(chunk_line, &tx, stream_id));
+            let (message, received_id) = rx.try_recv().expect("expected chunk message");
+            assert_eq!(received_id, stream_id);
+            match message {
+                StreamMessage::Chunk(content) => assert_eq!(content, *expected_chunk),
+                other => panic!("expected chunk message, got {:?}", other),
+            }
+
+            assert!(process_sse_line(done_line, &tx, stream_id));
+            let (message, received_id) = rx.try_recv().expect("expected end message");
+            assert_eq!(received_id, stream_id);
+            assert!(matches!(message, StreamMessage::End));
+        }
+
+        assert!(rx.try_recv().is_err());
     }
 }

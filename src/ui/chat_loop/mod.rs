@@ -13,7 +13,7 @@ use self::keybindings::{
 };
 
 use self::setup::bootstrap_app;
-use self::stream::{StreamDispatcher, StreamParams, STREAM_END_MARKER};
+use self::stream::{StreamDispatcher, StreamMessage, StreamParams};
 
 use crate::commands::process_input;
 use crate::commands::CommandResult;
@@ -98,7 +98,7 @@ pub async fn run_chat(
     let terminal = Arc::new(Mutex::new(Terminal::new(backend)?));
 
     // Channel for streaming updates with stream ID
-    let (stream_tx, mut rx) = mpsc::unbounded_channel::<(String, u64)>();
+    let (stream_tx, mut rx) = mpsc::unbounded_channel::<(StreamMessage, u64)>();
     let stream_dispatcher = Arc::new(StreamDispatcher::new(stream_tx));
 
     // Channel for async event processing
@@ -270,7 +270,7 @@ pub async fn run_chat(
 
         // Handle streaming updates - drain all available messages
         let mut received_any = false;
-        while let Ok((content, msg_stream_id)) = rx.try_recv() {
+        while let Ok((message, msg_stream_id)) = rx.try_recv() {
             let mut app_guard = app.lock().await;
 
             // Only process messages from the current stream
@@ -280,33 +280,9 @@ pub async fn run_chat(
                 continue;
             }
 
-            if content == STREAM_END_MARKER {
-                // End of streaming - clear the streaming state and finalize response
-                app_guard.finalize_response();
-                app_guard.is_streaming = false;
-                drop(app_guard);
-                received_any = true;
-            } else if let Some(err) = content.strip_prefix("<<API_ERROR>>") {
-                // Display API/network error in the chat area as a system message
-                let error_message = format!("Error: {}", err.trim());
-                app_guard.add_system_message(error_message);
-                // Stop streaming state, since the request failed
-                app_guard.is_streaming = false;
-                // Ensure the new system message is visible
-                let input_area_height = app_guard.calculate_input_area_height(term_size.width);
-                let available_height =
-                    app_guard.calculate_available_height(term_size.height, input_area_height);
-                app_guard.update_scroll_position(available_height, term_size.width);
-                drop(app_guard);
-                received_any = true;
-            } else {
-                let input_area_height = app_guard.calculate_input_area_height(term_size.width);
-                let available_height =
-                    app_guard.calculate_available_height(term_size.height, input_area_height);
-                app_guard.append_to_response(&content, available_height, term_size.width);
-                drop(app_guard);
-                received_any = true;
-            }
+            handle_stream_message(&mut app_guard, message, term_size.width, term_size.height);
+            drop(app_guard);
+            received_any = true;
         }
         if received_any {
             request_redraw = true;
@@ -334,6 +310,28 @@ pub async fn run_chat(
     }
 
     result
+}
+
+fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16, term_height: u16) {
+    match message {
+        StreamMessage::Chunk(content) => {
+            let input_area_height = app.calculate_input_area_height(term_width);
+            let available_height = app.calculate_available_height(term_height, input_area_height);
+            app.append_to_response(&content, available_height, term_width);
+        }
+        StreamMessage::Error(err) => {
+            let error_message = format!("Error: {}", err.trim());
+            app.add_system_message(error_message);
+            app.is_streaming = false;
+            let input_area_height = app.calculate_input_area_height(term_width);
+            let available_height = app.calculate_available_height(term_height, input_area_height);
+            app.update_scroll_position(available_height, term_width);
+        }
+        StreamMessage::End => {
+            app.finalize_response();
+            app.is_streaming = false;
+        }
+    }
 }
 
 async fn handle_edit_select_mode_event(
@@ -1297,7 +1295,24 @@ async fn handle_picker_key_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{wrap_next_index, wrap_previous_index};
+    use super::*;
+    use crate::core::message::Message;
+    use crate::ui::theme::Theme;
+
+    const TERM_WIDTH: u16 = 80;
+    const TERM_HEIGHT: u16 = 24;
+
+    fn setup_dispatcher() -> (
+        StreamDispatcher,
+        tokio::sync::mpsc::UnboundedReceiver<(StreamMessage, u64)>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<(StreamMessage, u64)>();
+        (StreamDispatcher::new(tx), rx)
+    }
+
+    fn setup_app() -> App {
+        App::new_bench(Theme::dark_default(), true, true)
+    }
 
     #[test]
     fn wrap_previous_handles_empty() {
@@ -1317,5 +1332,60 @@ mod tests {
     #[test]
     fn wrap_next_wraps_to_start() {
         assert_eq!(wrap_next_index(4, 5), Some(0));
+    }
+
+    #[test]
+    fn chunk_messages_append_to_response() {
+        let (dispatcher, mut rx) = setup_dispatcher();
+        dispatcher.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
+
+        let mut app = setup_app();
+        app.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+
+        while let Ok((message, _)) = rx.try_recv() {
+            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
+        }
+
+        assert_eq!(app.current_response, "Hello");
+        assert_eq!(app.messages.back().unwrap().content, "Hello");
+    }
+
+    #[test]
+    fn error_messages_add_system_entries_and_stop_streaming() {
+        let (dispatcher, mut rx) = setup_dispatcher();
+        dispatcher.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
+
+        let mut app = setup_app();
+        app.is_streaming = true;
+
+        while let Ok((message, _)) = rx.try_recv() {
+            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
+        }
+
+        assert!(!app.is_streaming);
+        let last_message = app.messages.back().expect("system message added");
+        assert_eq!(last_message.role, "system");
+        assert_eq!(last_message.content, "Error: api failure");
+    }
+
+    #[test]
+    fn end_messages_finalize_responses() {
+        let (dispatcher, mut rx) = setup_dispatcher();
+        dispatcher.send_for_test(StreamMessage::End, 3);
+
+        let mut app = setup_app();
+        app.is_streaming = true;
+        app.retrying_message_index = Some(0);
+        app.current_response = "partial".into();
+
+        while let Ok((message, _)) = rx.try_recv() {
+            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
+        }
+
+        assert!(!app.is_streaming);
+        assert!(app.retrying_message_index.is_none());
     }
 }

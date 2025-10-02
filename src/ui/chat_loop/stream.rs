@@ -5,7 +5,12 @@ use tokio::sync::mpsc;
 use crate::api::{ChatRequest, ChatResponse};
 use crate::utils::url::construct_api_url;
 
-pub const STREAM_END_MARKER: &str = "<<STREAM_END>>";
+#[derive(Clone, Debug)]
+pub enum StreamMessage {
+    Chunk(String),
+    Error(String),
+    End,
+}
 
 fn format_api_error(error_text: &str) -> String {
     let trimmed = error_text.trim();
@@ -37,11 +42,11 @@ pub struct StreamParams {
 
 #[derive(Clone)]
 pub struct StreamDispatcher {
-    tx: mpsc::UnboundedSender<(String, u64)>,
+    tx: mpsc::UnboundedSender<(StreamMessage, u64)>,
 }
 
 impl StreamDispatcher {
-    pub fn new(tx: mpsc::UnboundedSender<(String, u64)>) -> Self {
+    pub fn new(tx: mpsc::UnboundedSender<(StreamMessage, u64)>) -> Self {
         Self { tx }
     }
 
@@ -87,8 +92,8 @@ impl StreamDispatcher {
                                     .unwrap_or_else(|_| "<no body>".to_string());
                                 let formatted_error = format_api_error(&error_text);
                                 let _ = tx_clone
-                                    .send((format!("<<API_ERROR>>{}", formatted_error), stream_id));
-                                let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                                    .send((StreamMessage::Error(formatted_error), stream_id));
+                                let _ = tx_clone.send((StreamMessage::End, stream_id));
                                 return;
                             }
 
@@ -116,7 +121,7 @@ impl StreamDispatcher {
                                         if let Some(data) = line_str.strip_prefix("data: ") {
                                             if data == "[DONE]" {
                                                 let _ = tx_clone
-                                                    .send((STREAM_END_MARKER.to_string(), stream_id));
+                                                    .send((StreamMessage::End, stream_id));
                                                 return;
                                             }
 
@@ -124,8 +129,12 @@ impl StreamDispatcher {
                                                 Ok(response) => {
                                                     if let Some(choice) = response.choices.first() {
                                                         if let Some(content) = &choice.delta.content {
-                                                            let _ = tx_clone
-                                                                .send((content.clone(), stream_id));
+                                                            let _ = tx_clone.send((
+                                                                StreamMessage::Chunk(
+                                                                    content.clone(),
+                                                                ),
+                                                                stream_id,
+                                                            ));
                                                         }
                                                     }
                                                 }
@@ -140,17 +149,25 @@ impl StreamDispatcher {
                             }
 
                             // Stream ended naturally (connection closed) - send end marker
-                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                            let _ = tx_clone.send((StreamMessage::End, stream_id));
                         }
                         Err(e) => {
                             let formatted_error = format_api_error(&e.to_string());
-                            let _ = tx_clone.send((format!("<<API_ERROR>>{}", formatted_error), stream_id));
-                            let _ = tx_clone.send((STREAM_END_MARKER.to_string(), stream_id));
+                            let _ = tx_clone
+                                .send((StreamMessage::Error(formatted_error), stream_id));
+                            let _ = tx_clone.send((StreamMessage::End, stream_id));
                         }
                     }
                 } => {}
                 _ = cancel_token.cancelled() => {}
             }
         });
+    }
+}
+
+#[cfg(test)]
+impl StreamDispatcher {
+    pub fn send_for_test(&self, message: StreamMessage, stream_id: u64) {
+        let _ = self.tx.send((message, stream_id));
     }
 }

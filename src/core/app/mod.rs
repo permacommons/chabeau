@@ -2,7 +2,6 @@ use crate::api::models::{fetch_models, sort_models};
 use crate::auth::AuthManager;
 use crate::core::config::Config;
 use crate::core::message::Message;
-use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::appearance::{detect_preferred_appearance, Appearance};
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
 use crate::ui::picker::{PickerItem, PickerState};
@@ -14,30 +13,13 @@ use crate::utils::url::construct_api_url;
 use chrono::Utc;
 use ratatui::text::Line;
 use reqwest::Client;
-use std::{collections::VecDeque, time::Instant};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 
-#[derive(Debug, Clone)]
-pub enum FilePromptKind {
-    Dump,
-    SaveCodeBlock,
-}
+pub mod ui_state;
 
-#[derive(Debug, Clone)]
-pub struct FilePrompt {
-    pub kind: FilePromptKind,
-    pub content: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum UiMode {
-    Typing,
-    EditSelect { selected_index: usize },
-    BlockSelect { block_index: usize },
-    InPlaceEdit { index: usize },
-    FilePrompt(FilePrompt),
-}
+pub use ui_state::{FilePrompt, FilePromptKind, UiMode, UiState};
 
 #[derive(Debug, Clone)]
 pub struct ThemePickerState {
@@ -141,31 +123,6 @@ pub struct SessionContext {
     pub startup_env_only: bool,
 }
 
-pub struct UiState {
-    pub messages: VecDeque<Message>,
-    pub input: String,
-    pub input_cursor_position: usize,
-    pub mode: UiMode,
-    pub current_response: String,
-    pub scroll_offset: u16,
-    pub horizontal_scroll_offset: u16,
-    pub auto_scroll: bool,
-    pub is_streaming: bool,
-    pub pulse_start: Instant,
-    pub stream_interrupted: bool,
-    pub input_scroll_offset: u16,
-    pub textarea: TextArea<'static>,
-    pub theme: Theme,
-    pub current_theme_id: Option<String>,
-    pub markdown_enabled: bool,
-    pub syntax_enabled: bool,
-    pub(crate) prewrap_cache: Option<PrewrapCache>,
-    pub status: Option<String>,
-    pub status_set_at: Option<Instant>,
-    pub exit_requested: bool,
-    pub compose_mode: bool,
-}
-
 pub struct PickerController {
     pub picker_session: Option<PickerSession>,
     pub in_provider_model_transition: bool,
@@ -179,61 +136,6 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
-}
-
-impl UiState {
-    pub(crate) fn new_basic(
-        theme: Theme,
-        markdown_enabled: bool,
-        syntax_enabled: bool,
-        current_theme_id: Option<String>,
-    ) -> Self {
-        Self {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            mode: UiMode::Typing,
-            current_response: String::new(),
-            scroll_offset: 0,
-            horizontal_scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: Instant::now(),
-            stream_interrupted: false,
-            input_scroll_offset: 0,
-            textarea: TextArea::default(),
-            theme,
-            current_theme_id,
-            markdown_enabled,
-            syntax_enabled,
-            prewrap_cache: None,
-            status: None,
-            status_set_at: None,
-            exit_requested: false,
-            compose_mode: false,
-        }
-    }
-
-    fn from_config(theme: Theme, config: &Config) -> Self {
-        Self::new_basic(
-            theme,
-            config.markdown.unwrap_or(true),
-            config.syntax.unwrap_or(true),
-            config.theme.clone(),
-        )
-    }
-
-    fn configure_textarea(&mut self) {
-        let textarea_style = self
-            .theme
-            .input_text_style
-            .patch(ratatui::style::Style::default().bg(self.theme.background_color));
-        self.textarea.set_style(textarea_style);
-        self.textarea
-            .set_cursor_style(self.theme.input_cursor_style);
-        self.textarea
-            .set_cursor_line_style(self.theme.input_cursor_line_style);
-    }
 }
 
 impl PickerController {
@@ -594,116 +496,15 @@ impl App {
     /// Cache is used only in normal mode (no selection/highlight) and invalidated when
     /// width, flags, theme signature, message count, or last message content hash changes.
     pub fn get_prewrapped_lines_cached(&mut self, width: u16) -> &Vec<Line<'static>> {
-        let theme_sig = compute_theme_signature(&self.ui.theme);
-        let markdown = self.ui.markdown_enabled;
-        let syntax = self.ui.syntax_enabled;
-        let msg_len = self.ui.messages.len();
-        let last_hash = hash_last_message(&self.ui.messages);
-
-        let mut can_reuse = false;
-        let mut only_last_changed = false;
-        if let Some(c) = &self.ui.prewrap_cache {
-            if c.width == width
-                && c.markdown_enabled == markdown
-                && c.syntax_enabled == syntax
-                && c.theme_sig == theme_sig
-                && c.messages_len == msg_len
-            {
-                if c.last_msg_hash == last_hash {
-                    can_reuse = true;
-                } else {
-                    only_last_changed = true;
-                }
-            }
-        }
-
-        let layout_cfg = crate::ui::layout::LayoutConfig {
-            width: Some(width as usize),
-            markdown_enabled: markdown,
-            syntax_enabled: syntax,
-            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
-        };
-
-        if can_reuse {
-            // Up-to-date
-        } else if only_last_changed {
-            if let (Some(c), Some(last_msg)) =
-                (self.ui.prewrap_cache.as_mut(), self.ui.messages.back())
-            {
-                let mut last_only = VecDeque::with_capacity(1);
-                last_only.push_back(last_msg.clone());
-                let layout = crate::ui::layout::LayoutEngine::layout_messages(
-                    &last_only,
-                    &self.ui.theme,
-                    &layout_cfg,
-                );
-                Self::splice_last_message_layout(c, layout, last_hash);
-            } else {
-                only_last_changed = false;
-            }
-        }
-
-        if self.ui.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
-            // Build lines with proper width constraints - this is the semantic approach
-            let layout = crate::ui::layout::LayoutEngine::layout_messages(
-                &self.ui.messages,
-                &self.ui.theme,
-                &layout_cfg,
-            );
-            let last_span = layout.message_spans.last().cloned();
-            let (last_start, last_len) = last_span
-                .map(|span| (span.start, span.len))
-                .unwrap_or((0, 0));
-            let lines = layout.lines;
-            let span_metadata = layout.span_metadata;
-            self.ui.prewrap_cache = Some(PrewrapCache {
-                width,
-                markdown_enabled: markdown,
-                syntax_enabled: syntax,
-                theme_sig,
-                messages_len: msg_len,
-                last_msg_hash: last_hash,
-                lines,
-                span_metadata,
-                last_start,
-                last_len,
-            });
-        }
-
-        // Safe unwrap since we just populated if missing
-        &self.ui.prewrap_cache.as_ref().unwrap().lines
-    }
-
-    fn splice_last_message_layout(
-        cache: &mut PrewrapCache,
-        layout: crate::ui::layout::Layout,
-        last_msg_hash: u64,
-    ) {
-        let start = cache.last_start;
-        let mut new_lines: Vec<Line<'static>> = Vec::with_capacity(start + layout.lines.len());
-        new_lines.extend_from_slice(&cache.lines[..start]);
-        new_lines.extend_from_slice(&layout.lines);
-        cache.lines = new_lines;
-
-        let mut new_meta: Vec<Vec<SpanKind>> =
-            Vec::with_capacity(start + layout.span_metadata.len());
-        new_meta.extend_from_slice(&cache.span_metadata[..start]);
-        new_meta.extend_from_slice(&layout.span_metadata);
-        cache.span_metadata = new_meta;
-
-        let last_span = layout.message_spans.last().cloned().unwrap_or_default();
-        cache.last_start = start;
-        cache.last_len = last_span.len;
-        cache.last_msg_hash = last_msg_hash;
+        self.ui.get_prewrapped_lines_cached(width)
     }
 
     pub fn get_prewrapped_span_metadata_cached(&mut self, width: u16) -> &Vec<Vec<SpanKind>> {
-        self.get_prewrapped_lines_cached(width);
-        &self.ui.prewrap_cache.as_ref().unwrap().span_metadata
+        self.ui.get_prewrapped_span_metadata_cached(width)
     }
 
     pub fn invalidate_prewrap_cache(&mut self) {
-        self.ui.prewrap_cache = None;
+        self.ui.invalidate_prewrap_cache();
     }
 
     // Used by Criterion benches in `benches/`.
@@ -734,8 +535,7 @@ impl App {
     }
 
     pub fn calculate_wrapped_line_count(&mut self, terminal_width: u16) -> u16 {
-        let lines = self.get_prewrapped_lines_cached(terminal_width);
-        lines.len() as u16
+        self.ui.calculate_wrapped_line_count(terminal_width)
     }
 
     pub fn calculate_max_scroll_offset(
@@ -743,12 +543,8 @@ impl App {
         available_height: u16,
         terminal_width: u16,
     ) -> u16 {
-        let total = self.calculate_wrapped_line_count(terminal_width);
-        if total > available_height {
-            total.saturating_sub(available_height)
-        } else {
-            0
-        }
+        self.ui
+            .calculate_max_scroll_offset(available_height, terminal_width)
     }
 
     /// Scroll to the very top of the output area and disable auto-scroll.
@@ -1169,68 +965,25 @@ impl App {
     // fetch_newest_model was removed in favor of explicit model selection via the TUI picker
 
     /// Calculate how many lines the input text will wrap to using word wrapping
+    #[allow(dead_code)]
     pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
-        if self.get_input_text().is_empty() {
-            return 1; // At least one line for the cursor
-        }
-
-        let config = WrapConfig::new(width as usize);
-        TextWrapper::count_wrapped_lines(self.get_input_text(), &config)
+        self.ui.calculate_input_wrapped_lines(width)
     }
 
     /// Calculate the input area height based on content
     pub fn calculate_input_area_height(&self, width: u16) -> u16 {
-        if self.get_input_text().is_empty() {
-            return 1; // Default to 1 line when empty
-        }
-
-        // Account for borders and keep a one-column right margin
-        // Wrap one character earlier to avoid cursor touching the border
-        let available_width = width.saturating_sub(3);
-        let wrapped_lines = self.calculate_input_wrapped_lines(available_width);
-
-        // Start at 1 line, expand to 2 when we have content that wraps or newlines
-        // Then expand up to maximum of 6 lines
-        if wrapped_lines <= 1 && !self.get_input_text().contains('\n') {
-            1 // Single line, no wrapping, no newlines
-        } else {
-            (wrapped_lines as u16).clamp(2, 6) // Expand to 2-6 lines
-        }
+        self.ui.calculate_input_area_height(width)
     }
 
     /// Update input scroll offset to keep cursor visible
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        // Account for borders and keep a one-column right margin
-        // Wrap one character earlier to avoid cursor touching the border
-        let available_width = width.saturating_sub(3);
-        let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
-
-        if total_input_lines <= input_area_height {
-            // All content fits, no scrolling needed
-            self.ui.input_scroll_offset = 0;
-        } else {
-            // Calculate cursor line position accounting for text wrapping
-            let cursor_line = self.calculate_cursor_line_position(available_width as usize);
-
-            // Ensure cursor is visible within the input area
-            if cursor_line < self.ui.input_scroll_offset {
-                // Cursor is above visible area, scroll up
-                self.ui.input_scroll_offset = cursor_line;
-            } else if cursor_line >= self.ui.input_scroll_offset + input_area_height {
-                // Cursor is below visible area, scroll down
-                self.ui.input_scroll_offset = cursor_line.saturating_sub(input_area_height - 1);
-            }
-
-            // Ensure scroll offset doesn't exceed bounds
-            let max_scroll = total_input_lines.saturating_sub(input_area_height);
-            self.ui.input_scroll_offset = self.ui.input_scroll_offset.min(max_scroll);
-        }
+        self.ui.update_input_scroll(input_area_height, width);
     }
 
     /// Recompute input layout after editing: height + scroll
     pub fn recompute_input_layout_after_edit(&mut self, terminal_width: u16) {
-        let input_area_height = self.calculate_input_area_height(terminal_width);
-        self.update_input_scroll(input_area_height, terminal_width);
+        self.ui.recompute_input_layout_after_edit(terminal_width);
     }
 
     /// Apply a mutation to the textarea, then sync the string state
@@ -1238,8 +991,7 @@ impl App {
     where
         F: FnOnce(&mut TextArea<'static>),
     {
-        f(&mut self.ui.textarea);
-        self.sync_input_from_textarea();
+        self.ui.apply_textarea_edit(f);
     }
 
     /// Apply a mutation to the textarea, then sync and recompute layout
@@ -1247,8 +999,7 @@ impl App {
     where
         F: FnOnce(&mut TextArea<'static>),
     {
-        self.apply_textarea_edit(f);
-        self.recompute_input_layout_after_edit(terminal_width);
+        self.ui.apply_textarea_edit_and_recompute(terminal_width, f);
     }
 
     /// Calculate available chat height given terminal height and input area height
@@ -1258,76 +1009,25 @@ impl App {
             .saturating_sub(1) // 1 for title
     }
 
-    /// Calculate which line the cursor is on, accounting for word wrapping
-    fn calculate_cursor_line_position(&self, available_width: usize) -> u16 {
-        let config = WrapConfig::new(available_width);
-        TextWrapper::calculate_cursor_line(
-            self.get_input_text(),
-            self.ui.input_cursor_position,
-            &config,
-        ) as u16
-    }
-
     /// Clear input and reset cursor
     pub fn clear_input(&mut self) {
-        self.set_input_text(String::new());
+        self.ui.clear_input();
     }
 
     /// Get full input text (textarea is the source of truth; kept in sync with `input`)
     pub fn get_input_text(&self) -> &str {
-        &self.ui.input
+        self.ui.get_input_text()
     }
 
     /// Set input text into both the string and the textarea
     pub fn set_input_text(&mut self, text: String) {
-        self.ui.input = text;
-        let lines: Vec<String> = if self.ui.input.is_empty() {
-            Vec::new()
-        } else {
-            self.ui.input.split('\n').map(|s| s.to_string()).collect()
-        };
-        self.ui.textarea = TextArea::from(lines);
-        // Place both our linear cursor and the textarea cursor at the end of text
-        self.ui.input_cursor_position = self.ui.input.chars().count();
-        if !self.ui.input.is_empty() {
-            let last_row = self.ui.textarea.lines().len().saturating_sub(1) as u16;
-            let last_col = self
-                .ui
-                .textarea
-                .lines()
-                .last()
-                .map(|l| l.chars().count() as u16)
-                .unwrap_or(0);
-            self.ui
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Jump(last_row, last_col));
-        }
-        self.configure_textarea_appearance();
+        self.ui.set_input_text(text);
     }
 
     /// Sync `input` from the textarea state. Cursor linear position is best-effort.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn sync_input_from_textarea(&mut self) {
-        let lines = self.ui.textarea.lines();
-        self.ui.input = lines.join("\n");
-        // Compute linear cursor position from (row, col) in textarea
-        let (row, col) = self.ui.textarea.cursor();
-        let mut pos = 0usize;
-        for (i, line) in lines.iter().enumerate() {
-            if i < row {
-                pos += line.chars().count();
-                // account for newline separator between lines
-                pos += 1;
-            } else if i == row {
-                let line_len = line.chars().count();
-                pos += col.min(line_len);
-                break;
-            }
-        }
-        // If cursor row is beyond current lines (shouldn't happen), clamp to end
-        if row >= lines.len() {
-            pos = self.ui.input.chars().count();
-        }
-        self.ui.input_cursor_position = pos;
+        self.ui.sync_input_from_textarea();
     }
 
     fn configure_textarea_appearance(&mut self) {
@@ -2171,50 +1871,13 @@ impl App {
     }
 }
 
-// Simple cache holder for prewrapped lines
-pub(crate) struct PrewrapCache {
-    width: u16,
-    markdown_enabled: bool,
-    syntax_enabled: bool,
-    theme_sig: u64,
-    messages_len: usize,
-    last_msg_hash: u64,
-    lines: Vec<Line<'static>>,
-    span_metadata: Vec<Vec<SpanKind>>,
-    last_start: usize,
-    last_len: usize,
-}
-
-fn hash_last_message(messages: &VecDeque<Message>) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    if let Some(m) = messages.back() {
-        m.role.hash(&mut h);
-        m.content.hash(&mut h);
-    }
-    h.finish()
-}
-
-fn compute_theme_signature(theme: &crate::ui::theme::Theme) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    // Background and codeblock bg are strong signals
-    format!("{:?}", theme.background_color).hash(&mut h);
-    format!("{:?}", theme.md_codeblock_bg_color()).hash(&mut h);
-    // Include a couple of primary styles (fg colors)
-    format!("{:?}", theme.user_text_style).hash(&mut h);
-    format!("{:?}", theme.assistant_text_style).hash(&mut h);
-    h.finish()
-}
-
 #[cfg(all(feature = "bench", not(test)))]
 const _: fn(Theme, bool, bool) -> App = App::new_bench;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::text_wrapping::{TextWrapper, WrapConfig};
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
 

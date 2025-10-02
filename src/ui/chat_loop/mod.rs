@@ -17,6 +17,7 @@ use self::stream::{StreamDispatcher, StreamMessage, StreamParams};
 
 use crate::commands::process_input;
 use crate::commands::CommandResult;
+use crate::core::app::ui_state::FilePromptKind;
 use crate::core::app::App;
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
@@ -672,7 +673,7 @@ async fn handle_enter_key(
             }
             let overwrite = modifiers.contains(event::KeyModifiers::ALT);
             match prompt.kind {
-                crate::core::app::FilePromptKind::Dump => {
+                FilePromptKind::Dump => {
                     let res = crate::commands::dump_conversation_with_overwrite(
                         &app_guard, &filename, overwrite,
                     );
@@ -691,7 +692,7 @@ async fn handle_enter_key(
                         }
                     }
                 }
-                crate::core::app::FilePromptKind::SaveCodeBlock => {
+                FilePromptKind::SaveCodeBlock => {
                     use std::fs;
                     let exists = std::path::Path::new(&filename).exists();
                     if exists && !overwrite {

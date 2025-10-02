@@ -3,7 +3,8 @@
 //! This module provides the core registry system for handling keybindings
 //! in a mode-aware manner, including types, registry, and builder.
 
-use crate::core::app::{App, UiMode};
+use crate::core::app::ui_state::UiMode;
+use crate::core::app::App;
 use crate::ui::chat_loop::KeyLoopAction;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;

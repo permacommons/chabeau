@@ -270,19 +270,40 @@ pub async fn run_chat(
 
         // Handle streaming updates - drain all available messages
         let mut received_any = false;
-        while let Ok((message, msg_stream_id)) = rx.try_recv() {
-            let mut app_guard = app.lock().await;
+        let mut coalesced_chunks = String::new();
+        let mut marker_messages = Vec::new();
 
-            // Only process messages from the current stream
-            if msg_stream_id != app_guard.current_stream_id {
-                // This message is from an old stream, ignore it
-                drop(app_guard);
+        while let Ok((message, msg_stream_id)) = rx.try_recv() {
+            let should_process = {
+                let app_guard = app.lock().await;
+                msg_stream_id == app_guard.current_stream_id
+            };
+
+            if !should_process {
                 continue;
             }
 
-            handle_stream_message(&mut app_guard, message, term_size.width, term_size.height);
-            drop(app_guard);
+            match message {
+                StreamMessage::Chunk(content) => {
+                    coalesced_chunks.push_str(&content);
+                }
+                StreamMessage::Error(err) => {
+                    marker_messages.push(StreamMessage::Error(err));
+                }
+                StreamMessage::End => marker_messages.push(StreamMessage::End),
+            }
+
             received_any = true;
+        }
+
+        if received_any {
+            let mut app_guard = app.lock().await;
+            let chunk = std::mem::take(&mut coalesced_chunks);
+            append_coalesced_chunk(&mut app_guard, chunk, term_size.width, term_size.height);
+            for message in marker_messages {
+                handle_stream_message(&mut app_guard, message, term_size.width, term_size.height);
+            }
+            drop(app_guard);
         }
         if received_any {
             request_redraw = true;
@@ -312,12 +333,20 @@ pub async fn run_chat(
     result
 }
 
+fn append_coalesced_chunk(app: &mut App, chunk: String, term_width: u16, term_height: u16) {
+    if chunk.is_empty() {
+        return;
+    }
+
+    let input_area_height = app.calculate_input_area_height(term_width);
+    let available_height = app.calculate_available_height(term_height, input_area_height);
+    app.append_to_response(&chunk, available_height, term_width);
+}
+
 fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16, term_height: u16) {
     match message {
         StreamMessage::Chunk(content) => {
-            let input_area_height = app.calculate_input_area_height(term_width);
-            let available_height = app.calculate_available_height(term_height, input_area_height);
-            app.append_to_response(&content, available_height, term_width);
+            append_coalesced_chunk(app, content, term_width, term_height);
         }
         StreamMessage::Error(err) => {
             let error_message = format!("Error: {}", err.trim());
@@ -1351,6 +1380,42 @@ mod tests {
 
         assert_eq!(app.current_response, "Hello");
         assert_eq!(app.messages.back().unwrap().content, "Hello");
+    }
+
+    #[test]
+    fn coalesced_chunks_match_sequential_output() {
+        let chunks = ["Hello", " ", "world", "!\n"];
+
+        let mut sequential_app = setup_app();
+        sequential_app.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+
+        for chunk in &chunks {
+            let input_area_height = sequential_app.calculate_input_area_height(TERM_WIDTH);
+            let available_height =
+                sequential_app.calculate_available_height(TERM_HEIGHT, input_area_height);
+            sequential_app.append_to_response(chunk, available_height, TERM_WIDTH);
+        }
+
+        let mut coalesced_app = setup_app();
+        coalesced_app.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+
+        let aggregated = chunks.concat();
+        append_coalesced_chunk(&mut coalesced_app, aggregated, TERM_WIDTH, TERM_HEIGHT);
+
+        assert_eq!(
+            coalesced_app.current_response,
+            sequential_app.current_response
+        );
+        assert_eq!(
+            coalesced_app.messages.back().unwrap().content,
+            sequential_app.messages.back().unwrap().content
+        );
     }
 
     #[test]

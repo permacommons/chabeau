@@ -17,7 +17,7 @@ pub mod ui_state;
 
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use picker::{
-    ModelPickerState, PickerController, PickerData, PickerSession, ProviderPickerState,
+    ModelPickerState, PickerController, PickerData, PickerMode, PickerSession, ProviderPickerState,
     ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
@@ -83,13 +83,6 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickerMode {
-    Theme,
-    Model,
-    Provider,
 }
 
 impl App {

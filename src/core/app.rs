@@ -731,26 +731,16 @@ impl App {
         }
     }
 
-    pub fn build_display_lines_with_width(
-        &self,
-        terminal_width: Option<usize>,
-    ) -> Vec<Line<'static>> {
-        ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
-            &self.messages,
-            &self.theme,
-            self.markdown_enabled,
-            self.syntax_enabled,
-            terminal_width,
-        )
-    }
-
-    pub fn calculate_wrapped_line_count(&self, terminal_width: u16) -> u16 {
-        // Build through the unified layout pipeline and trust its line count.
-        let lines = self.build_display_lines_with_width(Some(terminal_width as usize));
+    pub fn calculate_wrapped_line_count(&mut self, terminal_width: u16) -> u16 {
+        let lines = self.get_prewrapped_lines_cached(terminal_width);
         lines.len() as u16
     }
 
-    pub fn calculate_max_scroll_offset(&self, available_height: u16, terminal_width: u16) -> u16 {
+    pub fn calculate_max_scroll_offset(
+        &mut self,
+        available_height: u16,
+        terminal_width: u16,
+    ) -> u16 {
         let total = self.calculate_wrapped_line_count(terminal_width);
         if total > available_height {
             total.saturating_sub(available_height)
@@ -882,10 +872,13 @@ impl App {
             }
         }
 
+        let total_wrapped_lines = {
+            let lines = self.get_prewrapped_lines_cached(terminal_width);
+            lines.len() as u16
+        };
+
         // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
         if self.auto_scroll {
-            // Calculate the scroll offset needed to show the bottom using wrapped line count
-            let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
             if total_wrapped_lines > available_height {
                 self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
             } else {
@@ -905,7 +898,6 @@ impl App {
     pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {
         // Auto-scroll to bottom when new content is added, but only if auto_scroll is enabled
         if self.auto_scroll {
-            // Calculate the scroll offset needed to show the bottom using wrapped line count
             let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
             if total_wrapped_lines > available_height {
                 self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
@@ -2393,11 +2385,15 @@ mod tests {
             });
         }
         let w = 100u16;
-        let p1 = app.get_prewrapped_lines_cached(w);
-        assert!(!p1.is_empty());
-        let ptr1 = p1.as_ptr();
-        let p2 = app.get_prewrapped_lines_cached(w);
-        let ptr2 = p2.as_ptr();
+        let ptr1 = {
+            let p1 = app.get_prewrapped_lines_cached(w);
+            assert!(!p1.is_empty());
+            p1.as_ptr()
+        };
+        let ptr2 = {
+            let p2 = app.get_prewrapped_lines_cached(w);
+            p2.as_ptr()
+        };
         assert_eq!(ptr1, ptr2, "cache should be reused when nothing changed");
     }
 
@@ -2408,10 +2404,14 @@ mod tests {
             role: "user".into(),
             content: "hello world".into(),
         });
-        let p1 = app.get_prewrapped_lines_cached(80);
-        let ptr1 = p1.as_ptr();
-        let p2 = app.get_prewrapped_lines_cached(120);
-        let ptr2 = p2.as_ptr();
+        let ptr1 = {
+            let p1 = app.get_prewrapped_lines_cached(80);
+            p1.as_ptr()
+        };
+        let ptr2 = {
+            let p2 = app.get_prewrapped_lines_cached(120);
+            p2.as_ptr()
+        };
         assert_ne!(ptr1, ptr2, "cache should invalidate on width change");
     }
 
@@ -2564,7 +2564,7 @@ mod tests {
         });
 
         let width = 20u16;
-        let _first = app.get_prewrapped_lines_cached(width);
+        app.get_prewrapped_lines_cached(width);
 
         // Update only the last message content to trigger the fast path
         if let Some(last) = app.messages.back_mut() {
@@ -2811,8 +2811,10 @@ mod tests {
         let width = 80u16;
 
         // Get the height that the renderer will actually use (prewrapped with width)
-        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
-        let renderer_height = prewrapped_lines.len() as u16;
+        let renderer_height = {
+            let lines = app.get_prewrapped_lines_cached(width);
+            lines.len() as u16
+        };
 
         // Get the height that scroll calculations currently use
         let scroll_height = app.calculate_wrapped_line_count(width);
@@ -2948,8 +2950,10 @@ Some additional text after the table."#;
         let width = 40u16;
 
         // Get the height that the renderer will actually use (prewrapped with narrow width)
-        let prewrapped_lines = app.get_prewrapped_lines_cached(width);
-        let renderer_height = prewrapped_lines.len() as u16;
+        let renderer_height = {
+            let lines = app.get_prewrapped_lines_cached(width);
+            lines.len() as u16
+        };
 
         // Get the height that scroll calculations currently use (widthless, then scroll heuristic)
         let scroll_height = app.calculate_wrapped_line_count(width);

@@ -12,6 +12,17 @@
 ### Changed
 - Introduced a shared width-aware layout engine and span metadata pipeline for Markdown/plain rendering, enabling horizontal table scrolling and consistent wrapping (`src/ui/layout.rs`, `src/ui/markdown.rs`, `src/utils/scroll.rs`).
 - Modularized the chat loop with a keybinding registry, centralized redraw/height management, and event-driven rendering for smoother selection and paging (`src/ui/chat_loop`, `src/core/app.rs`).
+- Expanded the streaming indicator into an eight-frame animation for a smoother pulse while responses generate (`src/ui/renderer.rs`).
+
+### Fixed
+- Normalized server-sent event parsing so streaming responses continue even when providers omit whitespace in `data:` lines (`src/ui/chat_loop/stream.rs`).
+- Coalesced streamed chunks per render tick to avoid flickering partial updates and ensure markers finalize correctly (`src/ui/chat_loop/mod.rs`).
+- Appended streamed content onto the in-progress assistant message instead of replacing it, preserving incremental updates during retries and long replies (`src/core/app/conversation.rs`).
+- Deduplicated custom providers in the authentication removal menu so entries shared with built-ins only appear once (`src/auth/mod.rs`).
+- Forced redraws and closures for stale OSC 8 hyperlinks, preventing scrolled links from lingering after the content changes (`src/ui/osc_backend.rs`).
+
+### Performance
+- Cached built-in provider definitions after the first load to avoid repeatedly parsing the embedded TOML (`src/core/builtin_providers.rs`).
 
 ## 0.3.5
 

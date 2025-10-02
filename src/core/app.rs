@@ -133,6 +133,24 @@ fn theme_from_detected_appearance(appearance: Option<Appearance>) -> Theme {
     }
 }
 
+fn resolve_theme_from_config<F>(config: &Config, detect: F) -> Theme
+where
+    F: FnOnce() -> Option<Appearance>,
+{
+    match &config.theme {
+        Some(name) => {
+            if let Some(ct) = config.get_custom_theme(name) {
+                Theme::from_spec(&theme_spec_from_custom(ct))
+            } else if let Some(spec) = find_builtin_theme(name) {
+                Theme::from_spec(&spec)
+            } else {
+                Theme::from_name(name)
+            }
+        }
+        None => theme_from_detected_appearance(detect()),
+    }
+}
+
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
@@ -415,18 +433,7 @@ impl App {
 
         // Resolve theme: prefer explicit config (custom or built-in). If unset, try
         // detecting preferred appearance via OS hint and choose a suitable default.
-        let resolved_theme = match &config.theme {
-            Some(name) => {
-                if let Some(ct) = config.get_custom_theme(name) {
-                    Theme::from_spec(&theme_spec_from_custom(ct))
-                } else if let Some(spec) = find_builtin_theme(name) {
-                    Theme::from_spec(&spec)
-                } else {
-                    Theme::from_name(name)
-                }
-            }
-            None => theme_from_detected_appearance(detect_preferred_appearance()),
-        };
+        let resolved_theme = resolve_theme_from_config(config, detect_preferred_appearance);
 
         // Quantize theme colors for current terminal depth
         let resolved_theme =
@@ -499,22 +506,7 @@ impl App {
             }
         }
 
-        let resolved_theme = match &config.theme {
-            Some(name) => {
-                if let Some(ct) = config.get_custom_theme(name) {
-                    Theme::from_spec(&theme_spec_from_custom(ct))
-                } else if let Some(spec) = find_builtin_theme(name) {
-                    Theme::from_spec(&spec)
-                } else {
-                    Theme::from_name(name)
-                }
-            }
-            None => match detect_preferred_appearance() {
-                Some(Appearance::Light) => Theme::light(),
-                Some(Appearance::Dark) => Theme::dark_default(),
-                None => Theme::dark_default(),
-            },
-        };
+        let resolved_theme = resolve_theme_from_config(&config, detect_preferred_appearance);
 
         // Quantize theme colors for current terminal depth
         let resolved_theme =
@@ -2205,6 +2197,7 @@ const _: fn(Theme, bool, bool) -> App = App::new_bench;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::Config;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
 
@@ -2222,6 +2215,37 @@ mod tests {
 
         assert_eq!(dark_theme.background_color, expected_background);
         assert_eq!(fallback_theme.background_color, expected_background);
+    }
+
+    #[test]
+    fn resolve_theme_from_config_uses_detected_light_theme() {
+        let config = Config::default();
+
+        let theme = resolve_theme_from_config(&config, || Some(Appearance::Light));
+
+        assert_eq!(theme.background_color, Theme::light().background_color);
+    }
+
+    #[test]
+    fn resolve_theme_from_config_defaults_to_dark_without_hint() {
+        let config = Config::default();
+
+        let theme = resolve_theme_from_config(&config, || None);
+
+        assert_eq!(
+            theme.background_color,
+            Theme::dark_default().background_color
+        );
+    }
+
+    #[test]
+    fn resolve_theme_from_config_prefers_configured_theme() {
+        let mut config = Config::default();
+        config.theme = Some("light".to_string());
+
+        let theme = resolve_theme_from_config(&config, || Some(Appearance::Dark));
+
+        assert_eq!(theme.background_color, Theme::light().background_color);
     }
 
     #[test]

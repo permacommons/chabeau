@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::core::app::{App, UiMode};
+use crate::core::app::{App, PickerController, SessionContext, UiState};
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
@@ -11,47 +11,27 @@ use std::collections::VecDeque;
 
 #[cfg(test)]
 pub fn create_test_app() -> App {
-    App {
-        messages: VecDeque::new(),
-        input: String::new(),
-        input_cursor_position: 0,
-        mode: UiMode::Typing,
-        current_response: String::new(),
+    let session = SessionContext {
         client: reqwest::Client::new(),
         model: "test-model".to_string(),
         api_key: "test-key".to_string(),
         base_url: "https://api.test.com".to_string(),
         provider_name: "test".to_string(),
         provider_display_name: "Test".to_string(),
-        scroll_offset: 0,
-        horizontal_scroll_offset: 0,
-        auto_scroll: true,
-        is_streaming: false,
-        pulse_start: std::time::Instant::now(),
-        stream_interrupted: false,
         logging: LoggingState::new(None).unwrap(),
         stream_cancel_token: None,
         current_stream_id: 0,
         last_retry_time: std::time::Instant::now(),
         retrying_message_index: None,
-        input_scroll_offset: 0,
-        textarea: tui_textarea::TextArea::default(),
-        theme: Theme::dark_default(),
-        current_theme_id: None,
-        picker_session: None,
-        in_provider_model_transition: false,
-        provider_model_transition_state: None,
-        markdown_enabled: true,
-        syntax_enabled: true,
-        prewrap_cache: None,
-        status: None,
-        status_set_at: None,
-        startup_requires_provider: false,
-        startup_requires_model: false,
-        startup_multiple_providers_available: false,
-        exit_requested: false,
         startup_env_only: false,
-        compose_mode: false,
+    };
+
+    let ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+
+    App {
+        session,
+        ui,
+        picker: PickerController::new(),
     }
 }
 

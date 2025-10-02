@@ -126,54 +126,161 @@ impl PickerSession {
     }
 }
 
-pub struct App {
-    pub messages: VecDeque<Message>,
-    pub input: String,
-    pub input_cursor_position: usize,
-    pub mode: UiMode,
-    pub current_response: String,
+pub struct SessionContext {
     pub client: Client,
     pub model: String,
     pub api_key: String,
     pub base_url: String,
     pub provider_name: String,
     pub provider_display_name: String,
+    pub logging: LoggingState,
+    pub stream_cancel_token: Option<CancellationToken>,
+    pub current_stream_id: u64,
+    pub last_retry_time: Instant,
+    pub retrying_message_index: Option<usize>,
+    pub startup_env_only: bool,
+}
+
+pub struct UiState {
+    pub messages: VecDeque<Message>,
+    pub input: String,
+    pub input_cursor_position: usize,
+    pub mode: UiMode,
+    pub current_response: String,
     pub scroll_offset: u16,
     pub horizontal_scroll_offset: u16,
     pub auto_scroll: bool,
     pub is_streaming: bool,
     pub pulse_start: Instant,
     pub stream_interrupted: bool,
-    pub logging: LoggingState,
-    pub stream_cancel_token: Option<CancellationToken>,
-    pub current_stream_id: u64,
-    pub last_retry_time: Instant,
-    pub retrying_message_index: Option<usize>,
     pub input_scroll_offset: u16,
     pub textarea: TextArea<'static>,
     pub theme: Theme,
-    // Currently active theme id for this session (may differ from default in config)
     pub current_theme_id: Option<String>,
-    pub picker_session: Option<PickerSession>,
-    // Track when we're in a provider->model transition flow
-    pub in_provider_model_transition: bool,
-    pub provider_model_transition_state: Option<(String, String, String, String, String)>, // (prev_provider_name, prev_provider_display, prev_model, prev_api_key, prev_base_url)
-    // Rendering toggles
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
-    // Cached prewrapped chat lines for fast redraws in normal mode
     pub(crate) prewrap_cache: Option<PrewrapCache>,
-    // One-line ephemeral status message (shown in input border)
     pub status: Option<String>,
     pub status_set_at: Option<Instant>,
-    // Startup gating flags for initial selection flows
+    pub exit_requested: bool,
+    pub compose_mode: bool,
+}
+
+pub struct PickerController {
+    pub picker_session: Option<PickerSession>,
+    pub in_provider_model_transition: bool,
+    pub provider_model_transition_state: Option<(String, String, String, String, String)>,
     pub startup_requires_provider: bool,
     pub startup_requires_model: bool,
     pub startup_multiple_providers_available: bool,
-    pub exit_requested: bool,
-    pub startup_env_only: bool,
-    // Compose mode: Enter inserts newline; Alt+Enter sends; persists until toggled
-    pub compose_mode: bool,
+}
+
+pub struct App {
+    pub session: SessionContext,
+    pub ui: UiState,
+    pub picker: PickerController,
+}
+
+impl UiState {
+    pub(crate) fn new_basic(
+        theme: Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+        current_theme_id: Option<String>,
+    ) -> Self {
+        Self {
+            messages: VecDeque::new(),
+            input: String::new(),
+            input_cursor_position: 0,
+            mode: UiMode::Typing,
+            current_response: String::new(),
+            scroll_offset: 0,
+            horizontal_scroll_offset: 0,
+            auto_scroll: true,
+            is_streaming: false,
+            pulse_start: Instant::now(),
+            stream_interrupted: false,
+            input_scroll_offset: 0,
+            textarea: TextArea::default(),
+            theme,
+            current_theme_id,
+            markdown_enabled,
+            syntax_enabled,
+            prewrap_cache: None,
+            status: None,
+            status_set_at: None,
+            exit_requested: false,
+            compose_mode: false,
+        }
+    }
+
+    fn from_config(theme: Theme, config: &Config) -> Self {
+        Self::new_basic(
+            theme,
+            config.markdown.unwrap_or(true),
+            config.syntax.unwrap_or(true),
+            config.theme.clone(),
+        )
+    }
+
+    fn configure_textarea(&mut self) {
+        let textarea_style = self
+            .theme
+            .input_text_style
+            .patch(ratatui::style::Style::default().bg(self.theme.background_color));
+        self.textarea.set_style(textarea_style);
+        self.textarea
+            .set_cursor_style(self.theme.input_cursor_style);
+        self.textarea
+            .set_cursor_line_style(self.theme.input_cursor_line_style);
+    }
+}
+
+impl PickerController {
+    pub(crate) fn new() -> Self {
+        Self {
+            picker_session: None,
+            in_provider_model_transition: false,
+            provider_model_transition_state: None,
+            startup_requires_provider: false,
+            startup_requires_model: false,
+            startup_multiple_providers_available: false,
+        }
+    }
+}
+
+fn initialize_logging(
+    log_file: Option<String>,
+) -> Result<LoggingState, Box<dyn std::error::Error>> {
+    let logging = LoggingState::new(log_file.clone())?;
+    if let Some(_log_path) = log_file {
+        let timestamp = Utc::now().to_rfc3339();
+        if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
+            eprintln!("Warning: Failed to write initial log timestamp: {}", e);
+        }
+    }
+    Ok(logging)
+}
+
+fn resolve_theme(config: &Config) -> Theme {
+    let resolved_theme = match &config.theme {
+        Some(name) => {
+            if let Some(ct) = config.get_custom_theme(name) {
+                Theme::from_spec(&theme_spec_from_custom(ct))
+            } else if let Some(spec) = find_builtin_theme(name) {
+                Theme::from_spec(&spec)
+            } else {
+                Theme::from_name(name)
+            }
+        }
+        None => match detect_preferred_appearance() {
+            Some(Appearance::Light) => Theme::light(),
+            Some(Appearance::Dark) => Theme::dark_default(),
+            None => Theme::dark_default(),
+        },
+    };
+
+    crate::utils::color::quantize_theme_for_current_terminal(resolved_theme)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,17 +293,17 @@ pub enum PickerMode {
 impl App {
     pub fn is_input_active(&self) -> bool {
         matches!(
-            self.mode,
+            self.ui.mode,
             UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
         )
     }
 
     pub fn in_edit_select_mode(&self) -> bool {
-        matches!(self.mode, UiMode::EditSelect { .. })
+        matches!(self.ui.mode, UiMode::EditSelect { .. })
     }
 
     pub fn selected_user_message_index(&self) -> Option<usize> {
-        if let UiMode::EditSelect { selected_index } = self.mode {
+        if let UiMode::EditSelect { selected_index } = self.ui.mode {
             Some(selected_index)
         } else {
             None
@@ -204,17 +311,17 @@ impl App {
     }
 
     pub fn set_selected_user_message_index(&mut self, index: usize) {
-        if let UiMode::EditSelect { selected_index } = &mut self.mode {
+        if let UiMode::EditSelect { selected_index } = &mut self.ui.mode {
             *selected_index = index;
         }
     }
 
     pub fn in_block_select_mode(&self) -> bool {
-        matches!(self.mode, UiMode::BlockSelect { .. })
+        matches!(self.ui.mode, UiMode::BlockSelect { .. })
     }
 
     pub fn selected_block_index(&self) -> Option<usize> {
-        if let UiMode::BlockSelect { block_index } = self.mode {
+        if let UiMode::BlockSelect { block_index } = self.ui.mode {
             Some(block_index)
         } else {
             None
@@ -222,13 +329,13 @@ impl App {
     }
 
     pub fn set_selected_block_index(&mut self, index: usize) {
-        if let UiMode::BlockSelect { block_index } = &mut self.mode {
+        if let UiMode::BlockSelect { block_index } = &mut self.ui.mode {
             *block_index = index;
         }
     }
 
     pub fn in_place_edit_index(&self) -> Option<usize> {
-        if let UiMode::InPlaceEdit { index } = self.mode {
+        if let UiMode::InPlaceEdit { index } = self.ui.mode {
             Some(index)
         } else {
             None
@@ -236,11 +343,11 @@ impl App {
     }
 
     fn set_mode(&mut self, mode: UiMode) {
-        self.mode = mode;
+        self.ui.mode = mode;
     }
 
     pub fn file_prompt(&self) -> Option<&FilePrompt> {
-        if let UiMode::FilePrompt(ref prompt) = self.mode {
+        if let UiMode::FilePrompt(ref prompt) = self.ui.mode {
             Some(prompt)
         } else {
             None
@@ -248,7 +355,7 @@ impl App {
     }
 
     pub fn take_in_place_edit_index(&mut self) -> Option<usize> {
-        if let UiMode::InPlaceEdit { index } = self.mode {
+        if let UiMode::InPlaceEdit { index } = self.ui.mode {
             self.set_mode(UiMode::Typing);
             Some(index)
         } else {
@@ -257,31 +364,40 @@ impl App {
     }
 
     pub fn toggle_compose_mode(&mut self) {
-        self.compose_mode = !self.compose_mode;
+        self.ui.compose_mode = !self.ui.compose_mode;
     }
 
     pub fn picker_session(&self) -> Option<&PickerSession> {
-        self.picker_session.as_ref()
+        self.picker.picker_session.as_ref()
     }
 
     pub fn picker_session_mut(&mut self) -> Option<&mut PickerSession> {
-        self.picker_session.as_mut()
+        self.picker.picker_session.as_mut()
     }
 
     pub fn current_picker_mode(&self) -> Option<PickerMode> {
-        self.picker_session().map(|session| session.mode)
+        self.picker
+            .picker_session
+            .as_ref()
+            .map(|session| session.mode)
     }
 
     pub fn picker_state(&self) -> Option<&PickerState> {
-        self.picker_session().map(|session| &session.state)
+        self.picker
+            .picker_session
+            .as_ref()
+            .map(|session| &session.state)
     }
 
     pub fn picker_state_mut(&mut self) -> Option<&mut PickerState> {
-        self.picker_session_mut().map(|session| &mut session.state)
+        self.picker
+            .picker_session
+            .as_mut()
+            .map(|session| &mut session.state)
     }
 
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
-        match self.picker_session() {
+        match self.picker.picker_session.as_ref() {
             Some(PickerSession {
                 mode: PickerMode::Theme,
                 data: PickerData::Theme(state),
@@ -292,7 +408,7 @@ impl App {
     }
 
     pub fn theme_picker_state_mut(&mut self) -> Option<&mut ThemePickerState> {
-        match self.picker_session_mut() {
+        match self.picker.picker_session.as_mut() {
             Some(PickerSession {
                 mode: PickerMode::Theme,
                 data: PickerData::Theme(state),
@@ -303,7 +419,7 @@ impl App {
     }
 
     pub fn model_picker_state(&self) -> Option<&ModelPickerState> {
-        match self.picker_session() {
+        match self.picker.picker_session.as_ref() {
             Some(PickerSession {
                 mode: PickerMode::Model,
                 data: PickerData::Model(state),
@@ -314,7 +430,7 @@ impl App {
     }
 
     pub fn model_picker_state_mut(&mut self) -> Option<&mut ModelPickerState> {
-        match self.picker_session_mut() {
+        match self.picker.picker_session.as_mut() {
             Some(PickerSession {
                 mode: PickerMode::Model,
                 data: PickerData::Model(state),
@@ -325,7 +441,7 @@ impl App {
     }
 
     pub fn provider_picker_state(&self) -> Option<&ProviderPickerState> {
-        match self.picker_session() {
+        match self.picker.picker_session.as_ref() {
             Some(PickerSession {
                 mode: PickerMode::Provider,
                 data: PickerData::Provider(state),
@@ -336,7 +452,7 @@ impl App {
     }
 
     pub fn provider_picker_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
-        match self.picker_session_mut() {
+        match self.picker.picker_session.as_mut() {
             Some(PickerSession {
                 mode: PickerMode::Provider,
                 data: PickerData::Provider(state),
@@ -348,7 +464,7 @@ impl App {
 
     /// Close any active picker session.
     pub fn close_picker(&mut self) {
-        self.picker_session = None;
+        self.picker.picker_session = None;
     }
 
     /// Returns true if current picker should use alphabetical sorting (A–Z / Z–A)
@@ -397,79 +513,28 @@ impl App {
         // Build API endpoint for internal use (no noisy startup prints)
         let _api_endpoint = construct_api_url(&base_url, "chat/completions");
 
-        let logging = LoggingState::new(log_file.clone())?;
-        // If logging was enabled via command line, log the start timestamp
-        if let Some(_log_path) = log_file {
-            let timestamp = Utc::now().to_rfc3339();
-            if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
-                eprintln!("Warning: Failed to write initial log timestamp: {}", e);
-            }
-        }
+        let logging = initialize_logging(log_file)?;
+        let resolved_theme = resolve_theme(config);
 
-        // Resolve theme: prefer explicit config (custom or built-in). If unset, try
-        // detecting preferred appearance via OS hint and choose a suitable default.
-        let resolved_theme = match &config.theme {
-            Some(name) => {
-                if let Some(ct) = config.get_custom_theme(name) {
-                    Theme::from_spec(&theme_spec_from_custom(ct))
-                } else if let Some(spec) = find_builtin_theme(name) {
-                    Theme::from_spec(&spec)
-                } else {
-                    Theme::from_name(name)
-                }
-            }
-            None => match detect_preferred_appearance() {
-                Some(Appearance::Light) => Theme::light(),
-                Some(Appearance::Dark) => Theme::dark_default(),
-                None => Theme::dark_default(),
-            },
-        };
-
-        // Quantize theme colors for current terminal depth
-        let resolved_theme =
-            crate::utils::color::quantize_theme_for_current_terminal(resolved_theme);
-
-        let mut app = App {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            mode: UiMode::Typing,
-            current_response: String::new(),
+        let session = SessionContext {
             client: Client::new(),
             model: final_model,
             api_key,
             base_url,
             provider_name: provider_name.to_string(),
             provider_display_name,
-            scroll_offset: 0,
-            horizontal_scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: Instant::now(),
-            stream_interrupted: false,
             logging,
             stream_cancel_token: None,
             current_stream_id: 0,
             last_retry_time: Instant::now(),
             retrying_message_index: None,
-            input_scroll_offset: 0,
-            textarea: TextArea::default(),
-            theme: resolved_theme,
-            current_theme_id: config.theme.clone(),
-            picker_session: None,
-            in_provider_model_transition: false,
-            provider_model_transition_state: None,
-            markdown_enabled: config.markdown.unwrap_or(true),
-            syntax_enabled: config.syntax.unwrap_or(true),
-            prewrap_cache: None,
-            status: None,
-            status_set_at: None,
-            startup_requires_provider: false,
-            startup_requires_model: false,
-            startup_multiple_providers_available: false,
-            exit_requested: false,
             startup_env_only: false,
-            compose_mode: false,
+        };
+
+        let mut app = App {
+            session,
+            ui: UiState::from_config(resolved_theme, config),
+            picker: PickerController::new(),
         };
 
         // Keep textarea state in sync with the string input initially
@@ -488,76 +553,31 @@ impl App {
 
         // Quiet startup; no noisy prints here
 
-        let logging = LoggingState::new(log_file.clone())?;
-        if let Some(_log_path) = log_file {
-            let timestamp = Utc::now().to_rfc3339();
-            if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
-                eprintln!("Warning: Failed to write initial log timestamp: {}", e);
-            }
-        }
+        let logging = initialize_logging(log_file)?;
+        let resolved_theme = resolve_theme(&config);
 
-        let resolved_theme = match &config.theme {
-            Some(name) => {
-                if let Some(ct) = config.get_custom_theme(name) {
-                    Theme::from_spec(&theme_spec_from_custom(ct))
-                } else if let Some(spec) = find_builtin_theme(name) {
-                    Theme::from_spec(&spec)
-                } else {
-                    Theme::from_name(name)
-                }
-            }
-            None => match detect_preferred_appearance() {
-                Some(Appearance::Light) => Theme::light(),
-                Some(Appearance::Dark) => Theme::dark_default(),
-                None => Theme::dark_default(),
-            },
-        };
-
-        // Quantize theme colors for current terminal depth
-        let resolved_theme =
-            crate::utils::color::quantize_theme_for_current_terminal(resolved_theme);
-
-        let mut app = App {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            mode: UiMode::Typing,
-            current_response: String::new(),
+        let session = SessionContext {
             client: Client::new(),
             model: String::new(),
             api_key: String::new(),
             base_url: String::new(),
             provider_name: String::new(),
             provider_display_name: "(no provider selected)".to_string(),
-            scroll_offset: 0,
-            horizontal_scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: Instant::now(),
-            stream_interrupted: false,
             logging,
             stream_cancel_token: None,
             current_stream_id: 0,
             last_retry_time: Instant::now(),
             retrying_message_index: None,
-            input_scroll_offset: 0,
-            textarea: TextArea::default(),
-            theme: resolved_theme,
-            current_theme_id: config.theme.clone(),
-            picker_session: None,
-            in_provider_model_transition: false,
-            provider_model_transition_state: None,
-            markdown_enabled: config.markdown.unwrap_or(true),
-            syntax_enabled: config.syntax.unwrap_or(true),
-            prewrap_cache: None,
-            status: None,
-            status_set_at: None,
-            startup_requires_provider: true,
-            startup_requires_model: false,
-            startup_multiple_providers_available: false,
-            exit_requested: false,
             startup_env_only: false,
-            compose_mode: false,
+        };
+
+        let mut picker = PickerController::new();
+        picker.startup_requires_provider = true;
+
+        let mut app = App {
+            session,
+            ui: UiState::from_config(resolved_theme, &config),
+            picker,
         };
 
         app.set_input_text(String::new());
@@ -569,15 +589,15 @@ impl App {
     /// Cache is used only in normal mode (no selection/highlight) and invalidated when
     /// width, flags, theme signature, message count, or last message content hash changes.
     pub fn get_prewrapped_lines_cached(&mut self, width: u16) -> &Vec<Line<'static>> {
-        let theme_sig = compute_theme_signature(&self.theme);
-        let markdown = self.markdown_enabled;
-        let syntax = self.syntax_enabled;
-        let msg_len = self.messages.len();
-        let last_hash = hash_last_message(&self.messages);
+        let theme_sig = compute_theme_signature(&self.ui.theme);
+        let markdown = self.ui.markdown_enabled;
+        let syntax = self.ui.syntax_enabled;
+        let msg_len = self.ui.messages.len();
+        let last_hash = hash_last_message(&self.ui.messages);
 
         let mut can_reuse = false;
         let mut only_last_changed = false;
-        if let Some(c) = &self.prewrap_cache {
+        if let Some(c) = &self.ui.prewrap_cache {
             if c.width == width
                 && c.markdown_enabled == markdown
                 && c.syntax_enabled == syntax
@@ -602,12 +622,14 @@ impl App {
         if can_reuse {
             // Up-to-date
         } else if only_last_changed {
-            if let (Some(c), Some(last_msg)) = (self.prewrap_cache.as_mut(), self.messages.back()) {
+            if let (Some(c), Some(last_msg)) =
+                (self.ui.prewrap_cache.as_mut(), self.ui.messages.back())
+            {
                 let mut last_only = VecDeque::with_capacity(1);
                 last_only.push_back(last_msg.clone());
                 let layout = crate::ui::layout::LayoutEngine::layout_messages(
                     &last_only,
-                    &self.theme,
+                    &self.ui.theme,
                     &layout_cfg,
                 );
                 Self::splice_last_message_layout(c, layout, last_hash);
@@ -616,11 +638,11 @@ impl App {
             }
         }
 
-        if self.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
+        if self.ui.prewrap_cache.is_none() || (!can_reuse && !only_last_changed) {
             // Build lines with proper width constraints - this is the semantic approach
             let layout = crate::ui::layout::LayoutEngine::layout_messages(
-                &self.messages,
-                &self.theme,
+                &self.ui.messages,
+                &self.ui.theme,
                 &layout_cfg,
             );
             let last_span = layout.message_spans.last().cloned();
@@ -629,7 +651,7 @@ impl App {
                 .unwrap_or((0, 0));
             let lines = layout.lines;
             let span_metadata = layout.span_metadata;
-            self.prewrap_cache = Some(PrewrapCache {
+            self.ui.prewrap_cache = Some(PrewrapCache {
                 width,
                 markdown_enabled: markdown,
                 syntax_enabled: syntax,
@@ -644,7 +666,7 @@ impl App {
         }
 
         // Safe unwrap since we just populated if missing
-        &self.prewrap_cache.as_ref().unwrap().lines
+        &self.ui.prewrap_cache.as_ref().unwrap().lines
     }
 
     fn splice_last_message_layout(
@@ -672,57 +694,37 @@ impl App {
 
     pub fn get_prewrapped_span_metadata_cached(&mut self, width: u16) -> &Vec<Vec<SpanKind>> {
         self.get_prewrapped_lines_cached(width);
-        &self.prewrap_cache.as_ref().unwrap().span_metadata
+        &self.ui.prewrap_cache.as_ref().unwrap().span_metadata
     }
 
     pub fn invalidate_prewrap_cache(&mut self) {
-        self.prewrap_cache = None;
+        self.ui.prewrap_cache = None;
     }
 
     // Used by Criterion benches in `benches/`.
     #[cfg(any(test, feature = "bench"))]
     pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
-        Self {
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_cursor_position: 0,
-            mode: UiMode::Typing,
-            current_response: String::new(),
+        let session = SessionContext {
             client: reqwest::Client::new(),
             model: "bench".into(),
             api_key: String::new(),
             base_url: String::new(),
             provider_name: "bench".into(),
             provider_display_name: "Bench".into(),
-            scroll_offset: 0,
-            horizontal_scroll_offset: 0,
-            auto_scroll: true,
-            is_streaming: false,
-            pulse_start: std::time::Instant::now(),
-            stream_interrupted: false,
             logging: crate::utils::logging::LoggingState::new(None).unwrap(),
             stream_cancel_token: None,
             current_stream_id: 0,
             last_retry_time: std::time::Instant::now(),
             retrying_message_index: None,
-            input_scroll_offset: 0,
-            textarea: tui_textarea::TextArea::default(),
-            theme,
-            current_theme_id: None,
-            picker_session: None,
-            in_provider_model_transition: false,
-            provider_model_transition_state: None,
-            markdown_enabled,
-            syntax_enabled,
-            prewrap_cache: None,
-            status: None,
-            status_set_at: None,
-            startup_requires_provider: false,
-            startup_requires_model: false,
-            startup_multiple_providers_available: false,
-            exit_requested: false,
             startup_env_only: false,
-            compose_mode: false,
+        };
+
+        let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
+
+        App {
+            session,
+            ui,
+            picker: PickerController::new(),
         }
     }
 
@@ -746,30 +748,30 @@ impl App {
 
     /// Scroll to the very top of the output area and disable auto-scroll.
     pub fn scroll_to_top(&mut self) {
-        self.auto_scroll = false;
-        self.scroll_offset = 0;
+        self.ui.auto_scroll = false;
+        self.ui.scroll_offset = 0;
     }
 
     /// Scroll to the very bottom of the output area and enable auto-scroll.
     pub fn scroll_to_bottom_view(&mut self, available_height: u16, terminal_width: u16) {
         let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
-        self.scroll_offset = max_scroll;
-        self.auto_scroll = true;
+        self.ui.scroll_offset = max_scroll;
+        self.ui.auto_scroll = true;
     }
 
     /// Page up by one full output area (minus one line overlap). Disables auto-scroll.
     pub fn page_up(&mut self, available_height: u16) {
-        self.auto_scroll = false;
+        self.ui.auto_scroll = false;
         let step = available_height.saturating_sub(1);
-        self.scroll_offset = self.scroll_offset.saturating_sub(step);
+        self.ui.scroll_offset = self.ui.scroll_offset.saturating_sub(step);
     }
 
     /// Page down by one full output area (minus one line overlap). Disables auto-scroll.
     pub fn page_down(&mut self, available_height: u16, terminal_width: u16) {
-        self.auto_scroll = false;
+        self.ui.auto_scroll = false;
         let step = available_height.saturating_sub(1);
         let max_scroll = self.calculate_max_scroll_offset(available_height, terminal_width);
-        self.scroll_offset = (self.scroll_offset.saturating_add(step)).min(max_scroll);
+        self.ui.scroll_offset = (self.ui.scroll_offset.saturating_add(step)).min(max_scroll);
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
@@ -782,26 +784,26 @@ impl App {
         };
 
         // Log the user message if logging is active
-        if let Err(e) = self.logging.log_message(&format!("You: {content}")) {
+        if let Err(e) = self.session.logging.log_message(&format!("You: {content}")) {
             eprintln!("Failed to log message: {e}");
         }
 
-        self.messages.push_back(user_message);
+        self.ui.messages.push_back(user_message);
 
         // Start assistant message
         let assistant_message = Message {
             role: "assistant".to_string(),
             content: String::new(),
         };
-        self.messages.push_back(assistant_message);
-        self.current_response.clear();
+        self.ui.messages.push_back(assistant_message);
+        self.ui.current_response.clear();
 
         // Clear retry state since we're starting a new conversation
-        self.retrying_message_index = None;
+        self.session.retrying_message_index = None;
 
         // Prepare messages for API (excluding the empty assistant message we just added and system messages)
         let mut api_messages = Vec::new();
-        for msg in self.messages.iter().take(self.messages.len() - 1) {
+        for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
             // Only include user and assistant messages in API calls, exclude system messages
             if msg.role == "user" || msg.role == "assistant" {
                 api_messages.push(crate::api::ChatMessage {
@@ -814,13 +816,13 @@ impl App {
     }
 
     pub fn set_status<S: Into<String>>(&mut self, s: S) {
-        self.status = Some(s.into());
-        self.status_set_at = Some(Instant::now());
+        self.ui.status = Some(s.into());
+        self.ui.status_set_at = Some(Instant::now());
     }
 
     pub fn clear_status(&mut self) {
-        self.status = None;
-        self.status_set_at = None;
+        self.ui.status = None;
+        self.ui.status_set_at = None;
     }
 
     pub fn start_file_prompt_dump(&mut self, filename: String) {
@@ -840,7 +842,7 @@ impl App {
     }
 
     pub fn cancel_file_prompt(&mut self) {
-        if let UiMode::FilePrompt(_) = self.mode {
+        if let UiMode::FilePrompt(_) = self.ui.mode {
             self.set_mode(UiMode::Typing);
         }
         self.clear_input();
@@ -852,16 +854,16 @@ impl App {
         available_height: u16,
         terminal_width: u16,
     ) {
-        self.current_response.push_str(content);
+        self.ui.current_response.push_str(content);
 
         // Update the message being retried, or the last message if not retrying
-        if let Some(retry_index) = self.retrying_message_index {
-            if let Some(msg) = self.messages.get_mut(retry_index) {
+        if let Some(retry_index) = self.session.retrying_message_index {
+            if let Some(msg) = self.ui.messages.get_mut(retry_index) {
                 if msg.role == "assistant" {
                     msg.content.push_str(content);
                 }
             }
-        } else if let Some(last_msg) = self.messages.back_mut() {
+        } else if let Some(last_msg) = self.ui.messages.back_mut() {
             if last_msg.role == "assistant" {
                 last_msg.content.push_str(content);
             }
@@ -873,11 +875,11 @@ impl App {
         };
 
         // Auto-scroll to bottom when new content arrives, but only if auto_scroll is enabled
-        if self.auto_scroll {
+        if self.ui.auto_scroll {
             if total_wrapped_lines > available_height {
-                self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
+                self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
             } else {
-                self.scroll_offset = 0;
+                self.ui.scroll_offset = 0;
             }
         }
     }
@@ -887,39 +889,40 @@ impl App {
             role: "system".to_string(),
             content,
         };
-        self.messages.push_back(system_message);
+        self.ui.messages.push_back(system_message);
     }
 
     pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {
         // Auto-scroll to bottom when new content is added, but only if auto_scroll is enabled
-        if self.auto_scroll {
+        if self.ui.auto_scroll {
             let total_wrapped_lines = self.calculate_wrapped_line_count(terminal_width);
             if total_wrapped_lines > available_height {
-                self.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
+                self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
             } else {
-                self.scroll_offset = 0;
+                self.ui.scroll_offset = 0;
             }
         }
     }
 
     pub fn get_logging_status(&self) -> String {
-        self.logging.get_status_string()
+        self.session.logging.get_status_string()
     }
 
     pub fn can_retry(&self) -> bool {
         // Can retry if there's at least one assistant message (even if currently streaming)
-        self.messages
+        self.ui
+            .messages
             .iter()
             .any(|msg| msg.role == "assistant" && !msg.content.is_empty())
     }
 
     pub fn cancel_current_stream(&mut self) {
-        if let Some(token) = &self.stream_cancel_token {
+        if let Some(token) = &self.session.stream_cancel_token {
             token.cancel();
         }
-        self.stream_cancel_token = None;
-        self.is_streaming = false;
-        self.stream_interrupted = true;
+        self.session.stream_cancel_token = None;
+        self.ui.is_streaming = false;
+        self.ui.stream_interrupted = true;
     }
 
     pub fn start_new_stream(&mut self) -> (CancellationToken, u64) {
@@ -927,16 +930,16 @@ impl App {
         self.cancel_current_stream();
 
         // Increment stream ID to distinguish this stream from previous ones
-        self.current_stream_id += 1;
+        self.session.current_stream_id += 1;
 
         // Create new cancellation token
         let token = CancellationToken::new();
-        self.stream_cancel_token = Some(token.clone());
-        self.is_streaming = true;
-        self.stream_interrupted = false;
-        self.pulse_start = Instant::now();
+        self.session.stream_cancel_token = Some(token.clone());
+        self.ui.is_streaming = true;
+        self.ui.stream_interrupted = false;
+        self.ui.pulse_start = Instant::now();
 
-        (token, self.current_stream_id)
+        (token, self.session.current_stream_id)
     }
 
     pub fn calculate_scroll_to_message(
@@ -946,10 +949,10 @@ impl App {
         available_height: u16,
     ) -> u16 {
         ScrollCalculator::calculate_scroll_to_message_with_flags(
-            &self.messages,
-            &self.theme,
-            self.markdown_enabled,
-            self.syntax_enabled,
+            &self.ui.messages,
+            &self.ui.theme,
+            self.ui.markdown_enabled,
+            self.ui.syntax_enabled,
             message_index,
             terminal_width,
             available_height,
@@ -958,26 +961,28 @@ impl App {
 
     pub fn finalize_response(&mut self) {
         // Log the complete assistant response if logging is active
-        if !self.current_response.is_empty() {
-            if let Err(e) = self.logging.log_message(&self.current_response) {
+        if !self.ui.current_response.is_empty() {
+            if let Err(e) = self.session.logging.log_message(&self.ui.current_response) {
                 eprintln!("Failed to log response: {e}");
             }
         }
 
         // Clear retry state since response is now complete
-        self.retrying_message_index = None;
+        self.session.retrying_message_index = None;
     }
 
     /// Scroll so that the given message index is visible.
     pub fn scroll_index_into_view(&mut self, index: usize, term_width: u16, term_height: u16) {
         let input_area_height = self.calculate_input_area_height(term_width);
         let available_height = self.calculate_available_height(term_height, input_area_height);
-        self.scroll_offset = self.calculate_scroll_to_message(index, term_width, available_height);
+        self.ui.scroll_offset =
+            self.calculate_scroll_to_message(index, term_width, available_height);
     }
 
     /// Find the last user-authored message index
     pub fn last_user_message_index(&self) -> Option<usize> {
-        self.messages
+        self.ui
+            .messages
             .iter()
             .enumerate()
             .rev()
@@ -990,7 +995,8 @@ impl App {
         if from_index == 0 {
             return None;
         }
-        self.messages
+        self.ui
+            .messages
             .iter()
             .enumerate()
             .take(from_index)
@@ -1001,7 +1007,8 @@ impl App {
 
     /// Find next user message index after `from_index` (exclusive)
     pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
-        self.messages
+        self.ui
+            .messages
             .iter()
             .enumerate()
             .skip(from_index + 1)
@@ -1011,7 +1018,8 @@ impl App {
 
     /// Find the first user-authored message index
     pub fn first_user_message_index(&self) -> Option<usize> {
-        self.messages
+        self.ui
+            .messages
             .iter()
             .enumerate()
             .find(|(_, m)| m.role == "user")
@@ -1041,7 +1049,7 @@ impl App {
 
     /// Cancel in-place edit (does not modify history)
     pub fn cancel_in_place_edit(&mut self) {
-        if matches!(self.mode, UiMode::InPlaceEdit { .. }) {
+        if matches!(self.ui.mode, UiMode::InPlaceEdit { .. }) {
             self.set_mode(UiMode::Typing);
         }
     }
@@ -1068,16 +1076,16 @@ impl App {
         }
 
         // Update retry time (debounce is now handled at event level)
-        self.last_retry_time = Instant::now();
+        self.session.last_retry_time = Instant::now();
 
         // Check if we're already retrying a specific message
-        if let Some(retry_index) = self.retrying_message_index {
+        if let Some(retry_index) = self.session.retrying_message_index {
             // We're already retrying a specific message - just clear its content
-            if retry_index < self.messages.len() {
-                if let Some(msg) = self.messages.get_mut(retry_index) {
+            if retry_index < self.ui.messages.len() {
+                if let Some(msg) = self.ui.messages.get_mut(retry_index) {
                     if msg.role == "assistant" {
                         msg.content.clear();
-                        self.current_response.clear();
+                        self.ui.current_response.clear();
                     }
                 }
             }
@@ -1086,7 +1094,7 @@ impl App {
             let mut target_index = None;
 
             // Find the last assistant message with content
-            for (i, msg) in self.messages.iter().enumerate().rev() {
+            for (i, msg) in self.ui.messages.iter().enumerate().rev() {
                 if msg.role == "assistant" && !msg.content.is_empty() {
                     target_index = Some(i);
                     break;
@@ -1095,18 +1103,19 @@ impl App {
 
             if let Some(index) = target_index {
                 // Mark this message as being retried
-                self.retrying_message_index = Some(index);
+                self.session.retrying_message_index = Some(index);
 
                 // Clear the content of this specific message
-                if let Some(msg) = self.messages.get_mut(index) {
+                if let Some(msg) = self.ui.messages.get_mut(index) {
                     msg.content.clear();
-                    self.current_response.clear();
+                    self.ui.current_response.clear();
                 }
 
                 // Rewrite the log file to remove the last assistant response
                 if let Err(e) = self
+                    .session
                     .logging
-                    .rewrite_log_without_last_response(&self.messages)
+                    .rewrite_log_without_last_response(&self.ui.messages)
                 {
                     eprintln!("Failed to rewrite log file: {e}");
                 }
@@ -1116,27 +1125,27 @@ impl App {
         }
 
         // Set scroll position to show the user message that corresponds to the retry
-        if let Some(retry_index) = self.retrying_message_index {
+        if let Some(retry_index) = self.session.retrying_message_index {
             // Find the user message that precedes this assistant message
             if retry_index > 0 {
                 let user_message_index = retry_index - 1;
-                self.scroll_offset = self.calculate_scroll_to_message(
+                self.ui.scroll_offset = self.calculate_scroll_to_message(
                     user_message_index,
                     terminal_width,
                     available_height,
                 );
             } else {
-                self.scroll_offset = 0;
+                self.ui.scroll_offset = 0;
             }
         }
 
         // Re-enable auto-scroll for the new response
-        self.auto_scroll = true;
+        self.ui.auto_scroll = true;
 
         // Prepare messages for API (excluding the message being retried and system messages)
         let mut api_messages = Vec::new();
-        if let Some(retry_index) = self.retrying_message_index {
-            for (i, msg) in self.messages.iter().enumerate() {
+        if let Some(retry_index) = self.session.retrying_message_index {
+            for (i, msg) in self.ui.messages.iter().enumerate() {
                 if i < retry_index {
                     // Only include user and assistant messages in API calls, exclude system messages
                     if msg.role == "user" || msg.role == "assistant" {
@@ -1193,23 +1202,23 @@ impl App {
 
         if total_input_lines <= input_area_height {
             // All content fits, no scrolling needed
-            self.input_scroll_offset = 0;
+            self.ui.input_scroll_offset = 0;
         } else {
             // Calculate cursor line position accounting for text wrapping
             let cursor_line = self.calculate_cursor_line_position(available_width as usize);
 
             // Ensure cursor is visible within the input area
-            if cursor_line < self.input_scroll_offset {
+            if cursor_line < self.ui.input_scroll_offset {
                 // Cursor is above visible area, scroll up
-                self.input_scroll_offset = cursor_line;
-            } else if cursor_line >= self.input_scroll_offset + input_area_height {
+                self.ui.input_scroll_offset = cursor_line;
+            } else if cursor_line >= self.ui.input_scroll_offset + input_area_height {
                 // Cursor is below visible area, scroll down
-                self.input_scroll_offset = cursor_line.saturating_sub(input_area_height - 1);
+                self.ui.input_scroll_offset = cursor_line.saturating_sub(input_area_height - 1);
             }
 
             // Ensure scroll offset doesn't exceed bounds
             let max_scroll = total_input_lines.saturating_sub(input_area_height);
-            self.input_scroll_offset = self.input_scroll_offset.min(max_scroll);
+            self.ui.input_scroll_offset = self.ui.input_scroll_offset.min(max_scroll);
         }
     }
 
@@ -1224,7 +1233,7 @@ impl App {
     where
         F: FnOnce(&mut TextArea<'static>),
     {
-        f(&mut self.textarea);
+        f(&mut self.ui.textarea);
         self.sync_input_from_textarea();
     }
 
@@ -1249,7 +1258,7 @@ impl App {
         let config = WrapConfig::new(available_width);
         TextWrapper::calculate_cursor_line(
             self.get_input_text(),
-            self.input_cursor_position,
+            self.ui.input_cursor_position,
             &config,
         ) as u16
     }
@@ -1261,29 +1270,31 @@ impl App {
 
     /// Get full input text (textarea is the source of truth; kept in sync with `input`)
     pub fn get_input_text(&self) -> &str {
-        &self.input
+        &self.ui.input
     }
 
     /// Set input text into both the string and the textarea
     pub fn set_input_text(&mut self, text: String) {
-        self.input = text;
-        let lines: Vec<String> = if self.input.is_empty() {
+        self.ui.input = text;
+        let lines: Vec<String> = if self.ui.input.is_empty() {
             Vec::new()
         } else {
-            self.input.split('\n').map(|s| s.to_string()).collect()
+            self.ui.input.split('\n').map(|s| s.to_string()).collect()
         };
-        self.textarea = TextArea::from(lines);
+        self.ui.textarea = TextArea::from(lines);
         // Place both our linear cursor and the textarea cursor at the end of text
-        self.input_cursor_position = self.input.chars().count();
-        if !self.input.is_empty() {
-            let last_row = self.textarea.lines().len().saturating_sub(1) as u16;
+        self.ui.input_cursor_position = self.ui.input.chars().count();
+        if !self.ui.input.is_empty() {
+            let last_row = self.ui.textarea.lines().len().saturating_sub(1) as u16;
             let last_col = self
+                .ui
                 .textarea
                 .lines()
                 .last()
                 .map(|l| l.chars().count() as u16)
                 .unwrap_or(0);
-            self.textarea
+            self.ui
+                .textarea
                 .move_cursor(tui_textarea::CursorMove::Jump(last_row, last_col));
         }
         self.configure_textarea_appearance();
@@ -1291,10 +1302,10 @@ impl App {
 
     /// Sync `input` from the textarea state. Cursor linear position is best-effort.
     pub fn sync_input_from_textarea(&mut self) {
-        let lines = self.textarea.lines();
-        self.input = lines.join("\n");
+        let lines = self.ui.textarea.lines();
+        self.ui.input = lines.join("\n");
         // Compute linear cursor position from (row, col) in textarea
-        let (row, col) = self.textarea.cursor();
+        let (row, col) = self.ui.textarea.cursor();
         let mut pos = 0usize;
         for (i, line) in lines.iter().enumerate() {
             if i < row {
@@ -1309,22 +1320,13 @@ impl App {
         }
         // If cursor row is beyond current lines (shouldn't happen), clamp to end
         if row >= lines.len() {
-            pos = self.input.chars().count();
+            pos = self.ui.input.chars().count();
         }
-        self.input_cursor_position = pos;
+        self.ui.input_cursor_position = pos;
     }
 
     fn configure_textarea_appearance(&mut self) {
-        // Apply theme styles to textarea, including background for visibility
-        let textarea_style = self
-            .theme
-            .input_text_style
-            .patch(ratatui::style::Style::default().bg(self.theme.background_color));
-        self.textarea.set_style(textarea_style);
-        self.textarea
-            .set_cursor_style(self.theme.input_cursor_style);
-        self.textarea
-            .set_cursor_line_style(self.theme.input_cursor_line_style);
+        self.ui.configure_textarea();
     }
 
     /// Open a theme picker modal with built-in and custom themes
@@ -1382,6 +1384,7 @@ impl App {
         }
 
         let active_theme_id = self
+            .ui
             .current_theme_id
             .as_ref()
             .or(cfg.theme.as_ref())
@@ -1405,13 +1408,13 @@ impl App {
             data: PickerData::Theme(ThemePickerState {
                 search_filter: String::new(),
                 all_items: items,
-                before_theme: Some(self.theme.clone()),
+                before_theme: Some(self.ui.theme.clone()),
                 before_theme_id: cfg.theme.clone(),
             }),
         };
 
         session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
+        self.picker.picker_session = Some(session);
 
         self.sort_picker_items();
         self.update_picker_title();
@@ -1440,8 +1443,8 @@ impl App {
             return Err(format!("Unknown theme: {}", id));
         };
         // Quantize to terminal color depth
-        self.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
-        self.current_theme_id = Some(id.to_string());
+        self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
+        self.ui.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
 
         let mut cfg = Config::load_test_safe();
@@ -1459,14 +1462,14 @@ impl App {
         // Try custom then built-in then no-op
         let cfg = Config::load_test_safe();
         if let Some(ct) = cfg.get_custom_theme(id) {
-            self.theme = crate::utils::color::quantize_theme_for_current_terminal(
+            self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(
                 Theme::from_spec(&theme_spec_from_custom(ct)),
             );
             self.configure_textarea_appearance();
             return;
         }
         if let Some(spec) = find_builtin_theme(id) {
-            self.theme =
+            self.ui.theme =
                 crate::utils::color::quantize_theme_for_current_terminal(Theme::from_spec(&spec));
             self.configure_textarea_appearance();
         }
@@ -1486,7 +1489,7 @@ impl App {
         }
 
         if let Some(prev) = previous_theme {
-            self.theme = prev;
+            self.ui.theme = prev;
             self.configure_textarea_appearance();
         }
     }
@@ -1494,13 +1497,14 @@ impl App {
     /// Open a model picker modal with available models from current provider
     pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let cfg = Config::load_test_safe();
-        let default_model_for_provider = cfg.get_default_model(&self.provider_name).cloned();
+        let default_model_for_provider =
+            cfg.get_default_model(&self.session.provider_name).cloned();
 
         let models_response = fetch_models(
-            &self.client,
-            &self.base_url,
-            &self.api_key,
-            &self.provider_name,
+            &self.session.client,
+            &self.session.base_url,
+            &self.session.api_key,
+            &self.session.provider_name,
         )
         .await?;
 
@@ -1599,7 +1603,11 @@ impl App {
             .collect();
 
         let mut selected = 0usize;
-        if let Some((idx, _)) = items.iter().enumerate().find(|(_, it)| it.id == self.model) {
+        if let Some((idx, _)) = items
+            .iter()
+            .enumerate()
+            .find(|(_, it)| it.id == self.session.model)
+        {
             selected = idx;
         }
 
@@ -1610,18 +1618,18 @@ impl App {
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
                 all_items: items,
-                before_model: Some(self.model.clone()),
+                before_model: Some(self.session.model.clone()),
                 has_dates,
             }),
         };
 
         session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
+        self.picker.picker_session = Some(session);
 
         self.sort_picker_items();
         self.update_picker_title();
 
-        let current_model = self.model.clone();
+        let current_model = self.session.model.clone();
         if let Some(session) = self.picker_session_mut() {
             if let Some((idx, _)) = session
                 .state
@@ -1823,12 +1831,12 @@ impl App {
 
     /// Apply model by id and persist in current session (not config)
     pub fn apply_model_by_id(&mut self, model_id: &str) {
-        self.model = model_id.to_string();
+        self.session.model = model_id.to_string();
         if let Some(state) = self.model_picker_state_mut() {
             state.before_model = None;
         }
         // Complete provider->model transition if we were in one
-        if self.in_provider_model_transition {
+        if self.picker.in_provider_model_transition {
             self.complete_provider_model_transition();
         }
     }
@@ -1847,10 +1855,10 @@ impl App {
         }
 
         if let Some(prev) = previous_model {
-            self.model = prev;
+            self.session.model = prev;
         }
         // Check if we're in a provider->model transition and need to revert
-        if self.in_provider_model_transition {
+        if self.picker.in_provider_model_transition {
             self.revert_provider_model_transition();
         }
     }
@@ -1937,7 +1945,7 @@ impl App {
         if let Some((idx, _)) = items
             .iter()
             .enumerate()
-            .find(|(_, it)| it.id == self.provider_name)
+            .find(|(_, it)| it.id == self.session.provider_name)
         {
             selected = idx;
         }
@@ -1950,19 +1958,19 @@ impl App {
                 search_filter: String::new(),
                 all_items: items,
                 before_provider: Some((
-                    self.provider_name.clone(),
-                    self.provider_display_name.clone(),
+                    self.session.provider_name.clone(),
+                    self.session.provider_display_name.clone(),
                 )),
             }),
         };
 
         session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
+        self.picker.picker_session = Some(session);
 
         self.sort_picker_items();
         self.update_picker_title();
 
-        let current_provider = self.provider_name.clone();
+        let current_provider = self.session.provider_name.clone();
         if let Some(session) = self.picker_session_mut() {
             if let Some((idx, _)) = session
                 .state
@@ -1994,29 +2002,29 @@ impl App {
                 let open_model_picker =
                     if let Some(default_model) = config.get_default_model(&provider_name) {
                         // Apply the default model immediately
-                        self.api_key = api_key;
-                        self.base_url = base_url;
-                        self.provider_name = provider_name.clone();
-                        self.provider_display_name = provider_display_name;
-                        self.model = default_model.clone();
+                        self.session.api_key = api_key;
+                        self.session.base_url = base_url;
+                        self.session.provider_name = provider_name.clone();
+                        self.session.provider_display_name = provider_display_name;
+                        self.session.model = default_model.clone();
                         false // No need to open model picker
                     } else {
                         // No default model found, need to save state before changing provider
                         // so we can revert if model picker is cancelled
-                        self.in_provider_model_transition = true;
-                        self.provider_model_transition_state = Some((
-                            self.provider_name.clone(),
-                            self.provider_display_name.clone(),
-                            self.model.clone(),
-                            self.api_key.clone(),
-                            self.base_url.clone(),
+                        self.picker.in_provider_model_transition = true;
+                        self.picker.provider_model_transition_state = Some((
+                            self.session.provider_name.clone(),
+                            self.session.provider_display_name.clone(),
+                            self.session.model.clone(),
+                            self.session.api_key.clone(),
+                            self.session.base_url.clone(),
                         ));
 
                         // Apply the new provider
-                        self.api_key = api_key;
-                        self.base_url = base_url;
-                        self.provider_name = provider_name.clone();
-                        self.provider_display_name = provider_display_name;
+                        self.session.api_key = api_key;
+                        self.session.base_url = base_url;
+                        self.session.provider_name = provider_name.clone();
+                        self.session.provider_display_name = provider_display_name;
                         true // Need to open model picker
                     };
 
@@ -2067,8 +2075,8 @@ impl App {
         }
 
         if let Some((prev_name, prev_display)) = previous_provider {
-            self.provider_name = prev_name;
-            self.provider_display_name = prev_display;
+            self.session.provider_name = prev_name;
+            self.session.provider_display_name = prev_display;
             // Note: We don't revert api_key and base_url as they should stay consistent with provider
         }
     }
@@ -2081,22 +2089,22 @@ impl App {
             prev_model,
             prev_api_key,
             prev_base_url,
-        )) = self.provider_model_transition_state.take()
+        )) = self.picker.provider_model_transition_state.take()
         {
-            self.provider_name = prev_provider_name;
-            self.provider_display_name = prev_provider_display;
-            self.model = prev_model;
-            self.api_key = prev_api_key;
-            self.base_url = prev_base_url;
+            self.session.provider_name = prev_provider_name;
+            self.session.provider_display_name = prev_provider_display;
+            self.session.model = prev_model;
+            self.session.api_key = prev_api_key;
+            self.session.base_url = prev_base_url;
         }
-        self.in_provider_model_transition = false;
-        self.provider_model_transition_state = None;
+        self.picker.in_provider_model_transition = false;
+        self.picker.provider_model_transition_state = None;
     }
 
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
-        self.in_provider_model_transition = false;
-        self.provider_model_transition_state = None;
+        self.picker.in_provider_model_transition = false;
+        self.picker.provider_model_transition_state = None;
     }
 
     /// Apply model by id and persist as default model for current provider in config
@@ -2106,7 +2114,7 @@ impl App {
 
         // Then persist to config
         let mut config = Config::load_test_safe();
-        config.set_default_model(self.provider_name.clone(), model_id.to_string());
+        config.set_default_model(self.session.provider_name.clone(), model_id.to_string());
         config.save_test_safe().map_err(|e| e.to_string())?;
 
         Ok(())
@@ -2123,8 +2131,8 @@ impl App {
             return Err(format!("Unknown theme: {}", id));
         };
         // Quantize to terminal color depth
-        self.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
-        self.current_theme_id = Some(id.to_string());
+        self.ui.theme = crate::utils::color::quantize_theme_for_current_terminal(theme);
+        self.ui.current_theme_id = Some(id.to_string());
         self.configure_textarea_appearance();
         if let Some(state) = self.theme_picker_state_mut() {
             state.before_theme = None;
@@ -2209,7 +2217,7 @@ mod tests {
     fn theme_picker_highlights_active_theme_over_default() {
         let mut app = create_test_app();
         // Simulate active theme is light, while default (config) remains None in tests
-        app.current_theme_id = Some("light".to_string());
+        app.ui.current_theme_id = Some("light".to_string());
 
         // Open the theme picker
         app.open_theme_picker();
@@ -2244,7 +2252,7 @@ mod tests {
         ];
         let mut picker_state = PickerState::new("Pick Model", items.clone(), 0);
         picker_state.sort_mode = crate::ui::picker::SortMode::Name;
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
@@ -2263,15 +2271,15 @@ mod tests {
     fn provider_model_cancel_reverts_base_url_and_state() {
         let mut app = create_test_app();
         // Set current state to some new provider context
-        app.provider_name = "newprov".into();
-        app.provider_display_name = "NewProv".into();
-        app.model = "new-model".into();
-        app.api_key = "new-key".into();
-        app.base_url = "https://api.newprov.test/v1".into();
+        app.session.provider_name = "newprov".into();
+        app.session.provider_display_name = "NewProv".into();
+        app.session.model = "new-model".into();
+        app.session.api_key = "new-key".into();
+        app.session.base_url = "https://api.newprov.test/v1".into();
 
         // Simulate saved previous state for transition
-        app.in_provider_model_transition = true;
-        app.provider_model_transition_state = Some((
+        app.picker.in_provider_model_transition = true;
+        app.picker.provider_model_transition_state = Some((
             "oldprov".into(),
             "OldProv".into(),
             "old-model".into(),
@@ -2282,13 +2290,13 @@ mod tests {
         // Cancelling model picker should revert provider/model/api_key/base_url
         app.revert_model_preview();
 
-        assert_eq!(app.provider_name, "oldprov");
-        assert_eq!(app.provider_display_name, "OldProv");
-        assert_eq!(app.model, "old-model");
-        assert_eq!(app.api_key, "old-key");
-        assert_eq!(app.base_url, "https://api.oldprov.test/v1");
-        assert!(!app.in_provider_model_transition);
-        assert!(app.provider_model_transition_state.is_none());
+        assert_eq!(app.session.provider_name, "oldprov");
+        assert_eq!(app.session.provider_display_name, "OldProv");
+        assert_eq!(app.session.model, "old-model");
+        assert_eq!(app.session.api_key, "old-key");
+        assert_eq!(app.session.base_url, "https://api.oldprov.test/v1");
+        assert!(!app.picker.in_provider_model_transition);
+        assert!(app.picker.provider_model_transition_state.is_none());
     }
 
     #[test]
@@ -2313,7 +2321,7 @@ mod tests {
     fn default_sort_mode_helper_behaviour() {
         let mut app = create_test_app();
         // Theme picker prefers alphabetical → Name
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Theme,
             state: PickerState::new("Pick Theme", vec![], 0),
             data: PickerData::Theme(ThemePickerState {
@@ -2328,7 +2336,7 @@ mod tests {
             crate::ui::picker::SortMode::Name
         ));
         // Provider picker prefers alphabetical → Name
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Provider,
             state: PickerState::new("Pick Provider", vec![], 0),
             data: PickerData::Provider(ProviderPickerState {
@@ -2342,7 +2350,7 @@ mod tests {
             crate::ui::picker::SortMode::Name
         ));
         // Model picker with dates → Date
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Model,
             state: PickerState::new("Pick Model", vec![], 0),
             data: PickerData::Model(ModelPickerState {
@@ -2374,7 +2382,7 @@ mod tests {
     fn prewrap_cache_reuse_no_changes() {
         let mut app = create_test_app();
         for i in 0..50 {
-            app.messages.push_back(Message {
+            app.ui.messages.push_back(Message {
                 role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
                 content: "lorem ipsum dolor sit amet consectetur adipiscing elit".into(),
             });
@@ -2395,7 +2403,7 @@ mod tests {
     #[test]
     fn prewrap_cache_invalidates_on_width_change() {
         let mut app = create_test_app();
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "user".into(),
             content: "hello world".into(),
         });
@@ -2413,9 +2421,10 @@ mod tests {
     #[test]
     fn prewrap_cache_updates_metadata_for_markdown_last_message() {
         let mut app = create_test_app();
-        app.messages
+        app.ui
+            .messages
             .push_back(create_test_message("user", "This is the opening line."));
-        app.messages.push_back(create_test_message(
+        app.ui.messages.push_back(create_test_message(
             "assistant",
             "Initial response that will be replaced.",
         ));
@@ -2425,7 +2434,7 @@ mod tests {
         let initial_meta = app.get_prewrapped_span_metadata_cached(width).clone();
         assert_eq!(initial_lines.len(), initial_meta.len());
 
-        if let Some(last) = app.messages.back_mut() {
+        if let Some(last) = app.ui.messages.back_mut() {
             last.content = "Here's an updated reply with a [link](https://example.com).".into();
         }
 
@@ -2440,11 +2449,12 @@ mod tests {
     #[test]
     fn prewrap_cache_updates_metadata_for_plain_text_last_message() {
         let mut app = create_test_app();
-        app.markdown_enabled = false;
-        app.syntax_enabled = false;
-        app.messages
+        app.ui.markdown_enabled = false;
+        app.ui.syntax_enabled = false;
+        app.ui
+            .messages
             .push_back(create_test_message("user", "Plain intro from the user."));
-        app.messages.push_back(create_test_message(
+        app.ui.messages.push_back(create_test_message(
             "assistant",
             "A short reply that will expand into a much longer paragraph after the update.",
         ));
@@ -2454,7 +2464,7 @@ mod tests {
         let initial_meta = app.get_prewrapped_span_metadata_cached(width).clone();
         assert_eq!(initial_lines.len(), initial_meta.len());
 
-        if let Some(last) = app.messages.back_mut() {
+        if let Some(last) = app.ui.messages.back_mut() {
             last.content = "Now the assistant responds with a deliberately long piece of plain text that should wrap across multiple terminal lines once re-rendered.".into();
         }
 
@@ -2473,7 +2483,9 @@ mod tests {
         let mut app = create_test_app();
 
         // Add a user message
-        app.messages.push_back(create_test_message("user", "Hello"));
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
 
         // Add a system message (like from /help command)
         app.add_system_message(
@@ -2481,7 +2493,8 @@ mod tests {
         );
 
         // Add an assistant message
-        app.messages
+        app.ui
+            .messages
             .push_back(create_test_message("assistant", "Hi there!"));
 
         // Add another system message
@@ -2511,20 +2524,20 @@ mod tests {
         let mut app = create_test_app();
 
         // Add messages in order: user, system, assistant
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "user".to_string(),
             content: "Test question".to_string(),
         });
 
         app.add_system_message("System message between user and assistant".to_string());
 
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: "Test response".to_string(),
         });
 
         // Set up retry state
-        app.retrying_message_index = Some(2); // Retry the assistant message at index 2
+        app.session.retrying_message_index = Some(2); // Retry the assistant message at index 2
 
         // Test prepare_retry
         let api_messages = app.prepare_retry(10, 80).unwrap();
@@ -2544,15 +2557,15 @@ mod tests {
     fn prewrap_cache_plain_text_last_message_wrapping() {
         // Reproduce the fast-path tail update and ensure plain-text wrapping is preserved
         let mut app = crate::utils::test_utils::create_test_app();
-        app.markdown_enabled = false;
-        let theme = app.theme.clone();
+        app.ui.markdown_enabled = false;
+        let theme = app.ui.theme.clone();
 
         // Start with two assistant messages
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".into(),
             content: "Short".into(),
         });
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".into(),
             content: "This is a very long plain text line that should wrap when width is small"
                 .into(),
@@ -2562,7 +2575,7 @@ mod tests {
         app.get_prewrapped_lines_cached(width);
 
         // Update only the last message content to trigger the fast path
-        if let Some(last) = app.messages.back_mut() {
+        if let Some(last) = app.ui.messages.back_mut() {
             last.content.push_str(" and now it changed");
         }
         let second = app.get_prewrapped_lines_cached(width).clone();
@@ -2593,17 +2606,17 @@ mod tests {
 
         // Single line: move to end
         app.set_input_text("hello world".to_string());
-        app.textarea.move_cursor(CursorMove::End);
+        app.ui.textarea.move_cursor(CursorMove::End);
         app.sync_input_from_textarea();
         assert_eq!(app.get_input_text(), "hello world");
-        assert_eq!(app.input_cursor_position, 11);
+        assert_eq!(app.ui.input_cursor_position, 11);
 
         // Multi-line: jump to (row=1, col=3) => after "wor" on second line
         app.set_input_text("hello\nworld".to_string());
-        app.textarea.move_cursor(CursorMove::Jump(1, 3));
+        app.ui.textarea.move_cursor(CursorMove::Jump(1, 3));
         app.sync_input_from_textarea();
         // 5 (hello) + 1 (\n) + 3 = 9
-        assert_eq!(app.input_cursor_position, 9);
+        assert_eq!(app.ui.input_cursor_position, 9);
     }
 
     #[test]
@@ -2611,9 +2624,9 @@ mod tests {
         let mut app = create_test_app();
         app.set_input_text("abc".to_string());
         // Move to head of line
-        app.textarea.move_cursor(CursorMove::Head);
+        app.ui.textarea.move_cursor(CursorMove::Head);
         // Simulate backspace (always single-char via input_without_shortcuts)
-        app.textarea.input_without_shortcuts(Input {
+        app.ui.textarea.input_without_shortcuts(Input {
             key: Key::Backspace,
             ctrl: false,
             alt: false,
@@ -2621,7 +2634,7 @@ mod tests {
         });
         app.sync_input_from_textarea();
         assert_eq!(app.get_input_text(), "abc");
-        assert_eq!(app.input_cursor_position, 0);
+        assert_eq!(app.ui.input_cursor_position, 0);
     }
 
     #[test]
@@ -2629,9 +2642,9 @@ mod tests {
         let mut app = create_test_app();
         app.set_input_text("hello\nworld".to_string());
         // Move to start of second line
-        app.textarea.move_cursor(CursorMove::Jump(1, 0));
+        app.ui.textarea.move_cursor(CursorMove::Jump(1, 0));
         // Backspace should join lines; use input_without_shortcuts to ensure single-char delete
-        app.textarea.input_without_shortcuts(Input {
+        app.ui.textarea.input_without_shortcuts(Input {
             key: Key::Backspace,
             ctrl: false,
             alt: false,
@@ -2640,16 +2653,16 @@ mod tests {
         app.sync_input_from_textarea();
         assert_eq!(app.get_input_text(), "helloworld");
         // Cursor should be at end of former first line (index 5)
-        assert_eq!(app.input_cursor_position, 5);
+        assert_eq!(app.ui.input_cursor_position, 5);
     }
 
     #[test]
     fn test_backspace_with_alt_modifier_deletes_single_char() {
         let mut app = create_test_app();
         app.set_input_text("hello world".to_string());
-        app.textarea.move_cursor(CursorMove::End);
+        app.ui.textarea.move_cursor(CursorMove::End);
         // Simulate Alt+Backspace; with input_without_shortcuts it should still delete one char
-        app.textarea.input_without_shortcuts(Input {
+        app.ui.textarea.input_without_shortcuts(Input {
             key: Key::Backspace,
             ctrl: false,
             alt: true,
@@ -2657,7 +2670,7 @@ mod tests {
         });
         app.sync_input_from_textarea();
         assert_eq!(app.get_input_text(), "hello worl");
-        assert_eq!(app.input_cursor_position, "hello worl".chars().count());
+        assert_eq!(app.ui.input_cursor_position, "hello worl".chars().count());
     }
 
     #[test]
@@ -2670,10 +2683,10 @@ mod tests {
         let width: u16 = 10; // small terminal width to force wrapping (inner ~4)
         let input_area_height: u16 = 2; // only 2 lines visible
                                         // Place cursor near end
-        app.input_cursor_position = text.chars().count().saturating_sub(1);
+        app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
         app.update_input_scroll(input_area_height, width);
         // With cursor near end, scroll offset should be > 0 to bring cursor into view
-        assert!(app.input_scroll_offset > 0);
+        assert!(app.ui.input_scroll_offset > 0);
     }
 
     #[test]
@@ -2683,26 +2696,26 @@ mod tests {
         let text = "top\n\n\n\n\n\n\n\n\n\nbottom";
         app.set_input_text(text.to_string());
         // Jump to bottom line, col=3 (after 'bot')
-        let bottom_row_usize = app.textarea.lines().len().saturating_sub(1);
+        let bottom_row_usize = app.ui.textarea.lines().len().saturating_sub(1);
         let bottom_row = bottom_row_usize as u16;
-        app.textarea.move_cursor(CursorMove::Jump(bottom_row, 3));
+        app.ui.textarea.move_cursor(CursorMove::Jump(bottom_row, 3));
         app.sync_input_from_textarea();
-        let (row_before, col_before) = app.textarea.cursor();
+        let (row_before, col_before) = app.ui.textarea.cursor();
         assert_eq!(row_before, bottom_row as usize);
-        assert!(col_before <= app.textarea.lines()[bottom_row_usize].chars().count());
+        assert!(col_before <= app.ui.textarea.lines()[bottom_row_usize].chars().count());
 
         // Move up exactly one line
-        app.textarea.move_cursor(CursorMove::Up);
+        app.ui.textarea.move_cursor(CursorMove::Up);
         app.sync_input_from_textarea();
-        let (row_after_up, col_after_up) = app.textarea.cursor();
+        let (row_after_up, col_after_up) = app.ui.textarea.cursor();
         assert_eq!(row_after_up, bottom_row_usize.saturating_sub(1));
         // Column should clamp reasonably; we just assert it's within line bounds
-        assert!(col_after_up <= app.textarea.lines()[8].chars().count());
+        assert!(col_after_up <= app.ui.textarea.lines()[8].chars().count());
 
         // Move down exactly one line
-        app.textarea.move_cursor(CursorMove::Down);
+        app.ui.textarea.move_cursor(CursorMove::Down);
         app.sync_input_from_textarea();
-        let (row_after_down, _col_after_down) = app.textarea.cursor();
+        let (row_after_down, _col_after_down) = app.ui.textarea.cursor();
         assert_eq!(row_after_down, bottom_row_usize);
     }
 
@@ -2711,16 +2724,16 @@ mod tests {
         let mut app = create_test_app();
         app.set_input_text("hello".to_string());
         // Move to end, then back by one, then forward by one
-        app.textarea.move_cursor(CursorMove::End);
+        app.ui.textarea.move_cursor(CursorMove::End);
         app.sync_input_from_textarea();
-        let end_pos = app.input_cursor_position;
-        app.textarea.move_cursor(CursorMove::Back);
+        let end_pos = app.ui.input_cursor_position;
+        app.ui.textarea.move_cursor(CursorMove::Back);
         app.sync_input_from_textarea();
-        let back_pos = app.input_cursor_position;
+        let back_pos = app.ui.input_cursor_position;
         assert_eq!(back_pos, end_pos.saturating_sub(1));
-        app.textarea.move_cursor(CursorMove::Forward);
+        app.ui.textarea.move_cursor(CursorMove::Forward);
         app.sync_input_from_textarea();
-        let forward_pos = app.input_cursor_position;
+        let forward_pos = app.ui.input_cursor_position;
         assert_eq!(forward_pos, end_pos);
     }
 
@@ -2730,21 +2743,21 @@ mod tests {
         let text = "asdf\n\nasdf\n\nasdf";
         app.set_input_text(text.to_string());
         // Jump to blank line 2 (0-based row 3), column 0
-        app.textarea.move_cursor(CursorMove::Jump(3, 0));
+        app.ui.textarea.move_cursor(CursorMove::Jump(3, 0));
         app.sync_input_from_textarea();
         // Insert a character on the blank line
-        app.textarea.insert_str("x");
+        app.ui.textarea.insert_str("x");
         app.sync_input_from_textarea();
 
         // Compute wrapped position using same wrapper logic (no wrapping with wide width)
         let config = WrapConfig::new(120);
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             app.get_input_text(),
-            app.input_cursor_position,
+            app.ui.input_cursor_position,
             &config,
         );
         // Compare to textarea's cursor row/col
-        let (row, c) = app.textarea.cursor();
+        let (row, c) = app.ui.textarea.cursor();
         assert_eq!(line, row);
         assert_eq!(col, c);
     }
@@ -2756,16 +2769,16 @@ mod tests {
         let text = "one two three four five six seven eight nine ten";
         app.set_input_text(text.to_string());
         // Place cursor near end
-        app.input_cursor_position = text.chars().count().saturating_sub(1);
+        app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
         // Very small terminal width to force heavy wrapping; method accounts for borders and margin
         let width: u16 = 6;
         app.recompute_input_layout_after_edit(width);
         // With cursor near end on a heavily wrapped input, expect some scroll
-        assert!(app.input_scroll_offset > 0);
+        assert!(app.ui.input_scroll_offset > 0);
         // Changing cursor position to start should reduce or reset scroll
-        app.input_cursor_position = 0;
+        app.ui.input_cursor_position = 0;
         app.recompute_input_layout_after_edit(width);
-        assert_eq!(app.input_scroll_offset, 0);
+        assert_eq!(app.ui.input_scroll_offset, 0);
     }
 
     #[test]
@@ -2776,10 +2789,11 @@ mod tests {
         assert_eq!(app.first_user_message_index(), None);
 
         // Add messages: user, assistant, user
-        app.messages.push_back(create_test_message("user", "u1"));
-        app.messages
+        app.ui.messages.push_back(create_test_message("user", "u1"));
+        app.ui
+            .messages
             .push_back(create_test_message("assistant", "a1"));
-        app.messages.push_back(create_test_message("user", "u2"));
+        app.ui.messages.push_back(create_test_message("user", "u2"));
 
         assert_eq!(app.first_user_message_index(), Some(0));
         assert_eq!(app.last_user_message_index(), Some(2));
@@ -2798,7 +2812,7 @@ mod tests {
 | Monarchy | A form of government in which a single person, known as a monarch, rules until death or abdication. | Hereditary succession, Often ceremonial with limited political power |
 "#;
 
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".into(),
             content: table_content.to_string(),
         });
@@ -2848,12 +2862,12 @@ mod tests {
         app.append_to_response(row2, available_height, width);
 
         // After each append, if we're auto-scrolling, we should be at the bottom
-        if app.auto_scroll {
+        if app.ui.auto_scroll {
             let expected_max_scroll = app.calculate_max_scroll_offset(available_height, width);
             assert_eq!(
-                app.scroll_offset, expected_max_scroll,
+                app.ui.scroll_offset, expected_max_scroll,
                 "Auto-scroll should keep us at bottom. Current offset: {}, Expected max: {}",
-                app.scroll_offset, expected_max_scroll
+                app.ui.scroll_offset, expected_max_scroll
             );
         }
     }
@@ -2879,7 +2893,7 @@ fn main() {
 }
 ```"#;
 
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".into(),
             content: content_with_table_and_code.to_string(),
         });
@@ -2888,7 +2902,7 @@ fn main() {
         let available_height = 20u16;
 
         // Get codeblock ranges (these are computed from widthless lines)
-        let ranges = crate::ui::markdown::compute_codeblock_ranges(&app.messages, &app.theme);
+        let ranges = crate::ui::markdown::compute_codeblock_ranges(&app.ui.messages, &app.ui.theme);
         assert!(!ranges.is_empty(), "Should have at least one code block");
 
         let (code_block_start, _len, _content) = &ranges[0];
@@ -2936,7 +2950,7 @@ fn main() {
 
 Some additional text after the table."#;
 
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".into(),
             content: wide_table.to_string(),
         });
@@ -2989,18 +3003,18 @@ Some additional text after the table."#;
 
         for chunk in table_chunks {
             // Before append: get current scroll state
-            let _scroll_before = app.scroll_offset;
+            let _scroll_before = app.ui.scroll_offset;
             let _max_scroll_before = app.calculate_max_scroll_offset(available_height, width);
 
             // Append content (this invalidates prewrap cache)
             app.append_to_response(chunk, available_height, width);
 
             // After append: check scroll consistency
-            let scroll_after = app.scroll_offset;
+            let scroll_after = app.ui.scroll_offset;
             let max_scroll_after = app.calculate_max_scroll_offset(available_height, width);
 
             // During streaming with auto_scroll=true, we should always be at bottom
-            if app.auto_scroll {
+            if app.ui.auto_scroll {
                 assert_eq!(
                     scroll_after, max_scroll_after,
                     "Auto-scroll should keep us at bottom after streaming chunk"
@@ -3024,7 +3038,8 @@ Some additional text after the table."#;
         let mut app = create_test_app();
         // Create enough messages to require scrolling
         for _ in 0..50 {
-            app.messages
+            app.ui
+                .messages
                 .push_back(create_test_message("assistant", "line content"));
         }
 
@@ -3039,42 +3054,45 @@ Some additional text after the table."#;
 
         // Start in the middle
         let step = available_height.saturating_sub(1);
-        app.scroll_offset = (step * 2).min(max_scroll);
+        app.ui.scroll_offset = (step * 2).min(max_scroll);
 
         // Page up reduces by step, not below 0
-        let before = app.scroll_offset;
+        let before = app.ui.scroll_offset;
         app.page_up(available_height);
-        let after_up = app.scroll_offset;
+        let after_up = app.ui.scroll_offset;
         assert_eq!(after_up, before.saturating_sub(step));
-        assert!(!app.auto_scroll);
+        assert!(!app.ui.auto_scroll);
 
         // Page down increases by step, clamped to max
         app.page_down(available_height, width);
-        let after_down = app.scroll_offset;
+        let after_down = app.ui.scroll_offset;
         assert!(after_down >= after_up);
         assert!(after_down <= max_scroll);
-        assert!(!app.auto_scroll);
+        assert!(!app.ui.auto_scroll);
 
         // Home goes to top and disables auto-scroll
         app.scroll_to_top();
-        assert_eq!(app.scroll_offset, 0);
-        assert!(!app.auto_scroll);
+        assert_eq!(app.ui.scroll_offset, 0);
+        assert!(!app.ui.auto_scroll);
 
         // End goes to bottom and enables auto-scroll
         app.scroll_to_bottom_view(available_height, width);
-        assert_eq!(app.scroll_offset, max_scroll);
-        assert!(app.auto_scroll);
+        assert_eq!(app.ui.scroll_offset, max_scroll);
+        assert!(app.ui.auto_scroll);
     }
 
     #[test]
     fn test_prev_next_user_message_index_navigation() {
         let mut app = create_test_app();
         // indices: 0 user, 1 assistant, 2 system, 3 user
-        app.messages.push_back(create_test_message("user", "u1"));
-        app.messages
+        app.ui.messages.push_back(create_test_message("user", "u1"));
+        app.ui
+            .messages
             .push_back(create_test_message("assistant", "a1"));
-        app.messages.push_back(create_test_message("system", "s1"));
-        app.messages.push_back(create_test_message("user", "u2"));
+        app.ui
+            .messages
+            .push_back(create_test_message("system", "s1"));
+        app.ui.messages.push_back(create_test_message("user", "u2"));
 
         // From index 3 (user) prev should be 0 (skipping non-user)
         assert_eq!(app.prev_user_message_index(3), Some(0));
@@ -3092,10 +3110,10 @@ Some additional text after the table."#;
         let text = String::from("line1\nline2");
         app.set_input_text(text.clone());
         // Linear cursor at end
-        assert_eq!(app.input_cursor_position, text.chars().count());
+        assert_eq!(app.ui.input_cursor_position, text.chars().count());
         // Textarea cursor at end (last row/col)
-        let (row, col) = app.textarea.cursor();
-        let lines = app.textarea.lines();
+        let (row, col) = app.ui.textarea.cursor();
+        let lines = app.ui.textarea.lines();
         assert_eq!(row, lines.len() - 1);
         assert_eq!(col, lines.last().unwrap().chars().count());
     }

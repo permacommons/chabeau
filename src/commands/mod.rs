@@ -23,7 +23,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
         match parts.len() {
             1 => {
                 // Just "/log" - toggle logging if file is set
-                match app.logging.toggle_logging() {
+                match app.session.logging.toggle_logging() {
                     Ok(message) => {
                         app.set_status(message);
                         CommandResult::Continue
@@ -37,7 +37,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             2 => {
                 // "/log <filename>" - set log file and enable logging
                 let filename = parts[1];
-                match app.logging.set_log_file(filename.to_string()) {
+                match app.session.logging.set_log_file(filename.to_string()) {
                     Ok(message) => {
                         app.set_status(message);
                         CommandResult::Continue
@@ -154,7 +154,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     } else if trimmed.starts_with("/markdown") {
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         let action = parts.get(1).copied().unwrap_or("");
-        let mut new_state = app.markdown_enabled;
+        let mut new_state = app.ui.markdown_enabled;
         match action.to_ascii_lowercase().as_str() {
             "on" => new_state = true,
             "off" => new_state = false,
@@ -164,7 +164,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 return CommandResult::Continue;
             }
         }
-        app.markdown_enabled = new_state;
+        app.ui.markdown_enabled = new_state;
         // Persist
         match crate::core::config::Config::load() {
             Ok(mut cfg) => {
@@ -193,7 +193,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     } else if trimmed.starts_with("/syntax") {
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         let action = parts.get(1).copied().unwrap_or("");
-        let mut new_state = app.syntax_enabled;
+        let mut new_state = app.ui.syntax_enabled;
         match action.to_ascii_lowercase().as_str() {
             "on" => new_state = true,
             "off" => new_state = false,
@@ -203,7 +203,7 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
                 return CommandResult::Continue;
             }
         }
-        app.syntax_enabled = new_state;
+        app.ui.syntax_enabled = new_state;
         // Persist
         match crate::core::config::Config::load() {
             Ok(mut cfg) => {
@@ -236,6 +236,7 @@ pub fn dump_conversation_with_overwrite(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Filter out system messages and check if conversation is empty
     let conversation_messages: Vec<_> = app
+        .ui
         .messages
         .iter()
         .filter(|msg| msg.role != "system")
@@ -304,10 +305,14 @@ mod tests {
         let mut app = create_test_app();
 
         // Add messages
-        app.messages.push_back(create_test_message("user", "Hello"));
-        app.messages
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+        app.ui
+            .messages
             .push_back(create_test_message("assistant", "Hi there!"));
-        app.messages
+        app.ui
+            .messages
             .push_back(create_test_message("system", "System message"));
 
         // Create a temporary directory for testing
@@ -339,8 +344,11 @@ mod tests {
         let mut app = create_test_app();
 
         // Add messages
-        app.messages.push_back(create_test_message("user", "Hello"));
-        app.messages
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+        app.ui
+            .messages
             .push_back(create_test_message("assistant", "Hi there!"));
 
         // Create a temporary directory for testing
@@ -370,7 +378,8 @@ mod tests {
         let mut app = create_test_app();
 
         // Add a message to test dumping
-        app.messages
+        app.ui
+            .messages
             .push_back(create_test_message("user", "Test message"));
 
         // Create a temporary directory for testing
@@ -385,8 +394,8 @@ mod tests {
         assert!(matches!(result, CommandResult::Continue));
 
         // Should set a status about the dump
-        assert!(app.status.is_some());
-        assert!(app.status.as_ref().unwrap().starts_with("Dumped: "));
+        assert!(app.ui.status.is_some());
+        assert!(app.ui.status.as_ref().unwrap().starts_with("Dumped: "));
 
         // Clean up
         fs::remove_file(dump_filename).ok();
@@ -408,8 +417,8 @@ mod tests {
         assert!(matches!(result, CommandResult::Continue));
 
         // Should set a status with an error
-        assert!(app.status.is_some());
-        assert!(app.status.as_ref().unwrap().starts_with("Dump error:"));
+        assert!(app.ui.status.is_some());
+        assert!(app.ui.status.as_ref().unwrap().starts_with("Dump error:"));
     }
 
     #[test]
@@ -433,11 +442,11 @@ mod tests {
     #[test]
     fn model_command_with_id_sets_model() {
         let mut app = create_test_app();
-        let original_model = app.model.clone();
+        let original_model = app.session.model.clone();
         let res = process_input(&mut app, "/model gpt-4");
         matches!(res, CommandResult::Continue);
-        assert_eq!(app.model, "gpt-4");
-        assert_ne!(app.model, original_model);
+        assert_eq!(app.session.model, "gpt-4");
+        assert_ne!(app.session.model, original_model);
     }
 
     #[test]

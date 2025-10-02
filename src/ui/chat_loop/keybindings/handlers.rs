@@ -55,10 +55,10 @@ pub fn scroll_block_into_view(
 ) {
     let lines =
         crate::utils::scroll::ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
-            &app_guard.messages,
-            &app_guard.theme,
-            app_guard.markdown_enabled,
-            app_guard.syntax_enabled,
+            &app_guard.ui.messages,
+            &app_guard.ui.theme,
+            app_guard.ui.markdown_enabled,
+            app_guard.ui.syntax_enabled,
             Some(term_width as usize),
         );
     let input_area_height = app_guard.calculate_input_area_height(term_width);
@@ -70,7 +70,7 @@ pub fn scroll_block_into_view(
         block_start,
     );
     let max_scroll = app_guard.calculate_max_scroll_offset(available_height, term_width);
-    app_guard.scroll_offset = desired.min(max_scroll);
+    app_guard.ui.scroll_offset = desired.min(max_scroll);
 }
 
 /// Helper function to recompute input layout if enough time has passed
@@ -163,7 +163,7 @@ impl KeyHandler for EscapeHandler {
             app_guard.clear_input();
             return KeyResult::Handled;
         }
-        if app_guard.is_streaming {
+        if app_guard.ui.is_streaming {
             app_guard.cancel_current_stream();
             return KeyResult::Handled;
         }
@@ -268,58 +268,58 @@ impl KeyHandler for ArrowKeyHandler {
 
         match key.code {
             KeyCode::Left => {
-                let compose = app_guard.compose_mode;
+                let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
                     app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
-                    app_guard.horizontal_scroll_offset =
-                        app_guard.horizontal_scroll_offset.saturating_sub(1);
+                    app_guard.ui.horizontal_scroll_offset =
+                        app_guard.ui.horizontal_scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Right => {
-                let compose = app_guard.compose_mode;
+                let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
                     app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
-                    app_guard.horizontal_scroll_offset =
-                        app_guard.horizontal_scroll_offset.saturating_add(1);
+                    app_guard.ui.horizontal_scroll_offset =
+                        app_guard.ui.horizontal_scroll_offset.saturating_add(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Up => {
-                let compose = app_guard.compose_mode;
+                let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
                     app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
-                    app_guard.auto_scroll = false;
-                    app_guard.scroll_offset = app_guard.scroll_offset.saturating_sub(1);
+                    app_guard.ui.auto_scroll = false;
+                    app_guard.ui.scroll_offset = app_guard.ui.scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Down => {
-                let compose = app_guard.compose_mode;
+                let compose = app_guard.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
                     app_guard.apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
                     recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
                 } else {
-                    app_guard.auto_scroll = false;
+                    app_guard.ui.auto_scroll = false;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
                     let max_scroll =
                         app_guard.calculate_max_scroll_offset(available_height, term_width);
-                    app_guard.scroll_offset =
-                        (app_guard.scroll_offset.saturating_add(1)).min(max_scroll);
+                    app_guard.ui.scroll_offset =
+                        (app_guard.ui.scroll_offset.saturating_add(1)).min(max_scroll);
                 }
                 KeyResult::Handled
             }
@@ -415,17 +415,17 @@ impl KeyHandler for CtrlBHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut app_guard = app.lock().await;
-        if !app_guard.markdown_enabled {
+        if !app_guard.ui.markdown_enabled {
             app_guard.set_status("Markdown disabled (/markdown on)");
             return KeyResult::Handled;
         }
 
         let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &app_guard.messages,
-            &app_guard.theme,
+            &app_guard.ui.messages,
+            &app_guard.ui.theme,
             Some(term_width as usize),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
-            app_guard.syntax_enabled,
+            app_guard.ui.syntax_enabled,
         );
 
         if app_guard.in_block_select_mode() {

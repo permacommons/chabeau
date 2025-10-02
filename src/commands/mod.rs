@@ -96,7 +96,11 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             _ => {
                 // Try to set theme directly by id/name
                 let id = parts[1];
-                match app.apply_theme_by_id(id) {
+                let res = {
+                    let mut controller = app.theme_controller();
+                    controller.apply_theme_by_id(id)
+                };
+                match res {
                     Ok(_) => {
                         app.set_status(format!("Theme set: {}", id));
                         CommandResult::Continue
@@ -118,7 +122,10 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             _ => {
                 // Try to set model directly by id/name
                 let model_id = parts[1];
-                app.apply_model_by_id(model_id);
+                {
+                    let mut controller = app.provider_controller();
+                    controller.apply_model_by_id(model_id);
+                }
                 app.set_status(format!("Model set: {}", model_id));
                 CommandResult::Continue
             }
@@ -133,7 +140,10 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
             _ => {
                 // Try to set provider directly by id/name
                 let provider_id = parts[1];
-                let (result, should_open_model_picker) = app.apply_provider_by_id(provider_id);
+                let (result, should_open_model_picker) = {
+                    let mut controller = app.provider_controller();
+                    controller.apply_provider_by_id(provider_id)
+                };
                 match result {
                     Ok(_) => {
                         app.set_status(format!("Provider set: {}", provider_id));

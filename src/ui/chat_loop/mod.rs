@@ -1015,10 +1015,13 @@ async fn handle_picker_key_event(
                 // Theme
                 if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
                     if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let res = if is_persistent {
-                            app_guard.apply_theme_by_id(&id)
-                        } else {
-                            app_guard.apply_theme_by_id_session_only(&id)
+                        let res = {
+                            let mut controller = app_guard.theme_controller();
+                            if is_persistent {
+                                controller.apply_theme_by_id(&id)
+                            } else {
+                                controller.apply_theme_by_id_session_only(&id)
+                            }
                         };
                         match res {
                             Ok(_) => app_guard.set_status(format!(
@@ -1034,11 +1037,14 @@ async fn handle_picker_key_event(
                 } else if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
                     if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
                         let persist = is_persistent && !app_guard.session.startup_env_only;
-                        let res = if persist {
-                            app_guard.apply_model_by_id_persistent(&id)
-                        } else {
-                            app_guard.apply_model_by_id(&id);
-                            Ok(())
+                        let res = {
+                            let mut controller = app_guard.provider_controller();
+                            if persist {
+                                controller.apply_model_by_id_persistent(&id)
+                            } else {
+                                controller.apply_model_by_id(&id);
+                                Ok(())
+                            }
                         };
                         match res {
                             Ok(_) => {
@@ -1061,10 +1067,13 @@ async fn handle_picker_key_event(
                     Some("__picker_handled__".to_string())
                 } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
                     if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let (res, should_open_model_picker) = if is_persistent {
-                            app_guard.apply_provider_by_id_persistent(&id)
-                        } else {
-                            app_guard.apply_provider_by_id(&id)
+                        let (res, should_open_model_picker) = {
+                            let mut controller = app_guard.provider_controller();
+                            if is_persistent {
+                                controller.apply_provider_by_id_persistent(&id)
+                            } else {
+                                controller.apply_provider_by_id(&id)
+                            }
                         };
                         match res {
                             Ok(_) => {
@@ -1108,7 +1117,11 @@ async fn handle_picker_key_event(
                 match current_picker_mode {
                     Some(crate::core::app::PickerMode::Theme) => {
                         if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            match app_guard.apply_theme_by_id(&id) {
+                            let res = {
+                                let mut controller = app_guard.theme_controller();
+                                controller.apply_theme_by_id(&id)
+                            };
+                            match res {
                                 Ok(_) => app_guard.set_status(format!(
                                     "Theme set: {}{}",
                                     id,
@@ -1123,11 +1136,14 @@ async fn handle_picker_key_event(
                     Some(crate::core::app::PickerMode::Model) => {
                         if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
                             let persist = !app_guard.session.startup_env_only;
-                            let res = if persist {
-                                app_guard.apply_model_by_id_persistent(&id)
-                            } else {
-                                app_guard.apply_model_by_id(&id);
-                                Ok(())
+                            let res = {
+                                let mut controller = app_guard.provider_controller();
+                                if persist {
+                                    controller.apply_model_by_id_persistent(&id)
+                                } else {
+                                    controller.apply_model_by_id(&id);
+                                    Ok(())
+                                }
                             };
                             match res {
                                 Ok(_) => {
@@ -1151,8 +1167,10 @@ async fn handle_picker_key_event(
                     }
                     Some(crate::core::app::PickerMode::Provider) => {
                         if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let (res, should_open_model_picker) =
-                                app_guard.apply_provider_by_id_persistent(&id);
+                            let (res, should_open_model_picker) = {
+                                let mut controller = app_guard.provider_controller();
+                                controller.apply_provider_by_id_persistent(&id)
+                            };
                             match res {
                                 Ok(_) => {
                                     app_guard.set_status(format!(
@@ -1196,13 +1214,16 @@ async fn handle_picker_key_event(
 
                         let result = match current_picker_mode {
                             Some(crate::core::app::PickerMode::Model) => {
-                                app_guard.unset_default_model(&provider_name)
+                                let mut controller = app_guard.provider_controller();
+                                controller.unset_default_model(&provider_name)
                             }
                             Some(crate::core::app::PickerMode::Theme) => {
-                                app_guard.unset_default_theme()
+                                let mut controller = app_guard.theme_controller();
+                                controller.unset_default_theme()
                             }
                             Some(crate::core::app::PickerMode::Provider) => {
-                                app_guard.unset_default_provider()
+                                let mut controller = app_guard.provider_controller();
+                                controller.unset_default_provider()
                             }
                             _ => Err("Unknown picker mode".to_string()),
                         };

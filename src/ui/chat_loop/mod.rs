@@ -150,7 +150,7 @@ pub async fn run_chat(
         // Check if we need to exit
         {
             let app_guard = app.lock().await;
-            if app_guard.exit_requested {
+            if app_guard.ui.exit_requested {
                 break 'main_loop Ok(());
             }
         }
@@ -190,7 +190,7 @@ pub async fn run_chat(
                         let picker_open = app_guard.model_picker_state().is_some()
                             || app_guard.theme_picker_state().is_some()
                             || app_guard.provider_picker_state().is_some();
-                        KeyContext::from_ui_mode(&app_guard.mode, picker_open)
+                        KeyContext::from_ui_mode(&app_guard.ui.mode, picker_open)
                     };
 
                     // Smart routing: check if this should be handled as text input first
@@ -276,7 +276,7 @@ pub async fn run_chat(
         while let Ok((message, msg_stream_id)) = rx.try_recv() {
             let should_process = {
                 let app_guard = app.lock().await;
-                msg_stream_id == app_guard.current_stream_id
+                msg_stream_id == app_guard.session.current_stream_id
             };
 
             if !should_process {
@@ -351,14 +351,14 @@ fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16,
         StreamMessage::Error(err) => {
             let error_message = format!("Error: {}", err.trim());
             app.add_system_message(error_message);
-            app.is_streaming = false;
+            app.ui.is_streaming = false;
             let input_area_height = app.calculate_input_area_height(term_width);
             let available_height = app.calculate_available_height(term_height, input_area_height);
             app.update_scroll_position(available_height, term_width);
         }
         StreamMessage::End => {
             app.finalize_response();
-            app.is_streaming = false;
+            app.ui.is_streaming = false;
         }
     }
 }
@@ -410,14 +410,15 @@ async fn handle_edit_select_mode_event(
         }
         KeyCode::Enter => {
             if let Some(idx) = app_guard.selected_user_message_index() {
-                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
-                    let content = app_guard.messages[idx].content.clone();
+                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
+                    let content = app_guard.ui.messages[idx].content.clone();
                     app_guard.cancel_current_stream();
-                    app_guard.messages.truncate(idx);
+                    app_guard.ui.messages.truncate(idx);
                     app_guard.invalidate_prewrap_cache();
                     let _ = app_guard
+                        .session
                         .logging
-                        .rewrite_log_without_last_response(&app_guard.messages);
+                        .rewrite_log_without_last_response(&app_guard.ui.messages);
                     app_guard.set_input_text(content);
                     app_guard.exit_edit_select_mode();
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
@@ -430,8 +431,8 @@ async fn handle_edit_select_mode_event(
         }
         KeyCode::Char('E') | KeyCode::Char('e') => {
             if let Some(idx) = app_guard.selected_user_message_index() {
-                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
-                    let content = app_guard.messages[idx].content.clone();
+                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
+                    let content = app_guard.ui.messages[idx].content.clone();
                     app_guard.set_input_text(content);
                     app_guard.start_in_place_edit(idx);
                     app_guard.exit_edit_select_mode();
@@ -441,13 +442,14 @@ async fn handle_edit_select_mode_event(
         }
         KeyCode::Delete => {
             if let Some(idx) = app_guard.selected_user_message_index() {
-                if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                     app_guard.cancel_current_stream();
-                    app_guard.messages.truncate(idx);
+                    app_guard.ui.messages.truncate(idx);
                     app_guard.invalidate_prewrap_cache();
                     let _ = app_guard
+                        .session
                         .logging
-                        .rewrite_log_without_last_response(&app_guard.messages);
+                        .rewrite_log_without_last_response(&app_guard.ui.messages);
                     app_guard.exit_edit_select_mode();
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
                     let available_height =
@@ -474,11 +476,11 @@ async fn handle_block_select_mode_event(
     }
 
     let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-        &app_guard.messages,
-        &app_guard.theme,
+        &app_guard.ui.messages,
+        &app_guard.ui.theme,
         Some(term_width as usize),
         crate::ui::layout::TableOverflowPolicy::WrapCells,
-        app_guard.syntax_enabled,
+        app_guard.ui.syntax_enabled,
     );
 
     match key.code {
@@ -523,7 +525,7 @@ async fn handle_block_select_mode_event(
                         Err(_e) => app_guard.set_status("Clipboard error"),
                     }
                     app_guard.exit_block_select_mode();
-                    app_guard.auto_scroll = true;
+                    app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
@@ -534,8 +536,9 @@ async fn handle_block_select_mode_event(
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
             if let Some(cur) = app_guard.selected_block_index() {
-                let contents =
-                    crate::ui::markdown::compute_codeblock_contents_with_lang(&app_guard.messages);
+                let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(
+                    &app_guard.ui.messages,
+                );
                 if let Some((content, lang)) = contents.get(cur) {
                     use chrono::Utc;
                     use std::fs;
@@ -552,7 +555,7 @@ async fn handle_block_select_mode_event(
                         }
                     }
                     app_guard.exit_block_select_mode();
-                    app_guard.auto_scroll = true;
+                    app_guard.ui.auto_scroll = true;
                     let input_area_height = app_guard.calculate_input_area_height(term_width);
                     let available_height =
                         app_guard.calculate_available_height(term_height, input_area_height);
@@ -712,7 +715,7 @@ async fn handle_enter_key(
 
     let should_insert_newline = {
         let app_guard = app.lock().await;
-        let compose = app_guard.compose_mode;
+        let compose = app_guard.ui.compose_mode;
         let alt = modifiers.contains(event::KeyModifiers::ALT);
         if compose {
             !alt
@@ -732,13 +735,14 @@ async fn handle_enter_key(
     {
         let mut app_guard = app.lock().await;
         if let Some(idx) = app_guard.take_in_place_edit_index() {
-            if idx < app_guard.messages.len() && app_guard.messages[idx].role == "user" {
+            if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
                 let new_text = app_guard.get_input_text().to_string();
-                app_guard.messages[idx].content = new_text;
+                app_guard.ui.messages[idx].content = new_text;
                 app_guard.invalidate_prewrap_cache();
                 let _ = app_guard
+                    .session
                     .logging
-                    .rewrite_log_without_last_response(&app_guard.messages);
+                    .rewrite_log_without_last_response(&app_guard.ui.messages);
             }
             app_guard.clear_input();
             return Ok(Some(KeyLoopAction::Continue));
@@ -774,7 +778,7 @@ async fn handle_ctrl_j_shortcut(
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let send_now = {
         let app_guard = app.lock().await;
-        app_guard.compose_mode && app_guard.file_prompt().is_none()
+        app_guard.ui.compose_mode && app_guard.file_prompt().is_none()
     };
 
     if !send_now {
@@ -814,7 +818,11 @@ async fn handle_retry_shortcut(
     let maybe_params = {
         let mut app_guard = app.lock().await;
         let now = Instant::now();
-        if now.duration_since(app_guard.last_retry_time).as_millis() < 200 {
+        if now
+            .duration_since(app_guard.session.last_retry_time)
+            .as_millis()
+            < 200
+        {
             return true;
         }
 
@@ -826,11 +834,11 @@ async fn handle_retry_shortcut(
             .map(|api_messages| {
                 let (cancel_token, stream_id) = app_guard.start_new_stream();
                 StreamParams {
-                    client: app_guard.client.clone(),
-                    base_url: app_guard.base_url.clone(),
-                    api_key: app_guard.api_key.clone(),
-                    provider_name: app_guard.provider_name.clone(),
-                    model: app_guard.model.clone(),
+                    client: app_guard.session.client.clone(),
+                    base_url: app_guard.session.base_url.clone(),
+                    api_key: app_guard.session.api_key.clone(),
+                    provider_name: app_guard.session.provider_name.clone(),
+                    model: app_guard.session.model.clone(),
                     api_messages,
                     cancel_token,
                     stream_id,
@@ -851,7 +859,7 @@ fn prepare_stream_params_for_message(
     term_width: u16,
     term_height: u16,
 ) -> StreamParams {
-    app_guard.auto_scroll = true;
+    app_guard.ui.auto_scroll = true;
     let (cancel_token, stream_id) = app_guard.start_new_stream();
     let api_messages = app_guard.add_user_message(message);
     let input_area_height = app_guard.calculate_input_area_height(term_width);
@@ -859,11 +867,11 @@ fn prepare_stream_params_for_message(
     app_guard.update_scroll_position(available_height, term_width);
 
     StreamParams {
-        client: app_guard.client.clone(),
-        base_url: app_guard.base_url.clone(),
-        api_key: app_guard.api_key.clone(),
-        provider_name: app_guard.provider_name.clone(),
-        model: app_guard.model.clone(),
+        client: app_guard.session.client.clone(),
+        base_url: app_guard.session.base_url.clone(),
+        api_key: app_guard.session.api_key.clone(),
+        provider_name: app_guard.session.provider_name.clone(),
+        model: app_guard.session.model.clone(),
         api_messages,
         cancel_token,
         stream_id,
@@ -882,7 +890,7 @@ async fn handle_picker_key_event(
 ) {
     let mut app_guard = app.lock().await;
     let current_picker_mode = app_guard.current_picker_mode();
-    let provider_name = app_guard.provider_name.clone();
+    let provider_name = app_guard.session.provider_name.clone();
     let mut should_request_redraw = false;
 
     let selection = if let Some(picker) = app_guard.picker_state_mut() {
@@ -894,28 +902,28 @@ async fn handle_picker_key_event(
                         app_guard.close_picker();
                     }
                     Some(crate::core::app::PickerMode::Model) => {
-                        if app_guard.startup_requires_model {
+                        if app_guard.picker.startup_requires_model {
                             // Startup mandatory model selection
                             app_guard.close_picker();
-                            if app_guard.startup_multiple_providers_available {
+                            if app_guard.picker.startup_multiple_providers_available {
                                 // Go back to provider picker per spec
-                                app_guard.startup_requires_model = false;
-                                app_guard.startup_requires_provider = true;
+                                app_guard.picker.startup_requires_model = false;
+                                app_guard.picker.startup_requires_provider = true;
                                 // Clear provider selection in title bar during startup bounce-back
-                                app_guard.provider_name.clear();
-                                app_guard.provider_display_name =
+                                app_guard.session.provider_name.clear();
+                                app_guard.session.provider_display_name =
                                     "(no provider selected)".to_string();
-                                app_guard.api_key.clear();
-                                app_guard.base_url.clear();
+                                app_guard.session.api_key.clear();
+                                app_guard.session.base_url.clear();
                                 app_guard.open_provider_picker();
                                 should_request_redraw = true;
                             } else {
                                 // Exit app if no alternative provider
-                                app_guard.exit_requested = true;
+                                app_guard.ui.exit_requested = true;
                             }
                         } else {
                             app_guard.revert_model_preview();
-                            if app_guard.in_provider_model_transition {
+                            if app_guard.picker.in_provider_model_transition {
                                 app_guard.revert_provider_model_transition();
                                 app_guard.set_status("Selection cancelled");
                             }
@@ -923,10 +931,10 @@ async fn handle_picker_key_event(
                         }
                     }
                     Some(crate::core::app::PickerMode::Provider) => {
-                        if app_guard.startup_requires_provider {
+                        if app_guard.picker.startup_requires_provider {
                             // Startup mandatory provider selection: exit if cancelled
                             app_guard.close_picker();
-                            app_guard.exit_requested = true;
+                            app_guard.ui.exit_requested = true;
                         } else {
                             app_guard.revert_provider_preview();
                             app_guard.close_picker();
@@ -1024,7 +1032,7 @@ async fn handle_picker_key_event(
                     Some("__picker_handled__".to_string())
                 } else if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
                     if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let persist = is_persistent && !app_guard.startup_env_only;
+                        let persist = is_persistent && !app_guard.session.startup_env_only;
                         let res = if persist {
                             app_guard.apply_model_by_id_persistent(&id)
                         } else {
@@ -1038,11 +1046,11 @@ async fn handle_picker_key_event(
                                     id,
                                     status_suffix(persist)
                                 ));
-                                if app_guard.in_provider_model_transition {
+                                if app_guard.picker.in_provider_model_transition {
                                     app_guard.complete_provider_model_transition();
                                 }
-                                if app_guard.startup_requires_model {
-                                    app_guard.startup_requires_model = false;
+                                if app_guard.picker.startup_requires_model {
+                                    app_guard.picker.startup_requires_model = false;
                                 }
                             }
                             Err(e) => app_guard.set_status(format!("Model error: {}", e)),
@@ -1066,9 +1074,9 @@ async fn handle_picker_key_event(
                                 ));
                                 app_guard.close_picker();
                                 if should_open_model_picker {
-                                    if app_guard.startup_requires_provider {
-                                        app_guard.startup_requires_provider = false;
-                                        app_guard.startup_requires_model = true;
+                                    if app_guard.picker.startup_requires_provider {
+                                        app_guard.picker.startup_requires_provider = false;
+                                        app_guard.picker.startup_requires_model = true;
                                     }
                                     let app_clone = app.clone();
                                     let event_tx = event_tx.clone();
@@ -1113,7 +1121,7 @@ async fn handle_picker_key_event(
                     }
                     Some(crate::core::app::PickerMode::Model) => {
                         if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let persist = !app_guard.startup_env_only;
+                            let persist = !app_guard.session.startup_env_only;
                             let res = if persist {
                                 app_guard.apply_model_by_id_persistent(&id)
                             } else {
@@ -1127,11 +1135,11 @@ async fn handle_picker_key_event(
                                         id,
                                         status_suffix(persist)
                                     ));
-                                    if app_guard.in_provider_model_transition {
+                                    if app_guard.picker.in_provider_model_transition {
                                         app_guard.complete_provider_model_transition();
                                     }
-                                    if app_guard.startup_requires_model {
-                                        app_guard.startup_requires_model = false;
+                                    if app_guard.picker.startup_requires_model {
+                                        app_guard.picker.startup_requires_model = false;
                                     }
                                 }
                                 Err(e) => app_guard.set_status(format!("Model error: {}", e)),
@@ -1369,7 +1377,7 @@ mod tests {
         dispatcher.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
 
         let mut app = setup_app();
-        app.messages.push_back(Message {
+        app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: String::new(),
         });
@@ -1378,8 +1386,8 @@ mod tests {
             handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
         }
 
-        assert_eq!(app.current_response, "Hello");
-        assert_eq!(app.messages.back().unwrap().content, "Hello");
+        assert_eq!(app.ui.current_response, "Hello");
+        assert_eq!(app.ui.messages.back().unwrap().content, "Hello");
     }
 
     #[test]
@@ -1387,7 +1395,7 @@ mod tests {
         let chunks = ["Hello", " ", "world", "!\n"];
 
         let mut sequential_app = setup_app();
-        sequential_app.messages.push_back(Message {
+        sequential_app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: String::new(),
         });
@@ -1400,7 +1408,7 @@ mod tests {
         }
 
         let mut coalesced_app = setup_app();
-        coalesced_app.messages.push_back(Message {
+        coalesced_app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: String::new(),
         });
@@ -1409,12 +1417,12 @@ mod tests {
         append_coalesced_chunk(&mut coalesced_app, aggregated, TERM_WIDTH, TERM_HEIGHT);
 
         assert_eq!(
-            coalesced_app.current_response,
-            sequential_app.current_response
+            coalesced_app.ui.current_response,
+            sequential_app.ui.current_response
         );
         assert_eq!(
-            coalesced_app.messages.back().unwrap().content,
-            sequential_app.messages.back().unwrap().content
+            coalesced_app.ui.messages.back().unwrap().content,
+            sequential_app.ui.messages.back().unwrap().content
         );
     }
 
@@ -1424,14 +1432,14 @@ mod tests {
         dispatcher.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
 
         let mut app = setup_app();
-        app.is_streaming = true;
+        app.ui.is_streaming = true;
 
         while let Ok((message, _)) = rx.try_recv() {
             handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
         }
 
-        assert!(!app.is_streaming);
-        let last_message = app.messages.back().expect("system message added");
+        assert!(!app.ui.is_streaming);
+        let last_message = app.ui.messages.back().expect("system message added");
         assert_eq!(last_message.role, "system");
         assert_eq!(last_message.content, "Error: api failure");
     }
@@ -1442,15 +1450,15 @@ mod tests {
         dispatcher.send_for_test(StreamMessage::End, 3);
 
         let mut app = setup_app();
-        app.is_streaming = true;
-        app.retrying_message_index = Some(0);
-        app.current_response = "partial".into();
+        app.ui.is_streaming = true;
+        app.session.retrying_message_index = Some(0);
+        app.ui.current_response = "partial".into();
 
         while let Ok((message, _)) = rx.try_recv() {
             handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
         }
 
-        assert!(!app.is_streaming);
-        assert!(app.retrying_message_index.is_none());
+        assert!(!app.ui.is_streaming);
+        assert!(app.session.retrying_message_index.is_none());
     }
 }

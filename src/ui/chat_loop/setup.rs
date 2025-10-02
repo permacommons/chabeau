@@ -79,8 +79,8 @@ pub async fn bootstrap_app(
         ));
         {
             let mut app_guard = app.lock().await;
-            app_guard.startup_requires_provider = true;
-            app_guard.startup_multiple_providers_available = multiple_providers_available;
+            app_guard.picker.startup_requires_provider = true;
+            app_guard.picker.startup_multiple_providers_available = multiple_providers_available;
             app_guard.open_provider_picker();
         }
         app
@@ -118,16 +118,16 @@ pub async fn bootstrap_app(
         let mut need_model_picker = false;
         {
             let app_guard = app.lock().await;
-            if app_guard.model.is_empty() {
+            if app_guard.session.model.is_empty() {
                 need_model_picker = true;
             }
         }
         if need_model_picker {
             let mut app_guard = app.lock().await;
-            app_guard.startup_requires_model = true;
-            app_guard.startup_multiple_providers_available = multiple_providers_available;
+            app_guard.picker.startup_requires_model = true;
+            app_guard.picker.startup_multiple_providers_available = multiple_providers_available;
             let env_only = has_env_openai && token_providers.is_empty();
-            app_guard.startup_env_only = env_only;
+            app_guard.session.startup_env_only = env_only;
             if let Err(e) = app_guard.open_model_picker().await {
                 app_guard.set_status(format!("Model picker error: {}", e));
             }

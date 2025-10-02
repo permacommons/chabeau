@@ -12,7 +12,7 @@ use ratatui::{
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     // Paint full-frame background based on theme to ensure readable contrast
-    let bg_block = Block::default().style(Style::default().bg(app.theme.background_color));
+    let bg_block = Block::default().style(Style::default().bg(app.ui.theme.background_color));
     f.render_widget(bg_block, f.area());
 
     // Calculate dynamic input area height based on content
@@ -37,24 +37,24 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     } else if app.in_edit_select_mode() {
         let highlight = Style::default();
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
-            &app.messages,
-            &app.theme,
+            &app.ui.messages,
+            &app.ui.theme,
             app.selected_user_message_index(),
             highlight,
-            app.markdown_enabled,
-            app.syntax_enabled,
+            app.ui.markdown_enabled,
+            app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
         );
         (layout.lines, layout.span_metadata)
     } else if app.in_block_select_mode() {
         let highlight = Style::default().add_modifier(Modifier::BOLD);
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_codeblock_highlight_and_flags_and_width(
-            &app.messages,
-            &app.theme,
+            &app.ui.messages,
+            &app.ui.theme,
             app.selected_block_index(),
             highlight,
-            app.markdown_enabled,
-            app.syntax_enabled,
+            app.ui.markdown_enabled,
+            app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
         );
         (layout.lines, layout.span_metadata)
@@ -73,11 +73,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         0
     };
     // Clamp the user-controlled scroll offset
-    let scroll_offset = app.scroll_offset.min(max_offset);
+    let scroll_offset = app.ui.scroll_offset.min(max_offset);
 
     // Create enhanced title with version, provider, model name and logging status
     let title_text = build_main_title(app);
-    let block = Block::default().title(Span::styled(title_text, app.theme.title_style));
+    let block = Block::default().title(Span::styled(title_text, app.ui.theme.title_style));
     let inner_area = block.inner(chunks[0]);
     let picker_active = app.picker_state().is_some();
 
@@ -95,9 +95,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 
     let messages_paragraph = Paragraph::new(messages_lines)
-        .style(Style::default().bg(app.theme.background_color))
+        .style(Style::default().bg(app.ui.theme.background_color))
         .block(block)
-        .scroll((scroll_offset, app.horizontal_scroll_offset));
+        .scroll((scroll_offset, app.ui.horizontal_scroll_offset));
 
     f.render_widget(messages_paragraph, chunks[0]);
 
@@ -109,7 +109,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             &lines,
             &span_metadata,
             scroll_offset as usize,
-            app.horizontal_scroll_offset,
+            app.ui.horizontal_scroll_offset,
         );
         set_render_state(state);
     }
@@ -117,8 +117,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     // Input area takes full width
 
     // Pulsing indicator rendered in the title for simplicity
-    let indicator = if app.is_streaming {
-        let elapsed = app.pulse_start.elapsed().as_millis() as f32 / 1000.0;
+    let indicator = if app.ui.is_streaming {
+        let elapsed = app.ui.pulse_start.elapsed().as_millis() as f32 / 1000.0;
         let phase = (elapsed * 2.0) % 2.0;
         if phase < 0.33 {
             "○"
@@ -153,9 +153,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
     } else if app.in_place_edit_index().is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
-    } else if app.compose_mode {
+    } else if app.ui.compose_mode {
         "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
-    } else if app.is_streaming {
+    } else if app.ui.is_streaming {
         "Type a new message (Esc=interrupt • Ctrl+R=retry)"
     } else {
         "Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)"
@@ -164,19 +164,22 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let input_title: Line = if indicator.is_empty() {
         Line::from(Span::styled(
             base_title.to_string(),
-            app.theme.input_title_style,
+            app.ui.theme.input_title_style,
         ))
     } else {
         Line::from(vec![
-            Span::styled(base_title.to_string(), app.theme.input_title_style),
+            Span::styled(base_title.to_string(), app.ui.theme.input_title_style),
             Span::raw(" "), // 1 space before indicator
-            Span::styled(indicator.to_string(), app.theme.streaming_indicator_style),
+            Span::styled(
+                indicator.to_string(),
+                app.ui.theme.streaming_indicator_style,
+            ),
             Span::raw("  "), // 2 spaces after indicator for a bit more padding
         ])
     };
 
     // Prepare optional bottom-right status message, shortened and right-aligned
-    let status_bottom: Option<Line> = if let Some(status) = &app.status {
+    let status_bottom: Option<Line> = if let Some(status) = &app.ui.status {
         // Limit to available width minus borders and a small margin
         let input_area_width = chunks[1].width;
         let inner_width = input_area_width.saturating_sub(2) as usize; // exclude borders
@@ -209,12 +212,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     || s.contains("cancelled")
             };
             let base_style = if is_error {
-                app.theme.error_text_style
+                app.ui.theme.error_text_style
             } else {
-                app.theme.system_text_style
+                app.ui.theme.system_text_style
             };
             // Build a brief highlight effect: flash brighter then dim (same timing as success)
-            let style = if let Some(set_at) = app.status_set_at {
+            let style = if let Some(set_at) = app.ui.status_set_at {
                 let ms = set_at.elapsed().as_millis() as u64;
                 if ms < 300 {
                     // brief highlight: bold the base style
@@ -238,10 +241,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 String::new()
             };
             let line = Line::from(vec![
-                Span::styled(left_border, app.theme.input_border_style),
-                Span::styled(" ", app.theme.input_border_style),
+                Span::styled(left_border, app.ui.theme.input_border_style),
+                Span::styled(" ", app.ui.theme.input_border_style),
                 Span::styled(text_raw.clone(), style),
-                Span::styled(" ", app.theme.input_border_style),
+                Span::styled(" ", app.ui.theme.input_border_style),
             ]);
             Some(line)
         }
@@ -252,8 +255,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     // Render border/title and the textarea inside
     let mut input_block = Block::default()
         .borders(Borders::ALL)
-        .style(Style::default().bg(app.theme.background_color))
-        .border_style(app.theme.input_border_style)
+        .style(Style::default().bg(app.ui.theme.background_color))
+        .border_style(app.ui.theme.input_border_style)
         .title(input_title);
     if let Some(bottom) = status_bottom {
         input_block = input_block.title_bottom(bottom);
@@ -270,12 +273,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let wrapped_text = TextWrapper::wrap_text(app.get_input_text(), &config);
     let paragraph = Paragraph::new(wrapped_text)
         .style(
-            app.theme
+            app.ui
+                .theme
                 .input_text_style
-                .patch(Style::default().bg(app.theme.background_color)),
+                .patch(Style::default().bg(app.ui.theme.background_color)),
         )
         .wrap(Wrap { trim: false })
-        .scroll((app.input_scroll_offset, 0));
+        .scroll((app.ui.input_scroll_offset, 0));
     f.render_widget(paragraph, inner);
 
     // Set cursor based on wrapped text and linear cursor position
@@ -283,10 +287,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     if app.is_input_active() && available_width > 0 && app.picker_session().is_none() {
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
             app.get_input_text(),
-            app.input_cursor_position,
+            app.ui.input_cursor_position,
             &config,
         );
-        let visible_line = (line as u16).saturating_sub(app.input_scroll_offset);
+        let visible_line = (line as u16).saturating_sub(app.ui.input_scroll_offset);
         if visible_line < inner.height {
             let cursor_x = inner.x.saturating_add(col as u16);
             let cursor_y = inner.y.saturating_add(visible_line);
@@ -301,14 +305,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         // Clear any content under the modal
         f.render_widget(Clear, area);
         // Paint modal background consistent with theme
-        let modal_bg = Block::default().style(Style::default().bg(app.theme.background_color));
+        let modal_bg = Block::default().style(Style::default().bg(app.ui.theme.background_color));
         f.render_widget(modal_bg, area);
 
         // Outer bordered block with title
         let modal_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(app.theme.input_border_style)
-            .title(Span::styled(&picker.title, app.theme.title_style));
+            .border_style(app.ui.theme.input_border_style)
+            .title(Span::styled(&picker.title, app.ui.theme.title_style));
         let content_area = modal_block.inner(area); // create padding space inside borders
         f.render_widget(modal_block, area);
         // Split space to show list + metadata footer + help (2 lines)
@@ -332,15 +336,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .map(|it| {
                 ListItem::new(Line::from(Span::styled(
                     it.label.clone(),
-                    app.theme.assistant_text_style,
+                    app.ui.theme.assistant_text_style,
                 )))
             })
             .collect();
 
         let list = List::new(items)
-            .style(Style::default().bg(app.theme.background_color))
+            .style(Style::default().bg(app.ui.theme.background_color))
             .highlight_style(
-                app.theme
+                app.ui
+                    .theme
                     .streaming_indicator_style
                     .add_modifier(Modifier::BOLD | Modifier::REVERSED),
             )
@@ -354,7 +359,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .unwrap_or("No metadata available");
         let metadata = Paragraph::new(Span::styled(
             metadata_text,
-            app.theme
+            app.ui
+                .theme
                 .system_text_style
                 .add_modifier(ratatui::style::Modifier::DIM),
         ));
@@ -362,21 +368,21 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         // Generate help text for picker
         let help_text = generate_picker_help_text(app);
-        let help = Paragraph::new(help_text.as_str()).style(app.theme.system_text_style);
+        let help = Paragraph::new(help_text.as_str()).style(app.ui.theme.system_text_style);
         f.render_widget(help, help_area);
     }
 }
 
 fn build_main_title(app: &App) -> String {
-    let model_display = if app.in_provider_model_transition || app.model.is_empty() {
+    let model_display = if app.picker.in_provider_model_transition || app.session.model.is_empty() {
         "no model selected".to_string()
     } else {
-        app.model.clone()
+        app.session.model.clone()
     };
-    let provider_display = if app.provider_display_name.trim().is_empty() {
+    let provider_display = if app.session.provider_display_name.trim().is_empty() {
         "(no provider selected)".to_string()
     } else {
-        app.provider_display_name.clone()
+        app.session.provider_display_name.clone()
     };
     format!(
         "Chabeau v{} - {} ({}) • Logging: {}",
@@ -426,7 +432,7 @@ fn generate_picker_help_text(app: &App) -> String {
     };
 
     // Suppress persistent save option during env-only startup model selection
-    let show_persist = !(app.startup_env_only
+    let show_persist = !(app.session.startup_env_only
         && app.current_picker_mode() == Some(crate::core::app::PickerMode::Model));
     if show_persist {
         format!("{}\nEnter=This session • Alt+Enter=As default", first_line)
@@ -504,7 +510,7 @@ mod tests {
         has_dates: bool,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
@@ -523,7 +529,7 @@ mod tests {
         selected: usize,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Theme,
             state: picker_state,
             data: PickerData::Theme(ThemePickerState {
@@ -542,7 +548,7 @@ mod tests {
         selected: usize,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker_session = Some(PickerSession {
+        app.picker.picker_session = Some(PickerSession {
             mode: PickerMode::Provider,
             state: picker_state,
             data: PickerData::Provider(ProviderPickerState {
@@ -556,9 +562,9 @@ mod tests {
     #[test]
     fn title_shows_no_model_selected_during_transition() {
         let mut app = create_test_app();
-        app.provider_display_name = "Cerebras".to_string();
-        app.model = "foo-model".to_string();
-        app.in_provider_model_transition = true;
+        app.session.provider_display_name = "Cerebras".to_string();
+        app.session.model = "foo-model".to_string();
+        app.picker.in_provider_model_transition = true;
 
         let title = build_main_title(&app);
         assert!(title.contains("(no model selected)"));
@@ -568,9 +574,9 @@ mod tests {
     #[test]
     fn title_shows_model_when_not_in_transition() {
         let mut app = create_test_app();
-        app.provider_display_name = "Cerebras".to_string();
-        app.model = "foo-model".to_string();
-        app.in_provider_model_transition = false;
+        app.session.provider_display_name = "Cerebras".to_string();
+        app.session.model = "foo-model".to_string();
+        app.picker.in_provider_model_transition = false;
 
         let title = build_main_title(&app);
         assert!(title.contains("foo-model"));

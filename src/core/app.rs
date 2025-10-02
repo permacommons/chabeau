@@ -126,6 +126,13 @@ impl PickerSession {
     }
 }
 
+fn theme_from_detected_appearance(appearance: Option<Appearance>) -> Theme {
+    match appearance {
+        Some(Appearance::Light) => Theme::light(),
+        Some(Appearance::Dark) | None => Theme::dark_default(),
+    }
+}
+
 pub struct App {
     pub messages: VecDeque<Message>,
     pub input: String,
@@ -418,11 +425,7 @@ impl App {
                     Theme::from_name(name)
                 }
             }
-            None => match detect_preferred_appearance() {
-                Some(Appearance::Light) => Theme::light(),
-                Some(Appearance::Dark) => Theme::dark_default(),
-                None => Theme::dark_default(),
-            },
+            None => theme_from_detected_appearance(detect_preferred_appearance()),
         };
 
         // Quantize theme colors for current terminal depth
@@ -2204,6 +2207,22 @@ mod tests {
     use super::*;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tui_textarea::{CursorMove, Input, Key};
+
+    #[test]
+    fn theme_from_detected_appearance_prefers_light_theme() {
+        let theme = theme_from_detected_appearance(Some(Appearance::Light));
+        assert_eq!(theme.background_color, Theme::light().background_color);
+    }
+
+    #[test]
+    fn theme_from_detected_appearance_defaults_to_dark() {
+        let expected_background = Theme::dark_default().background_color;
+        let dark_theme = theme_from_detected_appearance(Some(Appearance::Dark));
+        let fallback_theme = theme_from_detected_appearance(None);
+
+        assert_eq!(dark_theme.background_color, expected_background);
+        assert_eq!(fallback_theme.background_color, expected_background);
+    }
 
     #[test]
     fn theme_picker_highlights_active_theme_over_default() {

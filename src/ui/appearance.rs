@@ -1,21 +1,8 @@
-#[cfg(test)]
-use crate::ui::theme::Theme;
-
 /// Preferred appearance used to choose a default theme when none is set
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
     Light,
     Dark,
-}
-
-#[cfg(test)]
-impl Appearance {
-    pub fn to_theme(self) -> Theme {
-        match self {
-            Appearance::Light => Theme::light(),
-            Appearance::Dark => Theme::dark_default(),
-        }
-    }
 }
 
 /// Try to detect the preferred appearance via OS-level app theme preference.
@@ -108,16 +95,5 @@ fn detect_via_os_hint() -> Option<Appearance> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn appearance_to_theme_rounds() {
-        let _ = Appearance::Light.to_theme();
-        let _ = Appearance::Dark.to_theme();
     }
 }

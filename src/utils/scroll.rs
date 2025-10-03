@@ -9,7 +9,8 @@ use ratatui::{
     text::Span,
 };
 use std::collections::VecDeque;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Handles all scroll-related calculations and line building
 pub struct ScrollCalculator;
@@ -86,7 +87,7 @@ impl ScrollCalculator {
             let mut emitted_any = false;
 
             // Current word accumulated as styled segments
-            let mut word_segs: Vec<(Vec<char>, ratatui::style::Style, SpanKind)> =
+            let mut word_segs: Vec<(String, usize, ratatui::style::Style, SpanKind)> =
                 Vec::with_capacity(line.spans.len() + 4);
             let mut word_len: usize = 0;
 
@@ -118,9 +119,9 @@ impl ScrollCalculator {
                               out_metadata: &mut Vec<Vec<SpanKind>>,
                               out_len: &mut usize,
                               emitted_any: &mut bool,
-                              word_segs: &mut Vec<(Vec<char>, Style, SpanKind)>,
+                              word_segs: &mut Vec<(String, usize, Style, SpanKind)>,
                               word_len: &mut usize| {
-                if *word_len == 0 {
+                if word_segs.is_empty() {
                     return;
                 }
                 if *out_len > 0 && *out_len + *word_len > width {
@@ -134,37 +135,35 @@ impl ScrollCalculator {
                     *out_len = 0;
                 }
 
-                let mut seg_idx = 0usize;
-                let mut seg_pos = 0usize;
-                let mut remaining = *word_len;
-                while remaining > 0 {
-                    let space_left = width.saturating_sub(*out_len);
-                    let take = remaining.min(space_left.max(1));
-                    let mut to_take = take;
-                    while to_take > 0 && seg_idx < word_segs.len() {
-                        let (seg_chars, seg_style, seg_kind) = &word_segs[seg_idx];
-                        let seg_rem = seg_chars.len().saturating_sub(seg_pos);
-                        let here = to_take.min(seg_rem);
-                        if here > 0 {
-                            let slice: String = seg_chars[seg_pos..seg_pos + here].iter().collect();
-                            append_run(
-                                collector_spans,
-                                collector_kinds,
-                                *seg_style,
-                                seg_kind.clone(),
-                                &slice,
-                            );
-                            *out_len += here;
-                            to_take -= here;
-                            seg_pos += here;
-                        }
-                        if seg_pos >= seg_chars.len() {
-                            seg_idx += 1;
-                            seg_pos = 0;
-                        }
+                let total = word_segs.len();
+                for (idx, (seg_text, seg_width, seg_style, seg_kind)) in
+                    word_segs.iter().enumerate()
+                {
+                    if *out_len > 0 && *seg_width > 0 && *out_len + *seg_width > width {
+                        Self::push_emitted_line(
+                            collector_spans,
+                            collector_kinds,
+                            out_lines,
+                            out_metadata,
+                        );
+                        *emitted_any = true;
+                        *out_len = 0;
                     }
-                    remaining -= take;
-                    if remaining > 0 {
+
+                    if !seg_text.is_empty() {
+                        append_run(
+                            collector_spans,
+                            collector_kinds,
+                            *seg_style,
+                            seg_kind.clone(),
+                            seg_text,
+                        );
+                    }
+                    if *seg_width > 0 {
+                        *out_len += *seg_width;
+                    }
+
+                    if idx + 1 < total && *out_len >= width {
                         Self::push_emitted_line(
                             collector_spans,
                             collector_kinds,
@@ -186,10 +185,11 @@ impl ScrollCalculator {
                     .cloned()
                     .unwrap_or(SpanKind::Text);
 
-                for ch in s.content.chars() {
-                    let is_plain_space = ch == ' ';
+                for grapheme in s.content.graphemes(true) {
+                    let is_plain_space = grapheme == " ";
+                    let is_whitespace_grapheme = grapheme.chars().all(|c| c.is_whitespace());
                     let is_link_break_space =
-                        span_kind.is_link() && ch.is_whitespace() && !is_plain_space;
+                        span_kind.is_link() && is_whitespace_grapheme && !is_plain_space;
 
                     if is_plain_space || is_link_break_space {
                         flush_word(
@@ -203,14 +203,12 @@ impl ScrollCalculator {
                             &mut word_len,
                         );
 
-                        let space_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+                        let space_width = UnicodeWidthStr::width(grapheme);
                         if space_width == 0 {
                             continue;
                         }
 
                         if cur_len + space_width <= width {
-                            let mut buf = [0u8; 4];
-                            let piece = ch.encode_utf8(&mut buf);
                             let kind_for_space = if span_kind.is_link() {
                                 span_kind.clone()
                             } else {
@@ -221,7 +219,7 @@ impl ScrollCalculator {
                                 &mut cur_kinds,
                                 s.style,
                                 kind_for_space,
-                                piece,
+                                grapheme,
                             );
                             cur_len += space_width;
                         } else {
@@ -236,16 +234,14 @@ impl ScrollCalculator {
                         }
                         continue;
                     } else {
-                        if let Some((last_text, last_style, last_kind)) = word_segs.last_mut() {
-                            if *last_style == s.style && *last_kind == span_kind {
-                                last_text.push(ch);
-                            } else {
-                                word_segs.push((vec![ch], s.style, span_kind.clone()));
-                            }
-                        } else {
-                            word_segs.push((vec![ch], s.style, span_kind.clone()));
-                        }
-                        word_len += 1;
+                        let grapheme_width = UnicodeWidthStr::width(grapheme);
+                        word_segs.push((
+                            grapheme.to_string(),
+                            grapheme_width,
+                            s.style,
+                            span_kind.clone(),
+                        ));
+                        word_len += grapheme_width;
                     }
                 }
             }
@@ -768,6 +764,7 @@ mod tests {
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
     use std::time::Instant;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn test_build_display_lines_basic() {
@@ -955,6 +952,59 @@ mod tests {
         let rendered: Vec<String> = wrapped.into_iter().map(|l| l.to_string()).collect();
 
         assert_eq!(rendered, vec!["Rust\u{00A0}", "programming ", "language"]);
+    }
+
+    #[test]
+    fn test_prewrap_wide_emoji_respects_width() {
+        let style = Style::default();
+        let content = "😀😀😀😀😀";
+        let line = Line::from(vec![Span::styled(content, style)]);
+
+        let (wrapped, _) = ScrollCalculator::prewrap_lines_with_metadata(&[line], None, 4);
+
+        for (idx, line) in wrapped.iter().enumerate() {
+            let width: usize = line
+                .spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum();
+            assert!(
+                width <= 4,
+                "Line {} exceeded width: {} > 4 (content: {:?})",
+                idx,
+                width,
+                line.to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn test_prewrap_zwj_sequence_respects_width() {
+        let style = Style::default();
+        let content = "👨‍👩‍👧‍👦👨‍👩‍👧‍👦👨‍👩‍👧‍👦";
+        let line = Line::from(vec![Span::styled(content, style)]);
+
+        let (wrapped, _) = ScrollCalculator::prewrap_lines_with_metadata(&[line], None, 4);
+
+        assert!(
+            wrapped.len() > 1,
+            "Expected wrapped output for clustered emoji"
+        );
+
+        for (idx, line) in wrapped.iter().enumerate() {
+            let width: usize = line
+                .spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum();
+            assert!(
+                width <= 4,
+                "Line {} exceeded width: {} > 4 (content: {:?})",
+                idx,
+                width,
+                line.to_string()
+            );
+        }
     }
 
     #[test]

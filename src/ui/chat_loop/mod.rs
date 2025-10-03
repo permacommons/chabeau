@@ -9,7 +9,7 @@ mod stream;
 
 use self::keybindings::{
     build_mode_aware_registry, scroll_block_into_view, wrap_next_index, wrap_previous_index,
-    KeyContext, KeyLoopAction, KeyResult,
+    KeyContext, KeyLoopAction, KeyResult, ModeAwareRegistry,
 };
 
 use self::setup::bootstrap_app;
@@ -27,7 +27,7 @@ use ratatui::crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::Terminal;
+use ratatui::{prelude::Size, Terminal};
 use std::{
     error::Error,
     io,
@@ -35,6 +35,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex};
+
+type SharedTerminal = Arc<Mutex<Terminal<OscBackend<io::Stdout>>>>;
 
 #[derive(Debug)]
 pub enum UiEvent {
@@ -75,6 +77,235 @@ fn status_suffix(is_persistent: bool) -> &'static str {
     } else {
         " (session only)"
     }
+}
+
+async fn is_exit_requested(app: &Arc<Mutex<App>>) -> bool {
+    let app_guard = app.lock().await;
+    app_guard.ui.exit_requested
+}
+
+async fn current_terminal_size(terminal: &SharedTerminal) -> Size {
+    let terminal_guard = terminal.lock().await;
+    terminal_guard.size().unwrap_or_default()
+}
+
+async fn try_draw_frame(
+    app: &Arc<Mutex<App>>,
+    terminal: &SharedTerminal,
+    request_redraw: &mut bool,
+    last_draw: &mut Instant,
+    frame_duration: Duration,
+) -> io::Result<()> {
+    if !*request_redraw {
+        return Ok(());
+    }
+
+    let now = Instant::now();
+    if now.duration_since(*last_draw) < frame_duration {
+        return Ok(());
+    }
+
+    let mut app_guard = app.lock().await;
+    let mut terminal_guard = terminal.lock().await;
+    terminal_guard.draw(|f| ui(f, &mut app_guard))?;
+    *last_draw = now;
+    *request_redraw = false;
+    Ok(())
+}
+
+struct EventProcessingOutcome {
+    events_processed: bool,
+    request_redraw: bool,
+    exit_requested: bool,
+}
+
+async fn process_ui_events(
+    app: &Arc<Mutex<App>>,
+    event_rx: &mut mpsc::UnboundedReceiver<UiEvent>,
+    mode_registry: &ModeAwareRegistry,
+    term_size: Size,
+    last_input_layout_update: &mut Instant,
+) -> Result<EventProcessingOutcome, Box<dyn Error>> {
+    let mut outcome = EventProcessingOutcome {
+        events_processed: false,
+        request_redraw: false,
+        exit_requested: false,
+    };
+
+    while let Ok(ev) = event_rx.try_recv() {
+        outcome.events_processed = true;
+        match ev {
+            UiEvent::RequestRedraw => {
+                outcome.request_redraw = true;
+            }
+            UiEvent::Crossterm(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                let keyboard_outcome = route_keyboard_event(
+                    app,
+                    mode_registry,
+                    key,
+                    term_size,
+                    last_input_layout_update,
+                )
+                .await?;
+                if keyboard_outcome.exit_requested {
+                    outcome.exit_requested = true;
+                    outcome.request_redraw = true;
+                    break;
+                }
+                if keyboard_outcome.request_redraw {
+                    outcome.request_redraw = true;
+                }
+            }
+            UiEvent::Crossterm(Event::Paste(text)) => {
+                handle_paste_event(app, term_size.width, text, last_input_layout_update).await;
+                outcome.request_redraw = true;
+            }
+            UiEvent::Crossterm(Event::Resize(_, _)) => {
+                outcome.request_redraw = true;
+            }
+            UiEvent::Crossterm(_) => {}
+        }
+    }
+
+    if outcome.events_processed {
+        outcome.request_redraw = true;
+    }
+
+    Ok(outcome)
+}
+
+struct KeyboardEventOutcome {
+    request_redraw: bool,
+    exit_requested: bool,
+}
+
+async fn route_keyboard_event(
+    app: &Arc<Mutex<App>>,
+    mode_registry: &ModeAwareRegistry,
+    key: event::KeyEvent,
+    term_size: Size,
+    last_input_layout_update: &mut Instant,
+) -> Result<KeyboardEventOutcome, Box<dyn Error>> {
+    let context = {
+        let app_guard = app.lock().await;
+        let picker_open = app_guard.model_picker_state().is_some()
+            || app_guard.theme_picker_state().is_some()
+            || app_guard.provider_picker_state().is_some();
+        KeyContext::from_ui_mode(&app_guard.ui.mode, picker_open)
+    };
+
+    if mode_registry.should_handle_as_text_input(&key, &context) {
+        let mut app_guard = app.lock().await;
+        app_guard
+            .ui
+            .apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                ta.input(tui_textarea::Input::from(key));
+            });
+        return Ok(KeyboardEventOutcome {
+            request_redraw: true,
+            exit_requested: false,
+        });
+    }
+
+    let registry_result = mode_registry
+        .handle_key_event(
+            app,
+            &key,
+            context,
+            term_size.width,
+            term_size.height,
+            Some(*last_input_layout_update),
+        )
+        .await;
+
+    if let Some(updated_time) = registry_result.updated_layout_time {
+        *last_input_layout_update = updated_time;
+    }
+
+    let outcome = match registry_result.result {
+        KeyResult::Exit => KeyboardEventOutcome {
+            request_redraw: true,
+            exit_requested: true,
+        },
+        KeyResult::Continue | KeyResult::Handled => KeyboardEventOutcome {
+            request_redraw: true,
+            exit_requested: false,
+        },
+        KeyResult::NotHandled => KeyboardEventOutcome {
+            request_redraw: false,
+            exit_requested: false,
+        },
+    };
+
+    Ok(outcome)
+}
+
+async fn handle_paste_event(
+    app: &Arc<Mutex<App>>,
+    term_width: u16,
+    text: String,
+    last_input_layout_update: &mut Instant,
+) {
+    let mut app_guard = app.lock().await;
+    let sanitized_text = text
+        .replace('\t', "    ")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|&c| c == '\n' || !c.is_control())
+        .collect::<String>();
+    app_guard
+        .ui
+        .apply_textarea_edit_and_recompute(term_width, |ta| {
+            ta.insert_str(&sanitized_text);
+        });
+    *last_input_layout_update = Instant::now();
+}
+
+async fn process_stream_updates(
+    app: &Arc<Mutex<App>>,
+    rx: &mut mpsc::UnboundedReceiver<(StreamMessage, u64)>,
+    term_width: u16,
+    term_height: u16,
+) -> bool {
+    let current_stream_id = {
+        let app_guard = app.lock().await;
+        app_guard.session.current_stream_id
+    };
+
+    let mut received_any = false;
+    let mut coalesced_chunks = String::new();
+    let mut marker_messages = Vec::new();
+
+    while let Ok((message, msg_stream_id)) = rx.try_recv() {
+        if msg_stream_id != current_stream_id {
+            continue;
+        }
+
+        match message {
+            StreamMessage::Chunk(content) => {
+                coalesced_chunks.push_str(&content);
+            }
+            StreamMessage::Error(err) => {
+                marker_messages.push(StreamMessage::Error(err));
+            }
+            StreamMessage::End => marker_messages.push(StreamMessage::End),
+        }
+
+        received_any = true;
+    }
+
+    if !received_any {
+        return false;
+    }
+
+    let mut app_guard = app.lock().await;
+    let chunk = std::mem::take(&mut coalesced_chunks);
+    append_coalesced_chunk(&mut app_guard, chunk, term_width, term_height);
+    for message in marker_messages {
+        handle_stream_message(&mut app_guard, message, term_width, term_height);
+    }
+
+    true
 }
 
 pub async fn run_chat(
@@ -148,174 +379,48 @@ pub async fn run_chat(
 
     // Main loop
     let result = 'main_loop: loop {
-        // Check if we need to exit
-        {
-            let app_guard = app.lock().await;
-            if app_guard.ui.exit_requested {
-                break 'main_loop Ok(());
-            }
+        if is_exit_requested(&app).await {
+            break 'main_loop Ok(());
         }
 
-        // Only draw if we need to redraw and enough time has passed since last draw
-        let now = Instant::now();
-        let should_draw = request_redraw && (now.duration_since(last_draw) >= frame_duration);
+        try_draw_frame(
+            &app,
+            &terminal,
+            &mut request_redraw,
+            &mut last_draw,
+            frame_duration,
+        )
+        .await?;
 
-        if should_draw {
-            {
-                let mut app_guard = app.lock().await;
-                let mut terminal_guard = terminal.lock().await;
-                terminal_guard.draw(|f| ui(f, &mut app_guard))?;
-            }
-            last_draw = now;
-            request_redraw = false;
-        }
-        // Cache terminal size for this tick
-        let term_size = {
-            let terminal_guard = terminal.lock().await;
-            terminal_guard.size().unwrap_or_default()
-        };
+        let term_size = current_terminal_size(&terminal).await;
 
-        // Handle events from async queue
-        let mut events_processed = false;
-        while let Ok(ev) = event_rx.try_recv() {
-            events_processed = true;
-            match ev {
-                UiEvent::RequestRedraw => {
-                    request_redraw = true;
-                    continue;
-                }
-                UiEvent::Crossterm(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    // Determine the current context based on app state
-                    let context = {
-                        let app_guard = app.lock().await;
-                        let picker_open = app_guard.model_picker_state().is_some()
-                            || app_guard.theme_picker_state().is_some()
-                            || app_guard.provider_picker_state().is_some();
-                        KeyContext::from_ui_mode(&app_guard.ui.mode, picker_open)
-                    };
+        let event_outcome = process_ui_events(
+            &app,
+            &mut event_rx,
+            &mode_registry,
+            term_size,
+            &mut last_input_layout_update,
+        )
+        .await?;
 
-                    // Smart routing: check if this should be handled as text input first
-                    if mode_registry.should_handle_as_text_input(&key, &context) {
-                        // Direct text input - bypass registry and go straight to tui-textarea
-                        let mut app_guard = app.lock().await;
-                        app_guard
-                            .ui
-                            .apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                                ta.input(tui_textarea::Input::from(key));
-                            });
-                        request_redraw = true;
-                        continue;
-                    }
-
-                    // Use mode-aware registry for discrete actions
-                    let registry_result = mode_registry
-                        .handle_key_event(
-                            &app,
-                            &key,
-                            context.clone(),
-                            term_size.width,
-                            term_size.height,
-                            Some(last_input_layout_update),
-                        )
-                        .await;
-
-                    // Update the layout time if it was modified
-                    if let Some(updated_time) = registry_result.updated_layout_time {
-                        last_input_layout_update = updated_time;
-                    }
-
-                    // Handle registry results
-                    match registry_result.result {
-                        KeyResult::Exit => break 'main_loop Ok(()),
-                        KeyResult::Continue | KeyResult::Handled => {
-                            request_redraw = true;
-                            continue;
-                        }
-                        KeyResult::NotHandled => {
-                            // Key not handled by registry - silently ignore
-                        }
-                    }
-                }
-                UiEvent::Crossterm(Event::Paste(text)) => {
-                    // Handle paste events - sanitize and add the pasted text to input
-                    let mut app_guard = app.lock().await;
-
-                    // Sanitize the pasted text to prevent TUI corruption
-                    // Convert tabs to spaces and carriage returns to newlines
-                    let sanitized_text = text
-                        .replace('\t', "    ") // Convert tabs to 4 spaces
-                        .replace('\r', "\n") // Convert carriage returns to newlines
-                        .chars()
-                        .filter(|&c| {
-                            // Allow printable characters and newlines, filter out other control characters
-                            c == '\n' || !c.is_control()
-                        })
-                        .collect::<String>();
-                    app_guard
-                        .ui
-                        .apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                            ta.insert_str(&sanitized_text);
-                        });
-                    last_input_layout_update = Instant::now();
-                    request_redraw = true;
-                }
-                UiEvent::Crossterm(Event::Resize(_, _)) => {
-                    // Terminal was resized, need to redraw
-                    request_redraw = true;
-                }
-
-                UiEvent::Crossterm(_) => {}
-            }
+        if event_outcome.exit_requested {
+            break 'main_loop Ok(());
         }
 
-        // Request redraw if we processed any events
-        if events_processed {
+        if event_outcome.request_redraw {
             request_redraw = true;
         }
 
-        // Handle streaming updates - drain all available messages
-        let mut received_any = false;
-        let mut coalesced_chunks = String::new();
-        let mut marker_messages = Vec::new();
+        let received_any =
+            process_stream_updates(&app, &mut rx, term_size.width, term_size.height).await;
 
-        while let Ok((message, msg_stream_id)) = rx.try_recv() {
-            let should_process = {
-                let app_guard = app.lock().await;
-                msg_stream_id == app_guard.session.current_stream_id
-            };
-
-            if !should_process {
-                continue;
-            }
-
-            match message {
-                StreamMessage::Chunk(content) => {
-                    coalesced_chunks.push_str(&content);
-                }
-                StreamMessage::Error(err) => {
-                    marker_messages.push(StreamMessage::Error(err));
-                }
-                StreamMessage::End => marker_messages.push(StreamMessage::End),
-            }
-
-            received_any = true;
-        }
-
-        if received_any {
-            let mut app_guard = app.lock().await;
-            let chunk = std::mem::take(&mut coalesced_chunks);
-            append_coalesced_chunk(&mut app_guard, chunk, term_size.width, term_size.height);
-            for message in marker_messages {
-                handle_stream_message(&mut app_guard, message, term_size.width, term_size.height);
-            }
-            drop(app_guard);
-        }
         if received_any {
             request_redraw = true;
         }
 
-        // If no events were processed and no redraw is needed, yield to prevent busy waiting
-        if !events_processed && !received_any && !request_redraw {
+        let idle = !event_outcome.events_processed && !received_any && !request_redraw;
+
+        if idle {
             tokio::time::sleep(Duration::from_millis(16)).await; // ~60 FPS when idle
         }
     };

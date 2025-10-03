@@ -34,9 +34,6 @@ Items are removed when completed.
   - Add integration-style tests for event handling if feasible (simulate key events) — [OPEN]
   - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
   - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
-- Reduce locking churn in `src/ui/chat_loop/mod.rs` — [OPEN]
-  - Extract focused handlers for drawing, keyboard routing, and stream dispatch so a mutable `App` borrow does not cross await points and to make event ordering easier to reason about — [OPEN]
-
 ### Medium priority
 
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]

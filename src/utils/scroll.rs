@@ -99,14 +99,14 @@ impl ScrollCalculator {
                 if text.is_empty() {
                     return;
                 }
-                if let Some(last) = collector_spans.last_mut() {
-                    if last.style == style && collector_kinds.last() == Some(&kind) {
-                        let mut combined = String::with_capacity(last.content.len() + text.len());
-                        combined.push_str(&last.content);
-                        combined.push_str(text);
-                        let st = last.style;
-                        *last = Span::styled(combined, st);
-                        return;
+                if let Some(last_kind) = collector_kinds.last() {
+                    if *last_kind == kind {
+                        if let Some(last_span) = collector_spans.last_mut() {
+                            if last_span.style == style {
+                                last_span.content.to_mut().push_str(text);
+                                return;
+                            }
+                        }
                     }
                 }
                 collector_spans.push(Span::styled(text.to_string(), style));

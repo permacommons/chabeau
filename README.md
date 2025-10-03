@@ -1,14 +1,14 @@
 # Chabeau - Terminal Chat Interface
 
-![Chabeau in action, courtesy of VHS](vhs.gif)
+![Chabeau rendering a complex table](chabeau.png)
 
-**NOTE:** This is pre-alpha software. It has been tested on Linux and macOS.
+**See several of Chabeau's features in action in [this short video](https://permacommons.org/videos/chabeau-0.4.0.mp4).**
 
 A full-screen terminal chat interface that connects to various AI APIs for real-time conversations.
 
-Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal.
+Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal. Its focus is on conversation and speed.
 
-Its focus is on conversation and speed.
+**NOTE:** This is pre-alpha software. It has been tested on Linux and macOS.
 
 ![Our friendly mascot](chabeau-mascot-small.png)
 

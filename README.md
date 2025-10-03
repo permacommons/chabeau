@@ -2,28 +2,32 @@
 
 ![Chabeau in action, courtesy of VHS](vhs.gif)
 
-**NOTE:** This is pre-alpha software. It has only been tested on Linux.
+**NOTE:** This is pre-alpha software. It has been tested on Linux and macOS.
 
-A full-screen terminal chat interface that connects to various AI APIs for real-time conversations with secure credential management.
+A full-screen terminal chat interface that connects to various AI APIs for real-time conversations.
 
-Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal, with your favorite editor for long prompts.
+Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal.
+
+Its focus is on conversation and speed.
 
 ![Our friendly mascot](chabeau-mascot-small.png)
 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Efficient byte-level parsing for smooth streaming output
-- Secure API key storage in system keyring with config-based provider management
-- Multi-line input (IME-friendly)
-- Compose mode for drafting long prompts (F4 toggles Enter vs. send, Ctrl+J mirrors Alt+Enter)
-- Multiple OpenAI-compatible providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, custom)
-- Interactive provider, model, and theme pickers with filtering, sorting, and config persistence
-- Message retry and external editor support
-- Conversation logging with pause/resume
 - Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code) with clickable OSC 8 hyperlinks
+- Built-in support for many common providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras)
+- Support for quick custom configuration of new OpenAI-compatible providers
+- Interactive dialogs for selecting models (e.g., Claude vs. GPT-5) and providers
+- Extensible theming system that degrades gracefully to terminals with limited color support
+- Secure API key storage in system keyring with config-based provider management
+- Multi-line input (IME-friendly) with compose mode for longer responses
+- Message retry and message editing
+- Conversation logging with pause/resume; quick `/dump` of contents to a file
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
+
+For features under consideration, see [WISHLIST.md](WISHLIST.md)
 
 ## Quick Start
 
@@ -42,14 +46,7 @@ chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Veni
 chabeau         # Uses defaults; opens pickers when needed
 ```
 
-Inside the TUI, use `/provider` and `/model` to switch.
-
-## How does auto-selection work?
-
-We try to do what makes the most sense:
-
-- Provider: If you've picked a default provider, Chabeau uses it. If not, but exactly one provider has auth (keyring or environment), Chabeau uses that one. If multiple providers are available and none is default, Chabeau launches the TUI and opens the provider picker. If no providers are configured, it will prompt you to configure auth and exit.
-- Model: If the chosen provider has no default model configured, Chabeau launches into the model picker. The newest model (when metadata is available) is highlighted. Cancelling this picker at startup exits the app; if multiple providers are available, cancelling returns to the provider picker instead.
+Inside the TUI, use `/provider` and `/model` to switch, and `/help` to see a full breakdown of commands and keyboard shortcuts.
 
 ## Usage
 
@@ -57,7 +54,7 @@ We try to do what makes the most sense:
 ```bash
 chabeau                              # Start chat with defaults (pickers on demand)
 chabeau --provider openai            # Use specific provider
-chabeau --model gpt-3.5-turbo        # Use specific model
+chabeau --model gpt-5                # Use specific model
 chabeau --log conversation.log       # Enable logging
 ```
 
@@ -91,7 +88,7 @@ so using the keyring is generally advisable.
 
 Chabeau supports configuring default providers and models for a smoother experience. 
 The easiest way to do so is via the `/model` and `/provider` commands in the TUI,
-which open interactive pickers. Use Alt+Enter to persist a choice to the config.
+which open interactive pickers. Use Alt+Enter or Ctrl+J to persist a choice to the config.
 
 You can also do it on the command line:
 
@@ -100,7 +97,7 @@ chabeau set default-provider openai     # Set default provider
 chabeau set default-model openai gpt-4o # Set default model for a provider
 ```
 
-There are even simplified interactive selectors:
+There are also simplified interactive selectors:
 
 ```bash
 chabeau pick-default-provider            # Interactive provider selection
@@ -118,7 +115,7 @@ chabeau set default-provider            # Show current configuration
 Chabeau includes built-in themes to customize the TUI appearance.
 
 
-- Use `/theme` in the TUI to pick a theme, and use Alt+Enter to persist it to the config.
+- Use `/theme` in the TUI to pick a theme, and use Alt+Enter or Ctrl+J to persist it to the config.
 - You can also use the commmand line to set a default theme, e.g.:
   - Set a theme: `chabeau set theme dark`
   - List themes: `chabeau themes` (shows built-in and custom, marks current)
@@ -164,12 +161,21 @@ Most should be intuitive. A couple of choices may be a bit jarring at first:
 
 Feedback and suggestions are always welcome!
 
+## Mousewheel Use
+
+We avoid capturing the mouse so that selection operation (copy/paste) work without issues. Some terminals treat mousewheel events as cursor key input,
+so scrolling the mousewheel will scroll the conversation.
+
+In other terminals, scrolling the mousewheel may reveal the contents of your terminal prior to your launch of Chabeau. In that case, we recommend using the cursor keys or PgUp/PgDn instead.
+
 ### External Editor
 Set `EDITOR` environment variable:
 ```bash
 export EDITOR=nano          # or vim, code, etc.
 export EDITOR="code --wait" # VS Code with wait
 ```
+
+Once the variable is set, you can compose messages using the external editor via Ctrl+T.
 
 ## Architecture
 
@@ -219,12 +225,6 @@ Modular design with focused components:
 - `commands/` - Chat command processing
   - `mod.rs` - Command processing implementation
 
-### Built-in Provider Configuration
-
-Chabeau uses a build-time configuration system for built-in providers. The `builtins/models.toml` file defines supported providers with their IDs, display names, base URLs, and authentication modes.
-
-This configuration is embedded into the binary at compile time, eliminating runtime file dependencies while allowing easy modification of supported providers during development.
-
 ## Development
 
 ### Running Tests
@@ -250,22 +250,6 @@ Chabeau includes lightweight performance checks in the unit test suite and suppo
   - To add new benches, create files under `benches/` (e.g., `benches/my_bench.rs`) and use Criterion’s `criterion_group!/criterion_main!`.
   - Benches import internal modules via `src/lib.rs` (e.g., `use chabeau::...`).
 
-### Key Dependencies
-- `tokio` - Async runtime
-- `ratatui` - Terminal UI framework
-- `reqwest` - HTTP client
-- `keyring` - Secure credential storage
-- `clap` - Command line parsing
-
 ## License
 
 CC0 1.0 Universal (Public Domain)
-### Edit Previous Messages (Ctrl+P)
-
-- Press `Ctrl+P` to enter edit-select mode. The most recent user message is highlighted. The input area locks and shows instructions.
-- Navigate between your messages with `Up/Down` or `j/k`.
-- You can also press `Ctrl+P` repeatedly to cycle upward through your messages (wraps at the top).
-- Press `Enter` to delete the selected user message and all messages below it, and put its content into the input area for editing and resending.
-- Press `e` to edit the selected message in place: the input area is populated so you can edit, then press `Enter` to apply changes back to history (no send, no deletion). Use `Ctrl+R` afterwards to retry from that point if desired.
-- Press `Delete` to delete the selected user message and everything below it without populating the input.
-- Press `Esc` to cancel and return to normal typing.

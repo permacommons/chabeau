@@ -1,5 +1,6 @@
 use crate::ui::span::SpanKind;
 use ratatui::{style::Style, text::Span};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Wrap spans to the provided width while preserving styles and word boundaries.
@@ -26,13 +27,14 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
             let mut chars_to_fit = 0usize;
             let mut width_so_far = 0usize;
             let mut last_break_pos: Option<(usize, usize)> = None;
-            for (char_pos, ch) in text.char_indices() {
-                let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                if current_width + width_so_far + cw <= max_width {
-                    width_so_far += cw;
-                    chars_to_fit = char_pos + ch.len_utf8();
-                    if ch.is_whitespace() {
-                        last_break_pos = Some((char_pos + ch.len_utf8(), width_so_far));
+            for (grapheme_start, grapheme) in text.grapheme_indices(true) {
+                let grapheme_end = grapheme_start + grapheme.len();
+                let gw = UnicodeWidthStr::width(grapheme);
+                if current_width + width_so_far + gw <= max_width {
+                    width_so_far += gw;
+                    chars_to_fit = grapheme_end;
+                    if grapheme.chars().all(|c| c.is_whitespace()) {
+                        last_break_pos = Some((grapheme_end, width_so_far));
                     }
                 } else {
                     break;
@@ -61,28 +63,31 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     } else {
                         // Hard break the very long token
                         let mut forced_width = 0usize;
-                        let mut forced_end = text.len();
-                        for (char_pos, ch) in text.char_indices() {
-                            let cw = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]));
-                            if forced_width + cw > max_width {
-                                forced_end = char_pos;
+                        let mut forced_end = 0usize;
+                        for (grapheme_start, grapheme) in text.grapheme_indices(true) {
+                            let grapheme_end = grapheme_start + grapheme.len();
+                            let gw = UnicodeWidthStr::width(grapheme);
+                            if forced_width + gw > max_width {
+                                if forced_end == 0 {
+                                    forced_end = grapheme_end;
+                                    forced_width += gw;
+                                }
                                 break;
                             }
-                            forced_width += cw;
+                            forced_width += gw;
+                            forced_end = grapheme_end;
                         }
-                        if forced_end > 0 {
-                            let chunk = text[..forced_end].to_string();
-                            current_line.push((Span::styled(chunk, style), kind.clone()));
-                            current_width = forced_width;
-                            text = text[forced_end..].to_string();
-                            if !text.is_empty() {
-                                wrapped_lines.push(std::mem::take(&mut current_line));
-                                current_width = 0;
-                            }
-                        } else {
-                            current_line.push((Span::styled(text.clone(), style), kind.clone()));
-                            current_width += UnicodeWidthStr::width(text.as_str());
-                            break;
+                        if forced_end == 0 {
+                            forced_end = text.len();
+                            forced_width = UnicodeWidthStr::width(text.as_str());
+                        }
+                        let chunk = text[..forced_end].to_string();
+                        current_line.push((Span::styled(chunk, style), kind.clone()));
+                        current_width = forced_width;
+                        text = text[forced_end..].to_string();
+                        if !text.is_empty() {
+                            wrapped_lines.push(std::mem::take(&mut current_line));
+                            current_width = 0;
                         }
                     }
                 }
@@ -149,5 +154,37 @@ mod tests {
             .filter(|s| !s.is_empty())
             .collect();
         assert_eq!(lines, vec!["word", "bounda", "ry", "test"]);
+    }
+
+    #[test]
+    fn wrap_preserves_zwj_clusters() {
+        let spans = vec![(Span::raw("👩‍💻👩‍💻"), SpanKind::Text)];
+        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2);
+        let lines: Vec<String> = wrapped
+            .into_iter()
+            .map(|line| {
+                line.iter()
+                    .map(|(s, _)| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(lines, vec!["👩‍💻", "👩‍💻"]);
+    }
+
+    #[test]
+    fn wrap_preserves_skin_tone_modifiers() {
+        let spans = vec![(Span::raw("👍🏽👍🏽"), SpanKind::Text)];
+        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2);
+        let lines: Vec<String> = wrapped
+            .into_iter()
+            .map(|line| {
+                line.iter()
+                    .map(|(s, _)| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(lines, vec!["👍🏽", "👍🏽"]);
     }
 }

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Not yet released]
+## 0.4.0
 
 ### Added
 - Compose mode toggled with F4 (Enter inserts newlines; Alt+Enter/Ctrl+J send) to make long-form drafting easier (`src/ui/chat_loop`, `src/builtins/help.md`).

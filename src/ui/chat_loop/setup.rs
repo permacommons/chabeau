@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use crate::{
     auth::AuthManager,
     core::{
-        app::{self, App},
+        app::{self, App, PickerController},
         builtin_providers::load_builtin_providers,
         config::Config,
         providers::ProviderResolutionError,
@@ -125,15 +125,30 @@ pub async fn bootstrap_app(
             }
         }
         if need_model_picker {
+            let request = {
+                let mut app_guard = app.lock().await;
+                app_guard.picker.startup_requires_model = true;
+                app_guard.picker.startup_multiple_providers_available =
+                    multiple_providers_available;
+                let env_only = has_env_openai && token_providers.is_empty();
+                app_guard.session.startup_env_only = env_only;
+                PickerController::model_picker_loader_request(&app_guard.session)
+            };
+
+            let loaded = PickerController::load_model_picker_items(request).await;
             let mut app_guard = app.lock().await;
-            app_guard.picker.startup_requires_model = true;
-            app_guard.picker.startup_multiple_providers_available = multiple_providers_available;
-            let env_only = has_env_openai && token_providers.is_empty();
-            app_guard.session.startup_env_only = env_only;
-            if let Err(e) = app_guard.open_model_picker().await {
-                app_guard
-                    .conversation()
-                    .set_status(format!("Model picker error: {}", e));
+            match loaded {
+                Ok(items) => {
+                    let current_model = app_guard.session.model.clone();
+                    app_guard
+                        .picker
+                        .apply_model_picker_items(&current_model, items);
+                }
+                Err(e) => {
+                    app_guard
+                        .conversation()
+                        .set_status(format!("Model picker error: {}", e));
+                }
             }
         }
         app

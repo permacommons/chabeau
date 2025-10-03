@@ -110,6 +110,20 @@ pub struct PickerController {
     pub startup_multiple_providers_available: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ModelPickerLoaderRequest {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    pub api_key: String,
+    pub provider_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelPickerItems {
+    pub items: Vec<PickerItem>,
+    pub has_dates: bool,
+}
+
 impl PickerController {
     pub(crate) fn new() -> Self {
         Self {
@@ -309,20 +323,28 @@ impl PickerController {
         }
     }
 
-    pub async fn open_model_picker(
-        &mut self,
+    pub fn model_picker_loader_request(
         session_context: &SessionContext,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> ModelPickerLoaderRequest {
+        ModelPickerLoaderRequest {
+            client: session_context.client.clone(),
+            base_url: session_context.base_url.clone(),
+            api_key: session_context.api_key.clone(),
+            provider_name: session_context.provider_name.clone(),
+        }
+    }
+
+    pub async fn load_model_picker_items(
+        request: ModelPickerLoaderRequest,
+    ) -> Result<ModelPickerItems, Box<dyn std::error::Error>> {
         let cfg = Config::load_test_safe();
-        let default_model_for_provider = cfg
-            .get_default_model(&session_context.provider_name)
-            .cloned();
+        let default_model_for_provider = cfg.get_default_model(&request.provider_name).cloned();
 
         let models_response = fetch_models(
-            &session_context.client,
-            &session_context.base_url,
-            &session_context.api_key,
-            &session_context.provider_name,
+            &request.client,
+            &request.base_url,
+            &request.api_key,
+            &request.provider_name,
         )
         .await?;
 
@@ -420,24 +442,30 @@ impl PickerController {
             })
             .collect();
 
+        Ok(ModelPickerItems { items, has_dates })
+    }
+
+    pub fn apply_model_picker_items(&mut self, current_model: &str, loaded: ModelPickerItems) {
+        let current_model = current_model.to_string();
         let mut selected = 0usize;
-        if let Some((idx, _)) = items
+        if let Some((idx, _)) = loaded
+            .items
             .iter()
             .enumerate()
-            .find(|(_, it)| it.id == session_context.model)
+            .find(|(_, it)| it.id == current_model)
         {
             selected = idx;
         }
 
-        let picker_state = PickerState::new("Pick Model", items.clone(), selected);
+        let picker_state = PickerState::new("Pick Model", loaded.items.clone(), selected);
         let mut session = PickerSession {
             mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
-                all_items: items,
-                before_model: Some(session_context.model.clone()),
-                has_dates,
+                all_items: loaded.items,
+                before_model: Some(current_model.clone()),
+                has_dates: loaded.has_dates,
             }),
         };
 
@@ -447,7 +475,6 @@ impl PickerController {
         self.sort_items();
         self.update_title();
 
-        let current_model = session_context.model.clone();
         if let Some(session) = self.session_mut() {
             if let Some((idx, _)) = session
                 .state
@@ -459,8 +486,6 @@ impl PickerController {
                 session.state.selected = idx;
             }
         }
-
-        Ok(())
     }
 
     pub fn filter_models(&mut self) {

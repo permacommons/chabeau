@@ -17,8 +17,8 @@ pub mod ui_state;
 pub use conversation::ConversationController;
 #[allow(unused_imports)]
 pub use picker::{
-    ModelPickerState, PickerController, PickerData, PickerMode, PickerSession, ProviderPickerState,
-    ThemePickerState,
+    ModelPickerItems, ModelPickerLoaderRequest, ModelPickerState, PickerController, PickerData,
+    PickerMode, PickerSession, ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -215,11 +215,6 @@ impl App {
     pub fn revert_theme_preview(&mut self) {
         let mut controller = self.theme_controller();
         controller.revert_theme_preview();
-    }
-
-    /// Open a model picker modal with available models from current provider
-    pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.picker.open_model_picker(&self.session).await
     }
 
     /// Filter models based on search term and update picker

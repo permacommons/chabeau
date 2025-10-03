@@ -18,7 +18,7 @@ use self::stream::{StreamDispatcher, StreamMessage, StreamParams};
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
-use crate::core::app::App;
+use crate::core::app::{App, PickerController};
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
@@ -688,10 +688,25 @@ async fn process_input_submission(
             SubmissionResult::Continue
         }
         CommandResult::OpenModelPicker => {
-            if let Err(e) = app_guard.open_model_picker().await {
-                app_guard
-                    .conversation()
-                    .set_status(format!("Model picker error: {}", e));
+            let request = PickerController::model_picker_loader_request(&app_guard.session);
+            drop(app_guard);
+
+            let loaded = PickerController::load_model_picker_items(request)
+                .await
+                .map_err(|e| e.to_string());
+            let mut app_guard = app.lock().await;
+            match loaded {
+                Ok(items) => {
+                    let current_model = app_guard.session.model.clone();
+                    app_guard
+                        .picker
+                        .apply_model_picker_items(&current_model, items);
+                }
+                Err(e) => {
+                    app_guard
+                        .conversation()
+                        .set_status(format!("Model picker error: {}", e));
+                }
             }
             drop(app_guard);
             let _ = event_tx.send(UiEvent::RequestRedraw);
@@ -1174,11 +1189,33 @@ async fn handle_picker_key_event(
                                     let app_clone = app.clone();
                                     let event_tx = event_tx.clone();
                                     tokio::spawn(async move {
+                                        let request = {
+                                            let app_guard = app_clone.lock().await;
+                                            PickerController::model_picker_loader_request(
+                                                &app_guard.session,
+                                            )
+                                        };
+
+                                        let loaded =
+                                            PickerController::load_model_picker_items(request)
+                                                .await
+                                                .map_err(|e| e.to_string());
+
                                         let mut app_guard = app_clone.lock().await;
-                                        if let Err(e) = app_guard.open_model_picker().await {
-                                            app_guard
-                                                .conversation()
-                                                .set_status(format!("Model picker error: {}", e));
+                                        match loaded {
+                                            Ok(items) => {
+                                                let current_model = app_guard.session.model.clone();
+                                                app_guard.picker.apply_model_picker_items(
+                                                    &current_model,
+                                                    items,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                app_guard.conversation().set_status(format!(
+                                                    "Model picker error: {}",
+                                                    e
+                                                ));
+                                            }
                                         }
                                         drop(app_guard);
                                         let _ = event_tx.send(UiEvent::RequestRedraw);
@@ -1271,12 +1308,34 @@ async fn handle_picker_key_event(
                                         let app_clone = app.clone();
                                         let event_tx = event_tx.clone();
                                         tokio::spawn(async move {
+                                            let request = {
+                                                let app_guard = app_clone.lock().await;
+                                                PickerController::model_picker_loader_request(
+                                                    &app_guard.session,
+                                                )
+                                            };
+
+                                            let loaded =
+                                                PickerController::load_model_picker_items(request)
+                                                    .await
+                                                    .map_err(|e| e.to_string());
+
                                             let mut app_guard = app_clone.lock().await;
-                                            if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.conversation().set_status(format!(
-                                                    "Model picker error: {}",
-                                                    e
-                                                ));
+                                            match loaded {
+                                                Ok(items) => {
+                                                    let current_model =
+                                                        app_guard.session.model.clone();
+                                                    app_guard.picker.apply_model_picker_items(
+                                                        &current_model,
+                                                        items,
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    app_guard.conversation().set_status(format!(
+                                                        "Model picker error: {}",
+                                                        e
+                                                    ));
+                                                }
                                             }
                                             drop(app_guard);
                                             let _ = event_tx.send(UiEvent::RequestRedraw);
@@ -1329,12 +1388,34 @@ async fn handle_picker_key_event(
                                         let app_clone = app.clone();
                                         let event_tx = event_tx.clone();
                                         tokio::spawn(async move {
+                                            let request = {
+                                                let app_guard = app_clone.lock().await;
+                                                PickerController::model_picker_loader_request(
+                                                    &app_guard.session,
+                                                )
+                                            };
+
+                                            let loaded =
+                                                PickerController::load_model_picker_items(request)
+                                                    .await
+                                                    .map_err(|e| e.to_string());
+
                                             let mut app_guard = app_clone.lock().await;
-                                            if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.conversation().set_status(format!(
-                                                    "Model picker error: {}",
-                                                    e
-                                                ));
+                                            match loaded {
+                                                Ok(items) => {
+                                                    let current_model =
+                                                        app_guard.session.model.clone();
+                                                    app_guard.picker.apply_model_picker_items(
+                                                        &current_model,
+                                                        items,
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    app_guard.conversation().set_status(format!(
+                                                        "Model picker error: {}",
+                                                        e
+                                                    ));
+                                                }
                                             }
                                             drop(app_guard);
                                             let _ = event_tx.send(UiEvent::RequestRedraw);

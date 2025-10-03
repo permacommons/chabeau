@@ -21,6 +21,9 @@
 //! positions, then renders it with ratatui's `Paragraph` without wrapping enabled.
 //! This ensures perfect alignment between our cursor calculations and the rendered text.
 
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
 /// Configuration for text wrapping behavior
 #[derive(Debug, Clone)]
 pub struct WrapConfig {
@@ -45,121 +48,146 @@ impl TextWrapper {
         }
 
         let mut result = String::new();
-        let mut current_line_len = 0;
+        let mut current_line_width = 0;
 
         // Split text by explicit newlines first
         for (line_idx, line) in text.split('\n').enumerate() {
             if line_idx > 0 {
                 result.push('\n');
-                current_line_len = 0;
+                current_line_width = 0;
             }
 
-            // Process each character, keeping track of words and spaces
-            let chars = line.chars().peekable();
             let mut current_word = String::new();
+            let mut current_word_width = 0;
 
-            for ch in chars {
-                if ch.is_whitespace() {
-                    // Flush current word if we have one
+            for grapheme in line.graphemes(true) {
+                let is_whitespace = grapheme.chars().all(|c| c.is_whitespace());
+                let grapheme_width = UnicodeWidthStr::width(grapheme);
+
+                if is_whitespace {
                     if !current_word.is_empty() {
-                        let word_len = current_word.chars().count();
-
-                        // Check if word fits on current line
-                        if current_line_len > 0 && current_line_len + word_len > config.width {
-                            // Need to wrap before this word
-                            result.push('\n');
-                            current_line_len = 0;
-                        }
-
-                        // Handle very long words
-                        if word_len > config.width {
-                            Self::handle_long_word(
-                                &mut result,
-                                &current_word,
-                                &mut current_line_len,
-                                config.width,
-                            );
-                        } else {
-                            // Normal word that fits
-                            result.push_str(&current_word);
-                            current_line_len += word_len;
-                        }
-
+                        Self::flush_word(
+                            &mut result,
+                            &mut current_line_width,
+                            &current_word,
+                            current_word_width,
+                            config.width,
+                        );
                         current_word.clear();
+                        current_word_width = 0;
                     }
 
-                    // Only add the whitespace if it fits
-                    if current_line_len < config.width {
-                        result.push(ch);
-                        current_line_len += 1;
-                    } else {
-                        // Whitespace would exceed line, wrap and skip it
+                    if current_line_width + grapheme_width > config.width {
                         result.push('\n');
-                        current_line_len = 0;
-                        // Don't add the space at the beginning of a new line
+                        current_line_width = 0;
+                    } else {
+                        result.push_str(grapheme);
+                        current_line_width += grapheme_width;
                     }
                 } else {
-                    // Regular character - add to current word
-                    current_word.push(ch);
+                    current_word.push_str(grapheme);
+                    current_word_width += grapheme_width;
                 }
             }
 
-            // Flush any remaining word
             if !current_word.is_empty() {
-                let word_len = current_word.chars().count();
-
-                // Check if word fits on current line
-                if current_line_len > 0 && current_line_len + word_len > config.width {
-                    // Need to wrap before this word
-                    result.push('\n');
-                    current_line_len = 0;
-                }
-
-                // Handle very long words
-                if word_len > config.width {
-                    Self::handle_long_word(
-                        &mut result,
-                        &current_word,
-                        &mut current_line_len,
-                        config.width,
-                    );
-                } else {
-                    // Normal word that fits
-                    result.push_str(&current_word);
-                    current_line_len += word_len;
-                }
+                Self::flush_word(
+                    &mut result,
+                    &mut current_line_width,
+                    &current_word,
+                    current_word_width,
+                    config.width,
+                );
             }
         }
 
         result
     }
 
+    fn flush_word(
+        result: &mut String,
+        current_line_width: &mut usize,
+        word: &str,
+        word_width: usize,
+        width: usize,
+    ) {
+        if *current_line_width > 0 && *current_line_width + word_width > width {
+            result.push('\n');
+            *current_line_width = 0;
+        }
+
+        if word_width > width {
+            Self::handle_long_word(result, word, current_line_width, width);
+        } else {
+            result.push_str(word);
+            *current_line_width += word_width;
+        }
+    }
+
     /// Handle words that are longer than the line width by breaking them
     fn handle_long_word(
         result: &mut String,
         word: &str,
-        current_line_len: &mut usize,
+        current_line_width: &mut usize,
         width: usize,
     ) {
-        let mut remaining_word = word;
-        while !remaining_word.is_empty() {
-            let chars_to_take = width.saturating_sub(*current_line_len);
-            if chars_to_take == 0 {
+        let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(word, true).collect();
+        let mut idx = 0;
+
+        while idx < graphemes.len() {
+            if *current_line_width >= width {
                 result.push('\n');
-                *current_line_len = 0;
-                continue;
+                *current_line_width = 0;
             }
 
-            let word_chars: Vec<char> = remaining_word.chars().collect();
-            let chunk: String = word_chars.iter().take(chars_to_take).collect();
-            result.push_str(&chunk);
-            *current_line_len += chunk.chars().count();
+            let mut chunk = String::new();
+            let mut advanced = false;
 
-            remaining_word = &remaining_word[chunk.len()..];
+            while idx < graphemes.len() {
+                let grapheme = graphemes[idx];
+                let grapheme_width = UnicodeWidthStr::width(grapheme);
 
-            if !remaining_word.is_empty() {
+                if grapheme_width > width {
+                    if *current_line_width != 0 {
+                        result.push('\n');
+                        *current_line_width = 0;
+                    }
+
+                    result.push_str(grapheme);
+                    *current_line_width = grapheme_width;
+                    idx += 1;
+                    advanced = true;
+                    break;
+                }
+
+                if *current_line_width + grapheme_width > width {
+                    if chunk.is_empty() {
+                        result.push('\n');
+                        *current_line_width = 0;
+                        continue;
+                    }
+                    break;
+                }
+
+                chunk.push_str(grapheme);
+                *current_line_width += grapheme_width;
+                idx += 1;
+                advanced = true;
+
+                if *current_line_width == width {
+                    break;
+                }
+            }
+
+            if !chunk.is_empty() {
+                result.push_str(&chunk);
+            }
+
+            if idx < graphemes.len() {
                 result.push('\n');
-                *current_line_len = 0;
+                *current_line_width = 0;
+            } else if !advanced {
+                break;
             }
         }
     }
@@ -212,8 +240,14 @@ impl TextWrapper {
         let wrapped_lines: Vec<&str> = wrapped_text.split('\n').collect();
         let mut wrapped_coords: Vec<(usize, usize)> = Vec::new();
         for (line_idx, line) in wrapped_lines.iter().enumerate() {
-            for (col_idx, _ch) in line.chars().enumerate() {
-                wrapped_coords.push((line_idx, col_idx));
+            let mut col = 0usize;
+            for grapheme in line.graphemes(true) {
+                let grapheme_width = UnicodeWidthStr::width(grapheme);
+                col += grapheme_width;
+                let grapheme_char_count = grapheme.chars().count();
+                for _ in 0..grapheme_char_count {
+                    wrapped_coords.push((line_idx, col));
+                }
             }
         }
 
@@ -235,11 +269,15 @@ impl TextWrapper {
                 if wrapped_idx < wrapped_coords.len() {
                     let (l, c) = wrapped_coords[wrapped_idx];
                     current_line = l;
-                    pos_map.push((current_line, c.saturating_add(1)));
+                    pos_map.push((current_line, c));
                     wrapped_idx += 1;
                 } else if let Some(last_line) = wrapped_lines.last() {
                     // Fallback to end of last line if somehow we ran out
-                    pos_map.push((wrapped_lines.len() - 1, last_line.chars().count()));
+                    let last_width = (*last_line)
+                        .graphemes(true)
+                        .map(UnicodeWidthStr::width)
+                        .sum();
+                    pos_map.push((wrapped_lines.len() - 1, last_width));
                 } else {
                     pos_map.push((0, 0));
                 }
@@ -286,7 +324,33 @@ mod tests {
         // Should break long words
         assert!(wrapped.contains('\n'));
         let lines: Vec<&str> = wrapped.split('\n').collect();
-        assert!(lines.iter().all(|line| line.chars().count() <= 5));
+        assert!(lines.iter().all(|line| UnicodeWidthStr::width(*line) <= 5));
+    }
+
+    #[test]
+    fn test_wrap_with_double_width_emoji() {
+        let config = WrapConfig::new(4);
+        let text = "😀😀😀";
+        let wrapped = TextWrapper::wrap_text(text, &config);
+
+        let lines: Vec<&str> = wrapped.split('\n').collect();
+        assert_eq!(lines, vec!["😀😀", "😀"]);
+        assert_eq!(UnicodeWidthStr::width(lines[0]), 4);
+        assert_eq!(UnicodeWidthStr::width(lines[1]), 2);
+    }
+
+    #[test]
+    fn test_cursor_mapping_with_double_width_emoji() {
+        let config = WrapConfig::new(4);
+        let text = "😀😀😀";
+
+        let expectations = [(0, (0usize, 0usize)), (1, (0, 2)), (2, (0, 4)), (3, (1, 2))];
+
+        for (cursor, expected) in expectations {
+            let (line, col) =
+                TextWrapper::calculate_cursor_position_in_wrapped_text(text, cursor, &config);
+            assert_eq!((line, col), expected);
+        }
     }
 
     #[test]

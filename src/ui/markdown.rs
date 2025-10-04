@@ -225,6 +225,10 @@ impl<'a> MarkdownRenderer<'a> {
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_TASKLISTS);
         options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_GFM);
+        options.insert(Options::ENABLE_SUPERSCRIPT);
+        options.insert(Options::ENABLE_SUBSCRIPT);
         let parser = Parser::new_ext(self.content, options);
 
         for event in parser {
@@ -258,7 +262,7 @@ impl<'a> MarkdownRenderer<'a> {
                             self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                         self.kind_stack.push(current_kind);
                     }
-                    Tag::BlockQuote => {
+                    Tag::BlockQuote(_) => {
                         self.style_stack.push(self.theme.md_blockquote_style());
                         let current_kind =
                             self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
@@ -343,6 +347,13 @@ impl<'a> MarkdownRenderer<'a> {
                             self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                         self.kind_stack.push(current_kind);
                     }
+                    Tag::Superscript | Tag::Subscript => {
+                        let style = self.style_stack.last().copied().unwrap_or_default();
+                        self.style_stack.push(style);
+                        let current_kind =
+                            self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                        self.kind_stack.push(current_kind);
+                    }
                     Tag::Link { dest_url, .. } => {
                         self.style_stack.push(self.theme.md_link_style());
                         self.kind_stack.push(SpanKind::link(dest_url.as_ref()));
@@ -381,7 +392,7 @@ impl<'a> MarkdownRenderer<'a> {
                         self.style_stack.pop();
                         self.kind_stack.pop();
                     }
-                    TagEnd::BlockQuote => {
+                    TagEnd::BlockQuote(_) => {
                         self.flush_current_spans(true);
                         self.push_empty_line();
                         self.style_stack.pop();
@@ -420,7 +431,12 @@ impl<'a> MarkdownRenderer<'a> {
                         self.push_empty_line();
                         self.in_code_block = None;
                     }
-                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                    TagEnd::Emphasis
+                    | TagEnd::Strong
+                    | TagEnd::Strikethrough
+                    | TagEnd::Link
+                    | TagEnd::Superscript
+                    | TagEnd::Subscript => {
                         self.style_stack.pop();
                         self.kind_stack.pop();
                     }
@@ -477,6 +493,15 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 Event::Code(code) => {
                     let span = Span::styled(detab(&code), self.theme.md_inline_code_style());
+                    let kind = self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
+                    if let Some(ref mut table) = self.table_renderer {
+                        table.add_span(span, kind);
+                    } else {
+                        self.push_span(span, kind);
+                    }
+                }
+                Event::InlineMath(math) | Event::DisplayMath(math) => {
+                    let span = Span::styled(detab(&math), self.theme.md_inline_code_style());
                     let kind = self.kind_stack.last().cloned().unwrap_or(SpanKind::Text);
                     if let Some(ref mut table) = self.table_renderer {
                         table.add_span(span, kind);
@@ -735,6 +760,10 @@ pub fn compute_codeblock_contents_with_lang(
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_TASKLISTS);
         options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_GFM);
+        options.insert(Options::ENABLE_SUPERSCRIPT);
+        options.insert(Options::ENABLE_SUBSCRIPT);
         let parser = Parser::new_ext(&msg.content, options);
         let mut in_code_block: Option<String> = None;
         let mut buf: Vec<String> = Vec::new();
@@ -842,6 +871,50 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
+    }
+
+    #[test]
+    fn superscript_and_subscript_render_without_markers() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Subscripts: ~abc~ alongside superscripts: ^def^.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, true, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        assert!(
+            lines.len() >= 2,
+            "expected rendered output to include paragraph and trailing blank line"
+        );
+        assert_eq!(lines[0], "Subscripts: abc alongside superscripts: def.");
+        assert!(
+            lines[1].is_empty(),
+            "renderer should emit blank line after paragraph"
+        );
+    }
+
+    #[test]
+    fn gfm_callout_blockquotes_render_content() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "> [!NOTE]\n> Always document parser upgrades.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, true, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        assert!(
+            lines.len() >= 3,
+            "expected callout blockquote to render with trailing spacing"
+        );
+        assert_eq!(lines[0], "Always document parser upgrades.");
+        assert!(
+            lines[1].is_empty(),
+            "blockquote rendering should emit a separating blank line"
+        );
     }
 
     #[test]

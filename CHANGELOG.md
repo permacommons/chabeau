@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Upgraded the Markdown parser to pulldown-cmark 0.13, unlocking GitHub-flavored callouts alongside superscript and subscript inline syntax (`Cargo.toml`, `src/ui/markdown.rs`).
+
 ## 0.4.0
 
 ### Added

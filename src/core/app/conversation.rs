@@ -157,7 +157,7 @@ impl<'a> ConversationController<'a> {
             token.cancel();
         }
         self.session.stream_cancel_token = None;
-        self.ui.is_streaming = false;
+        self.ui.end_streaming();
         self.ui.stream_interrupted = true;
     }
 
@@ -168,9 +168,7 @@ impl<'a> ConversationController<'a> {
 
         let token = CancellationToken::new();
         self.session.stream_cancel_token = Some(token.clone());
-        self.ui.is_streaming = true;
-        self.ui.stream_interrupted = false;
-        self.ui.pulse_start = Instant::now();
+        self.ui.begin_streaming();
 
         (token, self.session.current_stream_id)
     }

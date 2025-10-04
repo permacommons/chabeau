@@ -121,7 +121,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     const STREAMING_FRAMES: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
     const ROTATIONS_PER_SECOND: f32 = 0.5;
 
-    let indicator = if app.ui.is_streaming {
+    let indicator = if app.ui.is_activity_indicator_visible() {
         let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
         let total_frames =
             (elapsed * ROTATIONS_PER_SECOND * STREAMING_FRAMES.len() as f32).floor() as usize;

@@ -1,5 +1,6 @@
 use super::{SessionContext, UiState};
-use crate::api::models::{fetch_models, sort_models};
+use crate::api::models::sort_models;
+use crate::api::ModelsResponse;
 use crate::auth::AuthManager;
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::Config;
@@ -309,23 +310,12 @@ impl PickerController {
         }
     }
 
-    pub async fn open_model_picker(
+    pub fn populate_model_picker_from_response(
         &mut self,
         session_context: &SessionContext,
+        default_model_for_provider: Option<String>,
+        models_response: ModelsResponse,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let cfg = Config::load_test_safe();
-        let default_model_for_provider = cfg
-            .get_default_model(&session_context.provider_name)
-            .cloned();
-
-        let models_response = fetch_models(
-            &session_context.client,
-            &session_context.base_url,
-            &session_context.api_key,
-            &session_context.provider_name,
-        )
-        .await?;
-
         if models_response.data.is_empty() {
             return Err("No models available from this provider".into());
         }

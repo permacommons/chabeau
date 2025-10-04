@@ -1,3 +1,5 @@
+use crate::api::models::fetch_models;
+use crate::api::ModelsResponse;
 use crate::core::config::Config;
 #[cfg(test)]
 use crate::core::message::Message;
@@ -23,7 +25,7 @@ pub use picker::{
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
 #[allow(unused_imports)]
-pub use ui_state::{UiMode, UiState};
+pub use ui_state::{ActivityKind, UiMode, UiState};
 
 pub async fn new_with_auth(
     model: String,
@@ -85,6 +87,15 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
+}
+
+#[derive(Clone)]
+pub struct ModelPickerRequest {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    pub api_key: String,
+    pub provider_name: String,
+    pub default_model_for_provider: Option<String>,
 }
 
 impl App {
@@ -219,7 +230,51 @@ impl App {
 
     /// Open a model picker modal with available models from current provider
     pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.picker.open_model_picker(&self.session).await
+        let request = self.prepare_model_picker_request();
+        let ModelPickerRequest {
+            client,
+            base_url,
+            api_key,
+            provider_name,
+            default_model_for_provider,
+        } = request;
+
+        let models_response = fetch_models(&client, &base_url, &api_key, &provider_name).await?;
+
+        self.complete_model_picker_request(default_model_for_provider, models_response)
+    }
+
+    pub fn prepare_model_picker_request(&mut self) -> ModelPickerRequest {
+        self.ui.begin_activity(ActivityKind::ModelRequest);
+        let cfg = Config::load_test_safe();
+        let default_model_for_provider =
+            cfg.get_default_model(&self.session.provider_name).cloned();
+
+        ModelPickerRequest {
+            client: self.session.client.clone(),
+            base_url: self.session.base_url.clone(),
+            api_key: self.session.api_key.clone(),
+            provider_name: self.session.provider_name.clone(),
+            default_model_for_provider,
+        }
+    }
+
+    pub fn complete_model_picker_request(
+        &mut self,
+        default_model_for_provider: Option<String>,
+        models_response: ModelsResponse,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.picker.populate_model_picker_from_response(
+            &self.session,
+            default_model_for_provider,
+            models_response,
+        );
+        self.ui.end_activity(ActivityKind::ModelRequest);
+        result
+    }
+
+    pub fn fail_model_picker_request(&mut self) {
+        self.ui.end_activity(ActivityKind::ModelRequest);
     }
 
     /// Filter models based on search term and update picker

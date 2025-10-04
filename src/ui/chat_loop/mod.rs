@@ -15,10 +15,11 @@ use self::setup::bootstrap_app;
 
 use crate::core::chat_stream::{ChatStreamService, StreamMessage, StreamParams};
 
+use crate::api::models::fetch_models;
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
-use crate::core::app::App;
+use crate::core::app::{App, ModelPickerRequest};
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
@@ -77,6 +78,48 @@ fn status_suffix(is_persistent: bool) -> &'static str {
     } else {
         " (session only)"
     }
+}
+
+fn spawn_model_picker_loader(
+    app: Arc<Mutex<App>>,
+    event_tx: mpsc::UnboundedSender<UiEvent>,
+    request: ModelPickerRequest,
+) {
+    let _ = event_tx.send(UiEvent::RequestRedraw);
+    tokio::spawn(async move {
+        let ModelPickerRequest {
+            client,
+            base_url,
+            api_key,
+            provider_name,
+            default_model_for_provider,
+        } = request;
+
+        let fetch_result = fetch_models(&client, &base_url, &api_key, &provider_name)
+            .await
+            .map_err(|e| e.to_string());
+
+        let mut app_guard = app.lock().await;
+        match fetch_result {
+            Ok(models_response) => {
+                if let Err(e) = app_guard
+                    .complete_model_picker_request(default_model_for_provider, models_response)
+                {
+                    app_guard
+                        .conversation()
+                        .set_status(format!("Model picker error: {}", e));
+                }
+            }
+            Err(e) => {
+                app_guard.fail_model_picker_request();
+                app_guard
+                    .conversation()
+                    .set_status(format!("Model picker error: {}", e));
+            }
+        }
+        drop(app_guard);
+        let _ = event_tx.send(UiEvent::RequestRedraw);
+    });
 }
 
 async fn is_exit_requested(app: &Arc<Mutex<App>>) -> bool {
@@ -371,6 +414,7 @@ pub async fn run_chat(
     let mut last_draw = Instant::now();
     let mut request_redraw = true;
     let mut last_input_layout_update = Instant::now();
+    let mut indicator_visible = false;
     const MAX_FPS: u64 = 60; // Limit to 60 FPS
     let frame_duration = Duration::from_millis(1000 / MAX_FPS);
 
@@ -412,6 +456,16 @@ pub async fn run_chat(
             process_stream_updates(&app, &mut rx, term_size.width, term_size.height).await;
 
         if received_any {
+            request_redraw = true;
+        }
+
+        let indicator_now = {
+            let app_guard = app.lock().await;
+            app_guard.ui.is_activity_indicator_visible()
+        };
+
+        if indicator_now != indicator_visible {
+            indicator_visible = indicator_now;
             request_redraw = true;
         }
 
@@ -466,14 +520,14 @@ fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16,
                     conversation.calculate_available_height(term_height, input_area_height);
                 conversation.update_scroll_position(available_height, term_width);
             }
-            app.ui.is_streaming = false;
+            app.ui.end_streaming();
         }
         StreamMessage::End => {
             {
                 let mut conversation = app.conversation();
                 conversation.finalize_response();
             }
-            app.ui.is_streaming = false;
+            app.ui.end_streaming();
         }
     }
 }
@@ -790,13 +844,9 @@ async fn process_input_submission(
             SubmissionResult::Continue
         }
         CommandResult::OpenModelPicker => {
-            if let Err(e) = app_guard.open_model_picker().await {
-                app_guard
-                    .conversation()
-                    .set_status(format!("Model picker error: {}", e));
-            }
+            let request = app_guard.prepare_model_picker_request();
             drop(app_guard);
-            let _ = event_tx.send(UiEvent::RequestRedraw);
+            spawn_model_picker_loader(app.clone(), event_tx.clone(), request);
             SubmissionResult::Continue
         }
         CommandResult::OpenProviderPicker => {
@@ -1273,18 +1323,10 @@ async fn handle_picker_key_event(
                                         app_guard.picker.startup_requires_provider = false;
                                         app_guard.picker.startup_requires_model = true;
                                     }
+                                    let request = app_guard.prepare_model_picker_request();
                                     let app_clone = app.clone();
-                                    let event_tx = event_tx.clone();
-                                    tokio::spawn(async move {
-                                        let mut app_guard = app_clone.lock().await;
-                                        if let Err(e) = app_guard.open_model_picker().await {
-                                            app_guard
-                                                .conversation()
-                                                .set_status(format!("Model picker error: {}", e));
-                                        }
-                                        drop(app_guard);
-                                        let _ = event_tx.send(UiEvent::RequestRedraw);
-                                    });
+                                    let event_tx_clone = event_tx.clone();
+                                    spawn_model_picker_loader(app_clone, event_tx_clone, request);
                                 }
                             }
                             Err(e) => {
@@ -1370,19 +1412,14 @@ async fn handle_picker_key_event(
                                     ));
                                     app_guard.close_picker();
                                     if should_open_model_picker {
+                                        let request = app_guard.prepare_model_picker_request();
                                         let app_clone = app.clone();
-                                        let event_tx = event_tx.clone();
-                                        tokio::spawn(async move {
-                                            let mut app_guard = app_clone.lock().await;
-                                            if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.conversation().set_status(format!(
-                                                    "Model picker error: {}",
-                                                    e
-                                                ));
-                                            }
-                                            drop(app_guard);
-                                            let _ = event_tx.send(UiEvent::RequestRedraw);
-                                        });
+                                        let event_tx_clone = event_tx.clone();
+                                        spawn_model_picker_loader(
+                                            app_clone,
+                                            event_tx_clone,
+                                            request,
+                                        );
                                     }
                                 }
                                 Err(e) => app_guard
@@ -1428,19 +1465,14 @@ async fn handle_picker_key_event(
                                 match current_picker_mode {
                                     Some(crate::core::app::PickerMode::Model) => {
                                         // Store app reference for async refresh
+                                        let request = app_guard.prepare_model_picker_request();
                                         let app_clone = app.clone();
-                                        let event_tx = event_tx.clone();
-                                        tokio::spawn(async move {
-                                            let mut app_guard = app_clone.lock().await;
-                                            if let Err(e) = app_guard.open_model_picker().await {
-                                                app_guard.conversation().set_status(format!(
-                                                    "Model picker error: {}",
-                                                    e
-                                                ));
-                                            }
-                                            drop(app_guard);
-                                            let _ = event_tx.send(UiEvent::RequestRedraw);
-                                        });
+                                        let event_tx_clone = event_tx.clone();
+                                        spawn_model_picker_loader(
+                                            app_clone,
+                                            event_tx_clone,
+                                            request,
+                                        );
                                     }
                                     Some(crate::core::app::PickerMode::Theme) => {
                                         app_guard.open_theme_picker();

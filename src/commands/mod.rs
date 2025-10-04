@@ -409,11 +409,13 @@ mod tests {
 
     #[test]
     fn commands_dispatch_case_insensitively() {
-        let mut app = create_test_app();
-        app.ui.markdown_enabled = false;
-        let result = process_input(&mut app, "/MarkDown On");
-        assert!(matches!(result, CommandResult::Continue));
-        assert!(app.ui.markdown_enabled);
+        with_temp_config_env(|_| {
+            let mut app = create_test_app();
+            app.ui.markdown_enabled = false;
+            let result = process_input(&mut app, "/MarkDown On");
+            assert!(matches!(result, CommandResult::Continue));
+            assert!(app.ui.markdown_enabled);
+        });
     }
 
     #[test]

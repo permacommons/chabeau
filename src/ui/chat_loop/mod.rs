@@ -19,7 +19,10 @@ use crate::api::models::fetch_models;
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
-use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher, ModelPickerRequest};
+use crate::core::app::{
+    apply_actions, App, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
+    ModelPickerRequest,
+};
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
@@ -304,14 +307,13 @@ async fn handle_paste_event(
     *last_input_layout_update = Instant::now();
 }
 
-async fn process_stream_updates(
+fn process_stream_updates(
     dispatcher: &AppActionDispatcher,
     rx: &mut mpsc::UnboundedReceiver<(StreamMessage, u64)>,
     term_width: u16,
     term_height: u16,
+    current_stream_id: u64,
 ) -> bool {
-    let current_stream_id = dispatcher.current_stream_id().await;
-
     let mut received_any = false;
     let mut coalesced_chunks = String::new();
     let mut followup_actions = Vec::new();
@@ -351,9 +353,27 @@ async fn process_stream_updates(
     actions.extend(followup_actions);
 
     if !actions.is_empty() {
-        dispatcher.dispatch_many(actions, &ctx).await;
+        dispatcher.dispatch_many(actions, ctx);
     }
 
+    true
+}
+
+async fn drain_action_queue(
+    app: &Arc<Mutex<App>>,
+    action_rx: &mut mpsc::UnboundedReceiver<AppActionEnvelope>,
+) -> bool {
+    let mut pending = Vec::new();
+    while let Ok(envelope) = action_rx.try_recv() {
+        pending.push(envelope);
+    }
+
+    if pending.is_empty() {
+        return false;
+    }
+
+    let mut app_guard = app.lock().await;
+    apply_actions(&mut app_guard, pending);
     true
 }
 
@@ -364,7 +384,8 @@ pub async fn run_chat(
     env_only: bool,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only).await?;
-    let action_dispatcher = AppActionDispatcher::new(app.clone());
+    let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
+    let action_dispatcher = AppActionDispatcher::new(action_tx);
 
     // Sign-off line (no noisy startup banners)
     println!(
@@ -460,15 +481,25 @@ pub async fn run_chat(
             request_redraw = true;
         }
 
+        let current_stream_id = {
+            let app_guard = app.lock().await;
+            app_guard.session.current_stream_id
+        };
+
         let received_any = process_stream_updates(
             &action_dispatcher,
             &mut rx,
             term_size.width,
             term_size.height,
-        )
-        .await;
+            current_stream_id,
+        );
 
         if received_any {
+            request_redraw = true;
+        }
+
+        let actions_applied = drain_action_queue(&app, &mut action_rx).await;
+        if actions_applied {
             request_redraw = true;
         }
 
@@ -1572,12 +1603,13 @@ async fn handle_picker_key_event(
 mod tests {
     use super::*;
     use crate::core::app::actions::{
-        apply_action, AppAction, AppActionContext, AppActionDispatcher,
+        apply_action, apply_actions, AppAction, AppActionContext, AppActionDispatcher,
+        AppActionEnvelope,
     };
     use crate::core::message::Message;
     use crate::ui::theme::Theme;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{mpsc, Mutex};
 
     const TERM_WIDTH: u16 = 80;
     const TERM_HEIGHT: u16 = 24;
@@ -1634,7 +1666,7 @@ mod tests {
             AppAction::AppendResponseChunk {
                 content: "Hello".into(),
             },
-            &ctx,
+            ctx,
         );
 
         assert_eq!(app.ui.current_response, "Hello");
@@ -1674,7 +1706,7 @@ mod tests {
             AppAction::AppendResponseChunk {
                 content: aggregated,
             },
-            &ctx,
+            ctx,
         );
 
         assert_eq!(
@@ -1698,7 +1730,7 @@ mod tests {
             AppAction::StreamErrored {
                 message: " api failure \n".into(),
             },
-            &ctx,
+            ctx,
         );
 
         assert!(!app.ui.is_streaming);
@@ -1715,7 +1747,7 @@ mod tests {
         app.ui.current_response = "partial".into();
 
         let ctx = default_context();
-        apply_action(&mut app, AppAction::StreamCompleted, &ctx);
+        apply_action(&mut app, AppAction::StreamCompleted, ctx);
 
         assert!(!app.ui.is_streaming);
         assert!(app.session.retrying_message_index.is_none());
@@ -1730,6 +1762,7 @@ mod tests {
         service.send_for_test(StreamMessage::End, 42);
 
         let app = Arc::new(Mutex::new(setup_app()));
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
         {
             let mut guard = app.lock().await;
             guard.session.current_stream_id = 42;
@@ -1740,10 +1773,19 @@ mod tests {
             guard.ui.is_streaming = true;
         }
 
-        let dispatcher = AppActionDispatcher::new(app.clone());
+        let dispatcher = AppActionDispatcher::new(action_tx);
 
-        let processed = process_stream_updates(&dispatcher, &mut rx, TERM_WIDTH, TERM_HEIGHT).await;
+        let processed = process_stream_updates(&dispatcher, &mut rx, TERM_WIDTH, TERM_HEIGHT, 42);
         assert!(processed);
+
+        {
+            let mut guard = app.lock().await;
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            apply_actions(&mut guard, envelopes);
+        }
 
         let guard = app.lock().await;
         assert_eq!(guard.ui.current_response, "Hello world");

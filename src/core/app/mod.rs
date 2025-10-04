@@ -16,7 +16,9 @@ pub mod session;
 pub mod settings;
 pub mod ui_state;
 
-pub use actions::{AppAction, AppActionContext, AppActionDispatcher};
+pub use actions::{
+    apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
+};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use conversation::ConversationController;
 #[allow(unused_imports)]

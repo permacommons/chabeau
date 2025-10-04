@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 use super::App;
 
@@ -17,33 +15,42 @@ pub struct AppActionContext {
     pub term_height: u16,
 }
 
+#[derive(Debug, Clone)]
+pub struct AppActionEnvelope {
+    pub action: AppAction,
+    pub context: AppActionContext,
+}
+
 #[derive(Clone)]
 pub struct AppActionDispatcher {
-    app: Arc<Mutex<App>>,
+    tx: mpsc::UnboundedSender<AppActionEnvelope>,
 }
 
 impl AppActionDispatcher {
-    pub fn new(app: Arc<Mutex<App>>) -> Self {
-        Self { app }
+    pub fn new(tx: mpsc::UnboundedSender<AppActionEnvelope>) -> Self {
+        Self { tx }
     }
 
-    pub async fn dispatch_many<I>(&self, actions: I, ctx: &AppActionContext)
+    pub fn dispatch_many<I>(&self, actions: I, ctx: AppActionContext)
     where
         I: IntoIterator<Item = AppAction>,
     {
-        let mut app_guard = self.app.lock().await;
         for action in actions.into_iter() {
-            apply_action(&mut app_guard, action, ctx);
+            let _ = self.tx.send(AppActionEnvelope {
+                action,
+                context: ctx,
+            });
         }
-    }
-
-    pub async fn current_stream_id(&self) -> u64 {
-        let app_guard = self.app.lock().await;
-        app_guard.session.current_stream_id
     }
 }
 
-pub(crate) fn apply_action(app: &mut App, action: AppAction, ctx: &AppActionContext) {
+pub fn apply_actions(app: &mut App, envelopes: impl IntoIterator<Item = AppActionEnvelope>) {
+    for envelope in envelopes {
+        apply_action(app, envelope.action, envelope.context);
+    }
+}
+
+pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) {
     match action {
         AppAction::AppendResponseChunk { content } => {
             append_response_chunk(app, &content, ctx);
@@ -70,7 +77,7 @@ pub(crate) fn apply_action(app: &mut App, action: AppAction, ctx: &AppActionCont
     }
 }
 
-fn append_response_chunk(app: &mut App, chunk: &str, ctx: &AppActionContext) {
+fn append_response_chunk(app: &mut App, chunk: &str, ctx: AppActionContext) {
     if chunk.is_empty() {
         return;
     }

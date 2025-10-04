@@ -397,7 +397,11 @@ mod tests {
     use crate::ui::span::LinkMeta;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    use once_cell::sync::Lazy;
+
+    static TEST_RENDER_STATE_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     fn cell_with_symbol(symbol: &str) -> Cell {
         let mut cell = Cell::default();
@@ -435,6 +439,7 @@ mod tests {
 
     #[test]
     fn redraws_cell_when_hyperlink_changes_without_buffer_diff() {
+        let _guard = TEST_RENDER_STATE_GUARD.lock().unwrap();
         let (mut backend, storage) = backend_with_recorder();
         let cell = cell_with_symbol("A");
 
@@ -461,10 +466,13 @@ mod tests {
         let output = String::from_utf8_lossy(&output);
         assert!(output.contains("\x1b]8;;https://new.example\x1b\\"));
         assert!(output.contains("\x1b]8;;\x1b\\"));
+
+        set_render_state(OscRenderState::default());
     }
 
     #[test]
     fn closes_stale_hyperlink_even_without_cell_diff() {
+        let _guard = TEST_RENDER_STATE_GUARD.lock().unwrap();
         let (mut backend, storage) = backend_with_recorder();
         let cell = cell_with_symbol("A");
 
@@ -489,10 +497,13 @@ mod tests {
         let output = String::from_utf8_lossy(&output);
         assert!(!output.contains("https://old.example"));
         assert!(output.contains("\x1b]8;;\x1b\\"));
+
+        set_render_state(OscRenderState::default());
     }
 
     #[test]
     fn closes_hyperlink_removed_by_scroll_without_touching_endpoint() {
+        let _guard = TEST_RENDER_STATE_GUARD.lock().unwrap();
         let (mut backend, storage) = backend_with_recorder();
         let top_cell = cell_with_symbol("A");
         let scrolled_cell = cell_with_symbol("B");
@@ -518,5 +529,7 @@ mod tests {
         let output = storage.borrow();
         let output = String::from_utf8_lossy(&output);
         assert!(output.contains("\x1b]8;;\x1b\\"));
+
+        set_render_state(OscRenderState::default());
     }
 }

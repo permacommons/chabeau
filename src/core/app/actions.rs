@@ -3,31 +3,45 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use super::App;
+use crate::api::ModelsResponse;
 use crate::core::chat_stream::StreamParams;
 
-#[derive(Debug, Clone)]
 pub enum AppAction {
-    AppendResponseChunk { content: String },
-    StreamErrored { message: String },
+    AppendResponseChunk {
+        content: String,
+    },
+    StreamErrored {
+        message: String,
+    },
     StreamCompleted,
     ClearStatus,
     ToggleComposeMode,
     CancelFilePrompt,
     CancelInPlaceEdit,
     CancelStreaming,
-    SetStatus { message: String },
+    SetStatus {
+        message: String,
+    },
     ClearInput,
-    SubmitMessage { message: String },
+    SubmitMessage {
+        message: String,
+    },
     RetryLastMessage,
+    ModelPickerLoaded {
+        default_model_for_provider: Option<String>,
+        models_response: ModelsResponse,
+    },
+    ModelPickerLoadFailed {
+        error: String,
+    },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct AppActionContext {
     pub term_width: u16,
     pub term_height: u16,
 }
 
-#[derive(Debug, Clone)]
 pub struct AppActionEnvelope {
     pub action: AppAction,
     pub context: AppActionContext,
@@ -125,8 +139,8 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         }
         AppAction::SetStatus { message } => {
             app.conversation().set_status(message);
-            let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
-            {
+            if ctx.term_width > 0 && ctx.term_height > 0 {
+                let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
                 let mut conversation = app.conversation();
                 let available_height =
                     conversation.calculate_available_height(ctx.term_height, input_area_height);
@@ -136,7 +150,9 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         }
         AppAction::ClearInput => {
             app.ui.clear_input();
-            app.ui.recompute_input_layout_after_edit(ctx.term_width);
+            if ctx.term_width > 0 {
+                app.ui.recompute_input_layout_after_edit(ctx.term_width);
+            }
             None
         }
         AppAction::SubmitMessage { message } => {
@@ -144,6 +160,24 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             Some(AppCommand::SpawnStream(params))
         }
         AppAction::RetryLastMessage => prepare_retry_stream(app, ctx),
+        AppAction::ModelPickerLoaded {
+            default_model_for_provider,
+            models_response,
+        } => {
+            if let Err(e) =
+                app.complete_model_picker_request(default_model_for_provider, models_response)
+            {
+                app.conversation()
+                    .set_status(format!("Model picker error: {}", e));
+            }
+            None
+        }
+        AppAction::ModelPickerLoadFailed { error } => {
+            app.fail_model_picker_request();
+            app.conversation()
+                .set_status(format!("Model picker error: {}", error));
+            None
+        }
     }
 }
 
@@ -164,15 +198,17 @@ fn prepare_stream_params_for_message(
     message: String,
     ctx: AppActionContext,
 ) -> StreamParams {
+    let term_width = ctx.term_width.max(1);
+    let term_height = ctx.term_height.max(1);
     app.ui.auto_scroll = true;
-    let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
+    let input_area_height = app.ui.calculate_input_area_height(term_width);
     let (cancel_token, stream_id, api_messages) = {
         let mut conversation = app.conversation();
         let (cancel_token, stream_id) = conversation.start_new_stream();
         let api_messages = conversation.add_user_message(message);
         let available_height =
-            conversation.calculate_available_height(ctx.term_height, input_area_height);
-        conversation.update_scroll_position(available_height, ctx.term_width);
+            conversation.calculate_available_height(term_height, input_area_height);
+        conversation.update_scroll_position(available_height, term_width);
         (cancel_token, stream_id, api_messages)
     };
 
@@ -191,6 +227,10 @@ fn prepare_stream_params_for_message(
 fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     let now = Instant::now();
     if now.duration_since(app.session.last_retry_time).as_millis() < 200 {
+        return None;
+    }
+
+    if ctx.term_width == 0 || ctx.term_height == 0 {
         return None;
     }
 

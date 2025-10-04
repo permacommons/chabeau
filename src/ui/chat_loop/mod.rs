@@ -84,7 +84,7 @@ fn status_suffix(is_persistent: bool) -> &'static str {
 }
 
 fn spawn_model_picker_loader(
-    app: Arc<Mutex<App>>,
+    dispatcher: AppActionDispatcher,
     event_tx: mpsc::UnboundedSender<UiEvent>,
     request: ModelPickerRequest,
 ) {
@@ -102,25 +102,15 @@ fn spawn_model_picker_loader(
             .await
             .map_err(|e| e.to_string());
 
-        let mut app_guard = app.lock().await;
-        match fetch_result {
-            Ok(models_response) => {
-                if let Err(e) = app_guard
-                    .complete_model_picker_request(default_model_for_provider, models_response)
-                {
-                    app_guard
-                        .conversation()
-                        .set_status(format!("Model picker error: {}", e));
-                }
-            }
-            Err(e) => {
-                app_guard.fail_model_picker_request();
-                app_guard
-                    .conversation()
-                    .set_status(format!("Model picker error: {}", e));
-            }
-        }
-        drop(app_guard);
+        let action = match fetch_result {
+            Ok(models_response) => AppAction::ModelPickerLoaded {
+                default_model_for_provider,
+                models_response,
+            },
+            Err(e) => AppAction::ModelPickerLoadFailed { error: e },
+        };
+
+        dispatcher.dispatch_many([action], AppActionContext::default());
         let _ = event_tx.send(UiEvent::RequestRedraw);
     });
 }
@@ -848,6 +838,7 @@ async fn handle_external_editor_shortcut(
 }
 
 async fn process_input_submission(
+    dispatcher: &AppActionDispatcher,
     app: &Arc<Mutex<App>>,
     input_text: String,
     term_width: u16,
@@ -870,7 +861,7 @@ async fn process_input_submission(
         CommandResult::OpenModelPicker => {
             let request = app_guard.prepare_model_picker_request();
             drop(app_guard);
-            spawn_model_picker_loader(app.clone(), event_tx.clone(), request);
+            spawn_model_picker_loader(dispatcher.clone(), event_tx.clone(), request);
             SubmissionResult::Continue
         }
         CommandResult::OpenProviderPicker => {
@@ -888,6 +879,7 @@ async fn process_input_submission(
 }
 
 async fn handle_enter_key(
+    dispatcher: &AppActionDispatcher,
     app: &Arc<Mutex<App>>,
     key: &event::KeyEvent,
     term_width: u16,
@@ -1005,7 +997,16 @@ async fn handle_enter_key(
         text
     };
 
-    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
+    match process_input_submission(
+        dispatcher,
+        app,
+        input_text,
+        term_width,
+        term_height,
+        event_tx,
+    )
+    .await
+    {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_service.spawn_stream(params);
@@ -1015,6 +1016,7 @@ async fn handle_enter_key(
 }
 
 async fn handle_ctrl_j_shortcut(
+    dispatcher: &AppActionDispatcher,
     app: &Arc<Mutex<App>>,
     term_width: u16,
     term_height: u16,
@@ -1048,7 +1050,16 @@ async fn handle_ctrl_j_shortcut(
         text
     };
 
-    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
+    match process_input_submission(
+        dispatcher,
+        app,
+        input_text,
+        term_width,
+        term_height,
+        event_tx,
+    )
+    .await
+    {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_service.spawn_stream(params);
@@ -1094,6 +1105,7 @@ enum SubmissionResult {
 
 async fn handle_picker_key_event(
     app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,
     event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) {
@@ -1299,9 +1311,11 @@ async fn handle_picker_key_event(
                                         app_guard.picker.startup_requires_model = true;
                                     }
                                     let request = app_guard.prepare_model_picker_request();
-                                    let app_clone = app.clone();
-                                    let event_tx_clone = event_tx.clone();
-                                    spawn_model_picker_loader(app_clone, event_tx_clone, request);
+                                    spawn_model_picker_loader(
+                                        dispatcher.clone(),
+                                        event_tx.clone(),
+                                        request,
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -1388,11 +1402,9 @@ async fn handle_picker_key_event(
                                     app_guard.close_picker();
                                     if should_open_model_picker {
                                         let request = app_guard.prepare_model_picker_request();
-                                        let app_clone = app.clone();
-                                        let event_tx_clone = event_tx.clone();
                                         spawn_model_picker_loader(
-                                            app_clone,
-                                            event_tx_clone,
+                                            dispatcher.clone(),
+                                            event_tx.clone(),
                                             request,
                                         );
                                     }
@@ -1439,13 +1451,11 @@ async fn handle_picker_key_event(
                                 // Refresh the picker to remove the asterisk
                                 match current_picker_mode {
                                     Some(crate::core::app::PickerMode::Model) => {
-                                        // Store app reference for async refresh
+                                        // Refresh future model list asynchronously
                                         let request = app_guard.prepare_model_picker_request();
-                                        let app_clone = app.clone();
-                                        let event_tx_clone = event_tx.clone();
                                         spawn_model_picker_loader(
-                                            app_clone,
-                                            event_tx_clone,
+                                            dispatcher.clone(),
+                                            event_tx.clone(),
                                             request,
                                         );
                                     }

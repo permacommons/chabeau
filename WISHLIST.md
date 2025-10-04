@@ -56,8 +56,15 @@ Items are removed when completed.
 
 - Incremental chat loop action system — [OPEN]
   - **Motivation:** Reduce pervasive `Arc<Mutex<App>>` usage in the TUI loop to cut contention, simplify key handlers, and make UI state changes easier to reason about and test.
-  - **Step 1:** Introduce an internal `AppAction` enum plus dispatcher, then migrate the stream pipeline to emit actions instead of locking the app directly.
-  - **Step 2:** Refactor `run_chat` so it owns `App` and drains the action queue, keeping existing handlers temporarily by translating their direct mutations into actions inside the loop.
-  - **Step 3:** Convert keybinding handlers in batches (basic controls → navigation/editing → picker modes) to emit actions, adding focused regression tests for each batch.
-  - **Step 4:** Migrate remaining async helpers (external editor, retry, picker flows) to use the dispatcher, cleaning up now-unnecessary `Arc<Mutex<_>>` plumbing.
-  - **Step 5:** Once all producers emit actions, remove the legacy locking helpers and tighten the API around the event loop, ensuring documentation reflects the single-owner model.
+  - **Step 1:** Introduce an internal `AppAction` enum plus dispatcher, then migrate the stream pipeline to emit actions instead of locking the app directly. — [DONE]
+  - **Step 2:** Refactor `run_chat` so it owns `App` and drains the action queue, keeping existing handlers temporarily by translating their direct mutations into actions inside the loop. — [DONE]
+  - **Step 3:** Convert keybinding handlers in batches (basic controls → navigation/editing → picker modes) to emit actions, adding focused regression tests for each batch. — [DONE]
+  - **Step 4:** Migrate remaining async helpers (external editor, retry, picker flows) to use the dispatcher, cleaning up now-unnecessary `Arc<Mutex<_>>` plumbing. — [DONE]
+  - **Step 5:** Remove legacy locking helpers and tighten the event-loop API in incremental slices:
+    - **5a:** Move picker presentation mutations behind dedicated actions (open/close, preview, selection persistence). Ensure `/provider`, `/model`, and `/theme` flows drive the dispatcher exclusively, add focused tests for preview rollbacks, and route loader-triggered redraws through queued actions.
+    - **5b:** Translate command submission, file-prompt, and in-place edit workflows into action producers so command handling stops mutating shared state. Cover happy/error paths (dump, save-block, retries) with regression tests and ensure logging side effects remain intact.
+    - **5c:** Drop the deprecated locking helpers from `chat_loop`, document the single-owner dispatcher model, and audit public APIs (especially `ChatStreamService`, picker controllers, and commands) for the new invariants before promoting the pattern in README/architecture notes.
+  - **Step 6:** Post-migration cleanup — [OPEN]
+    - Sweep for remaining call sites that take `Arc<Mutex<App>>` solely for mutation side effects and convert to read-only access or action emission.
+    - Prune or rewrite legacy tests that still exercise the deprecated locking helpers; ensure action-centric tests cover enter, picker, and retry flows.
+    - Remove helper functions that became redundant after the dispatcher rollout (e.g., old picker refresh utilities) and modernize docs/examples to show the action-first patterns.

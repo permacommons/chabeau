@@ -768,7 +768,7 @@ impl KeyHandler for CtrlJHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -777,6 +777,7 @@ impl KeyHandler for CtrlJHandler {
         let mut layout_time = last_input_layout_update.unwrap_or_else(Instant::now);
 
         match handle_ctrl_j_shortcut(
+            dispatcher,
             app,
             term_width,
             term_height,
@@ -805,13 +806,14 @@ impl KeyHandler for EnterHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         match handle_enter_key(
+            dispatcher,
             app,
             key,
             term_width,
@@ -840,13 +842,14 @@ impl KeyHandler for AltEnterHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         match handle_enter_key(
+            dispatcher,
             app,
             key,
             term_width,
@@ -985,7 +988,7 @@ impl KeyHandler for PickerHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         _term_width: u16,
         _term_height: u16,
@@ -997,7 +1000,7 @@ impl KeyHandler for PickerHandler {
             app_guard.picker_session().is_some()
         };
 
-        handle_picker_key_event(app, key, &self.event_tx).await;
+        handle_picker_key_event(app, dispatcher, key, &self.event_tx).await;
 
         // If we had a picker session before, then the key was handled by the picker
         // (even if it resulted in closing the picker, like Esc does)

@@ -223,8 +223,9 @@ Modular design with focused components:
   - `logging.rs` - Chat logging functionality
   - `scroll.rs` - Text wrapping and scroll calculations
   - `clipboard.rs` - Cross-platform clipboard helper
-- `commands/` - Chat command processing
-  - `mod.rs` - Command processing implementation
+- `commands/` - Chat command processing and registry-driven dispatch
+  - `mod.rs` - Command handlers and dispatcher
+  - `registry.rs` - Static command metadata registry
 
 ## Development
 

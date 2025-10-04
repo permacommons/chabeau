@@ -1,3 +1,7 @@
+mod registry;
+
+pub use registry::{all_commands, CommandInvocation};
+
 use crate::core::app::App;
 use chrono::Utc;
 use std::fs::File;
@@ -13,238 +17,253 @@ pub enum CommandResult {
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     let trimmed = input.trim();
 
-    if trimmed.starts_with("/help") {
-        let help_md = crate::ui::help::builtin_help_md();
-        app.conversation().add_system_message(help_md.to_string());
-        CommandResult::Continue
-    } else if trimmed.starts_with("/log") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if !trimmed.starts_with('/') {
+        return CommandResult::ProcessAsMessage(input.to_string());
+    }
 
-        match parts.len() {
-            1 => {
-                // Just "/log" - toggle logging if file is set
-                match app.session.logging.toggle_logging() {
-                    Ok(message) => {
-                        app.conversation().set_status(message);
-                        CommandResult::Continue
-                    }
-                    Err(e) => {
-                        app.conversation().set_status(format!("Log error: {}", e));
-                        CommandResult::Continue
-                    }
-                }
-            }
-            2 => {
-                // "/log <filename>" - set log file and enable logging
-                let filename = parts[1];
-                match app.session.logging.set_log_file(filename.to_string()) {
-                    Ok(message) => {
-                        app.conversation().set_status(message);
-                        CommandResult::Continue
-                    }
-                    Err(e) => {
-                        app.conversation()
-                            .set_status(format!("Logfile error: {}", e));
-                        CommandResult::Continue
-                    }
-                }
-            }
-            _ => {
-                app.conversation().set_status("Usage: /log [filename]");
-                CommandResult::Continue
-            }
-        }
-    } else if trimmed.starts_with("/dump") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    let mut parts = trimmed[1..].splitn(2, ' ');
+    let command_name = match parts.next() {
+        Some(name) if !name.is_empty() => name,
+        _ => return CommandResult::ProcessAsMessage(input.to_string()),
+    };
+    let args = parts.next().unwrap_or("").trim();
 
-        match parts.len() {
-            1 => {
-                // Just "/dump" - dump to default filename with ISO date
-                let timestamp = Utc::now().format("%Y-%m-%d").to_string();
-                let filename = format!("chabeau-log-{}.txt", timestamp);
-                match dump_conversation(app, &filename) {
-                    Ok(()) => handle_dump_result(app, Ok(()), &filename),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("already exists") {
-                            app.conversation().set_status("Log file already exists.");
-                            app.ui.start_file_prompt_dump(filename);
-                            CommandResult::Continue
-                        } else {
-                            handle_dump_result(app, Err(e), &filename)
-                        }
-                    }
-                }
-            }
-            2 => {
-                // "/dump <filename>" - dump to specified filename
-                let filename = parts[1];
-                handle_dump_result(app, dump_conversation(app, filename), filename)
-            }
-            _ => {
-                app.conversation().set_status("Usage: /dump [filename]");
+    if let Some(command) = registry::find_command(command_name) {
+        let invocation = CommandInvocation {
+            input: trimmed,
+            args,
+        };
+        (command.handler)(app, invocation)
+    } else {
+        CommandResult::ProcessAsMessage(input.to_string())
+    }
+}
+
+pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {
+    let mut help_md = crate::ui::help::builtin_help_md().to_string();
+    help_md.push_str("\n\n### Commands\n");
+    for command in all_commands() {
+        help_md.push_str(&format!("* `/{}` - {}\n", command.name, command.help));
+    }
+    app.conversation().add_system_message(help_md);
+    CommandResult::Continue
+}
+
+pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+
+    match parts.len() {
+        1 => match app.session.logging.toggle_logging() {
+            Ok(message) => {
+                app.conversation().set_status(message);
                 CommandResult::Continue
             }
-        }
-    } else if trimmed.starts_with("/theme") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        match parts.len() {
-            1 => {
-                // Open picker
-                app.open_theme_picker();
+            Err(e) => {
+                app.conversation().set_status(format!("Log error: {}", e));
                 CommandResult::Continue
             }
-            _ => {
-                // Try to set theme directly by id/name
-                let id = parts[1];
-                let res = {
-                    let mut controller = app.theme_controller();
-                    controller.apply_theme_by_id(id)
-                };
-                match res {
-                    Ok(_) => {
-                        app.conversation().set_status(format!("Theme set: {}", id));
+        },
+        2 => {
+            let filename = parts[1];
+            match app.session.logging.set_log_file(filename.to_string()) {
+                Ok(message) => {
+                    app.conversation().set_status(message);
+                    CommandResult::Continue
+                }
+                Err(e) => {
+                    app.conversation()
+                        .set_status(format!("Logfile error: {}", e));
+                    CommandResult::Continue
+                }
+            }
+        }
+        _ => {
+            app.conversation().set_status("Usage: /log [filename]");
+            CommandResult::Continue
+        }
+    }
+}
+
+pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+
+    match parts.len() {
+        1 => {
+            let timestamp = Utc::now().format("%Y-%m-%d").to_string();
+            let filename = format!("chabeau-log-{}.txt", timestamp);
+            match dump_conversation(app, &filename) {
+                Ok(()) => handle_dump_result(app, Ok(()), &filename),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("already exists") {
+                        app.conversation().set_status("Log file already exists.");
+                        app.ui.start_file_prompt_dump(filename);
+                        CommandResult::Continue
+                    } else {
+                        handle_dump_result(app, Err(e), &filename)
+                    }
+                }
+            }
+        }
+        2 => {
+            let filename = parts[1];
+            handle_dump_result(app, dump_conversation(app, filename), filename)
+        }
+        _ => {
+            app.conversation().set_status("Usage: /dump [filename]");
+            CommandResult::Continue
+        }
+    }
+}
+
+pub(super) fn handle_theme(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => {
+            app.open_theme_picker();
+            CommandResult::Continue
+        }
+        _ => {
+            let id = parts[1];
+            let res = {
+                let mut controller = app.theme_controller();
+                controller.apply_theme_by_id(id)
+            };
+            match res {
+                Ok(_) => {
+                    app.conversation().set_status(format!("Theme set: {}", id));
+                    CommandResult::Continue
+                }
+                Err(_e) => {
+                    app.conversation().set_status("Theme error");
+                    CommandResult::Continue
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn handle_model(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => CommandResult::OpenModelPicker,
+        _ => {
+            let model_id = parts[1];
+            {
+                let mut controller = app.provider_controller();
+                controller.apply_model_by_id(model_id);
+            }
+            app.conversation()
+                .set_status(format!("Model set: {}", model_id));
+            CommandResult::Continue
+        }
+    }
+}
+
+pub(super) fn handle_provider(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => CommandResult::OpenProviderPicker,
+        _ => {
+            let provider_id = parts[1];
+            let (result, should_open_model_picker) = {
+                let mut controller = app.provider_controller();
+                controller.apply_provider_by_id(provider_id)
+            };
+            match result {
+                Ok(_) => {
+                    app.conversation()
+                        .set_status(format!("Provider set: {}", provider_id));
+                    if should_open_model_picker {
+                        CommandResult::OpenModelPicker
+                    } else {
                         CommandResult::Continue
                     }
-                    Err(_e) => {
-                        app.conversation().set_status("Theme error");
-                        CommandResult::Continue
-                    }
+                }
+                Err(e) => {
+                    app.conversation()
+                        .set_status(format!("Provider error: {}", e));
+                    CommandResult::Continue
                 }
             }
         }
-    } else if trimmed.starts_with("/model") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        match parts.len() {
-            1 => {
-                // Open model picker - this is async, so we return a special command result
-                CommandResult::OpenModelPicker
-            }
-            _ => {
-                // Try to set model directly by id/name
-                let model_id = parts[1];
-                {
-                    let mut controller = app.provider_controller();
-                    controller.apply_model_by_id(model_id);
-                }
-                app.conversation()
-                    .set_status(format!("Model set: {}", model_id));
-                CommandResult::Continue
-            }
+    }
+}
+
+pub(super) fn handle_markdown(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let action = invocation.args.split_whitespace().next().unwrap_or("");
+    let mut new_state = app.ui.markdown_enabled;
+    match action.to_ascii_lowercase().as_str() {
+        "on" => new_state = true,
+        "off" => new_state = false,
+        "toggle" | "" => new_state = !new_state,
+        _ => {
+            app.conversation()
+                .set_status("Usage: /markdown [on|off|toggle]");
+            return CommandResult::Continue;
         }
-    } else if trimmed.starts_with("/provider") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        match parts.len() {
-            1 => {
-                // Open provider picker
-                CommandResult::OpenProviderPicker
-            }
-            _ => {
-                // Try to set provider directly by id/name
-                let provider_id = parts[1];
-                let (result, should_open_model_picker) = {
-                    let mut controller = app.provider_controller();
-                    controller.apply_provider_by_id(provider_id)
-                };
-                match result {
-                    Ok(_) => {
-                        app.conversation()
-                            .set_status(format!("Provider set: {}", provider_id));
-                        if should_open_model_picker {
-                            // Return special command to trigger model picker
-                            CommandResult::OpenModelPicker
-                        } else {
-                            CommandResult::Continue
-                        }
-                    }
-                    Err(e) => {
-                        app.conversation()
-                            .set_status(format!("Provider error: {}", e));
-                        CommandResult::Continue
-                    }
-                }
-            }
-        }
-    } else if trimmed.starts_with("/markdown") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        let action = parts.get(1).copied().unwrap_or("");
-        let mut new_state = app.ui.markdown_enabled;
-        match action.to_ascii_lowercase().as_str() {
-            "on" => new_state = true,
-            "off" => new_state = false,
-            "toggle" | "" => new_state = !new_state,
-            _ => {
-                app.conversation()
-                    .set_status("Usage: /markdown [on|off|toggle]");
-                return CommandResult::Continue;
-            }
-        }
-        app.ui.markdown_enabled = new_state;
-        // Persist
-        match crate::core::config::Config::load() {
-            Ok(mut cfg) => {
-                cfg.markdown = Some(new_state);
-                if let Err(e) = cfg.save() {
-                    let _ = e; // keep detail out of status
-                    app.conversation().set_status(format!(
-                        "Markdown {} (unsaved)",
-                        if new_state { "enabled" } else { "disabled" }
-                    ));
-                } else {
-                    app.conversation().set_status(format!(
-                        "Markdown {}",
-                        if new_state { "enabled" } else { "disabled" }
-                    ));
-                }
-            }
-            Err(_e) => {
+    }
+    app.ui.markdown_enabled = new_state;
+    match crate::core::config::Config::load() {
+        Ok(mut cfg) => {
+            cfg.markdown = Some(new_state);
+            if let Err(e) = cfg.save() {
+                let _ = e;
+                app.conversation().set_status(format!(
+                    "Markdown {} (unsaved)",
+                    if new_state { "enabled" } else { "disabled" }
+                ));
+            } else {
                 app.conversation().set_status(format!(
                     "Markdown {}",
                     if new_state { "enabled" } else { "disabled" }
                 ));
             }
         }
-        CommandResult::Continue
-    } else if trimmed.starts_with("/syntax") {
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        let action = parts.get(1).copied().unwrap_or("");
-        let mut new_state = app.ui.syntax_enabled;
-        match action.to_ascii_lowercase().as_str() {
-            "on" => new_state = true,
-            "off" => new_state = false,
-            "toggle" | "" => new_state = !new_state,
-            _ => {
-                app.conversation()
-                    .set_status("Usage: /syntax [on|off|toggle]");
-                return CommandResult::Continue;
-            }
+        Err(_e) => {
+            app.conversation().set_status(format!(
+                "Markdown {}",
+                if new_state { "enabled" } else { "disabled" }
+            ));
         }
-        app.ui.syntax_enabled = new_state;
-        // Persist
-        match crate::core::config::Config::load() {
-            Ok(mut cfg) => {
-                cfg.syntax = Some(new_state);
-                if let Err(e) = cfg.save() {
-                    let _ = e;
-                    app.conversation().set_status(format!(
-                        "Syntax {} (unsaved)",
-                        if new_state { "on" } else { "off" }
-                    ));
-                } else {
-                    app.conversation()
-                        .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
-                }
-            }
-            Err(_e) => {
+    }
+    CommandResult::Continue
+}
+
+pub(super) fn handle_syntax(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let action = invocation.args.split_whitespace().next().unwrap_or("");
+    let mut new_state = app.ui.syntax_enabled;
+    match action.to_ascii_lowercase().as_str() {
+        "on" => new_state = true,
+        "off" => new_state = false,
+        "toggle" | "" => new_state = !new_state,
+        _ => {
+            app.conversation()
+                .set_status("Usage: /syntax [on|off|toggle]");
+            return CommandResult::Continue;
+        }
+    }
+    app.ui.syntax_enabled = new_state;
+    match crate::core::config::Config::load() {
+        Ok(mut cfg) => {
+            cfg.syntax = Some(new_state);
+            if let Err(e) = cfg.save() {
+                let _ = e;
+                app.conversation().set_status(format!(
+                    "Syntax {} (unsaved)",
+                    if new_state { "on" } else { "off" }
+                ));
+            } else {
                 app.conversation()
                     .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
             }
         }
-        CommandResult::Continue
-    } else {
-        // Not a command, process as regular message
-        CommandResult::ProcessAsMessage(input.to_string())
+        Err(_e) => {
+            app.conversation()
+                .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
+        }
     }
+    CommandResult::Continue
 }
 
 pub fn dump_conversation_with_overwrite(
@@ -362,6 +381,33 @@ mod tests {
     fn read_config(path: &Path) -> Value {
         let contents = std::fs::read_to_string(path).unwrap();
         toml::from_str(&contents).unwrap()
+    }
+
+    #[test]
+    fn registry_lists_commands() {
+        let commands = super::all_commands();
+        assert!(commands.iter().any(|cmd| cmd.name == "help"));
+        assert!(commands.iter().any(|cmd| cmd.name == "markdown"));
+    }
+
+    #[test]
+    fn help_command_includes_registry_metadata() {
+        let mut app = create_test_app();
+        let result = process_input(&mut app, "/help");
+        assert!(matches!(result, CommandResult::Continue));
+        let last_message = app.ui.messages.back().expect("help message");
+        assert!(last_message
+            .content
+            .contains("`/help` - Show available commands"));
+    }
+
+    #[test]
+    fn commands_dispatch_case_insensitively() {
+        let mut app = create_test_app();
+        app.ui.markdown_enabled = false;
+        let result = process_input(&mut app, "/MarkDown On");
+        assert!(matches!(result, CommandResult::Continue));
+        assert!(app.ui.markdown_enabled);
     }
 
     #[test]

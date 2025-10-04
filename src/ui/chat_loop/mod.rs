@@ -5,7 +5,6 @@
 
 mod keybindings;
 mod setup;
-mod stream;
 
 use self::keybindings::{
     build_mode_aware_registry, scroll_block_into_view, wrap_next_index, wrap_previous_index,
@@ -13,7 +12,8 @@ use self::keybindings::{
 };
 
 use self::setup::bootstrap_app;
-use self::stream::{StreamDispatcher, StreamMessage, StreamParams};
+
+use crate::core::chat_stream::{ChatStreamService, StreamMessage, StreamParams};
 
 use crate::commands::process_input;
 use crate::commands::CommandResult;
@@ -330,8 +330,8 @@ pub async fn run_chat(
     let terminal = Arc::new(Mutex::new(Terminal::new(backend)?));
 
     // Channel for streaming updates with stream ID
-    let (stream_tx, mut rx) = mpsc::unbounded_channel::<(StreamMessage, u64)>();
-    let stream_dispatcher = Arc::new(StreamDispatcher::new(stream_tx));
+    let (stream_service, mut rx) = ChatStreamService::new();
+    let stream_service = Arc::new(stream_service);
 
     // Channel for async event processing
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<UiEvent>();
@@ -364,11 +364,8 @@ pub async fn run_chat(
     };
 
     // Initialize mode-aware keybinding registry
-    let mode_registry = build_mode_aware_registry(
-        stream_dispatcher.clone(),
-        terminal.clone(),
-        event_tx.clone(),
-    );
+    let mode_registry =
+        build_mode_aware_registry(stream_service.clone(), terminal.clone(), event_tx.clone());
 
     // Drawing cadence control
     let mut last_draw = Instant::now();
@@ -721,7 +718,7 @@ async fn handle_block_select_mode_event(
 async fn handle_external_editor_shortcut(
     app: &Arc<Mutex<App>>,
     terminal: &mut Terminal<OscBackend<io::Stdout>>,
-    stream_dispatcher: &StreamDispatcher,
+    stream_service: &ChatStreamService,
     term_width: u16,
     term_height: u16,
 ) -> Result<Option<KeyLoopAction>, String> {
@@ -740,7 +737,7 @@ async fn handle_external_editor_shortcut(
             let params =
                 prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
             drop(app_guard);
-            stream_dispatcher.spawn(params);
+            stream_service.spawn_stream(params);
             Ok(Some(KeyLoopAction::Continue))
         }
         Ok(None) => {
@@ -821,7 +818,7 @@ async fn handle_enter_key(
     key: &event::KeyEvent,
     term_width: u16,
     term_height: u16,
-    stream_dispatcher: &StreamDispatcher,
+    stream_service: &ChatStreamService,
     event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
@@ -937,7 +934,7 @@ async fn handle_enter_key(
     match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
-            stream_dispatcher.spawn(params);
+            stream_service.spawn_stream(params);
             Ok(Some(KeyLoopAction::Continue))
         }
     }
@@ -947,7 +944,7 @@ async fn handle_ctrl_j_shortcut(
     app: &Arc<Mutex<App>>,
     term_width: u16,
     term_height: u16,
-    stream_dispatcher: &StreamDispatcher,
+    stream_service: &ChatStreamService,
     last_input_layout_update: &mut Instant,
     event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
@@ -980,7 +977,7 @@ async fn handle_ctrl_j_shortcut(
     match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
-            stream_dispatcher.spawn(params);
+            stream_service.spawn_stream(params);
             Ok(Some(KeyLoopAction::Continue))
         }
     }
@@ -990,7 +987,7 @@ async fn handle_retry_shortcut(
     app: &Arc<Mutex<App>>,
     term_width: u16,
     term_height: u16,
-    stream_dispatcher: &StreamDispatcher,
+    stream_service: &ChatStreamService,
 ) -> bool {
     let maybe_params = {
         let mut app_guard = app.lock().await;
@@ -1029,7 +1026,7 @@ async fn handle_retry_shortcut(
     };
 
     if let Some(params) = maybe_params {
-        stream_dispatcher.spawn(params);
+        stream_service.spawn_stream(params);
     }
 
     true
@@ -1562,12 +1559,11 @@ mod tests {
     const TERM_WIDTH: u16 = 80;
     const TERM_HEIGHT: u16 = 24;
 
-    fn setup_dispatcher() -> (
-        StreamDispatcher,
+    fn setup_service() -> (
+        ChatStreamService,
         tokio::sync::mpsc::UnboundedReceiver<(StreamMessage, u64)>,
     ) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<(StreamMessage, u64)>();
-        (StreamDispatcher::new(tx), rx)
+        ChatStreamService::new()
     }
 
     fn setup_app() -> App {
@@ -1596,8 +1592,8 @@ mod tests {
 
     #[test]
     fn chunk_messages_append_to_response() {
-        let (dispatcher, mut rx) = setup_dispatcher();
-        dispatcher.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
+        let (service, mut rx) = setup_service();
+        service.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
 
         let mut app = setup_app();
         app.ui.messages.push_back(Message {
@@ -1654,8 +1650,8 @@ mod tests {
 
     #[test]
     fn error_messages_add_system_entries_and_stop_streaming() {
-        let (dispatcher, mut rx) = setup_dispatcher();
-        dispatcher.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
+        let (service, mut rx) = setup_service();
+        service.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
 
         let mut app = setup_app();
         app.ui.is_streaming = true;
@@ -1672,8 +1668,8 @@ mod tests {
 
     #[test]
     fn end_messages_finalize_responses() {
-        let (dispatcher, mut rx) = setup_dispatcher();
-        dispatcher.send_for_test(StreamMessage::End, 3);
+        let (service, mut rx) = setup_service();
+        service.send_for_test(StreamMessage::End, 3);
 
         let mut app = setup_app();
         app.ui.is_streaming = true;

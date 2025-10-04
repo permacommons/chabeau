@@ -2,7 +2,7 @@ use futures_util::StreamExt;
 use memchr::memchr;
 use tokio::sync::mpsc;
 
-use crate::api::{ChatRequest, ChatResponse};
+use crate::api::{ChatMessage, ChatRequest, ChatResponse};
 use crate::utils::url::construct_api_url;
 
 #[derive(Clone, Debug)]
@@ -55,16 +55,11 @@ fn process_sse_line(
 fn format_api_error(error_text: &str) -> String {
     let trimmed = error_text.trim();
 
-    // Check if it looks like JSON
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         format!("API Error:\n```json\n{}\n```", trimmed)
-    }
-    // Check if it looks like XML
-    else if trimmed.starts_with('<') && trimmed.ends_with('>') {
+    } else if trimmed.starts_with('<') && trimmed.ends_with('>') {
         format!("API Error:\n```xml\n{}\n```", trimmed)
-    }
-    // For plain text errors, still wrap in code fences for consistency
-    else {
+    } else {
         format!("API Error:\n```\n{}\n```", trimmed)
     }
 }
@@ -75,22 +70,23 @@ pub struct StreamParams {
     pub api_key: String,
     pub provider_name: String,
     pub model: String,
-    pub api_messages: Vec<crate::api::ChatMessage>,
+    pub api_messages: Vec<ChatMessage>,
     pub cancel_token: tokio_util::sync::CancellationToken,
     pub stream_id: u64,
 }
 
 #[derive(Clone)]
-pub struct StreamDispatcher {
+pub struct ChatStreamService {
     tx: mpsc::UnboundedSender<(StreamMessage, u64)>,
 }
 
-impl StreamDispatcher {
-    pub fn new(tx: mpsc::UnboundedSender<(StreamMessage, u64)>) -> Self {
-        Self { tx }
+impl ChatStreamService {
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<(StreamMessage, u64)>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self { tx }, rx)
     }
 
-    pub fn spawn(&self, params: StreamParams) {
+    pub fn spawn_stream(&self, params: StreamParams) {
         let tx_clone = self.tx.clone();
         tokio::spawn(async move {
             let StreamParams {
@@ -117,7 +113,11 @@ impl StreamDispatcher {
                         .post(chat_url)
                         .header("Content-Type", "application/json");
 
-                    let http_request = crate::utils::auth::add_auth_headers(http_request, &provider_name, &api_key);
+                    let http_request = crate::utils::auth::add_auth_headers(
+                        http_request,
+                        &provider_name,
+                        &api_key,
+                    );
 
                     match http_request
                         .json(&request)
@@ -171,7 +171,6 @@ impl StreamDispatcher {
                                 }
                             }
 
-                            // Stream ended naturally (connection closed) - send end marker
                             let _ = tx_clone.send((StreamMessage::End, stream_id));
                         }
                         Err(e) => {
@@ -186,10 +185,8 @@ impl StreamDispatcher {
             }
         });
     }
-}
 
-#[cfg(test)]
-impl StreamDispatcher {
+    #[cfg(test)]
     pub fn send_for_test(&self, message: StreamMessage, stream_id: u64) {
         let _ = self.tx.send((message, stream_id));
     }
@@ -201,7 +198,7 @@ mod tests {
 
     #[test]
     fn process_sse_line_handles_spacing_variants() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (service, mut rx) = ChatStreamService::new();
         let variants = [
             (
                 r#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#,
@@ -218,7 +215,7 @@ mod tests {
         for (index, (chunk_line, expected_chunk, done_line)) in variants.iter().enumerate() {
             let stream_id = (index + 1) as u64;
 
-            assert!(!process_sse_line(chunk_line, &tx, stream_id));
+            assert!(!process_sse_line(chunk_line, &service.tx, stream_id));
             let (message, received_id) = rx.try_recv().expect("expected chunk message");
             assert_eq!(received_id, stream_id);
             match message {
@@ -226,7 +223,7 @@ mod tests {
                 other => panic!("expected chunk message, got {:?}", other),
             }
 
-            assert!(process_sse_line(done_line, &tx, stream_id));
+            assert!(process_sse_line(done_line, &service.tx, stream_id));
             let (message, received_id) = rx.try_recv().expect("expected end message");
             assert_eq!(received_id, stream_id);
             assert!(matches!(message, StreamMessage::End));

@@ -199,6 +199,7 @@ Modular design with focused components:
     - `session.rs` - Session bootstrap and provider/model state
     - `settings.rs` - Theme and provider controllers
     - `ui_state.rs` - UI state management and text input helpers
+  - `chat_stream.rs` - Shared streaming service that feeds responses to the app, UI, and loggers
   - `builtin_providers.rs` - Built-in provider configuration (loads from `builtins/models.toml`)
   - `config.rs` - Configuration management
   - `message.rs` - Message data structures
@@ -209,7 +210,7 @@ Modular design with focused components:
   - `models.rs` - Model fetching and sorting functionality
 - `ui/` - Terminal interface rendering
   - `mod.rs` - UI module declarations
-  - `chat_loop/` - Mode-aware chat loop with setup, streaming, and keybinding registries
+  - `chat_loop/` - Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
   - `layout.rs` - Shared width-aware layout engine for Markdown and plain text
   - `markdown.rs` / `markdown_wrap.rs` - Markdown renderer and wrapping helpers that emit span metadata
   - `renderer.rs` - Terminal interface rendering (chat area, input, pickers)

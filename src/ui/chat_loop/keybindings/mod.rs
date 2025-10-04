@@ -19,7 +19,7 @@ pub enum KeyLoopAction {
 
 /// Build a complete mode-aware registry with all handlers
 pub fn build_mode_aware_registry(
-    stream_dispatcher: std::sync::Arc<crate::ui::chat_loop::stream::StreamDispatcher>,
+    stream_service: std::sync::Arc<crate::core::chat_stream::ChatStreamService>,
     terminal: std::sync::Arc<
         tokio::sync::Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>,
     >,
@@ -210,7 +210,7 @@ pub fn build_mode_aware_registry(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('j')),
             Box::new(CtrlJHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -218,7 +218,7 @@ pub fn build_mode_aware_registry(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -226,7 +226,7 @@ pub fn build_mode_aware_registry(
             KeyContext::Typing,
             KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
             Box::new(AltEnterHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -235,7 +235,7 @@ pub fn build_mode_aware_registry(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -243,7 +243,7 @@ pub fn build_mode_aware_registry(
             KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
             Box::new(AltEnterHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -251,7 +251,7 @@ pub fn build_mode_aware_registry(
             KeyContext::InPlaceEdit,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
                 event_tx: event_tx.clone(),
             }),
         )
@@ -259,14 +259,14 @@ pub fn build_mode_aware_registry(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('r')),
             Box::new(CtrlRHandler {
-                stream_dispatcher: stream_dispatcher.clone(),
+                stream_service: stream_service.clone(),
             }),
         )
         .register_for_context(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('t')),
             Box::new(CtrlTHandler {
-                stream_dispatcher,
+                stream_service,
                 terminal,
             }),
         )

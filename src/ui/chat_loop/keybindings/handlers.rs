@@ -9,8 +9,8 @@
 //! - Mode-specific handlers (picker, edit select, block select)
 
 use crate::core::app::App;
+use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
-use crate::ui::chat_loop::stream::StreamDispatcher;
 use crate::ui::chat_loop::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
     handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event,
@@ -390,7 +390,7 @@ impl KeyHandler for TextEditingHandler {
                 KeyResult::Handled
             }
             KeyCode::Char(c) => {
-                // Skip Ctrl+J - it has special compose mode logic that needs StreamDispatcher
+                // Skip Ctrl+J - it has special compose mode logic that needs the stream service
                 if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return KeyResult::NotHandled;
                 }
@@ -540,7 +540,7 @@ impl KeyHandler for CtrlPHandler {
 
 /// Handler for Ctrl+J (send in compose mode, newline otherwise)
 pub struct CtrlJHandler {
-    pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub stream_service: Arc<ChatStreamService>,
     pub event_tx: UnboundedSender<UiEvent>,
 }
 
@@ -560,7 +560,7 @@ impl KeyHandler for CtrlJHandler {
             app,
             term_width,
             term_height,
-            &self.stream_dispatcher,
+            &self.stream_service,
             &mut layout_time,
             &self.event_tx,
         )
@@ -576,7 +576,7 @@ impl KeyHandler for CtrlJHandler {
 
 /// Handler for Enter key (submit message)
 pub struct EnterHandler {
-    pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub stream_service: Arc<ChatStreamService>,
     pub event_tx: UnboundedSender<UiEvent>,
 }
 
@@ -595,7 +595,7 @@ impl KeyHandler for EnterHandler {
             key,
             term_width,
             term_height,
-            &self.stream_dispatcher,
+            &self.stream_service,
             &self.event_tx,
         )
         .await
@@ -610,7 +610,7 @@ impl KeyHandler for EnterHandler {
 
 /// Handler for Alt+Enter key (context-dependent behavior)
 pub struct AltEnterHandler {
-    pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub stream_service: Arc<ChatStreamService>,
     pub event_tx: UnboundedSender<UiEvent>,
 }
 
@@ -629,7 +629,7 @@ impl KeyHandler for AltEnterHandler {
             key,
             term_width,
             term_height,
-            &self.stream_dispatcher,
+            &self.stream_service,
             &self.event_tx,
         )
         .await
@@ -644,7 +644,7 @@ impl KeyHandler for AltEnterHandler {
 
 /// Handler for Ctrl+R (retry last message)
 pub struct CtrlRHandler {
-    pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub stream_service: Arc<ChatStreamService>,
 }
 
 #[async_trait::async_trait]
@@ -657,7 +657,7 @@ impl KeyHandler for CtrlRHandler {
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
-        if handle_retry_shortcut(app, term_width, term_height, &self.stream_dispatcher).await {
+        if handle_retry_shortcut(app, term_width, term_height, &self.stream_service).await {
             KeyResult::Continue
         } else {
             KeyResult::NotHandled
@@ -667,7 +667,7 @@ impl KeyHandler for CtrlRHandler {
 
 /// Handler for Ctrl+T (external editor)
 pub struct CtrlTHandler {
-    pub stream_dispatcher: Arc<StreamDispatcher>,
+    pub stream_service: Arc<ChatStreamService>,
     pub terminal:
         Arc<Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>>,
 }
@@ -686,7 +686,7 @@ impl KeyHandler for CtrlTHandler {
         match handle_external_editor_shortcut(
             app,
             &mut terminal_guard,
-            &self.stream_dispatcher,
+            &self.stream_service,
             term_width,
             term_height,
         )

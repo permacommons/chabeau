@@ -177,7 +177,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ])
     };
 
-    // Prepare optional bottom-right status message, shortened and right-aligned
+    // Prepare optional bottom-left status message, shortened and left-aligned
     let status_bottom: Option<Line> = if let Some(status) = &app.ui.status {
         // Limit to available width minus borders and a small margin
         let input_area_width = chunks[1].width;
@@ -230,20 +230,20 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 base_style
             };
 
-            // Compose a visual border with left filler and right-aligned status text
+            // Compose a visual border with left-aligned status text and right filler
             // Account for one leading and one trailing space
             let status_len = text_raw.chars().count() + 2;
             let dash_count = inner_width.saturating_sub(status_len);
-            let left_border = if dash_count > 0 {
+            let right_border = if dash_count > 0 {
                 "─".repeat(dash_count)
             } else {
                 String::new()
             };
             let line = Line::from(vec![
-                Span::styled(left_border, app.ui.theme.input_border_style),
                 Span::styled(" ", app.ui.theme.input_border_style),
                 Span::styled(text_raw.clone(), style),
                 Span::styled(" ", app.ui.theme.input_border_style),
+                Span::styled(right_border, app.ui.theme.input_border_style),
             ]);
             Some(line)
         }

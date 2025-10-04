@@ -1,6 +1,8 @@
 # Chabeau Help
 
-Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
+Thanks for using Chabeau, a Permacommons project.
+
+Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 
 ## Keys
 
@@ -31,10 +33,7 @@ Thanks for using Chabeau! Find a bug? Let us know: https://github.com/permacommo
 
 ## Tips
 
+- Not all terminals support clickable hyperlinks. Even if yours does, you may need to hold a modifier key like [Ctrl] while clicking.
 - Use `/log` to start logging from where you are.
 - `/dump` creates a one-off snapshot of the _entire_ conversation so far.
 - Use Ctrl+B to copy (`c`) or save (`s`) code blocks.
-- Chabeau will try to guess a good filename. If that already exists, it will prompt
-  you to specify your own.
-
-Chabeau is a Permacommons project. It is in the public domain, forever.

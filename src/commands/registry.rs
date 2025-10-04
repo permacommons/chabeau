@@ -105,9 +105,7 @@ const COMMANDS: &[Command] = &[
                 description: "Switch to the specified provider for this session only.",
             },
         ],
-        extra_help: &[
-            "  (Tip: On startup with multiple providers, Esc from model picker returns here.)",
-        ],
+        extra_help: &[],
         handler: super::handle_provider,
     },
     Command {

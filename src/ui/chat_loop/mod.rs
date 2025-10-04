@@ -19,7 +19,7 @@ use crate::api::models::fetch_models;
 use crate::commands::process_input;
 use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
-use crate::core::app::{App, ModelPickerRequest};
+use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher, ModelPickerRequest};
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::handle_external_editor;
@@ -305,19 +305,16 @@ async fn handle_paste_event(
 }
 
 async fn process_stream_updates(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
     rx: &mut mpsc::UnboundedReceiver<(StreamMessage, u64)>,
     term_width: u16,
     term_height: u16,
 ) -> bool {
-    let current_stream_id = {
-        let app_guard = app.lock().await;
-        app_guard.session.current_stream_id
-    };
+    let current_stream_id = dispatcher.current_stream_id().await;
 
     let mut received_any = false;
     let mut coalesced_chunks = String::new();
-    let mut marker_messages = Vec::new();
+    let mut followup_actions = Vec::new();
 
     while let Ok((message, msg_stream_id)) = rx.try_recv() {
         if msg_stream_id != current_stream_id {
@@ -329,9 +326,9 @@ async fn process_stream_updates(
                 coalesced_chunks.push_str(&content);
             }
             StreamMessage::Error(err) => {
-                marker_messages.push(StreamMessage::Error(err));
+                followup_actions.push(AppAction::StreamErrored { message: err });
             }
-            StreamMessage::End => marker_messages.push(StreamMessage::End),
+            StreamMessage::End => followup_actions.push(AppAction::StreamCompleted),
         }
 
         received_any = true;
@@ -341,11 +338,20 @@ async fn process_stream_updates(
         return false;
     }
 
-    let mut app_guard = app.lock().await;
+    let ctx = AppActionContext {
+        term_width,
+        term_height,
+    };
+
+    let mut actions = Vec::with_capacity(1 + followup_actions.len());
     let chunk = std::mem::take(&mut coalesced_chunks);
-    append_coalesced_chunk(&mut app_guard, chunk, term_width, term_height);
-    for message in marker_messages {
-        handle_stream_message(&mut app_guard, message, term_width, term_height);
+    if !chunk.is_empty() {
+        actions.push(AppAction::AppendResponseChunk { content: chunk });
+    }
+    actions.extend(followup_actions);
+
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(actions, &ctx).await;
     }
 
     true
@@ -358,6 +364,7 @@ pub async fn run_chat(
     env_only: bool,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only).await?;
+    let action_dispatcher = AppActionDispatcher::new(app.clone());
 
     // Sign-off line (no noisy startup banners)
     println!(
@@ -453,8 +460,13 @@ pub async fn run_chat(
             request_redraw = true;
         }
 
-        let received_any =
-            process_stream_updates(&app, &mut rx, term_size.width, term_size.height).await;
+        let received_any = process_stream_updates(
+            &action_dispatcher,
+            &mut rx,
+            term_size.width,
+            term_size.height,
+        )
+        .await;
 
         if received_any {
             request_redraw = true;
@@ -504,44 +516,6 @@ pub async fn run_chat(
     }
 
     result
-}
-
-fn append_coalesced_chunk(app: &mut App, chunk: String, term_width: u16, term_height: u16) {
-    if chunk.is_empty() {
-        return;
-    }
-
-    let input_area_height = app.ui.calculate_input_area_height(term_width);
-    let mut conversation = app.conversation();
-    let available_height = conversation.calculate_available_height(term_height, input_area_height);
-    conversation.append_to_response(&chunk, available_height, term_width);
-}
-
-fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16, term_height: u16) {
-    match message {
-        StreamMessage::Chunk(content) => {
-            append_coalesced_chunk(app, content, term_width, term_height);
-        }
-        StreamMessage::Error(err) => {
-            let error_message = format!("Error: {}", err.trim());
-            let input_area_height = app.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app.conversation();
-                conversation.add_system_message(error_message);
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            app.ui.end_streaming();
-        }
-        StreamMessage::End => {
-            {
-                let mut conversation = app.conversation();
-                conversation.finalize_response();
-            }
-            app.ui.end_streaming();
-        }
-    }
 }
 
 async fn handle_edit_select_mode_event(
@@ -1597,8 +1571,13 @@ async fn handle_picker_key_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::actions::{
+        apply_action, AppAction, AppActionContext, AppActionDispatcher,
+    };
     use crate::core::message::Message;
     use crate::ui::theme::Theme;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     const TERM_WIDTH: u16 = 80;
     const TERM_HEIGHT: u16 = 24;
@@ -1612,6 +1591,13 @@ mod tests {
 
     fn setup_app() -> App {
         App::new_bench(Theme::dark_default(), true, true)
+    }
+
+    fn default_context() -> AppActionContext {
+        AppActionContext {
+            term_width: TERM_WIDTH,
+            term_height: TERM_HEIGHT,
+        }
     }
 
     #[test]
@@ -1636,18 +1622,20 @@ mod tests {
 
     #[test]
     fn chunk_messages_append_to_response() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
-
         let mut app = setup_app();
         app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: String::new(),
         });
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(
+            &mut app,
+            AppAction::AppendResponseChunk {
+                content: "Hello".into(),
+            },
+            &ctx,
+        );
 
         assert_eq!(app.ui.current_response, "Hello");
         assert_eq!(app.ui.messages.back().unwrap().content, "Hello");
@@ -1680,7 +1668,14 @@ mod tests {
         });
 
         let aggregated = chunks.concat();
-        append_coalesced_chunk(&mut coalesced_app, aggregated, TERM_WIDTH, TERM_HEIGHT);
+        let ctx = default_context();
+        apply_action(
+            &mut coalesced_app,
+            AppAction::AppendResponseChunk {
+                content: aggregated,
+            },
+            &ctx,
+        );
 
         assert_eq!(
             coalesced_app.ui.current_response,
@@ -1694,15 +1689,17 @@ mod tests {
 
     #[test]
     fn error_messages_add_system_entries_and_stop_streaming() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
-
         let mut app = setup_app();
         app.ui.is_streaming = true;
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(
+            &mut app,
+            AppAction::StreamErrored {
+                message: " api failure \n".into(),
+            },
+            &ctx,
+        );
 
         assert!(!app.ui.is_streaming);
         let last_message = app.ui.messages.back().expect("system message added");
@@ -1712,19 +1709,53 @@ mod tests {
 
     #[test]
     fn end_messages_finalize_responses() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::End, 3);
-
         let mut app = setup_app();
         app.ui.is_streaming = true;
         app.session.retrying_message_index = Some(0);
         app.ui.current_response = "partial".into();
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(&mut app, AppAction::StreamCompleted, &ctx);
 
         assert!(!app.ui.is_streaming);
         assert!(app.session.retrying_message_index.is_none());
+    }
+
+    #[tokio::test]
+    async fn process_stream_updates_dispatches_actions() {
+        let (service, mut rx) = setup_service();
+        service.send_for_test(StreamMessage::Chunk("Hello".into()), 42);
+        service.send_for_test(StreamMessage::Chunk(" world".into()), 42);
+        service.send_for_test(StreamMessage::Error(" failure ".into()), 99);
+        service.send_for_test(StreamMessage::End, 42);
+
+        let app = Arc::new(Mutex::new(setup_app()));
+        {
+            let mut guard = app.lock().await;
+            guard.session.current_stream_id = 42;
+            guard.ui.messages.push_back(Message {
+                role: "assistant".to_string(),
+                content: String::new(),
+            });
+            guard.ui.is_streaming = true;
+        }
+
+        let dispatcher = AppActionDispatcher::new(app.clone());
+
+        let processed = process_stream_updates(&dispatcher, &mut rx, TERM_WIDTH, TERM_HEIGHT).await;
+        assert!(processed);
+
+        let guard = app.lock().await;
+        assert_eq!(guard.ui.current_response, "Hello world");
+        assert_eq!(guard.ui.messages.back().unwrap().content, "Hello world");
+        assert!(!guard.ui.is_streaming);
+
+        let last_message = guard
+            .ui
+            .messages
+            .iter()
+            .rev()
+            .find(|msg| msg.role == "system");
+        assert!(last_message.is_none(), "non-matching error message ignored");
     }
 }

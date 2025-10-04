@@ -9,12 +9,14 @@ use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::text::Line;
 
+pub mod actions;
 pub mod conversation;
 pub mod picker;
 pub mod session;
 pub mod settings;
 pub mod ui_state;
 
+pub use actions::{AppAction, AppActionContext, AppActionDispatcher};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use conversation::ConversationController;
 #[allow(unused_imports)]

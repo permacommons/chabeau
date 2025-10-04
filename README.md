@@ -15,7 +15,6 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 ## Features
 
 - Full-screen terminal UI with real-time streaming responses
-- Animated activity indicator that covers both streaming replies and background model lookups
 - Markdown rendering in the chat area (headings, lists, quotes, tables, inline/fenced code) with clickable OSC 8 hyperlinks
 - Built-in support for many common providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras)
 - Support for quick custom configuration of new OpenAI-compatible providers

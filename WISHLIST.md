@@ -51,3 +51,13 @@ Items are removed when completed.
   - Create a small `ui/help.rs` with canonical key-hint strings used by CLI long_about, `/help`, and renderer titles — [OPEN]
 - Picker OSC8 state handling — [OPEN]
   - Investigate replacing the temporary clone used to strip link modifiers with a render-time style mask so we reuse the cached transcript buffer and toggle hyperlink styling without allocating new `Line` vectors when pickers open/close.
+
+## Architecture
+
+- Incremental chat loop action system — [OPEN]
+  - **Motivation:** Reduce pervasive `Arc<Mutex<App>>` usage in the TUI loop to cut contention, simplify key handlers, and make UI state changes easier to reason about and test.
+  - **Step 1:** Introduce an internal `AppAction` enum plus dispatcher, then migrate the stream pipeline to emit actions instead of locking the app directly.
+  - **Step 2:** Refactor `run_chat` so it owns `App` and drains the action queue, keeping existing handlers temporarily by translating their direct mutations into actions inside the loop.
+  - **Step 3:** Convert keybinding handlers in batches (basic controls → navigation/editing → picker modes) to emit actions, adding focused regression tests for each batch.
+  - **Step 4:** Migrate remaining async helpers (external editor, retry, picker flows) to use the dispatcher, cleaning up now-unnecessary `Arc<Mutex<_>>` plumbing.
+  - **Step 5:** Once all producers emit actions, remove the legacy locking helpers and tighten the API around the event loop, ensuring documentation reflects the single-owner model.

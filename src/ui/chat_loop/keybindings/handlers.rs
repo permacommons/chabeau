@@ -8,6 +8,7 @@
 //! - Complex operations (external editor, message submission)
 //! - Mode-specific handlers (picker, edit select, block select)
 
+use crate::commands;
 use crate::core::app::App;
 use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
@@ -428,6 +429,193 @@ impl KeyHandler for TextEditingHandler {
 }
 
 // ============================================================================
+// Slash Command Autocomplete Handler
+// ============================================================================
+
+type CommandMatchFn = dyn Fn(&str) -> Vec<String> + Send + Sync;
+
+pub struct CommandAutocompleteHandler {
+    matcher: Arc<CommandMatchFn>,
+}
+
+impl CommandAutocompleteHandler {
+    pub fn new() -> Self {
+        Self {
+            matcher: Arc::new(|prefix: &str| {
+                commands::matching_commands(prefix)
+                    .into_iter()
+                    .map(|command| command.name.to_string())
+                    .collect()
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_matcher(matcher: Arc<CommandMatchFn>) -> Self {
+        Self { matcher }
+    }
+}
+
+impl Default for CommandAutocompleteHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl KeyHandler for CommandAutocompleteHandler {
+    async fn handle(
+        &self,
+        app: &Arc<Mutex<App>>,
+        _key: &KeyEvent,
+        term_width: u16,
+        _term_height: u16,
+        _last_input_layout_update: Option<std::time::Instant>,
+    ) -> KeyResult {
+        let mut app_guard = app.lock().await;
+        let input = app_guard.ui.get_input_text().to_string();
+
+        if !input.starts_with('/') {
+            return KeyResult::NotHandled;
+        }
+
+        let cursor_char_index = app_guard.ui.input_cursor_position;
+        let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
+
+        if cursor_byte_index == 0 {
+            return KeyResult::NotHandled;
+        }
+
+        let command_region_end = {
+            let after_slash = &input[1..];
+            after_slash
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(idx, _)| idx + 1)
+                .unwrap_or_else(|| input.len())
+        };
+
+        if cursor_byte_index > command_region_end {
+            return KeyResult::NotHandled;
+        }
+
+        let command_prefix = &input[1..cursor_byte_index];
+        let matches = (self.matcher)(command_prefix);
+
+        if matches.is_empty() {
+            let message = if command_prefix.is_empty() {
+                "No commands available".to_string()
+            } else {
+                format!("No commands matching \"/{}\"", command_prefix)
+            };
+            app_guard.conversation().set_status(message);
+            return KeyResult::Handled;
+        }
+
+        let rest = &input[command_region_end..];
+
+        if matches.len() == 1 {
+            let command_name = &matches[0];
+            let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
+            new_text.push('/');
+            new_text.push_str(command_name);
+            if rest.is_empty() {
+                new_text.push(' ');
+            } else {
+                new_text.push_str(rest);
+            }
+
+            if new_text != input {
+                let target_col_base = command_name.chars().count() + 1;
+                let target_col = if rest.is_empty() {
+                    target_col_base + 1
+                } else {
+                    target_col_base
+                } as u16;
+
+                app_guard
+                    .ui
+                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                        ta.select_all();
+                        ta.cut();
+                        ta.insert_str(&new_text);
+                        ta.move_cursor(CursorMove::Jump(0, target_col));
+                    });
+            }
+
+            return KeyResult::Handled;
+        }
+
+        let prefix_char_len = command_prefix.chars().count();
+        let common_prefix_len = longest_common_prefix_len(&matches);
+        let target_prefix_len = common_prefix_len.max(prefix_char_len);
+        let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
+
+        let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
+        new_text.push('/');
+        new_text.push_str(&canonical_prefix);
+        new_text.push_str(rest);
+
+        if new_text != input {
+            let target_col = (canonical_prefix.chars().count() + 1) as u16;
+            app_guard
+                .ui
+                .apply_textarea_edit_and_recompute(term_width, |ta| {
+                    ta.select_all();
+                    ta.cut();
+                    ta.insert_str(&new_text);
+                    ta.move_cursor(CursorMove::Jump(0, target_col));
+                });
+        }
+
+        let status = matches
+            .iter()
+            .map(|name| format!("/{}", name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        app_guard
+            .conversation()
+            .set_status(format!("Commands: {}", status));
+
+        KeyResult::Handled
+    }
+}
+
+fn char_index_to_byte_index(s: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    match s.char_indices().nth(char_index) {
+        Some((idx, _)) => idx,
+        None => s.len(),
+    }
+}
+
+fn longest_common_prefix_len(names: &[String]) -> usize {
+    if names.is_empty() {
+        return 0;
+    }
+
+    let mut prefix: Vec<char> = names[0].chars().collect();
+    for name in names.iter().skip(1) {
+        let mut new_len = 0;
+        for (a, b) in prefix.iter().zip(name.chars()) {
+            if a.eq_ignore_ascii_case(&b) {
+                new_len += 1;
+            } else {
+                break;
+            }
+        }
+        prefix.truncate(new_len);
+        if prefix.is_empty() {
+            break;
+        }
+    }
+
+    prefix.len()
+}
+
+// ============================================================================
 // Mode Switching Handlers
 // ============================================================================
 
@@ -784,7 +972,14 @@ impl KeyHandler for PickerHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{wrap_next_index, wrap_previous_index};
+    use super::{
+        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, KeyHandler, KeyResult,
+    };
+    use crate::utils::test_utils::create_test_app;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::Arc;
+    use tokio::runtime::Runtime;
+    use tokio::sync::Mutex;
 
     #[test]
     fn wrap_previous_index_wraps_to_end() {
@@ -798,5 +993,71 @@ mod tests {
         assert_eq!(wrap_next_index(0, 0), None);
         assert_eq!(wrap_next_index(2, 3), Some(0));
         assert_eq!(wrap_next_index(1, 3), Some(2));
+    }
+
+    #[test]
+    fn tab_completion_single_match_completes_command() {
+        let suggestions = Arc::new(vec!["model".to_string()]);
+        let handler = CommandAutocompleteHandler::with_matcher({
+            let suggestions = Arc::clone(&suggestions);
+            Arc::new(move |prefix: &str| {
+                let lower = prefix.to_ascii_lowercase();
+                suggestions
+                    .iter()
+                    .filter(|name| name.starts_with(&lower))
+                    .cloned()
+                    .collect()
+            })
+        });
+
+        let mut app = create_test_app();
+        app.ui.set_input_text("/mo".to_string());
+        let app = Arc::new(Mutex::new(app));
+
+        let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let app_guard = app.lock().await;
+            assert_eq!(app_guard.ui.get_input_text(), "/model ");
+        });
+    }
+
+    #[test]
+    fn tab_completion_multiple_matches_extends_prefix_and_sets_status() {
+        let suggestions = Arc::new(vec!["theme".to_string(), "theory".to_string()]);
+        let handler = CommandAutocompleteHandler::with_matcher({
+            let suggestions = Arc::clone(&suggestions);
+            Arc::new(move |prefix: &str| {
+                let lower = prefix.to_ascii_lowercase();
+                suggestions
+                    .iter()
+                    .filter(|name| name.starts_with(&lower))
+                    .cloned()
+                    .collect()
+            })
+        });
+
+        let mut app = create_test_app();
+        app.ui.set_input_text("/t".to_string());
+        let app = Arc::new(Mutex::new(app));
+
+        let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let app_guard = app.lock().await;
+            assert_eq!(app_guard.ui.get_input_text(), "/the");
+            assert_eq!(
+                app_guard.ui.status.as_deref(),
+                Some("Commands: /theme, /theory")
+            );
+        });
     }
 }

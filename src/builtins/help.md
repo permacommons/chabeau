@@ -14,6 +14,7 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 - Ctrl+P: Edit previous messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message
+- Tab: Autocomplete slash commands
 - Ctrl+T: Open in external editor (requires `$EDITOR` to be set)
 - Esc: Interrupt streaming / cancel modes
 - Up/Down/Mouse: Scroll history

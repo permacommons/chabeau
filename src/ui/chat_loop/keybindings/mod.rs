@@ -37,6 +37,11 @@ pub fn build_mode_aware_registry(
             Box::new(EscapeHandler),
         )
         .register_for_context(
+            KeyContext::Typing,
+            KeyPattern::simple(KeyCode::Tab),
+            Box::new(CommandAutocompleteHandler::new()),
+        )
+        .register_for_context(
             KeyContext::EditSelect,
             KeyPattern::simple(KeyCode::Esc),
             Box::new(EscapeHandler),

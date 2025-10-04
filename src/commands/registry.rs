@@ -31,6 +31,20 @@ pub fn find_command(name: &str) -> Option<&'static Command> {
         .find(|command| command.name.eq_ignore_ascii_case(name))
 }
 
+pub fn matching_commands(prefix: &str) -> Vec<&'static Command> {
+    let lower_prefix = prefix.to_ascii_lowercase();
+    all_commands()
+        .iter()
+        .filter(|command| {
+            if lower_prefix.is_empty() {
+                true
+            } else {
+                command.name.to_ascii_lowercase().starts_with(&lower_prefix)
+            }
+        })
+        .collect()
+}
+
 const COMMANDS: &[Command] = &[
     Command {
         name: "help",

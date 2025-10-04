@@ -411,12 +411,13 @@ pub async fn run_chat(
         build_mode_aware_registry(stream_service.clone(), terminal.clone(), event_tx.clone());
 
     // Drawing cadence control
+    const MAX_FPS: u64 = 60; // Limit to 60 FPS
+    let frame_duration = Duration::from_millis(1000 / MAX_FPS);
     let mut last_draw = Instant::now();
     let mut request_redraw = true;
     let mut last_input_layout_update = Instant::now();
     let mut indicator_visible = false;
-    const MAX_FPS: u64 = 60; // Limit to 60 FPS
-    let frame_duration = Duration::from_millis(1000 / MAX_FPS);
+    let mut last_indicator_frame = Instant::now() - frame_duration;
 
     // Main loop
     let result = 'main_loop: loop {
@@ -467,6 +468,17 @@ pub async fn run_chat(
         if indicator_now != indicator_visible {
             indicator_visible = indicator_now;
             request_redraw = true;
+            if !indicator_now {
+                last_indicator_frame = Instant::now() - frame_duration;
+            }
+        }
+
+        if indicator_now {
+            let now = Instant::now();
+            if now.duration_since(last_indicator_frame) >= frame_duration {
+                request_redraw = true;
+                last_indicator_frame = now;
+            }
         }
 
         let idle = !event_outcome.events_processed && !received_any && !request_redraw;

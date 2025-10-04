@@ -25,7 +25,7 @@ use crate::core::app::{
 };
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
-use crate::utils::editor::handle_external_editor;
+use crate::utils::editor::{launch_external_editor, ExternalEditorOutcome};
 use ratatui::crossterm::{
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind},
     execute,
@@ -365,6 +365,7 @@ fn process_stream_updates(
 
 async fn drain_action_queue(
     app: &Arc<Mutex<App>>,
+    stream_service: &ChatStreamService,
     action_rx: &mut mpsc::UnboundedReceiver<AppActionEnvelope>,
 ) -> bool {
     let mut pending = Vec::new();
@@ -377,7 +378,15 @@ async fn drain_action_queue(
     }
 
     let mut app_guard = app.lock().await;
-    apply_actions(&mut app_guard, pending);
+    let commands = apply_actions(&mut app_guard, pending);
+    drop(app_guard);
+    for cmd in commands {
+        match cmd {
+            crate::core::app::AppCommand::SpawnStream(params) => {
+                stream_service.spawn_stream(params);
+            }
+        }
+    }
     true
 }
 
@@ -503,7 +512,7 @@ pub async fn run_chat(
             request_redraw = true;
         }
 
-        let actions_applied = drain_action_queue(&app, &mut action_rx).await;
+        let actions_applied = drain_action_queue(&app, &stream_service, &mut action_rx).await;
         if actions_applied {
             request_redraw = true;
         }
@@ -792,57 +801,50 @@ async fn handle_block_select_mode_event(
 }
 
 async fn handle_external_editor_shortcut(
+    dispatcher: &AppActionDispatcher,
     app: &Arc<Mutex<App>>,
     terminal: &mut Terminal<OscBackend<io::Stdout>>,
-    stream_service: &ChatStreamService,
     term_width: u16,
     term_height: u16,
 ) -> Result<Option<KeyLoopAction>, String> {
-    let editor_result = {
-        let mut app_guard = app.lock().await;
-        handle_external_editor(&mut app_guard)
-            .await
-            .map_err(|e| e.to_string())
+    let initial_text = {
+        let app_guard = app.lock().await;
+        app_guard.ui.get_input_text().to_string()
+    };
+
+    let outcome = match launch_external_editor(&initial_text).await {
+        Ok(outcome) => outcome,
+        Err(e) => ExternalEditorOutcome {
+            message: None,
+            status: Some(format!("Editor error: {}", e)),
+            clear_input: false,
+        },
     };
 
     terminal.clear().map_err(|e| e.to_string())?;
 
-    match editor_result {
-        Ok(Some(message)) => {
-            let mut app_guard = app.lock().await;
-            let params =
-                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
-            drop(app_guard);
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
-        Ok(None) => {
-            let mut app_guard = app.lock().await;
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            Ok(Some(KeyLoopAction::Continue))
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            let mut app_guard = app.lock().await;
-            app_guard
-                .conversation()
-                .set_status(format!("Editor error: {}", error_msg));
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            Ok(Some(KeyLoopAction::Continue))
-        }
+    let mut actions = Vec::new();
+    if let Some(status) = outcome.status {
+        actions.push(AppAction::SetStatus { message: status });
     }
+    if outcome.clear_input {
+        actions.push(AppAction::ClearInput);
+    }
+    if let Some(message) = outcome.message {
+        actions.push(AppAction::SubmitMessage { message });
+    }
+
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(
+            actions,
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+    }
+
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn process_input_submission(
@@ -1053,55 +1055,6 @@ async fn handle_ctrl_j_shortcut(
             Ok(Some(KeyLoopAction::Continue))
         }
     }
-}
-
-async fn handle_retry_shortcut(
-    app: &Arc<Mutex<App>>,
-    term_width: u16,
-    term_height: u16,
-    stream_service: &ChatStreamService,
-) -> bool {
-    let maybe_params = {
-        let mut app_guard = app.lock().await;
-        let now = Instant::now();
-        if now
-            .duration_since(app_guard.session.last_retry_time)
-            .as_millis()
-            < 200
-        {
-            return true;
-        }
-
-        let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-        let maybe_stream = {
-            let mut conversation = app_guard.conversation();
-            let available_height =
-                conversation.calculate_available_height(term_height, input_area_height);
-            conversation
-                .prepare_retry(available_height, term_width)
-                .map(|api_messages| {
-                    let (cancel_token, stream_id) = conversation.start_new_stream();
-                    (api_messages, cancel_token, stream_id)
-                })
-        };
-
-        maybe_stream.map(|(api_messages, cancel_token, stream_id)| StreamParams {
-            client: app_guard.session.client.clone(),
-            base_url: app_guard.session.base_url.clone(),
-            api_key: app_guard.session.api_key.clone(),
-            provider_name: app_guard.session.provider_name.clone(),
-            model: app_guard.session.model.clone(),
-            api_messages,
-            cancel_token,
-            stream_id,
-        })
-    };
-
-    if let Some(params) = maybe_params {
-        stream_service.spawn_stream(params);
-    }
-
-    true
 }
 
 fn prepare_stream_params_for_message(
@@ -1609,11 +1562,12 @@ mod tests {
     use super::*;
     use crate::core::app::actions::{
         apply_action, apply_actions, AppAction, AppActionContext, AppActionDispatcher,
-        AppActionEnvelope,
+        AppActionEnvelope, AppCommand,
     };
     use crate::core::message::Message;
     use crate::ui::theme::Theme;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, Mutex};
 
     const TERM_WIDTH: u16 = 80;
@@ -1758,6 +1712,46 @@ mod tests {
         assert!(app.session.retrying_message_index.is_none());
     }
 
+    #[test]
+    fn submit_message_returns_spawn_command() {
+        let mut app = setup_app();
+        let ctx = default_context();
+        let result = apply_action(
+            &mut app,
+            AppAction::SubmitMessage {
+                message: "Hello".into(),
+            },
+            ctx,
+        );
+        assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
+    }
+
+    #[test]
+    fn retry_last_message_returns_none_without_history() {
+        let mut app = setup_app();
+        let ctx = default_context();
+        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn retry_last_message_emits_command_with_history() {
+        let mut app = setup_app();
+        app.ui.messages.push_back(Message {
+            role: "user".to_string(),
+            content: "Hi".into(),
+        });
+        app.ui.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: "Hello".into(),
+        });
+        app.session.last_retry_time = Instant::now() - Duration::from_millis(500);
+
+        let ctx = default_context();
+        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
+    }
+
     #[tokio::test]
     async fn process_stream_updates_dispatches_actions() {
         let (service, mut rx) = setup_service();
@@ -1789,7 +1783,8 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            apply_actions(&mut guard, envelopes);
+            let commands = apply_actions(&mut guard, envelopes);
+            assert!(commands.is_empty());
         }
 
         let guard = app.lock().await;

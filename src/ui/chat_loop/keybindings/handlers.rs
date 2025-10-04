@@ -14,8 +14,8 @@ use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
-    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event,
-    handle_retry_shortcut, KeyLoopAction, UiEvent,
+    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event, KeyLoopAction,
+    UiEvent,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
@@ -865,32 +865,32 @@ impl KeyHandler for AltEnterHandler {
 }
 
 /// Handler for Ctrl+R (retry last message)
-pub struct CtrlRHandler {
-    pub stream_service: Arc<ChatStreamService>,
-}
+pub struct CtrlRHandler;
 
 #[async_trait::async_trait]
 impl KeyHandler for CtrlRHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        _app: &Arc<Mutex<App>>,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
-        if handle_retry_shortcut(app, term_width, term_height, &self.stream_service).await {
-            KeyResult::Continue
-        } else {
-            KeyResult::NotHandled
-        }
+        dispatcher.dispatch_many(
+            [AppAction::RetryLastMessage],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        KeyResult::Continue
     }
 }
 
 /// Handler for Ctrl+T (external editor)
 pub struct CtrlTHandler {
-    pub stream_service: Arc<ChatStreamService>,
     pub terminal:
         Arc<Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>>,
 }
@@ -900,7 +900,7 @@ impl KeyHandler for CtrlTHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -908,9 +908,9 @@ impl KeyHandler for CtrlTHandler {
     ) -> KeyResult {
         let mut terminal_guard = self.terminal.lock().await;
         match handle_external_editor_shortcut(
+            dispatcher,
             app,
             &mut terminal_guard,
-            &self.stream_service,
             term_width,
             term_height,
         )
@@ -1150,7 +1150,8 @@ mod tests {
 
             {
                 let mut guard = app.lock().await;
-                apply_actions(&mut guard, envelopes);
+                let commands = apply_actions(&mut guard, envelopes);
+                assert!(commands.is_empty());
                 assert!(guard.ui.status.is_none());
             }
         });
@@ -1181,7 +1182,8 @@ mod tests {
             {
                 let mut guard = app.lock().await;
                 assert!(!guard.ui.compose_mode);
-                apply_actions(&mut guard, envelopes);
+                let commands = apply_actions(&mut guard, envelopes);
+                assert!(commands.is_empty());
                 assert!(guard.ui.compose_mode);
             }
         });
@@ -1216,7 +1218,8 @@ mod tests {
 
             {
                 let mut guard = app.lock().await;
-                apply_actions(&mut guard, envelopes);
+                let commands = apply_actions(&mut guard, envelopes);
+                assert!(commands.is_empty());
                 assert!(guard.ui.file_prompt().is_none());
                 assert!(guard.ui.get_input_text().is_empty());
             }
@@ -1252,7 +1255,8 @@ mod tests {
 
             {
                 let mut guard = app.lock().await;
-                apply_actions(&mut guard, envelopes);
+                let commands = apply_actions(&mut guard, envelopes);
+                assert!(commands.is_empty());
                 assert!(guard.ui.in_place_edit_index().is_none());
                 assert!(guard.ui.get_input_text().is_empty());
             }
@@ -1288,7 +1292,8 @@ mod tests {
 
             {
                 let mut guard = app.lock().await;
-                apply_actions(&mut guard, envelopes);
+                let commands = apply_actions(&mut guard, envelopes);
+                assert!(commands.is_empty());
                 assert!(!guard.ui.is_streaming);
                 assert!(guard.session.stream_cancel_token.is_none());
                 assert!(guard.ui.stream_interrupted);

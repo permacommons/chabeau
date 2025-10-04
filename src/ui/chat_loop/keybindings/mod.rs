@@ -263,16 +263,13 @@ pub fn build_mode_aware_registry(
         .register_for_context(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('r')),
-            Box::new(CtrlRHandler {
-                stream_service: stream_service.clone(),
-            }),
+            Box::new(CtrlRHandler),
         )
         .register_for_context(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('t')),
             Box::new(CtrlTHandler {
-                stream_service,
-                terminal,
+                terminal: terminal.clone(),
             }),
         )
         // Mode-specific system handlers (must come before catch-all handlers)

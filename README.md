@@ -158,6 +158,7 @@ Most should be intuitive. A couple of choices may be a bit jarring at first:
 
 - Alt+Enter (or Ctrl+J) to start a new line: We've found this to be most reliable across terminals.
 - Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
+- Tab autocompletes slash commands so you can discover options quickly.
 
 Feedback and suggestions are always welcome!
 

@@ -1,6 +1,6 @@
 mod registry;
 
-pub use registry::{all_commands, CommandInvocation};
+pub use registry::{all_commands, matching_commands, CommandInvocation};
 
 use crate::core::app::App;
 use chrono::Utc;

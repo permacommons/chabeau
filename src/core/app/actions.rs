@@ -7,6 +7,11 @@ pub enum AppAction {
     AppendResponseChunk { content: String },
     StreamErrored { message: String },
     StreamCompleted,
+    ClearStatus,
+    ToggleComposeMode,
+    CancelFilePrompt,
+    CancelInPlaceEdit,
+    CancelStreaming,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +78,24 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) {
                 conversation.finalize_response();
             }
             app.ui.end_streaming();
+        }
+        AppAction::ClearStatus => {
+            app.conversation().clear_status();
+        }
+        AppAction::ToggleComposeMode => {
+            app.ui.toggle_compose_mode();
+        }
+        AppAction::CancelFilePrompt => {
+            app.ui.cancel_file_prompt();
+        }
+        AppAction::CancelInPlaceEdit => {
+            if app.ui.in_place_edit_index().is_some() {
+                app.ui.cancel_in_place_edit();
+                app.ui.clear_input();
+            }
+        }
+        AppAction::CancelStreaming => {
+            app.conversation().cancel_current_stream();
         }
     }
 }

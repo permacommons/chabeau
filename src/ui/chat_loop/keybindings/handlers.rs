@@ -9,7 +9,7 @@
 //! - Mode-specific handlers (picker, edit select, block select)
 
 use crate::commands;
-use crate::core::app::App;
+use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::{
@@ -99,6 +99,7 @@ impl KeyHandler for CtrlCHandler {
     async fn handle(
         &self,
         _app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         _term_width: u16,
         _term_height: u16,
@@ -116,13 +117,24 @@ impl KeyHandler for CtrlLHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        app_guard.conversation().clear_status();
+        let should_clear = {
+            let app_guard = app.lock().await;
+            app_guard.ui.status.is_some()
+        };
+
+        if should_clear {
+            let ctx = AppActionContext {
+                term_width,
+                term_height,
+            };
+            dispatcher.dispatch_many([AppAction::ClearStatus], ctx);
+        }
         KeyResult::Handled
     }
 }
@@ -134,14 +146,18 @@ pub struct F4Handler;
 impl KeyHandler for F4Handler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        _app: &Arc<Mutex<App>>,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        app_guard.ui.toggle_compose_mode();
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+        dispatcher.dispatch_many([AppAction::ToggleComposeMode], ctx);
         KeyResult::Handled
     }
 }
@@ -154,26 +170,34 @@ impl KeyHandler for EscapeHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.file_prompt().is_some() {
-            app_guard.ui.cancel_file_prompt();
-            return KeyResult::Handled;
+        let mut actions = Vec::new();
+        {
+            let app_guard = app.lock().await;
+            if app_guard.ui.file_prompt().is_some() {
+                actions.push(AppAction::CancelFilePrompt);
+            } else if app_guard.ui.in_place_edit_index().is_some() {
+                actions.push(AppAction::CancelInPlaceEdit);
+            } else if app_guard.ui.is_streaming {
+                actions.push(AppAction::CancelStreaming);
+            }
         }
-        if app_guard.ui.in_place_edit_index().is_some() {
-            app_guard.ui.cancel_in_place_edit();
-            app_guard.ui.clear_input();
-            return KeyResult::Handled;
+
+        if actions.is_empty() {
+            return KeyResult::NotHandled;
         }
-        if app_guard.ui.is_streaming {
-            app_guard.conversation().cancel_current_stream();
-            return KeyResult::Handled;
-        }
-        KeyResult::NotHandled
+
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+        dispatcher.dispatch_many(actions, ctx);
+        KeyResult::Handled
     }
 }
 
@@ -185,6 +209,7 @@ impl KeyHandler for CtrlDHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
@@ -221,6 +246,7 @@ impl KeyHandler for NavigationHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -274,6 +300,7 @@ impl KeyHandler for ArrowKeyHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -367,6 +394,7 @@ impl KeyHandler for TextEditingHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
@@ -467,6 +495,7 @@ impl KeyHandler for CommandAutocompleteHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
@@ -627,6 +656,7 @@ impl KeyHandler for CtrlBHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -680,6 +710,7 @@ impl KeyHandler for CtrlPHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -737,6 +768,7 @@ impl KeyHandler for CtrlJHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -773,6 +805,7 @@ impl KeyHandler for EnterHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -807,6 +840,7 @@ impl KeyHandler for AltEnterHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -840,6 +874,7 @@ impl KeyHandler for CtrlRHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -865,6 +900,7 @@ impl KeyHandler for CtrlTHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -903,6 +939,7 @@ impl KeyHandler for EditSelectHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -924,6 +961,7 @@ impl KeyHandler for BlockSelectHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -947,6 +985,7 @@ impl KeyHandler for PickerHandler {
     async fn handle(
         &self,
         app: &Arc<Mutex<App>>,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         _term_width: u16,
         _term_height: u16,
@@ -973,13 +1012,26 @@ impl KeyHandler for PickerHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, KeyHandler, KeyResult,
+        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, CtrlLHandler,
+        EscapeHandler, F4Handler, KeyHandler, KeyResult,
+    };
+    use crate::core::app::actions::{
+        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
     };
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
     use tokio::runtime::Runtime;
-    use tokio::sync::Mutex;
+    use tokio::sync::{mpsc, Mutex};
+    use tokio_util::sync::CancellationToken;
+
+    fn test_dispatcher() -> (
+        AppActionDispatcher,
+        mpsc::UnboundedReceiver<AppActionEnvelope>,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (AppActionDispatcher::new(tx), rx)
+    }
 
     #[test]
     fn wrap_previous_index_wraps_to_end() {
@@ -1018,11 +1070,15 @@ mod tests {
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
             assert_eq!(result, KeyResult::Handled);
 
             let app_guard = app.lock().await;
             assert_eq!(app_guard.ui.get_input_text(), "/model ");
+            assert!(action_rx.try_recv().is_err());
         });
     }
 
@@ -1049,7 +1105,10 @@ mod tests {
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
             assert_eq!(result, KeyResult::Handled);
 
             let app_guard = app.lock().await;
@@ -1058,6 +1117,182 @@ mod tests {
                 app_guard.ui.status.as_deref(),
                 Some("Commands: /theme, /theory")
             );
+            assert!(action_rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn ctrl_l_handler_emits_clear_status_action() {
+        let handler = CtrlLHandler;
+        let mut app = create_test_app();
+        {
+            let mut conversation = app.conversation();
+            conversation.set_status("Busy");
+        }
+        let app = Arc::new(Mutex::new(app));
+        let key_event = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::ClearStatus)));
+
+            {
+                let mut guard = app.lock().await;
+                apply_actions(&mut guard, envelopes);
+                assert!(guard.ui.status.is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn f4_handler_toggles_compose_mode_via_action() {
+        let handler = F4Handler;
+        let app = Arc::new(Mutex::new(create_test_app()));
+        let key_event = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::ToggleComposeMode)));
+
+            {
+                let mut guard = app.lock().await;
+                assert!(!guard.ui.compose_mode);
+                apply_actions(&mut guard, envelopes);
+                assert!(guard.ui.compose_mode);
+            }
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_file_prompt_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.ui
+                .start_file_prompt_save_block("snippet.rs".into(), "fn main() {}".into());
+        }
+        let app = Arc::new(Mutex::new(app));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelFilePrompt)));
+
+            {
+                let mut guard = app.lock().await;
+                apply_actions(&mut guard, envelopes);
+                assert!(guard.ui.file_prompt().is_none());
+                assert!(guard.ui.get_input_text().is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_in_place_edit_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.ui.start_in_place_edit(0);
+            app.ui.set_input_text("editing".into());
+        }
+        let app = Arc::new(Mutex::new(app));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelInPlaceEdit)));
+
+            {
+                let mut guard = app.lock().await;
+                apply_actions(&mut guard, envelopes);
+                assert!(guard.ui.in_place_edit_index().is_none());
+                assert!(guard.ui.get_input_text().is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_streaming_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.session.stream_cancel_token = Some(CancellationToken::new());
+            app.ui.begin_streaming();
+        }
+        let app = Arc::new(Mutex::new(app));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelStreaming)));
+
+            {
+                let mut guard = app.lock().await;
+                apply_actions(&mut guard, envelopes);
+                assert!(!guard.ui.is_streaming);
+                assert!(guard.session.stream_cancel_token.is_none());
+                assert!(guard.ui.stream_interrupted);
+            }
         });
     }
 }

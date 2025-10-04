@@ -169,6 +169,7 @@ async fn process_ui_events(
     app: &Arc<Mutex<App>>,
     event_rx: &mut mpsc::UnboundedReceiver<UiEvent>,
     mode_registry: &ModeAwareRegistry,
+    dispatcher: &AppActionDispatcher,
     term_size: Size,
     last_input_layout_update: &mut Instant,
 ) -> Result<EventProcessingOutcome, Box<dyn Error>> {
@@ -188,6 +189,7 @@ async fn process_ui_events(
                 let keyboard_outcome = route_keyboard_event(
                     app,
                     mode_registry,
+                    dispatcher,
                     key,
                     term_size,
                     last_input_layout_update,
@@ -228,6 +230,7 @@ struct KeyboardEventOutcome {
 async fn route_keyboard_event(
     app: &Arc<Mutex<App>>,
     mode_registry: &ModeAwareRegistry,
+    dispatcher: &AppActionDispatcher,
     key: event::KeyEvent,
     term_size: Size,
     last_input_layout_update: &mut Instant,
@@ -256,6 +259,7 @@ async fn route_keyboard_event(
     let registry_result = mode_registry
         .handle_key_event(
             app,
+            dispatcher,
             &key,
             context,
             term_size.width,
@@ -468,6 +472,7 @@ pub async fn run_chat(
             &app,
             &mut event_rx,
             &mode_registry,
+            &action_dispatcher,
             term_size,
             &mut last_input_layout_update,
         )

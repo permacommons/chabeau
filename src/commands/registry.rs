@@ -3,9 +3,15 @@ use crate::core::app::App;
 
 pub type CommandHandler = fn(&mut App, CommandInvocation<'_>) -> CommandResult;
 
+pub struct CommandUsage {
+    pub syntax: &'static str,
+    pub description: &'static str,
+}
+
 pub struct Command {
     pub name: &'static str,
-    pub help: &'static str,
+    pub usages: &'static [CommandUsage],
+    pub extra_help: &'static [&'static str],
     pub handler: CommandHandler,
 }
 
@@ -28,42 +34,98 @@ pub fn find_command(name: &str) -> Option<&'static Command> {
 const COMMANDS: &[Command] = &[
     Command {
         name: "help",
-        help: "Show available commands and usage information.",
+        usages: &[CommandUsage {
+            syntax: "/help",
+            description: "Show available commands and usage information.",
+        }],
+        extra_help: &[],
         handler: super::handle_help,
     },
     Command {
         name: "log",
-        help: "Toggle logging or set the log file path.",
+        usages: &[CommandUsage {
+            syntax: "/log [filename]",
+            description:
+                "Enable logging to a file, or toggle pause/resume when no filename is provided.",
+        }],
+        extra_help: &[],
         handler: super::handle_log,
     },
     Command {
         name: "dump",
-        help: "Export the current conversation to a file.",
+        usages: &[CommandUsage {
+            syntax: "/dump [filename]",
+            description:
+                "Dump the full conversation to a file (default: `chabeau-log-YYYY-MM-DD.txt`).",
+        }],
+        extra_help: &[],
         handler: super::handle_dump,
     },
     Command {
         name: "theme",
-        help: "Open the theme picker or apply a theme directly.",
+        usages: &[
+            CommandUsage {
+                syntax: "/theme",
+                description:
+                    "Pick a theme (built-in or custom) with filtering and sorting options.",
+            },
+            CommandUsage {
+                syntax: "/theme <id>",
+                description: "Apply a theme by id and persist the selection to config.",
+            },
+        ],
+        extra_help: &[],
         handler: super::handle_theme,
     },
     Command {
         name: "model",
-        help: "Open the model picker or switch models immediately.",
+        usages: &[
+            CommandUsage {
+                syntax: "/model",
+                description:
+                    "Pick a model from the current provider with filtering, sorting, and metadata.",
+            },
+            CommandUsage {
+                syntax: "/model <id>",
+                description: "Switch to the specified model for this session only.",
+            },
+        ],
+        extra_help: &[],
         handler: super::handle_model,
     },
     Command {
         name: "provider",
-        help: "Open the provider picker or switch providers immediately.",
+        usages: &[
+            CommandUsage {
+                syntax: "/provider",
+                description: "Pick a provider with filtering and sorting.",
+            },
+            CommandUsage {
+                syntax: "/provider <id>",
+                description: "Switch to the specified provider for this session only.",
+            },
+        ],
+        extra_help: &[
+            "  (Tip: On startup with multiple providers, Esc from model picker returns here.)",
+        ],
         handler: super::handle_provider,
     },
     Command {
         name: "markdown",
-        help: "Toggle markdown rendering for assistant responses.",
+        usages: &[CommandUsage {
+            syntax: "/markdown [on|off|toggle]",
+            description: "Toggle Markdown rendering and persist the preference to config.",
+        }],
+        extra_help: &[],
         handler: super::handle_markdown,
     },
     Command {
         name: "syntax",
-        help: "Toggle syntax highlighting for code blocks.",
+        usages: &[CommandUsage {
+            syntax: "/syntax [on|off|toggle]",
+            description: "Toggle code syntax highlighting and persist the preference to config.",
+        }],
+        extra_help: &[],
         handler: super::handle_syntax,
     },
 ];

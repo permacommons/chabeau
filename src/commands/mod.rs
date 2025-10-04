@@ -41,9 +41,15 @@ pub fn process_input(app: &mut App, input: &str) -> CommandResult {
 
 pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {
     let mut help_md = crate::ui::help::builtin_help_md().to_string();
-    help_md.push_str("\n\n### Commands\n");
+    help_md.push_str("\n\n## Commands\n");
     for command in all_commands() {
-        help_md.push_str(&format!("* `/{}` - {}\n", command.name, command.help));
+        for usage in command.usages {
+            help_md.push_str(&format!("- `{}` — {}\n", usage.syntax, usage.description));
+        }
+        for line in command.extra_help {
+            help_md.push_str(line);
+            help_md.push('\n');
+        }
     }
     app.conversation().add_system_message(help_md);
     CommandResult::Continue
@@ -398,7 +404,7 @@ mod tests {
         let last_message = app.ui.messages.back().expect("help message");
         assert!(last_message
             .content
-            .contains("`/help` - Show available commands"));
+            .contains("- `/help` — Show available commands"));
     }
 
     #[test]

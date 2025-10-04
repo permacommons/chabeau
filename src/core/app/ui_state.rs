@@ -8,6 +8,12 @@ use std::collections::VecDeque;
 use std::time::Instant;
 use tui_textarea::TextArea;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    ChatStream,
+    ModelRequest,
+}
+
 #[derive(Debug, Clone)]
 pub enum FilePromptKind {
     Dump,
@@ -40,6 +46,7 @@ pub struct UiState {
     pub horizontal_scroll_offset: u16,
     pub auto_scroll: bool,
     pub is_streaming: bool,
+    pub activity_indicator: Option<ActivityKind>,
     pub pulse_start: Instant,
     pub stream_interrupted: bool,
     pub input_scroll_offset: u16,
@@ -194,6 +201,34 @@ impl UiState {
         self.compose_mode = !self.compose_mode;
     }
 
+    pub fn begin_activity(&mut self, kind: ActivityKind) {
+        self.activity_indicator = Some(kind);
+        self.pulse_start = Instant::now();
+    }
+
+    pub fn end_activity(&mut self, kind: ActivityKind) {
+        if self.activity_indicator == Some(kind) {
+            self.activity_indicator = None;
+        }
+    }
+
+    pub fn is_activity_indicator_visible(&self) -> bool {
+        self.activity_indicator.is_some()
+    }
+
+    pub fn begin_streaming(&mut self) {
+        self.is_streaming = true;
+        self.stream_interrupted = false;
+        self.begin_activity(ActivityKind::ChatStream);
+    }
+
+    pub fn end_streaming(&mut self) {
+        self.is_streaming = false;
+        if matches!(self.activity_indicator, Some(ActivityKind::ChatStream)) {
+            self.activity_indicator = None;
+        }
+    }
+
     pub(crate) fn new_basic(
         theme: Theme,
         markdown_enabled: bool,
@@ -210,6 +245,7 @@ impl UiState {
             horizontal_scroll_offset: 0,
             auto_scroll: true,
             is_streaming: false,
+            activity_indicator: None,
             pulse_start: Instant::now(),
             stream_interrupted: false,
             input_scroll_offset: 0,

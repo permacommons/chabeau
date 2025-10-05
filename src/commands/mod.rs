@@ -336,51 +336,12 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::test_utils::{create_test_app, create_test_message};
-    use once_cell::sync::Lazy;
+    use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
     use std::fs;
     use std::io::Read;
     use std::path::Path;
-    use std::sync::Mutex;
     use tempfile::tempdir;
     use toml::Value;
-
-    static CONFIG_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn new(key: &'static str) -> Self {
-            Self {
-                key,
-                previous: std::env::var(key).ok(),
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(value) = self.previous.as_ref() {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
-    fn with_temp_config_env<F: FnOnce(&Path)>(f: F) {
-        let _guard = CONFIG_ENV_GUARD.lock().unwrap();
-        let temp_dir = tempdir().unwrap();
-        let config_root = temp_dir.path().join("config-root");
-        std::fs::create_dir_all(&config_root).unwrap();
-        let _env_guard = EnvVarGuard::new("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", &config_root);
-        let config_path = config_root.join("chabeau").join("config.toml");
-        f(&config_path);
-    }
 
     fn read_config(path: &Path) -> Value {
         let contents = std::fs::read_to_string(path).unwrap();
@@ -407,7 +368,7 @@ mod tests {
 
     #[test]
     fn commands_dispatch_case_insensitively() {
-        with_temp_config_env(|_| {
+        with_test_config_env(|_| {
             let mut app = create_test_app();
             app.ui.markdown_enabled = false;
             let result = process_input(&mut app, "/MarkDown On");
@@ -457,7 +418,8 @@ mod tests {
 
     #[test]
     fn markdown_command_updates_state_and_persists() {
-        with_temp_config_env(|config_path| {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
             let mut app = create_test_app();
             app.ui.markdown_enabled = true;
 
@@ -467,7 +429,7 @@ mod tests {
             assert_eq!(app.ui.status.as_deref(), Some("Markdown disabled"));
 
             assert!(config_path.exists());
-            let config = read_config(config_path);
+            let config = read_config(&config_path);
             assert_eq!(config["markdown"].as_bool(), Some(false));
 
             let result = process_input(&mut app, "/markdown toggle");
@@ -475,14 +437,15 @@ mod tests {
             assert!(app.ui.markdown_enabled);
             assert_eq!(app.ui.status.as_deref(), Some("Markdown enabled"));
 
-            let config = read_config(config_path);
+            let config = read_config(&config_path);
             assert_eq!(config["markdown"].as_bool(), Some(true));
         });
     }
 
     #[test]
     fn syntax_command_updates_state_and_persists() {
-        with_temp_config_env(|config_path| {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
             let mut app = create_test_app();
             app.ui.syntax_enabled = true;
 
@@ -492,7 +455,7 @@ mod tests {
             assert_eq!(app.ui.status.as_deref(), Some("Syntax off"));
 
             assert!(config_path.exists());
-            let config = read_config(config_path);
+            let config = read_config(&config_path);
             assert_eq!(config["syntax"].as_bool(), Some(false));
 
             let result = process_input(&mut app, "/syntax toggle");
@@ -500,7 +463,7 @@ mod tests {
             assert!(app.ui.syntax_enabled);
             assert_eq!(app.ui.status.as_deref(), Some("Syntax on"));
 
-            let config = read_config(config_path);
+            let config = read_config(&config_path);
             assert_eq!(config["syntax"].as_bool(), Some(true));
         });
     }

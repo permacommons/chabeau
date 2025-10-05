@@ -710,10 +710,8 @@ impl ProviderAuthSource for AuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test_utils::with_test_config_env;
     use std::env;
-    use std::sync::{Mutex, OnceLock};
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn collect_configured_providers_skips_duplicate_custom_entries() {
@@ -764,7 +762,7 @@ mod tests {
     }
 
     fn create_test_auth_manager() -> AuthManager {
-        AuthManager::new_with_keyring(false)
+        with_test_config_env(|_| AuthManager::new_with_keyring(false))
     }
 
     #[test]
@@ -817,37 +815,39 @@ mod tests {
 
     #[test]
     fn env_fallback_sets_openai_provider_for_default_base() {
-        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        // Ensure no default provider in config and no keyring; set explicit default base
-        env::set_var("OPENAI_API_KEY", "sk-test");
-        env::set_var("OPENAI_BASE_URL", "https://api.openai.com/v1");
-        let am = AuthManager::new_with_keyring(false);
-        let cfg = Config::default();
-        let (_key, base, prov, display) = am
-            .resolve_authentication(None, &cfg)
-            .expect("env fallback should work");
-        assert_eq!(base, "https://api.openai.com/v1");
-        assert_eq!(prov, "openai");
-        assert_eq!(display, "OpenAI");
-        env::remove_var("OPENAI_API_KEY");
-        env::remove_var("OPENAI_BASE_URL");
+        with_test_config_env(|_| {
+            // Ensure no default provider in config and no keyring; set explicit default base
+            env::set_var("OPENAI_API_KEY", "sk-test");
+            env::set_var("OPENAI_BASE_URL", "https://api.openai.com/v1");
+            let am = AuthManager::new_with_keyring(false);
+            let cfg = Config::default();
+            let (_key, base, prov, display) = am
+                .resolve_authentication(None, &cfg)
+                .expect("env fallback should work");
+            assert_eq!(base, "https://api.openai.com/v1");
+            assert_eq!(prov, "openai");
+            assert_eq!(display, "OpenAI");
+            env::remove_var("OPENAI_API_KEY");
+            env::remove_var("OPENAI_BASE_URL");
+        });
     }
 
     #[test]
     fn env_fallback_sets_openai_compatible_for_custom_base() {
-        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        env::set_var("OPENAI_API_KEY", "sk-test");
-        env::set_var("OPENAI_BASE_URL", "https://example.com/v1");
-        let am = AuthManager::new_with_keyring(false);
-        let cfg = Config::default();
-        let (_key, base, prov, display) = am
-            .resolve_authentication(None, &cfg)
-            .expect("env fallback should work");
-        assert_eq!(base, "https://example.com/v1");
-        assert_eq!(prov, "openai-compatible");
-        assert_eq!(display, "OpenAI-compatible");
-        env::remove_var("OPENAI_API_KEY");
-        env::remove_var("OPENAI_BASE_URL");
+        with_test_config_env(|_| {
+            env::set_var("OPENAI_API_KEY", "sk-test");
+            env::set_var("OPENAI_BASE_URL", "https://example.com/v1");
+            let am = AuthManager::new_with_keyring(false);
+            let cfg = Config::default();
+            let (_key, base, prov, display) = am
+                .resolve_authentication(None, &cfg)
+                .expect("env fallback should work");
+            assert_eq!(base, "https://example.com/v1");
+            assert_eq!(prov, "openai-compatible");
+            assert_eq!(display, "OpenAI-compatible");
+            env::remove_var("OPENAI_API_KEY");
+            env::remove_var("OPENAI_BASE_URL");
+        });
     }
 
     // Note: We can't easily test the full read_masked_input function without mocking

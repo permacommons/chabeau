@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 #[cfg(test)]
 use std::env;
 #[cfg(test)]
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
@@ -25,6 +25,9 @@ use tempfile::TempDir;
 
 #[cfg(test)]
 static TEST_CONFIG_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+#[cfg(test)]
+static TEST_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[cfg(test)]
 pub struct TestConfigEnv {
@@ -87,6 +90,13 @@ impl Drop for TestConfigEnv {
 }
 
 #[cfg(test)]
+impl Default for TestConfigEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 pub fn with_test_config_env<F, T>(f: F) -> T
 where
     F: FnOnce(&Path) -> T,
@@ -94,6 +104,74 @@ where
     let guard = TestConfigEnv::new();
     let result = f(guard.config_root());
     result
+}
+
+#[cfg(test)]
+pub struct TestEnvVarGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous_vars: Vec<(OsString, Option<OsString>)>,
+}
+
+#[cfg(test)]
+impl TestEnvVarGuard {
+    pub fn new() -> Self {
+        let lock = TEST_ENV_GUARD.lock().expect("environment mutex poisoned");
+        Self {
+            _lock: lock,
+            previous_vars: Vec::new(),
+        }
+    }
+
+    fn capture_if_needed(&mut self, key: &OsStr) {
+        if self
+            .previous_vars
+            .iter()
+            .any(|(existing, _)| existing.as_os_str() == key)
+        {
+            return;
+        }
+        let previous = env::var_os(key);
+        self.previous_vars.push((key.to_os_string(), previous));
+    }
+
+    pub fn set_var<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        let key_ref = key.as_ref();
+        self.capture_if_needed(key_ref);
+        env::set_var(key_ref, value);
+    }
+
+    pub fn remove_var<K>(&mut self, key: K)
+    where
+        K: AsRef<OsStr>,
+    {
+        let key_ref = key.as_ref();
+        self.capture_if_needed(key_ref);
+        env::remove_var(key_ref);
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestEnvVarGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.previous_vars.drain(..).rev() {
+            if let Some(val) = value {
+                env::set_var(&key, val);
+            } else {
+                env::remove_var(&key);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for TestEnvVarGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

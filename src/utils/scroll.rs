@@ -758,7 +758,7 @@ mod tests {
     use crate::ui::span::SpanKind;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{
-        create_test_message, create_test_messages, SAMPLE_HYPERTEXT_PARAGRAPH,
+        create_test_message, create_test_messages, TestEnvVarGuard, SAMPLE_HYPERTEXT_PARAGRAPH,
     };
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Line as TLine;
@@ -1411,7 +1411,8 @@ mod tests {
 
     #[test]
     fn highlight_is_correct_after_wrapped_paragraph() {
-        std::env::set_var("CHABEAU_COLOR", "truecolor");
+        let mut env = TestEnvVarGuard::new();
+        env.set_var("CHABEAU_COLOR", "truecolor");
         let theme = Theme::dark_default();
         let mut messages: VecDeque<Message> = VecDeque::new();
         let long_para = "This is a very long line that should wrap multiple times given a small terminal width so that the visual line count before the code block increases significantly.";
@@ -1463,12 +1464,12 @@ mod tests {
                 );
             }
         }
-        std::env::remove_var("CHABEAU_COLOR");
     }
 
     #[test]
     fn highlight_is_correct_after_table() {
-        std::env::set_var("CHABEAU_COLOR", "truecolor");
+        let mut env = TestEnvVarGuard::new();
+        env.set_var("CHABEAU_COLOR", "truecolor");
         let theme = Theme::dark_default();
         let mut messages: VecDeque<Message> = VecDeque::new();
         // Message 0: a table that will be rendered before the code block
@@ -1529,6 +1530,5 @@ mod tests {
                 );
             }
         }
-        std::env::remove_var("CHABEAU_COLOR");
     }
 }

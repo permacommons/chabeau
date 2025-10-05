@@ -600,7 +600,7 @@ mod tests {
     fn model_command_returns_open_picker_result() {
         let mut app = create_test_app();
         let res = process_input(&mut app, "/model");
-        matches!(res, CommandResult::OpenModelPicker);
+        assert!(matches!(res, CommandResult::OpenModelPicker));
     }
 
     #[test]

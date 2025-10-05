@@ -4,12 +4,10 @@
 //! in a mode-aware manner, including types, registry, and builder.
 
 use crate::core::app::ui_state::UiMode;
-use crate::core::app::App;
-use crate::ui::chat_loop::KeyLoopAction;
+use crate::core::app::AppActionDispatcher;
+use crate::ui::chat_loop::{AppHandle, KeyLoopAction};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // ============================================================================
 // Types and Traits
@@ -53,7 +51,8 @@ pub trait KeyHandler: Send + Sync {
     /// Handle a key event
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -226,9 +225,11 @@ impl ModeAwareRegistry {
     }
 
     /// Handle a key event in the given context
+    #[allow(clippy::too_many_arguments)]
     pub async fn handle_key_event(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         context: KeyContext,
         term_width: u16,
@@ -241,7 +242,14 @@ impl ModeAwareRegistry {
             for (pattern, handler) in context_handlers {
                 if pattern.matches(key) && !is_wildcard_pattern(pattern) {
                     let result = handler
-                        .handle(app, key, term_width, term_height, last_input_layout_update)
+                        .handle(
+                            app,
+                            dispatcher,
+                            key,
+                            term_width,
+                            term_height,
+                            last_input_layout_update,
+                        )
                         .await;
                     // Only return if the handler actually handled the key
                     if result != KeyResult::NotHandled {
@@ -257,7 +265,14 @@ impl ModeAwareRegistry {
             for (pattern, handler) in context_handlers {
                 if pattern.matches(key) && is_wildcard_pattern(pattern) {
                     let result = handler
-                        .handle(app, key, term_width, term_height, last_input_layout_update)
+                        .handle(
+                            app,
+                            dispatcher,
+                            key,
+                            term_width,
+                            term_height,
+                            last_input_layout_update,
+                        )
                         .await;
                     // Only return if the handler actually handled the key
                     if result != KeyResult::NotHandled {

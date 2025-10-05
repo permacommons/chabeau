@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use super::AppHandle;
+
 use crate::{
     auth::AuthManager,
     core::{
-        app::{self, App},
-        builtin_providers::load_builtin_providers,
-        config::Config,
+        app, builtin_providers::load_builtin_providers, config::Config,
         providers::ProviderResolutionError,
     },
 };
@@ -21,7 +21,7 @@ pub async fn bootstrap_app(
     log: Option<String>,
     provider: Option<String>,
     env_only: bool,
-) -> Result<Arc<Mutex<App>>, Box<dyn std::error::Error>> {
+) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let auth_manager = AuthManager::new();
 
@@ -76,68 +76,56 @@ pub async fn bootstrap_app(
     }
 
     let app = if open_provider_picker {
-        let app = Arc::new(Mutex::new(
-            app::new_uninitialized(log.clone()).await.expect("init app"),
-        ));
-        {
-            let mut app_guard = app.lock().await;
-            app_guard.picker.startup_requires_provider = true;
-            app_guard.picker.startup_multiple_providers_available = multiple_providers_available;
-            app_guard.open_provider_picker();
-        }
+        let mut app = app::new_uninitialized(log.clone()).await.expect("init app");
+        app.picker.startup_requires_provider = true;
+        app.picker.startup_multiple_providers_available = multiple_providers_available;
+        app.open_provider_picker();
         app
     } else {
-        let app = Arc::new(Mutex::new(
-            match app::new_with_auth(
-                model.clone(),
-                log.clone(),
-                selected_provider,
-                env_only,
-                &config,
-            )
-            .await
-            {
-                Ok(app) => app,
-                Err(e) => {
-                    if let Some(resolution_error) = e.downcast_ref::<ProviderResolutionError>() {
-                        eprintln!("{}", resolution_error);
-                        let fixes = resolution_error.quick_fixes();
-                        if !fixes.is_empty() {
-                            eprintln!();
-                            eprintln!("💡 Quick fixes:");
-                            for fix in fixes {
-                                eprintln!("  • {fix}");
-                            }
-                        }
-                        std::process::exit(resolution_error.exit_code());
-                    } else {
-                        eprintln!("❌ Error: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            },
-        ));
-        let mut need_model_picker = false;
+        let mut app = match app::new_with_auth(
+            model.clone(),
+            log.clone(),
+            selected_provider,
+            env_only,
+            &config,
+        )
+        .await
         {
-            let app_guard = app.lock().await;
-            if app_guard.session.model.is_empty() {
-                need_model_picker = true;
+            Ok(app) => app,
+            Err(e) => {
+                if let Some(resolution_error) = e.downcast_ref::<ProviderResolutionError>() {
+                    eprintln!("{}", resolution_error);
+                    let fixes = resolution_error.quick_fixes();
+                    if !fixes.is_empty() {
+                        eprintln!();
+                        eprintln!("💡 Quick fixes:");
+                        for fix in fixes {
+                            eprintln!("  • {fix}");
+                        }
+                    }
+                    std::process::exit(resolution_error.exit_code());
+                } else {
+                    eprintln!("❌ Error: {e}");
+                    std::process::exit(1);
+                }
             }
-        }
-        if need_model_picker {
-            let mut app_guard = app.lock().await;
-            app_guard.picker.startup_requires_model = true;
-            app_guard.picker.startup_multiple_providers_available = multiple_providers_available;
+        };
+
+        if app.session.model.is_empty() {
+            app.picker.startup_requires_model = true;
+            app.picker.startup_multiple_providers_available = multiple_providers_available;
             let env_only = has_env_openai && token_providers.is_empty();
-            app_guard.session.startup_env_only = env_only;
-            if let Err(e) = app_guard.open_model_picker().await {
-                app_guard
-                    .conversation()
+            app.session.startup_env_only = env_only;
+            if let Err(e) = app.open_model_picker().await {
+                app.conversation()
                     .set_status(format!("Model picker error: {}", e));
             }
         }
+
         app
     };
 
-    Ok(app)
+    let app = Arc::new(Mutex::new(app));
+
+    Ok(AppHandle::new(app))
 }

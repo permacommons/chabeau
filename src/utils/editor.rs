@@ -2,21 +2,47 @@
 //!
 //! This module handles integration with external text editors for composing longer messages.
 
-use crate::core::app::App;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box<dyn Error>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalEditorOutcome {
+    pub message: Option<String>,
+    pub status: Option<String>,
+    pub clear_input: bool,
+}
+
+impl ExternalEditorOutcome {
+    fn with_status<S: Into<String>>(status: S) -> Self {
+        Self {
+            message: None,
+            status: Some(status.into()),
+            clear_input: false,
+        }
+    }
+
+    fn with_message(message: String) -> Self {
+        Self {
+            message: Some(message),
+            status: None,
+            clear_input: true,
+        }
+    }
+}
+
+pub async fn launch_external_editor(
+    initial_text: &str,
+) -> Result<ExternalEditorOutcome, Box<dyn Error>> {
     // Check if EDITOR environment variable is set
     let editor = match std::env::var("EDITOR") {
         Ok(editor) if !editor.trim().is_empty() => editor,
         _ => {
-            app.conversation()
-                .set_status("EDITOR not set. Configure $EDITOR (e.g., nano)");
-            return Ok(None);
+            return Ok(ExternalEditorOutcome::with_status(
+                "EDITOR not set. Configure $EDITOR (e.g., nano)",
+            ));
         }
     };
 
@@ -25,9 +51,8 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
     let temp_path = temp_file.path().to_path_buf();
 
     // Write current input to the temp file if there's any
-    let current_text = app.ui.get_input_text();
-    if !current_text.is_empty() {
-        fs::write(&temp_path, current_text)?;
+    if !initial_text.is_empty() {
+        fs::write(&temp_path, initial_text)?;
     }
 
     // We need to temporarily exit raw mode to allow the editor to run
@@ -51,9 +76,10 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
     )?;
 
     if !status.success() {
-        app.conversation()
-            .set_status(format!("Editor exited with status: {}", status));
-        return Ok(None);
+        return Ok(ExternalEditorOutcome::with_status(format!(
+            "Editor exited with status: {}",
+            status
+        )));
     }
 
     // Read the file content
@@ -61,14 +87,13 @@ pub async fn handle_external_editor(app: &mut App) -> Result<Option<String>, Box
 
     // Check if file has content (not zero bytes and not just whitespace)
     if content.trim().is_empty() {
-        app.conversation()
-            .set_status("Editor file empty — no message");
-        Ok(None)
+        Ok(ExternalEditorOutcome::with_status(
+            "Editor file empty — no message",
+        ))
     } else {
         // Clear the input and return the content to be sent immediately
-        app.ui.clear_input();
         let message = content.trim_end().to_string(); // Remove trailing newlines but preserve internal formatting
-        Ok(Some(message))
+        Ok(ExternalEditorOutcome::with_message(message))
     }
 
     // Temp file will be automatically cleaned up when it goes out of scope

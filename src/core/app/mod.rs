@@ -9,12 +9,16 @@ use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::text::Line;
 
+pub mod actions;
 pub mod conversation;
 pub mod picker;
 pub mod session;
 pub mod settings;
 pub mod ui_state;
 
+pub use actions::{
+    apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
+};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use conversation::ConversationController;
 #[allow(unused_imports)]
@@ -316,12 +320,6 @@ impl App {
     /// Revert provider to the one before opening picker (on cancel)
     pub fn revert_provider_preview(&mut self) {
         self.picker.revert_provider_preview(&mut self.session);
-    }
-
-    /// Revert provider and model to previous state during provider->model transition cancellation
-    pub fn revert_provider_model_transition(&mut self) {
-        self.picker
-            .revert_provider_model_transition(&mut self.session);
     }
 
     /// Clear provider->model transition state when model is successfully selected

@@ -12,6 +12,7 @@ pub enum CommandResult {
     ProcessAsMessage(String),
     OpenModelPicker,
     OpenProviderPicker,
+    OpenThemePicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -125,10 +126,7 @@ pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> C
 pub(super) fn handle_theme(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
     let parts: Vec<&str> = invocation.input.split_whitespace().collect();
     match parts.len() {
-        1 => {
-            app.open_theme_picker();
-            CommandResult::Continue
-        }
+        1 => CommandResult::OpenThemePicker,
         _ => {
             let id = parts[1];
             let res = {
@@ -594,11 +592,8 @@ mod tests {
     fn theme_command_opens_picker() {
         let mut app = create_test_app();
         let res = process_input(&mut app, "/theme");
-        matches!(res, CommandResult::Continue);
-        assert!(app.picker_session().is_some());
-        // Picker should have at least the built-ins
-        let picker = app.picker_state().unwrap();
-        assert!(picker.items.len() >= 3);
+        assert!(matches!(res, CommandResult::OpenThemePicker));
+        assert!(app.picker_session().is_none());
     }
 
     #[test]

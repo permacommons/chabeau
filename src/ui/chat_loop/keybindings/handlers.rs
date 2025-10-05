@@ -9,18 +9,18 @@
 //! - Mode-specific handlers (picker, edit select, block select)
 
 use crate::commands;
-use crate::core::app::App;
+use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
-    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event,
-    handle_retry_shortcut, KeyLoopAction, UiEvent,
+    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event, AppHandle,
+    KeyLoopAction,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc::UnboundedSender, Mutex};
+use tokio::sync::Mutex;
 use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 
 // ============================================================================
@@ -98,7 +98,8 @@ pub struct CtrlCHandler;
 impl KeyHandler for CtrlCHandler {
     async fn handle(
         &self,
-        _app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         _term_width: u16,
         _term_height: u16,
@@ -115,14 +116,22 @@ pub struct CtrlLHandler;
 impl KeyHandler for CtrlLHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        app_guard.conversation().clear_status();
+        let should_clear = app.read(|app| app.ui.status.is_some()).await;
+
+        if should_clear {
+            let ctx = AppActionContext {
+                term_width,
+                term_height,
+            };
+            dispatcher.dispatch_many([AppAction::ClearStatus], ctx);
+        }
         KeyResult::Handled
     }
 }
@@ -134,14 +143,18 @@ pub struct F4Handler;
 impl KeyHandler for F4Handler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        app_guard.ui.toggle_compose_mode();
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+        dispatcher.dispatch_many([AppAction::ToggleComposeMode], ctx);
         KeyResult::Handled
     }
 }
@@ -153,27 +166,37 @@ pub struct EscapeHandler;
 impl KeyHandler for EscapeHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.file_prompt().is_some() {
-            app_guard.ui.cancel_file_prompt();
-            return KeyResult::Handled;
+        let actions = app
+            .read(|app| {
+                let mut actions = Vec::new();
+                if app.ui.file_prompt().is_some() {
+                    actions.push(AppAction::CancelFilePrompt);
+                } else if app.ui.in_place_edit_index().is_some() {
+                    actions.push(AppAction::CancelInPlaceEdit);
+                } else if app.ui.is_streaming {
+                    actions.push(AppAction::CancelStreaming);
+                }
+                actions
+            })
+            .await;
+
+        if actions.is_empty() {
+            return KeyResult::NotHandled;
         }
-        if app_guard.ui.in_place_edit_index().is_some() {
-            app_guard.ui.cancel_in_place_edit();
-            app_guard.ui.clear_input();
-            return KeyResult::Handled;
-        }
-        if app_guard.ui.is_streaming {
-            app_guard.conversation().cancel_current_stream();
-            return KeyResult::Handled;
-        }
-        KeyResult::NotHandled
+
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+        dispatcher.dispatch_many(actions, ctx);
+        KeyResult::Handled
     }
 }
 
@@ -184,19 +207,19 @@ pub struct CtrlDHandler;
 impl KeyHandler for CtrlDHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().is_empty() {
+        let is_empty = app.read(|app| app.ui.get_input_text().is_empty()).await;
+        if is_empty {
             KeyLoopAction::Break.into()
         } else {
-            app_guard
-                .ui
-                .apply_textarea_edit_and_recompute(term_width, |ta| {
+            app.update(|app| {
+                app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                     ta.input_without_shortcuts(TAInput {
                         key: TAKey::Delete,
                         ctrl: false,
@@ -204,6 +227,8 @@ impl KeyHandler for CtrlDHandler {
                         shift: false,
                     });
                 });
+            })
+            .await;
             KeyLoopAction::Continue.into()
         }
     }
@@ -220,49 +245,48 @@ pub struct NavigationHandler;
 impl KeyHandler for NavigationHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        match key.code {
+        app.update(|app| match key.code {
             KeyCode::Home => {
-                app_guard.ui.scroll_to_top();
+                app.ui.scroll_to_top();
                 KeyResult::Handled
             }
             KeyCode::End => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard
-                    .ui
-                    .scroll_to_bottom_view(available_height, term_width);
+                app.ui.scroll_to_bottom_view(available_height, term_width);
                 KeyResult::Handled
             }
             KeyCode::PageUp => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard.ui.page_up(available_height);
+                app.ui.page_up(available_height);
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard.ui.page_down(available_height, term_width);
+                app.ui.page_down(available_height, term_width);
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
-        }
+        })
+        .await
     }
 }
 
@@ -273,85 +297,81 @@ pub struct ArrowKeyHandler;
 impl KeyHandler for ArrowKeyHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
 
-        match key.code {
+        app.update(|app| match key.code {
             KeyCode::Left => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.horizontal_scroll_offset =
-                        app_guard.ui.horizontal_scroll_offset.saturating_sub(1);
+                    app.ui.horizontal_scroll_offset =
+                        app.ui.horizontal_scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Right => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.horizontal_scroll_offset =
-                        app_guard.ui.horizontal_scroll_offset.saturating_add(1);
+                    app.ui.horizontal_scroll_offset =
+                        app.ui.horizontal_scroll_offset.saturating_add(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Up => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.auto_scroll = false;
-                    app_guard.ui.scroll_offset = app_guard.ui.scroll_offset.saturating_sub(1);
+                    app.ui.auto_scroll = false;
+                    app.ui.scroll_offset = app.ui.scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Down => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.auto_scroll = false;
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                    app.ui.auto_scroll = false;
+                    let input_area_height = app.ui.calculate_input_area_height(term_width);
                     let available_height = {
-                        let conversation = app_guard.conversation();
+                        let conversation = app.conversation();
                         conversation.calculate_available_height(term_height, input_area_height)
                     };
-                    let max_scroll = app_guard
+                    let max_scroll = app
                         .ui
                         .calculate_max_scroll_offset(available_height, term_width);
-                    app_guard.ui.scroll_offset =
-                        (app_guard.ui.scroll_offset.saturating_add(1)).min(max_scroll);
+                    app.ui.scroll_offset = (app.ui.scroll_offset.saturating_add(1)).min(max_scroll);
                 }
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
-        }
+        })
+        .await
     }
 }
 
@@ -366,46 +386,51 @@ pub struct TextEditingHandler;
 impl KeyHandler for TextEditingHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
 
         match key.code {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input(TAInput::from(*key));
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input(TAInput::from(*key));
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input(TAInput::from(*key));
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input(TAInput::from(*key));
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Char(c) => {
-                // Skip Ctrl+J - it has special compose mode logic that needs the stream service
                 if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return KeyResult::NotHandled;
                 }
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                app.update(|app| {
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input(TAInput::from(*key));
                     });
-                KeyResult::Handled
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Delete => {
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                app.update(|app| {
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input_without_shortcuts(TAInput {
                             key: TAKey::Delete,
                             ctrl: false,
@@ -413,15 +438,20 @@ impl KeyHandler for TextEditingHandler {
                             shift: false,
                         });
                     });
-                KeyResult::Handled
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Backspace => {
                 let input = TAInput::from(*key);
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input_without_shortcuts(input);
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input_without_shortcuts(input);
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             _ => KeyResult::NotHandled,
         }
@@ -466,118 +496,116 @@ impl Default for CommandAutocompleteHandler {
 impl KeyHandler for CommandAutocompleteHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        let input = app_guard.ui.get_input_text().to_string();
+        app.update(|app| {
+            let input = app.ui.get_input_text().to_string();
 
-        if !input.starts_with('/') {
-            return KeyResult::NotHandled;
-        }
-
-        let cursor_char_index = app_guard.ui.input_cursor_position;
-        let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
-
-        if cursor_byte_index == 0 {
-            return KeyResult::NotHandled;
-        }
-
-        let command_region_end = {
-            let after_slash = &input[1..];
-            after_slash
-                .char_indices()
-                .find(|(_, c)| c.is_whitespace())
-                .map(|(idx, _)| idx + 1)
-                .unwrap_or_else(|| input.len())
-        };
-
-        if cursor_byte_index > command_region_end {
-            return KeyResult::NotHandled;
-        }
-
-        let command_prefix = &input[1..cursor_byte_index];
-        let matches = (self.matcher)(command_prefix);
-
-        if matches.is_empty() {
-            let message = if command_prefix.is_empty() {
-                "No commands available".to_string()
-            } else {
-                format!("No commands matching \"/{}\"", command_prefix)
-            };
-            app_guard.conversation().set_status(message);
-            return KeyResult::Handled;
-        }
-
-        let rest = &input[command_region_end..];
-
-        if matches.len() == 1 {
-            let command_name = &matches[0];
-            let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
-            new_text.push('/');
-            new_text.push_str(command_name);
-            if rest.is_empty() {
-                new_text.push(' ');
-            } else {
-                new_text.push_str(rest);
+            if !input.starts_with('/') {
+                return KeyResult::NotHandled;
             }
 
-            if new_text != input {
-                let target_col_base = command_name.chars().count() + 1;
-                let target_col = if rest.is_empty() {
-                    target_col_base + 1
-                } else {
-                    target_col_base
-                } as u16;
+            let cursor_char_index = app.ui.input_cursor_position;
+            let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
 
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+            if cursor_byte_index == 0 {
+                return KeyResult::NotHandled;
+            }
+
+            let command_region_end = {
+                let after_slash = &input[1..];
+                after_slash
+                    .char_indices()
+                    .find(|(_, c)| c.is_whitespace())
+                    .map(|(idx, _)| idx + 1)
+                    .unwrap_or_else(|| input.len())
+            };
+
+            if cursor_byte_index > command_region_end {
+                return KeyResult::NotHandled;
+            }
+
+            let command_prefix = &input[1..cursor_byte_index];
+            let matches = (self.matcher)(command_prefix);
+
+            if matches.is_empty() {
+                let message = if command_prefix.is_empty() {
+                    "No commands available".to_string()
+                } else {
+                    format!("No commands matching \"/{}\"", command_prefix)
+                };
+                app.conversation().set_status(message);
+                return KeyResult::Handled;
+            }
+
+            let rest = &input[command_region_end..];
+
+            if matches.len() == 1 {
+                let command_name = &matches[0];
+                let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
+                new_text.push('/');
+                new_text.push_str(command_name);
+                if rest.is_empty() {
+                    new_text.push(' ');
+                } else {
+                    new_text.push_str(rest);
+                }
+
+                if new_text != input {
+                    let target_col_base = command_name.chars().count() + 1;
+                    let target_col = if rest.is_empty() {
+                        target_col_base + 1
+                    } else {
+                        target_col_base
+                    } as u16;
+
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.select_all();
                         ta.cut();
                         ta.insert_str(&new_text);
                         ta.move_cursor(CursorMove::Jump(0, target_col));
                     });
+                }
+
+                return KeyResult::Handled;
             }
 
-            return KeyResult::Handled;
-        }
+            let prefix_char_len = command_prefix.chars().count();
+            let common_prefix_len = longest_common_prefix_len(&matches);
+            let target_prefix_len = common_prefix_len.max(prefix_char_len);
+            let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
 
-        let prefix_char_len = command_prefix.chars().count();
-        let common_prefix_len = longest_common_prefix_len(&matches);
-        let target_prefix_len = common_prefix_len.max(prefix_char_len);
-        let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
+            let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
+            new_text.push('/');
+            new_text.push_str(&canonical_prefix);
+            new_text.push_str(rest);
 
-        let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
-        new_text.push('/');
-        new_text.push_str(&canonical_prefix);
-        new_text.push_str(rest);
-
-        if new_text != input {
-            let target_col = (canonical_prefix.chars().count() + 1) as u16;
-            app_guard
-                .ui
-                .apply_textarea_edit_and_recompute(term_width, |ta| {
+            if new_text != input {
+                let target_col = (canonical_prefix.chars().count() + 1) as u16;
+                app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                     ta.select_all();
                     ta.cut();
                     ta.insert_str(&new_text);
                     ta.move_cursor(CursorMove::Jump(0, target_col));
                 });
-        }
+            }
 
-        let status = matches
-            .iter()
-            .map(|name| format!("/{}", name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        app_guard
-            .conversation()
-            .set_status(format!("Commands: {}", status));
+            let status = matches
+                .iter()
+                .map(|name| format!("/{}", name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            app.conversation()
+                .set_status(format!("Commands: {}", status));
 
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -626,49 +654,51 @@ pub struct CtrlBHandler;
 impl KeyHandler for CtrlBHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if !app_guard.ui.markdown_enabled {
-            app_guard
-                .conversation()
-                .set_status("Markdown disabled (/markdown on)");
-            return KeyResult::Handled;
-        }
+        app.update(|app| {
+            if !app.ui.markdown_enabled {
+                app.conversation()
+                    .set_status("Markdown disabled (/markdown on)");
+                return KeyResult::Handled;
+            }
 
-        let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &app_guard.ui.messages,
-            &app_guard.ui.theme,
-            Some(term_width as usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            app_guard.ui.syntax_enabled,
-        );
+            let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+                &app.ui.messages,
+                &app.ui.theme,
+                Some(term_width as usize),
+                crate::ui::layout::TableOverflowPolicy::WrapCells,
+                app.ui.syntax_enabled,
+            );
 
-        if app_guard.ui.in_block_select_mode() {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                let total = blocks.len();
-                if let Some(next) = wrap_previous_index(cur, total) {
-                    app_guard.ui.set_selected_block_index(next);
-                    if let Some((start, _len, _)) = blocks.get(next) {
-                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+            if app.ui.in_block_select_mode() {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    let total = blocks.len();
+                    if let Some(next) = wrap_previous_index(cur, total) {
+                        app.ui.set_selected_block_index(next);
+                        if let Some((start, _len, _)) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, *start);
+                        }
                     }
                 }
+            } else if blocks.is_empty() {
+                app.conversation().set_status("No code blocks");
+            } else {
+                let last = blocks.len().saturating_sub(1);
+                app.ui.enter_block_select_mode(last);
+                if let Some((start, _len, _)) = blocks.get(last) {
+                    scroll_block_into_view(app, term_width, term_height, *start);
+                }
             }
-        } else if blocks.is_empty() {
-            app_guard.conversation().set_status("No code blocks");
-        } else {
-            let last = blocks.len().saturating_sub(1);
-            app_guard.ui.enter_block_select_mode(last);
-            if let Some((start, _len, _)) = blocks.get(last) {
-                scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-            }
-        }
 
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -679,46 +709,47 @@ pub struct CtrlPHandler;
 impl KeyHandler for CtrlPHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
+        app.update(|app| {
+            if app.ui.last_user_message_index().is_none() {
+                app.conversation().set_status("No user messages");
+                return KeyResult::Handled;
+            }
 
-        if app_guard.ui.last_user_message_index().is_none() {
-            app_guard.conversation().set_status("No user messages");
-            return KeyResult::Handled;
-        }
-
-        if app_guard.ui.in_edit_select_mode() {
-            if let Some(current) = app_guard.ui.selected_user_message_index() {
-                let prev = {
-                    let ui = &app_guard.ui;
-                    ui.prev_user_message_index(current)
-                        .or_else(|| ui.last_user_message_index())
-                };
-                if let Some(prev) = prev {
-                    app_guard.ui.set_selected_user_message_index(prev);
+            if app.ui.in_edit_select_mode() {
+                if let Some(current) = app.ui.selected_user_message_index() {
+                    let prev = {
+                        let ui = &app.ui;
+                        ui.prev_user_message_index(current)
+                            .or_else(|| ui.last_user_message_index())
+                    };
+                    if let Some(prev) = prev {
+                        app.ui.set_selected_user_message_index(prev);
+                    }
+                } else if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
                 }
-            } else if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
+            } else {
+                app.ui.enter_edit_select_mode();
+                if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
+                }
             }
-        } else {
-            app_guard.ui.enter_edit_select_mode();
-            if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
+
+            if let Some(idx) = app.ui.selected_user_message_index() {
+                app.conversation()
+                    .scroll_index_into_view(idx, term_width, term_height);
             }
-        }
 
-        if let Some(idx) = app_guard.ui.selected_user_message_index() {
-            app_guard
-                .conversation()
-                .scroll_index_into_view(idx, term_width, term_height);
-        }
-
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -729,14 +760,14 @@ impl KeyHandler for CtrlPHandler {
 /// Handler for Ctrl+J (send in compose mode, newline otherwise)
 pub struct CtrlJHandler {
     pub stream_service: Arc<ChatStreamService>,
-    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
 impl KeyHandler for CtrlJHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -745,12 +776,12 @@ impl KeyHandler for CtrlJHandler {
         let mut layout_time = last_input_layout_update.unwrap_or_else(Instant::now);
 
         match handle_ctrl_j_shortcut(
+            dispatcher,
             app,
             term_width,
             term_height,
             &self.stream_service,
             &mut layout_time,
-            &self.event_tx,
         )
         .await
         {
@@ -765,26 +796,26 @@ impl KeyHandler for CtrlJHandler {
 /// Handler for Enter key (submit message)
 pub struct EnterHandler {
     pub stream_service: Arc<ChatStreamService>,
-    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
 impl KeyHandler for EnterHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         match handle_enter_key(
+            dispatcher,
             app,
             key,
             term_width,
             term_height,
             &self.stream_service,
-            &self.event_tx,
         )
         .await
         {
@@ -799,26 +830,26 @@ impl KeyHandler for EnterHandler {
 /// Handler for Alt+Enter key (context-dependent behavior)
 pub struct AltEnterHandler {
     pub stream_service: Arc<ChatStreamService>,
-    pub event_tx: UnboundedSender<UiEvent>,
 }
 
 #[async_trait::async_trait]
 impl KeyHandler for AltEnterHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         match handle_enter_key(
+            dispatcher,
             app,
             key,
             term_width,
             term_height,
             &self.stream_service,
-            &self.event_tx,
         )
         .await
         {
@@ -831,31 +862,32 @@ impl KeyHandler for AltEnterHandler {
 }
 
 /// Handler for Ctrl+R (retry last message)
-pub struct CtrlRHandler {
-    pub stream_service: Arc<ChatStreamService>,
-}
+pub struct CtrlRHandler;
 
 #[async_trait::async_trait]
 impl KeyHandler for CtrlRHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
-        if handle_retry_shortcut(app, term_width, term_height, &self.stream_service).await {
-            KeyResult::Continue
-        } else {
-            KeyResult::NotHandled
-        }
+        dispatcher.dispatch_many(
+            [AppAction::RetryLastMessage],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        KeyResult::Continue
     }
 }
 
 /// Handler for Ctrl+T (external editor)
 pub struct CtrlTHandler {
-    pub stream_service: Arc<ChatStreamService>,
     pub terminal:
         Arc<Mutex<ratatui::Terminal<crate::ui::osc_backend::OscBackend<std::io::Stdout>>>>,
 }
@@ -864,7 +896,8 @@ pub struct CtrlTHandler {
 impl KeyHandler for CtrlTHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -872,9 +905,9 @@ impl KeyHandler for CtrlTHandler {
     ) -> KeyResult {
         let mut terminal_guard = self.terminal.lock().await;
         match handle_external_editor_shortcut(
+            dispatcher,
             app,
             &mut terminal_guard,
-            &self.stream_service,
             term_width,
             term_height,
         )
@@ -902,7 +935,8 @@ pub struct EditSelectHandler;
 impl KeyHandler for EditSelectHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -923,7 +957,8 @@ pub struct BlockSelectHandler;
 impl KeyHandler for BlockSelectHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
@@ -938,27 +973,23 @@ impl KeyHandler for BlockSelectHandler {
 }
 
 /// Handler for picker navigation (model/theme selection)
-pub struct PickerHandler {
-    pub event_tx: UnboundedSender<UiEvent>,
-}
+pub struct PickerHandler;
 
 #[async_trait::async_trait]
 impl KeyHandler for PickerHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
-        _term_width: u16,
-        _term_height: u16,
+        term_width: u16,
+        term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         // Check if there's a picker session before handling the key
-        let had_picker_before = {
-            let app_guard = app.lock().await;
-            app_guard.picker_session().is_some()
-        };
+        let had_picker_before = app.read(|app| app.picker_session().is_some()).await;
 
-        handle_picker_key_event(app, key, &self.event_tx).await;
+        handle_picker_key_event(dispatcher, key, term_width, term_height).await;
 
         // If we had a picker session before, then the key was handled by the picker
         // (even if it resulted in closing the picker, like Esc does)
@@ -973,13 +1004,27 @@ impl KeyHandler for PickerHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, KeyHandler, KeyResult,
+        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, CtrlLHandler,
+        EscapeHandler, F4Handler, KeyHandler, KeyResult,
     };
+    use crate::core::app::actions::{
+        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
+    };
+    use crate::ui::chat_loop::AppHandle;
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
     use tokio::runtime::Runtime;
-    use tokio::sync::Mutex;
+    use tokio::sync::{mpsc, Mutex};
+    use tokio_util::sync::CancellationToken;
+
+    fn test_dispatcher() -> (
+        AppActionDispatcher,
+        mpsc::UnboundedReceiver<AppActionEnvelope>,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (AppActionDispatcher::new(tx), rx)
+    }
 
     #[test]
     fn wrap_previous_index_wraps_to_end() {
@@ -1012,17 +1057,21 @@ mod tests {
 
         let mut app = create_test_app();
         app.ui.set_input_text("/mo".to_string());
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
 
         let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let app_guard = app.lock().await;
-            assert_eq!(app_guard.ui.get_input_text(), "/model ");
+            let input = app.read(|app| app.ui.get_input_text().to_string()).await;
+            assert_eq!(input, "/model ");
+            assert!(action_rx.try_recv().is_err());
         });
     }
 
@@ -1043,21 +1092,234 @@ mod tests {
 
         let mut app = create_test_app();
         app.ui.set_input_text("/t".to_string());
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
 
         let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let result = handler.handle(&app, &key_event, 80, 24, None).await;
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let app_guard = app.lock().await;
-            assert_eq!(app_guard.ui.get_input_text(), "/the");
-            assert_eq!(
-                app_guard.ui.status.as_deref(),
-                Some("Commands: /theme, /theory")
-            );
+            let (input, status) = app
+                .read(|app| {
+                    (
+                        app.ui.get_input_text().to_string(),
+                        app.ui.status.as_deref().map(str::to_string),
+                    )
+                })
+                .await;
+            assert_eq!(input, "/the");
+            assert_eq!(status.as_deref(), Some("Commands: /theme, /theory"));
+            assert!(action_rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn ctrl_l_handler_emits_clear_status_action() {
+        let handler = CtrlLHandler;
+        let mut app = create_test_app();
+        {
+            let mut conversation = app.conversation();
+            conversation.set_status("Busy");
+        }
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::ClearStatus)));
+
+            let (commands, status_is_none) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (commands, app.ui.status.is_none())
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(status_is_none);
+        });
+    }
+
+    #[test]
+    fn f4_handler_toggles_compose_mode_via_action() {
+        let handler = F4Handler;
+        let app = AppHandle::new(Arc::new(Mutex::new(create_test_app())));
+        let key_event = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::ToggleComposeMode)));
+
+            let compose_before = app.read(|app| app.ui.compose_mode).await;
+            assert!(!compose_before);
+
+            let (commands, compose_after) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (commands, app.ui.compose_mode)
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(compose_after);
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_file_prompt_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.ui
+                .start_file_prompt_save_block("snippet.rs".into(), "fn main() {}".into());
+        }
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelFilePrompt)));
+
+            let (commands, prompt_cleared, input_empty) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.file_prompt().is_none(),
+                        app.ui.get_input_text().is_empty(),
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(prompt_cleared);
+            assert!(input_empty);
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_in_place_edit_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.ui.start_in_place_edit(0);
+            app.ui.set_input_text("editing".into());
+        }
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelInPlaceEdit)));
+
+            let (commands, in_place_cleared, input_empty) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.in_place_edit_index().is_none(),
+                        app.ui.get_input_text().is_empty(),
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(in_place_cleared);
+            assert!(input_empty);
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_streaming_via_action() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.session.stream_cancel_token = Some(CancellationToken::new());
+            app.ui.begin_streaming();
+        }
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelStreaming)));
+
+            let (commands, is_streaming, cancel_cleared, interrupted) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.is_streaming,
+                        app.session.stream_cancel_token.is_none(),
+                        app.ui.stream_interrupted,
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(!is_streaming);
+            assert!(cancel_cleared);
+            assert!(interrupted);
         });
     }
 }

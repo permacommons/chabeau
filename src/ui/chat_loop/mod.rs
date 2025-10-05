@@ -13,16 +13,17 @@ use self::keybindings::{
 
 use self::setup::bootstrap_app;
 
-use crate::core::chat_stream::{ChatStreamService, StreamMessage, StreamParams};
+use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 
 use crate::api::models::fetch_models;
-use crate::commands::process_input;
-use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
-use crate::core::app::{App, ModelPickerRequest};
+use crate::core::app::{
+    apply_actions, App, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
+    ModelPickerRequest,
+};
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
-use crate::utils::editor::handle_external_editor;
+use crate::utils::editor::{launch_external_editor, ExternalEditorOutcome};
 use ratatui::crossterm::{
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind},
     execute,
@@ -39,10 +40,30 @@ use tokio::sync::{mpsc, Mutex};
 
 type SharedTerminal = Arc<Mutex<Terminal<OscBackend<io::Stdout>>>>;
 
+#[derive(Clone)]
+pub struct AppHandle {
+    inner: Arc<Mutex<App>>,
+}
+
+impl AppHandle {
+    pub fn new(inner: Arc<Mutex<App>>) -> Self {
+        Self { inner }
+    }
+
+    pub async fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
+        let guard = self.inner.lock().await;
+        f(&guard)
+    }
+
+    pub async fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> R {
+        let mut guard = self.inner.lock().await;
+        f(&mut guard)
+    }
+}
+
 #[derive(Debug)]
 pub enum UiEvent {
     Crossterm(Event),
-    RequestRedraw,
 }
 
 fn language_to_extension(lang: Option<&str>) -> &'static str {
@@ -72,20 +93,7 @@ fn language_to_extension(lang: Option<&str>) -> &'static str {
 }
 
 /// Helper to generate status suffix for picker actions (persistent vs session-only)
-fn status_suffix(is_persistent: bool) -> &'static str {
-    if is_persistent {
-        " (saved to config)"
-    } else {
-        " (session only)"
-    }
-}
-
-fn spawn_model_picker_loader(
-    app: Arc<Mutex<App>>,
-    event_tx: mpsc::UnboundedSender<UiEvent>,
-    request: ModelPickerRequest,
-) {
-    let _ = event_tx.send(UiEvent::RequestRedraw);
+fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPickerRequest) {
     tokio::spawn(async move {
         let ModelPickerRequest {
             client,
@@ -99,32 +107,20 @@ fn spawn_model_picker_loader(
             .await
             .map_err(|e| e.to_string());
 
-        let mut app_guard = app.lock().await;
-        match fetch_result {
-            Ok(models_response) => {
-                if let Err(e) = app_guard
-                    .complete_model_picker_request(default_model_for_provider, models_response)
-                {
-                    app_guard
-                        .conversation()
-                        .set_status(format!("Model picker error: {}", e));
-                }
-            }
-            Err(e) => {
-                app_guard.fail_model_picker_request();
-                app_guard
-                    .conversation()
-                    .set_status(format!("Model picker error: {}", e));
-            }
-        }
-        drop(app_guard);
-        let _ = event_tx.send(UiEvent::RequestRedraw);
+        let action = match fetch_result {
+            Ok(models_response) => AppAction::ModelPickerLoaded {
+                default_model_for_provider,
+                models_response,
+            },
+            Err(e) => AppAction::ModelPickerLoadFailed { error: e },
+        };
+
+        dispatcher.dispatch_many([action], AppActionContext::default());
     });
 }
 
-async fn is_exit_requested(app: &Arc<Mutex<App>>) -> bool {
-    let app_guard = app.lock().await;
-    app_guard.ui.exit_requested
+async fn is_exit_requested(app: &AppHandle) -> bool {
+    app.read(|app| app.ui.exit_requested).await
 }
 
 async fn current_terminal_size(terminal: &SharedTerminal) -> Size {
@@ -133,7 +129,7 @@ async fn current_terminal_size(terminal: &SharedTerminal) -> Size {
 }
 
 async fn try_draw_frame(
-    app: &Arc<Mutex<App>>,
+    app: &AppHandle,
     terminal: &SharedTerminal,
     request_redraw: &mut bool,
     last_draw: &mut Instant,
@@ -148,9 +144,8 @@ async fn try_draw_frame(
         return Ok(());
     }
 
-    let mut app_guard = app.lock().await;
     let mut terminal_guard = terminal.lock().await;
-    terminal_guard.draw(|f| ui(f, &mut app_guard))?;
+    (app.update(|app| terminal_guard.draw(|f| ui(f, app))).await)?;
     *last_draw = now;
     *request_redraw = false;
     Ok(())
@@ -163,9 +158,10 @@ struct EventProcessingOutcome {
 }
 
 async fn process_ui_events(
-    app: &Arc<Mutex<App>>,
+    app: &AppHandle,
     event_rx: &mut mpsc::UnboundedReceiver<UiEvent>,
     mode_registry: &ModeAwareRegistry,
+    dispatcher: &AppActionDispatcher,
     term_size: Size,
     last_input_layout_update: &mut Instant,
 ) -> Result<EventProcessingOutcome, Box<dyn Error>> {
@@ -178,13 +174,11 @@ async fn process_ui_events(
     while let Ok(ev) = event_rx.try_recv() {
         outcome.events_processed = true;
         match ev {
-            UiEvent::RequestRedraw => {
-                outcome.request_redraw = true;
-            }
             UiEvent::Crossterm(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                 let keyboard_outcome = route_keyboard_event(
                     app,
                     mode_registry,
+                    dispatcher,
                     key,
                     term_size,
                     last_input_layout_update,
@@ -200,7 +194,14 @@ async fn process_ui_events(
                 }
             }
             UiEvent::Crossterm(Event::Paste(text)) => {
-                handle_paste_event(app, term_size.width, text, last_input_layout_update).await;
+                handle_paste_event(
+                    dispatcher,
+                    term_size.width,
+                    term_size.height,
+                    text,
+                    last_input_layout_update,
+                )
+                .await;
                 outcome.request_redraw = true;
             }
             UiEvent::Crossterm(Event::Resize(_, _)) => {
@@ -223,27 +224,30 @@ struct KeyboardEventOutcome {
 }
 
 async fn route_keyboard_event(
-    app: &Arc<Mutex<App>>,
+    app: &AppHandle,
     mode_registry: &ModeAwareRegistry,
+    dispatcher: &AppActionDispatcher,
     key: event::KeyEvent,
     term_size: Size,
     last_input_layout_update: &mut Instant,
 ) -> Result<KeyboardEventOutcome, Box<dyn Error>> {
-    let context = {
-        let app_guard = app.lock().await;
-        let picker_open = app_guard.model_picker_state().is_some()
-            || app_guard.theme_picker_state().is_some()
-            || app_guard.provider_picker_state().is_some();
-        KeyContext::from_ui_mode(&app_guard.ui.mode, picker_open)
-    };
+    let context = app
+        .read(|app| {
+            let picker_open = app.model_picker_state().is_some()
+                || app.theme_picker_state().is_some()
+                || app.provider_picker_state().is_some();
+            KeyContext::from_ui_mode(&app.ui.mode, picker_open)
+        })
+        .await;
 
     if mode_registry.should_handle_as_text_input(&key, &context) {
-        let mut app_guard = app.lock().await;
-        app_guard
-            .ui
-            .apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                ta.input(tui_textarea::Input::from(key));
-            });
+        app.update(|app| {
+            app.ui
+                .apply_textarea_edit_and_recompute(term_size.width, |ta| {
+                    ta.input(tui_textarea::Input::from(key));
+                });
+        })
+        .await;
         return Ok(KeyboardEventOutcome {
             request_redraw: true,
             exit_requested: false,
@@ -253,6 +257,7 @@ async fn route_keyboard_event(
     let registry_result = mode_registry
         .handle_key_event(
             app,
+            dispatcher,
             &key,
             context,
             term_size.width,
@@ -283,41 +288,50 @@ async fn route_keyboard_event(
     Ok(outcome)
 }
 
+fn sanitize_pasted_text(text: &str) -> String {
+    let without_crlf = text.replace("\r\n", "\n");
+    let without_cr = without_crlf.replace('\r', "\n");
+    let expanded_tabs = without_cr.replace('\t', "    ");
+    expanded_tabs
+        .chars()
+        .filter(|&c| c == '\n' || !c.is_control())
+        .collect()
+}
+
 async fn handle_paste_event(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
     term_width: u16,
+    term_height: u16,
     text: String,
     last_input_layout_update: &mut Instant,
 ) {
-    let mut app_guard = app.lock().await;
-    let sanitized_text = text
-        .replace('\t', "    ")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|&c| c == '\n' || !c.is_control())
-        .collect::<String>();
-    app_guard
-        .ui
-        .apply_textarea_edit_and_recompute(term_width, |ta| {
-            ta.insert_str(&sanitized_text);
-        });
+    let sanitized_text = sanitize_pasted_text(&text);
+    if sanitized_text.is_empty() {
+        return;
+    }
+
+    dispatcher.dispatch_many(
+        [AppAction::InsertIntoInput {
+            text: sanitized_text,
+        }],
+        AppActionContext {
+            term_width,
+            term_height,
+        },
+    );
     *last_input_layout_update = Instant::now();
 }
 
-async fn process_stream_updates(
-    app: &Arc<Mutex<App>>,
+fn process_stream_updates(
+    dispatcher: &AppActionDispatcher,
     rx: &mut mpsc::UnboundedReceiver<(StreamMessage, u64)>,
     term_width: u16,
     term_height: u16,
+    current_stream_id: u64,
 ) -> bool {
-    let current_stream_id = {
-        let app_guard = app.lock().await;
-        app_guard.session.current_stream_id
-    };
-
     let mut received_any = false;
     let mut coalesced_chunks = String::new();
-    let mut marker_messages = Vec::new();
+    let mut followup_actions = Vec::new();
 
     while let Ok((message, msg_stream_id)) = rx.try_recv() {
         if msg_stream_id != current_stream_id {
@@ -329,9 +343,9 @@ async fn process_stream_updates(
                 coalesced_chunks.push_str(&content);
             }
             StreamMessage::Error(err) => {
-                marker_messages.push(StreamMessage::Error(err));
+                followup_actions.push(AppAction::StreamErrored { message: err });
             }
-            StreamMessage::End => marker_messages.push(StreamMessage::End),
+            StreamMessage::End => followup_actions.push(AppAction::StreamCompleted),
         }
 
         received_any = true;
@@ -341,13 +355,51 @@ async fn process_stream_updates(
         return false;
     }
 
-    let mut app_guard = app.lock().await;
+    let ctx = AppActionContext {
+        term_width,
+        term_height,
+    };
+
+    let mut actions = Vec::with_capacity(1 + followup_actions.len());
     let chunk = std::mem::take(&mut coalesced_chunks);
-    append_coalesced_chunk(&mut app_guard, chunk, term_width, term_height);
-    for message in marker_messages {
-        handle_stream_message(&mut app_guard, message, term_width, term_height);
+    if !chunk.is_empty() {
+        actions.push(AppAction::AppendResponseChunk { content: chunk });
+    }
+    actions.extend(followup_actions);
+
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(actions, ctx);
     }
 
+    true
+}
+
+async fn drain_action_queue(
+    app: &AppHandle,
+    dispatcher: &AppActionDispatcher,
+    stream_service: &ChatStreamService,
+    action_rx: &mut mpsc::UnboundedReceiver<AppActionEnvelope>,
+) -> bool {
+    let mut pending = Vec::new();
+    while let Ok(envelope) = action_rx.try_recv() {
+        pending.push(envelope);
+    }
+
+    if pending.is_empty() {
+        return false;
+    }
+
+    let commands = app.update(|app| apply_actions(app, pending)).await;
+    for cmd in commands {
+        match cmd {
+            crate::core::app::AppCommand::SpawnStream(params) => {
+                stream_service.spawn_stream(params);
+            }
+            crate::core::app::AppCommand::LoadModelPicker(request) => {
+                spawn_model_picker_loader(dispatcher.clone(), request);
+            }
+        }
+    }
     true
 }
 
@@ -358,6 +410,8 @@ pub async fn run_chat(
     env_only: bool,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only).await?;
+    let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
+    let action_dispatcher = AppActionDispatcher::new(action_tx);
 
     // Sign-off line (no noisy startup banners)
     println!(
@@ -407,8 +461,7 @@ pub async fn run_chat(
     };
 
     // Initialize mode-aware keybinding registry
-    let mode_registry =
-        build_mode_aware_registry(stream_service.clone(), terminal.clone(), event_tx.clone());
+    let mode_registry = build_mode_aware_registry(stream_service.clone(), terminal.clone());
 
     // Drawing cadence control
     const MAX_FPS: u64 = 60; // Limit to 60 FPS
@@ -440,6 +493,7 @@ pub async fn run_chat(
             &app,
             &mut event_rx,
             &mode_registry,
+            &action_dispatcher,
             term_size,
             &mut last_input_layout_update,
         )
@@ -453,17 +507,27 @@ pub async fn run_chat(
             request_redraw = true;
         }
 
-        let received_any =
-            process_stream_updates(&app, &mut rx, term_size.width, term_size.height).await;
+        let current_stream_id = app.read(|app| app.session.current_stream_id).await;
+
+        let received_any = process_stream_updates(
+            &action_dispatcher,
+            &mut rx,
+            term_size.width,
+            term_size.height,
+            current_stream_id,
+        );
 
         if received_any {
             request_redraw = true;
         }
 
-        let indicator_now = {
-            let app_guard = app.lock().await;
-            app_guard.ui.is_activity_indicator_visible()
-        };
+        let actions_applied =
+            drain_action_queue(&app, &action_dispatcher, &stream_service, &mut action_rx).await;
+        if actions_applied {
+            request_redraw = true;
+        }
+
+        let indicator_now = app.read(|app| app.ui.is_activity_indicator_visible()).await;
 
         if indicator_now != indicator_visible {
             indicator_visible = indicator_now;
@@ -506,1099 +570,512 @@ pub async fn run_chat(
     result
 }
 
-fn append_coalesced_chunk(app: &mut App, chunk: String, term_width: u16, term_height: u16) {
-    if chunk.is_empty() {
-        return;
-    }
-
-    let input_area_height = app.ui.calculate_input_area_height(term_width);
-    let mut conversation = app.conversation();
-    let available_height = conversation.calculate_available_height(term_height, input_area_height);
-    conversation.append_to_response(&chunk, available_height, term_width);
-}
-
-fn handle_stream_message(app: &mut App, message: StreamMessage, term_width: u16, term_height: u16) {
-    match message {
-        StreamMessage::Chunk(content) => {
-            append_coalesced_chunk(app, content, term_width, term_height);
-        }
-        StreamMessage::Error(err) => {
-            let error_message = format!("Error: {}", err.trim());
-            let input_area_height = app.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app.conversation();
-                conversation.add_system_message(error_message);
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            app.ui.end_streaming();
-        }
-        StreamMessage::End => {
-            {
-                let mut conversation = app.conversation();
-                conversation.finalize_response();
-            }
-            app.ui.end_streaming();
-        }
-    }
-}
-
 async fn handle_edit_select_mode_event(
-    app: &Arc<Mutex<App>>,
+    app: &AppHandle,
     key: &event::KeyEvent,
     term_width: u16,
     term_height: u16,
 ) -> bool {
-    let mut app_guard = app.lock().await;
-    if !app_guard.ui.in_edit_select_mode() {
-        return false;
-    }
-
-    match key.code {
-        KeyCode::Esc => {
-            app_guard.ui.exit_edit_select_mode();
-            true
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(current) = app_guard.ui.selected_user_message_index() {
-                let prev = {
-                    let ui = &app_guard.ui;
-                    ui.prev_user_message_index(current)
-                        .or_else(|| ui.last_user_message_index())
-                };
-                if let Some(prev) = prev {
-                    app_guard.ui.set_selected_user_message_index(prev);
-                    app_guard
-                        .conversation()
-                        .scroll_index_into_view(prev, term_width, term_height);
-                }
-            } else if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
-            }
-            true
+    app.update(|app| {
+        if !app.ui.in_edit_select_mode() {
+            return false;
         }
 
-        KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(current) = app_guard.ui.selected_user_message_index() {
-                let next = {
-                    let ui = &app_guard.ui;
-                    ui.next_user_message_index(current)
-                        .or_else(|| ui.first_user_message_index())
-                };
-                if let Some(next) = next {
-                    app_guard.ui.set_selected_user_message_index(next);
-                    app_guard
-                        .conversation()
-                        .scroll_index_into_view(next, term_width, term_height);
-                }
-            } else if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
+        match key.code {
+            KeyCode::Esc => {
+                app.ui.exit_edit_select_mode();
+                true
             }
-            true
-        }
-        KeyCode::Enter => {
-            if let Some(idx) = app_guard.ui.selected_user_message_index() {
-                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                    let content = app_guard.ui.messages[idx].content.clone();
-                    {
-                        let mut conversation = app_guard.conversation();
-                        conversation.cancel_current_stream();
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(current) = app.ui.selected_user_message_index() {
+                    let prev = {
+                        let ui = &app.ui;
+                        ui.prev_user_message_index(current)
+                            .or_else(|| ui.last_user_message_index())
+                    };
+                    if let Some(prev) = prev {
+                        app.ui.set_selected_user_message_index(prev);
+                        app.conversation()
+                            .scroll_index_into_view(prev, term_width, term_height);
                     }
-                    app_guard.ui.messages.truncate(idx);
-                    app_guard.invalidate_prewrap_cache();
-                    let _ = app_guard
-                        .session
-                        .logging
-                        .rewrite_log_without_last_response(&app_guard.ui.messages);
-                    app_guard.ui.set_input_text(content);
-                    app_guard.ui.exit_edit_select_mode();
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    {
-                        let mut conversation = app_guard.conversation();
-                        let available_height =
-                            conversation.calculate_available_height(term_height, input_area_height);
-                        conversation.update_scroll_position(available_height, term_width);
-                    }
+                } else if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
                 }
+                true
             }
-            true
-        }
-        KeyCode::Char('E') | KeyCode::Char('e') => {
-            if let Some(idx) = app_guard.ui.selected_user_message_index() {
-                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                    let content = app_guard.ui.messages[idx].content.clone();
-                    app_guard.ui.set_input_text(content);
-                    app_guard.ui.start_in_place_edit(idx);
-                    app_guard.ui.exit_edit_select_mode();
-                }
-            }
-            true
-        }
-        KeyCode::Delete => {
-            if let Some(idx) = app_guard.ui.selected_user_message_index() {
-                if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                    {
-                        let mut conversation = app_guard.conversation();
-                        conversation.cancel_current_stream();
-                    }
-                    app_guard.ui.messages.truncate(idx);
-                    app_guard.invalidate_prewrap_cache();
-                    let _ = app_guard
-                        .session
-                        .logging
-                        .rewrite_log_without_last_response(&app_guard.ui.messages);
-                    app_guard.ui.exit_edit_select_mode();
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    {
-                        let mut conversation = app_guard.conversation();
-                        let available_height =
-                            conversation.calculate_available_height(term_height, input_area_height);
-                        conversation.update_scroll_position(available_height, term_width);
-                    }
-                }
-            }
-            true
-        }
 
-        _ => false, // Key not handled - allow fallback handlers to process it
-    }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(current) = app.ui.selected_user_message_index() {
+                    let next = {
+                        let ui = &app.ui;
+                        ui.next_user_message_index(current)
+                            .or_else(|| ui.first_user_message_index())
+                    };
+                    if let Some(next) = next {
+                        app.ui.set_selected_user_message_index(next);
+                        app.conversation()
+                            .scroll_index_into_view(next, term_width, term_height);
+                    }
+                } else if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
+                }
+                true
+            }
+            KeyCode::Enter => {
+                if let Some(idx) = app.ui.selected_user_message_index() {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                        let content = app.ui.messages[idx].content.clone();
+                        {
+                            let mut conversation = app.conversation();
+                            conversation.cancel_current_stream();
+                        }
+                        app.ui.messages.truncate(idx);
+                        app.invalidate_prewrap_cache();
+                        let _ = app
+                            .session
+                            .logging
+                            .rewrite_log_without_last_response(&app.ui.messages);
+                        app.ui.set_input_text(content);
+                        app.ui.exit_edit_select_mode();
+                        let input_area_height = app.ui.calculate_input_area_height(term_width);
+                        {
+                            let mut conversation = app.conversation();
+                            let available_height = conversation
+                                .calculate_available_height(term_height, input_area_height);
+                            conversation.update_scroll_position(available_height, term_width);
+                        }
+                    }
+                }
+                true
+            }
+            KeyCode::Char('E') | KeyCode::Char('e') => {
+                if let Some(idx) = app.ui.selected_user_message_index() {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                        let content = app.ui.messages[idx].content.clone();
+                        app.ui.set_input_text(content);
+                        app.ui.start_in_place_edit(idx);
+                        app.ui.exit_edit_select_mode();
+                    }
+                }
+                true
+            }
+            KeyCode::Delete => {
+                if let Some(idx) = app.ui.selected_user_message_index() {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                        {
+                            let mut conversation = app.conversation();
+                            conversation.cancel_current_stream();
+                        }
+                        app.ui.messages.truncate(idx);
+                        app.invalidate_prewrap_cache();
+                        let _ = app
+                            .session
+                            .logging
+                            .rewrite_log_without_last_response(&app.ui.messages);
+                        app.ui.exit_edit_select_mode();
+                        let input_area_height = app.ui.calculate_input_area_height(term_width);
+                        {
+                            let mut conversation = app.conversation();
+                            let available_height = conversation
+                                .calculate_available_height(term_height, input_area_height);
+                            conversation.update_scroll_position(available_height, term_width);
+                        }
+                    }
+                }
+                true
+            }
+
+            _ => false, // Key not handled - allow fallback handlers to process it
+        }
+    })
+    .await
 }
 
 async fn handle_block_select_mode_event(
-    app: &Arc<Mutex<App>>,
+    app: &AppHandle,
     key: &event::KeyEvent,
     term_width: u16,
     term_height: u16,
 ) -> bool {
-    let mut app_guard = app.lock().await;
-    if !app_guard.ui.in_block_select_mode() {
-        return false;
-    }
-
-    let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-        &app_guard.ui.messages,
-        &app_guard.ui.theme,
-        Some(term_width as usize),
-        crate::ui::layout::TableOverflowPolicy::WrapCells,
-        app_guard.ui.syntax_enabled,
-    );
-
-    match key.code {
-        KeyCode::Esc => {
-            app_guard.ui.exit_block_select_mode();
-            true
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                let total = ranges.len();
-                if let Some(next) = wrap_previous_index(cur, total) {
-                    app_guard.ui.set_selected_block_index(next);
-                    if let Some((start, _len, _)) = ranges.get(next) {
-                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-                    }
-                }
-            } else if !ranges.is_empty() {
-                app_guard.ui.set_selected_block_index(0);
-            }
-            true
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                let total = ranges.len();
-                if let Some(next) = wrap_next_index(cur, total) {
-                    app_guard.ui.set_selected_block_index(next);
-                    if let Some((start, _len, _)) = ranges.get(next) {
-                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-                    }
-                }
-            } else if !ranges.is_empty() {
-                app_guard.ui.set_selected_block_index(0);
-            }
-            true
+    app.update(|app| {
+        if !app.ui.in_block_select_mode() {
+            return false;
         }
 
-        KeyCode::Char('c') | KeyCode::Char('C') => {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                if let Some((_start, _len, content)) = ranges.get(cur) {
-                    match crate::utils::clipboard::copy_to_clipboard(content) {
-                        Ok(()) => app_guard.conversation().set_status("Copied code block"),
-                        Err(_e) => app_guard.conversation().set_status("Clipboard error"),
-                    }
-                    app_guard.ui.exit_block_select_mode();
-                    app_guard.ui.auto_scroll = true;
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    {
-                        let mut conversation = app_guard.conversation();
-                        let available_height =
-                            conversation.calculate_available_height(term_height, input_area_height);
-                        conversation.update_scroll_position(available_height, term_width);
-                    }
-                }
+        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+            &app.ui.messages,
+            &app.ui.theme,
+            Some(term_width as usize),
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            app.ui.syntax_enabled,
+        );
+
+        match key.code {
+            KeyCode::Esc => {
+                app.ui.exit_block_select_mode();
+                true
             }
-            true
-        }
-        KeyCode::Char('s') | KeyCode::Char('S') => {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(
-                    &app_guard.ui.messages,
-                );
-                if let Some((content, lang)) = contents.get(cur) {
-                    use chrono::Utc;
-                    use std::fs;
-                    let date = Utc::now().format("%Y-%m-%d");
-                    let ext = language_to_extension(lang.as_deref());
-                    let filename = format!("chabeau-block-{}.{}", date, ext);
-                    if std::path::Path::new(&filename).exists() {
-                        app_guard.conversation().set_status("File already exists.");
-                        app_guard
-                            .ui
-                            .start_file_prompt_save_block(filename, content.clone());
-                    } else {
-                        match fs::write(&filename, content) {
-                            Ok(()) => app_guard
-                                .conversation()
-                                .set_status(format!("Saved to {}", filename)),
-                            Err(_e) => app_guard
-                                .conversation()
-                                .set_status("Error saving code block"),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    let total = ranges.len();
+                    if let Some(next) = wrap_previous_index(cur, total) {
+                        app.ui.set_selected_block_index(next);
+                        if let Some((start, _len, _)) = ranges.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, *start);
                         }
                     }
-                    app_guard.ui.exit_block_select_mode();
-                    app_guard.ui.auto_scroll = true;
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-                    {
-                        let mut conversation = app_guard.conversation();
-                        let available_height =
-                            conversation.calculate_available_height(term_height, input_area_height);
-                        conversation.update_scroll_position(available_height, term_width);
+                } else if !ranges.is_empty() {
+                    app.ui.set_selected_block_index(0);
+                }
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    let total = ranges.len();
+                    if let Some(next) = wrap_next_index(cur, total) {
+                        app.ui.set_selected_block_index(next);
+                        if let Some((start, _len, _)) = ranges.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, *start);
+                        }
+                    }
+                } else if !ranges.is_empty() {
+                    app.ui.set_selected_block_index(0);
+                }
+                true
+            }
+
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    if let Some((_start, _len, content)) = ranges.get(cur) {
+                        match crate::utils::clipboard::copy_to_clipboard(content) {
+                            Ok(()) => app.conversation().set_status("Copied code block"),
+                            Err(_e) => app.conversation().set_status("Clipboard error"),
+                        }
+                        app.ui.exit_block_select_mode();
+                        app.ui.auto_scroll = true;
+                        let input_area_height = app.ui.calculate_input_area_height(term_width);
+                        {
+                            let mut conversation = app.conversation();
+                            let available_height = conversation
+                                .calculate_available_height(term_height, input_area_height);
+                            conversation.update_scroll_position(available_height, term_width);
+                        }
                     }
                 }
+                true
             }
-            true
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    let contents =
+                        crate::ui::markdown::compute_codeblock_contents_with_lang(&app.ui.messages);
+                    if let Some((content, lang)) = contents.get(cur) {
+                        use chrono::Utc;
+                        use std::fs;
+                        let date = Utc::now().format("%Y-%m-%d");
+                        let ext = language_to_extension(lang.as_deref());
+                        let filename = format!("chabeau-block-{}.{}", date, ext);
+                        if std::path::Path::new(&filename).exists() {
+                            app.conversation().set_status("File already exists.");
+                            app.ui
+                                .start_file_prompt_save_block(filename, content.clone());
+                        } else {
+                            match fs::write(&filename, content) {
+                                Ok(()) => app
+                                    .conversation()
+                                    .set_status(format!("Saved to {}", filename)),
+                                Err(_e) => app.conversation().set_status("Error saving code block"),
+                            }
+                        }
+                        app.ui.exit_block_select_mode();
+                        app.ui.auto_scroll = true;
+                        let input_area_height = app.ui.calculate_input_area_height(term_width);
+                        {
+                            let mut conversation = app.conversation();
+                            let available_height = conversation
+                                .calculate_available_height(term_height, input_area_height);
+                            conversation.update_scroll_position(available_height, term_width);
+                        }
+                    }
+                }
+                true
+            }
+            _ => false, // Key not handled - allow fallback handlers to process it
         }
-        _ => false, // Key not handled - allow fallback handlers to process it
-    }
+    })
+    .await
 }
 
 async fn handle_external_editor_shortcut(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
+    app: &AppHandle,
     terminal: &mut Terminal<OscBackend<io::Stdout>>,
-    stream_service: &ChatStreamService,
     term_width: u16,
     term_height: u16,
 ) -> Result<Option<KeyLoopAction>, String> {
-    let editor_result = {
-        let mut app_guard = app.lock().await;
-        handle_external_editor(&mut app_guard)
-            .await
-            .map_err(|e| e.to_string())
+    let initial_text = app.read(|app| app.ui.get_input_text().to_string()).await;
+
+    let outcome = match launch_external_editor(&initial_text).await {
+        Ok(outcome) => outcome,
+        Err(e) => ExternalEditorOutcome {
+            message: None,
+            status: Some(format!("Editor error: {}", e)),
+            clear_input: false,
+        },
     };
 
     terminal.clear().map_err(|e| e.to_string())?;
 
-    match editor_result {
-        Ok(Some(message)) => {
-            let mut app_guard = app.lock().await;
-            let params =
-                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
-            drop(app_guard);
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
-        Ok(None) => {
-            let mut app_guard = app.lock().await;
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            Ok(Some(KeyLoopAction::Continue))
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            let mut app_guard = app.lock().await;
-            app_guard
-                .conversation()
-                .set_status(format!("Editor error: {}", error_msg));
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            Ok(Some(KeyLoopAction::Continue))
-        }
+    let mut actions = Vec::new();
+    if let Some(status) = outcome.status {
+        actions.push(AppAction::SetStatus { message: status });
     }
+    if outcome.clear_input {
+        actions.push(AppAction::ClearInput);
+    }
+    if let Some(message) = outcome.message {
+        actions.push(AppAction::SubmitMessage { message });
+    }
+
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(
+            actions,
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+    }
+
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn process_input_submission(
-    app: &Arc<Mutex<App>>,
-    input_text: String,
+    dispatcher: &AppActionDispatcher,
+    app: &AppHandle,
     term_width: u16,
     term_height: u16,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
-) -> SubmissionResult {
-    let mut app_guard = app.lock().await;
-
-    match process_input(&mut app_guard, &input_text) {
-        CommandResult::Continue => {
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
+) {
+    let input_text = app
+        .read(|app| {
+            let text = app.ui.get_input_text().to_string();
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
             }
-            SubmissionResult::Continue
-        }
-        CommandResult::OpenModelPicker => {
-            let request = app_guard.prepare_model_picker_request();
-            drop(app_guard);
-            spawn_model_picker_loader(app.clone(), event_tx.clone(), request);
-            SubmissionResult::Continue
-        }
-        CommandResult::OpenProviderPicker => {
-            app_guard.open_provider_picker();
-            drop(app_guard);
-            let _ = event_tx.send(UiEvent::RequestRedraw);
-            SubmissionResult::Continue
-        }
-        CommandResult::ProcessAsMessage(message) => {
-            let params =
-                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
-            SubmissionResult::Spawn(params)
-        }
-    }
+        })
+        .await;
+
+    let Some(input_text) = input_text else {
+        return;
+    };
+
+    dispatcher.dispatch_many(
+        [
+            AppAction::ClearInput,
+            AppAction::ProcessCommand { input: input_text },
+        ],
+        AppActionContext {
+            term_width,
+            term_height,
+        },
+    );
 }
 
 async fn handle_enter_key(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
+    app: &AppHandle,
     key: &event::KeyEvent,
     term_width: u16,
     term_height: u16,
-    stream_service: &ChatStreamService,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
+    _stream_service: &ChatStreamService,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
 
-    {
-        let mut app_guard = app.lock().await;
-        if let Some(prompt) = app_guard.ui.file_prompt().cloned() {
-            let filename = app_guard.ui.get_input_text().trim().to_string();
-            if filename.is_empty() {
-                return Ok(Some(KeyLoopAction::Continue));
-            }
-            let overwrite = modifiers.contains(event::KeyModifiers::ALT);
-            match prompt.kind {
-                FilePromptKind::Dump => {
-                    let res = crate::commands::dump_conversation_with_overwrite(
-                        &app_guard, &filename, overwrite,
-                    );
-                    match res {
-                        Ok(()) => {
-                            app_guard
-                                .conversation()
-                                .set_status(format!("Dumped: {}", filename));
-                            app_guard.ui.cancel_file_prompt();
-                        }
-                        Err(e) => {
-                            let msg = e.to_string();
-                            if msg.contains("exists") && !overwrite {
-                                app_guard
-                                    .conversation()
-                                    .set_status("File exists (Alt+Enter to overwrite)");
-                            } else {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Dump error: {}", msg));
-                            }
-                        }
-                    }
-                }
-                FilePromptKind::SaveCodeBlock => {
-                    use std::fs;
-                    let exists = std::path::Path::new(&filename).exists();
-                    if exists && !overwrite {
-                        app_guard.conversation().set_status("File already exists.");
-                    } else if let Some(content) = prompt.content {
-                        match fs::write(&filename, content) {
-                            Ok(()) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Saved to {}", filename));
-                                app_guard.ui.cancel_file_prompt();
-                            }
-                            Err(_e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status("Error saving code block");
-                            }
-                        }
-                    }
-                }
-            }
+    let file_prompt_action = app
+        .read(|app| {
+            app.ui.file_prompt().cloned().map(|prompt| {
+                let filename = app.ui.get_input_text().trim().to_string();
+                let overwrite = modifiers.contains(event::KeyModifiers::ALT);
+                (prompt, filename, overwrite)
+            })
+        })
+        .await;
+
+    if let Some((prompt, filename, overwrite)) = file_prompt_action {
+        if filename.is_empty() {
             return Ok(Some(KeyLoopAction::Continue));
         }
-    }
 
-    let should_insert_newline = {
-        let app_guard = app.lock().await;
-        let compose = app_guard.ui.compose_mode;
-        let alt = modifiers.contains(event::KeyModifiers::ALT);
-        if compose {
-            !alt
-        } else {
-            alt
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+
+        match prompt.kind {
+            FilePromptKind::Dump => {
+                dispatcher.dispatch_many(
+                    [AppAction::CompleteFilePromptDump {
+                        filename,
+                        overwrite,
+                    }],
+                    ctx,
+                );
+            }
+            FilePromptKind::SaveCodeBlock => {
+                if let Some(content) = prompt.content {
+                    dispatcher.dispatch_many(
+                        [AppAction::CompleteFilePromptSaveBlock {
+                            filename,
+                            content,
+                            overwrite,
+                        }],
+                        ctx,
+                    );
+                }
+            }
         }
-    };
 
-    if should_insert_newline {
-        let mut app_guard = app.lock().await;
-        app_guard
-            .ui
-            .apply_textarea_edit_and_recompute(term_width, |ta| {
-                ta.insert_str("\n");
-            });
         return Ok(Some(KeyLoopAction::Continue));
     }
 
-    {
-        let mut app_guard = app.lock().await;
-        if let Some(idx) = app_guard.ui.take_in_place_edit_index() {
-            if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                let new_text = app_guard.ui.get_input_text().to_string();
-                app_guard.ui.messages[idx].content = new_text;
-                app_guard.invalidate_prewrap_cache();
-                let _ = app_guard
-                    .session
-                    .logging
-                    .rewrite_log_without_last_response(&app_guard.ui.messages);
+    let should_insert_newline = app
+        .read(|app| {
+            let compose = app.ui.compose_mode;
+            let alt = modifiers.contains(event::KeyModifiers::ALT);
+            if compose {
+                !alt
+            } else {
+                alt
             }
-            app_guard.ui.clear_input();
-            return Ok(Some(KeyLoopAction::Continue));
-        }
+        })
+        .await;
+
+    if should_insert_newline {
+        app.update(|app| {
+            app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
+                ta.insert_str("\n");
+            });
+        })
+        .await;
+        return Ok(Some(KeyLoopAction::Continue));
     }
 
-    let input_text = {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().trim().is_empty() {
-            return Ok(Some(KeyLoopAction::Continue));
-        }
-        let text = app_guard.ui.get_input_text().to_string();
-        app_guard.ui.clear_input();
-        text
-    };
+    let in_place_edit = app
+        .read(|app| {
+            app.ui
+                .in_place_edit_index()
+                .map(|idx| (idx, app.ui.get_input_text().to_string()))
+        })
+        .await;
 
-    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
-        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
-        SubmissionResult::Spawn(params) => {
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
+    if let Some((idx, new_text)) = in_place_edit {
+        dispatcher.dispatch_many(
+            [
+                AppAction::CompleteInPlaceEdit {
+                    index: idx,
+                    new_text,
+                },
+                AppAction::ClearInput,
+            ],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        return Ok(Some(KeyLoopAction::Continue));
     }
+
+    process_input_submission(dispatcher, app, term_width, term_height).await;
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn handle_ctrl_j_shortcut(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
+    app: &AppHandle,
     term_width: u16,
     term_height: u16,
-    stream_service: &ChatStreamService,
+    _stream_service: &ChatStreamService,
     last_input_layout_update: &mut Instant,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
-    let send_now = {
-        let app_guard = app.lock().await;
-        app_guard.ui.compose_mode && app_guard.ui.file_prompt().is_none()
-    };
+    let send_now = app
+        .read(|app| app.ui.compose_mode && app.ui.file_prompt().is_none())
+        .await;
 
     if !send_now {
-        let mut app_guard = app.lock().await;
-        app_guard
-            .ui
-            .apply_textarea_edit_and_recompute(term_width, |ta| {
+        app.update(|app| {
+            app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                 ta.insert_str("\n");
             });
+        })
+        .await;
         *last_input_layout_update = Instant::now();
         return Ok(Some(KeyLoopAction::Continue));
     }
 
-    let input_text = {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().trim().is_empty() {
-            return Ok(Some(KeyLoopAction::Continue));
-        }
-        let text = app_guard.ui.get_input_text().to_string();
-        app_guard.ui.clear_input();
-        text
-    };
-
-    match process_input_submission(app, input_text, term_width, term_height, event_tx).await {
-        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
-        SubmissionResult::Spawn(params) => {
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
-    }
-}
-
-async fn handle_retry_shortcut(
-    app: &Arc<Mutex<App>>,
-    term_width: u16,
-    term_height: u16,
-    stream_service: &ChatStreamService,
-) -> bool {
-    let maybe_params = {
-        let mut app_guard = app.lock().await;
-        let now = Instant::now();
-        if now
-            .duration_since(app_guard.session.last_retry_time)
-            .as_millis()
-            < 200
-        {
-            return true;
-        }
-
-        let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-        let maybe_stream = {
-            let mut conversation = app_guard.conversation();
-            let available_height =
-                conversation.calculate_available_height(term_height, input_area_height);
-            conversation
-                .prepare_retry(available_height, term_width)
-                .map(|api_messages| {
-                    let (cancel_token, stream_id) = conversation.start_new_stream();
-                    (api_messages, cancel_token, stream_id)
-                })
-        };
-
-        maybe_stream.map(|(api_messages, cancel_token, stream_id)| StreamParams {
-            client: app_guard.session.client.clone(),
-            base_url: app_guard.session.base_url.clone(),
-            api_key: app_guard.session.api_key.clone(),
-            provider_name: app_guard.session.provider_name.clone(),
-            model: app_guard.session.model.clone(),
-            api_messages,
-            cancel_token,
-            stream_id,
-        })
-    };
-
-    if let Some(params) = maybe_params {
-        stream_service.spawn_stream(params);
-    }
-
-    true
-}
-
-fn prepare_stream_params_for_message(
-    app_guard: &mut App,
-    message: String,
-    term_width: u16,
-    term_height: u16,
-) -> StreamParams {
-    app_guard.ui.auto_scroll = true;
-    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-    let (cancel_token, stream_id, api_messages) = {
-        let mut conversation = app_guard.conversation();
-        let (cancel_token, stream_id) = conversation.start_new_stream();
-        let api_messages = conversation.add_user_message(message);
-        let available_height =
-            conversation.calculate_available_height(term_height, input_area_height);
-        conversation.update_scroll_position(available_height, term_width);
-        (cancel_token, stream_id, api_messages)
-    };
-
-    StreamParams {
-        client: app_guard.session.client.clone(),
-        base_url: app_guard.session.base_url.clone(),
-        api_key: app_guard.session.api_key.clone(),
-        provider_name: app_guard.session.provider_name.clone(),
-        model: app_guard.session.model.clone(),
-        api_messages,
-        cancel_token,
-        stream_id,
-    }
-}
-
-enum SubmissionResult {
-    Continue,
-    Spawn(StreamParams),
+    process_input_submission(dispatcher, app, term_width, term_height).await;
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn handle_picker_key_event(
-    app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
+    term_width: u16,
+    term_height: u16,
 ) {
-    let mut app_guard = app.lock().await;
-    let current_picker_mode = app_guard.current_picker_mode();
-    let provider_name = app_guard.session.provider_name.clone();
-    let mut should_request_redraw = false;
+    let mut actions = Vec::new();
 
-    let selection = if let Some(picker) = app_guard.picker_state_mut() {
-        match key.code {
-            KeyCode::Esc => {
-                match current_picker_mode {
-                    Some(crate::core::app::PickerMode::Theme) => {
-                        app_guard.revert_theme_preview();
-                        app_guard.close_picker();
-                    }
-                    Some(crate::core::app::PickerMode::Model) => {
-                        if app_guard.picker.startup_requires_model {
-                            // Startup mandatory model selection
-                            app_guard.close_picker();
-                            if app_guard.picker.startup_multiple_providers_available {
-                                // Go back to provider picker per spec
-                                app_guard.picker.startup_requires_model = false;
-                                app_guard.picker.startup_requires_provider = true;
-                                // Clear provider selection in title bar during startup bounce-back
-                                app_guard.session.provider_name.clear();
-                                app_guard.session.provider_display_name =
-                                    "(no provider selected)".to_string();
-                                app_guard.session.api_key.clear();
-                                app_guard.session.base_url.clear();
-                                app_guard.open_provider_picker();
-                                should_request_redraw = true;
-                            } else {
-                                // Exit app if no alternative provider
-                                app_guard.ui.exit_requested = true;
-                            }
-                        } else {
-                            app_guard.revert_model_preview();
-                            if app_guard.picker.in_provider_model_transition {
-                                app_guard.revert_provider_model_transition();
-                                app_guard.conversation().set_status("Selection cancelled");
-                            }
-                            app_guard.close_picker();
-                        }
-                    }
-                    Some(crate::core::app::PickerMode::Provider) => {
-                        if app_guard.picker.startup_requires_provider {
-                            // Startup mandatory provider selection: exit if cancelled
-                            app_guard.close_picker();
-                            app_guard.ui.exit_requested = true;
-                        } else {
-                            app_guard.revert_provider_preview();
-                            app_guard.close_picker();
-                        }
-                    }
-                    _ => {}
-                }
-                None
-            }
-            KeyCode::Up => {
-                picker.move_up();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Down => {
-                picker.move_down();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('k') => {
-                picker.move_up();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                picker.move_down();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Home => {
-                picker.move_to_start();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::End => {
-                picker.move_to_end();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::F(6) => {
-                picker.cycle_sort_mode();
-                // Re-sort and update title
-                let _ = picker; // Release borrow
-                app_guard.sort_picker_items();
-                app_guard.update_picker_title();
-                None
-            }
-            // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
-            KeyCode::Enter | KeyCode::Char('j')
-                if key.code == KeyCode::Enter
-                    || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-            {
-                let is_persistent = if key.code == KeyCode::Enter {
-                    key.modifiers.contains(event::KeyModifiers::ALT)
-                } else {
-                    true
-                };
-                // Common apply path
-                // Theme
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let res = {
-                            let mut controller = app_guard.theme_controller();
-                            if is_persistent {
-                                controller.apply_theme_by_id(&id)
-                            } else {
-                                controller.apply_theme_by_id_session_only(&id)
-                            }
-                        };
-                        match res {
-                            Ok(_) => app_guard.conversation().set_status(format!(
-                                "Theme set: {}{}",
-                                id,
-                                status_suffix(is_persistent)
-                            )),
-                            Err(_e) => app_guard.conversation().set_status("Theme error"),
-                        }
-                    }
-                    app_guard.close_picker();
-                    Some("__picker_handled__".to_string())
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let persist = is_persistent && !app_guard.session.startup_env_only;
-                        let res = {
-                            let mut controller = app_guard.provider_controller();
-                            if persist {
-                                controller.apply_model_by_id_persistent(&id)
-                            } else {
-                                controller.apply_model_by_id(&id);
-                                Ok(())
-                            }
-                        };
-                        match res {
-                            Ok(_) => {
-                                app_guard.conversation().set_status(format!(
-                                    "Model set: {}{}",
-                                    id,
-                                    status_suffix(persist)
-                                ));
-                                if app_guard.picker.in_provider_model_transition {
-                                    app_guard.complete_provider_model_transition();
-                                }
-                                if app_guard.picker.startup_requires_model {
-                                    app_guard.picker.startup_requires_model = false;
-                                }
-                            }
-                            Err(e) => app_guard
-                                .conversation()
-                                .set_status(format!("Model error: {}", e)),
-                        }
-                    }
-                    app_guard.close_picker();
-                    Some("__picker_handled__".to_string())
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let (res, should_open_model_picker) = {
-                            let mut controller = app_guard.provider_controller();
-                            if is_persistent {
-                                controller.apply_provider_by_id_persistent(&id)
-                            } else {
-                                controller.apply_provider_by_id(&id)
-                            }
-                        };
-                        match res {
-                            Ok(_) => {
-                                app_guard.conversation().set_status(format!(
-                                    "Provider set: {}{}",
-                                    id,
-                                    status_suffix(is_persistent)
-                                ));
-                                app_guard.close_picker();
-                                if should_open_model_picker {
-                                    if app_guard.picker.startup_requires_provider {
-                                        app_guard.picker.startup_requires_provider = false;
-                                        app_guard.picker.startup_requires_model = true;
-                                    }
-                                    let request = app_guard.prepare_model_picker_request();
-                                    let app_clone = app.clone();
-                                    let event_tx_clone = event_tx.clone();
-                                    spawn_model_picker_loader(app_clone, event_tx_clone, request);
-                                }
-                            }
-                            Err(e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Provider error: {}", e));
-                                app_guard.close_picker();
-                            }
-                        }
-                    }
-                    Some("__picker_handled__".to_string())
-                } else {
-                    Some("__picker_handled__".to_string())
-                }
-            }
-            // Ctrl+J: persist selection to config (documented only in /help)
-            KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                match current_picker_mode {
-                    Some(crate::core::app::PickerMode::Theme) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let res = {
-                                let mut controller = app_guard.theme_controller();
-                                controller.apply_theme_by_id(&id)
-                            };
-                            match res {
-                                Ok(_) => app_guard.conversation().set_status(format!(
-                                    "Theme set: {}{}",
-                                    id,
-                                    status_suffix(true)
-                                )),
-                                Err(_e) => app_guard.conversation().set_status("Theme error"),
-                            }
-                        }
-                        app_guard.close_picker();
-                        Some("__picker_handled__".to_string())
-                    }
-                    Some(crate::core::app::PickerMode::Model) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let persist = !app_guard.session.startup_env_only;
-                            let res = {
-                                let mut controller = app_guard.provider_controller();
-                                if persist {
-                                    controller.apply_model_by_id_persistent(&id)
-                                } else {
-                                    controller.apply_model_by_id(&id);
-                                    Ok(())
-                                }
-                            };
-                            match res {
-                                Ok(_) => {
-                                    app_guard.conversation().set_status(format!(
-                                        "Model set: {}{}",
-                                        id,
-                                        status_suffix(persist)
-                                    ));
-                                    if app_guard.picker.in_provider_model_transition {
-                                        app_guard.complete_provider_model_transition();
-                                    }
-                                    if app_guard.picker.startup_requires_model {
-                                        app_guard.picker.startup_requires_model = false;
-                                    }
-                                }
-                                Err(e) => app_guard
-                                    .conversation()
-                                    .set_status(format!("Model error: {}", e)),
-                            }
-                        }
-                        app_guard.close_picker();
-                        Some("__picker_handled__".to_string())
-                    }
-                    Some(crate::core::app::PickerMode::Provider) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let (res, should_open_model_picker) = {
-                                let mut controller = app_guard.provider_controller();
-                                controller.apply_provider_by_id_persistent(&id)
-                            };
-                            match res {
-                                Ok(_) => {
-                                    app_guard.conversation().set_status(format!(
-                                        "Provider set: {}{}",
-                                        id,
-                                        status_suffix(true)
-                                    ));
-                                    app_guard.close_picker();
-                                    if should_open_model_picker {
-                                        let request = app_guard.prepare_model_picker_request();
-                                        let app_clone = app.clone();
-                                        let event_tx_clone = event_tx.clone();
-                                        spawn_model_picker_loader(
-                                            app_clone,
-                                            event_tx_clone,
-                                            request,
-                                        );
-                                    }
-                                }
-                                Err(e) => app_guard
-                                    .conversation()
-                                    .set_status(format!("Provider error: {}", e)),
-                            }
-                        }
-                        Some("__picker_handled__".to_string())
-                    }
-                    _ => Some("__picker_handled__".to_string()),
-                }
-            }
-            KeyCode::Delete => {
-                // Del key to unset defaults - only works if current selection is a default (has *)
-                if let Some(selected_item) = picker.get_selected_item() {
-                    if selected_item.label.ends_with('*') {
-                        let item_id = selected_item.id.clone();
-
-                        // Release picker borrow by ending the scope
-                        let _ = picker;
-
-                        let result = match current_picker_mode {
-                            Some(crate::core::app::PickerMode::Model) => {
-                                let mut controller = app_guard.provider_controller();
-                                controller.unset_default_model(&provider_name)
-                            }
-                            Some(crate::core::app::PickerMode::Theme) => {
-                                let mut controller = app_guard.theme_controller();
-                                controller.unset_default_theme()
-                            }
-                            Some(crate::core::app::PickerMode::Provider) => {
-                                let mut controller = app_guard.provider_controller();
-                                controller.unset_default_provider()
-                            }
-                            _ => Err("Unknown picker mode".to_string()),
-                        };
-                        match result {
-                            Ok(_) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Removed default: {}", item_id));
-                                // Refresh the picker to remove the asterisk
-                                match current_picker_mode {
-                                    Some(crate::core::app::PickerMode::Model) => {
-                                        // Store app reference for async refresh
-                                        let request = app_guard.prepare_model_picker_request();
-                                        let app_clone = app.clone();
-                                        let event_tx_clone = event_tx.clone();
-                                        spawn_model_picker_loader(
-                                            app_clone,
-                                            event_tx_clone,
-                                            request,
-                                        );
-                                    }
-                                    Some(crate::core::app::PickerMode::Theme) => {
-                                        app_guard.open_theme_picker();
-                                        should_request_redraw = true;
-                                    }
-                                    Some(crate::core::app::PickerMode::Provider) => {
-                                        app_guard.open_provider_picker();
-                                        should_request_redraw = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            Err(e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Error removing default: {}", e));
-                            }
-                        }
-                    } else {
-                        app_guard
-                            .conversation()
-                            .set_status("Del key only works on default items (marked with *)");
-                    }
-                }
-                None
-            }
-            KeyCode::Backspace => {
-                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    if let Some(state) = app_guard.model_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_models();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    if let Some(state) = app_guard.theme_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_themes();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    if let Some(state) = app_guard.provider_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_providers();
-                        }
-                    }
-                }
-                None
-            }
-            KeyCode::Char(c) => {
-                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    // Add character to filter for model picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.model_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_models();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    // Add character to filter for theme picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.theme_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_themes();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    // Add character to filter for provider picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.provider_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_providers();
-                        }
-                    }
-                }
-                None
-            }
-            // No block actions in picker modes
-            _ => None,
+    match key.code {
+        event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
+        event::KeyCode::Up => actions.push(AppAction::PickerMoveUp),
+        event::KeyCode::Down => actions.push(AppAction::PickerMoveDown),
+        event::KeyCode::Char('k') => actions.push(AppAction::PickerMoveUp),
+        event::KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            actions.push(AppAction::PickerApplySelection { persistent: true });
         }
-    } else {
-        None
-    };
-
-    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-        if let Some(selected_id) = selection.as_ref() {
-            if selected_id != "__picker_handled__" {
-                app_guard.preview_theme_by_id(selected_id);
+        event::KeyCode::Char('j') => actions.push(AppAction::PickerMoveDown),
+        event::KeyCode::Home => actions.push(AppAction::PickerMoveToStart),
+        event::KeyCode::End => actions.push(AppAction::PickerMoveToEnd),
+        event::KeyCode::F(6) => actions.push(AppAction::PickerCycleSortMode),
+        event::KeyCode::Enter => {
+            let persistent = key.modifiers.contains(event::KeyModifiers::ALT);
+            actions.push(AppAction::PickerApplySelection { persistent });
+        }
+        event::KeyCode::Delete => actions.push(AppAction::PickerUnsetDefault),
+        event::KeyCode::Backspace => actions.push(AppAction::PickerBackspace),
+        event::KeyCode::Char(c) => {
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                actions.push(AppAction::PickerTypeChar { ch: c });
             }
         }
+        _ => {}
     }
 
-    // Theme preview handling
-    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-        if let Some(selected_id) = selection.as_ref() {
-            if selected_id != "__picker_handled__" {
-                app_guard.preview_theme_by_id(selected_id);
-            }
-        }
-    }
-
-    drop(app_guard);
-    if should_request_redraw {
-        let _ = event_tx.send(UiEvent::RequestRedraw);
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(
+            actions,
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::actions::{
+        apply_action, apply_actions, AppAction, AppActionContext, AppActionDispatcher,
+        AppActionEnvelope, AppCommand,
+    };
     use crate::core::message::Message;
     use crate::ui::theme::Theme;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+    use tokio::sync::{mpsc, Mutex};
 
     const TERM_WIDTH: u16 = 80;
     const TERM_HEIGHT: u16 = 24;
@@ -1612,6 +1089,13 @@ mod tests {
 
     fn setup_app() -> App {
         App::new_bench(Theme::dark_default(), true, true)
+    }
+
+    fn default_context() -> AppActionContext {
+        AppActionContext {
+            term_width: TERM_WIDTH,
+            term_height: TERM_HEIGHT,
+        }
     }
 
     #[test]
@@ -1635,19 +1119,171 @@ mod tests {
     }
 
     #[test]
-    fn chunk_messages_append_to_response() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::Chunk("Hello".into()), 1);
+    fn sanitize_paste_text_removes_control_characters() {
+        let input = "Hello\tworld\r\nThis is\x01fine";
+        let sanitized = sanitize_pasted_text(input);
+        assert_eq!(sanitized, "Hello    world\nThis isfine");
+    }
 
+    #[test]
+    fn handle_paste_event_dispatches_insert_action() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let mut last_update = Instant::now();
+
+            handle_paste_event(
+                &dispatcher,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                "paste\tinput".into(),
+                &mut last_update,
+            )
+            .await;
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::InsertIntoInput { .. })));
+
+            let mut app = setup_app();
+            let commands = apply_actions(&mut app, envelopes);
+            assert!(commands.is_empty());
+            assert_eq!(app.ui.get_input_text(), "paste    input");
+        });
+    }
+
+    #[test]
+    fn enter_key_dispatches_process_command_action() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let app = Arc::new(Mutex::new(setup_app()));
+            let handle = AppHandle::new(app.clone());
+            handle
+                .update(|app| {
+                    app.ui.set_input_text("hello".into());
+                })
+                .await;
+
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let (stream_service, _rx) = setup_service();
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+            let result = handle_enter_key(
+                &dispatcher,
+                &handle,
+                &key,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                &stream_service,
+            )
+            .await
+            .expect("enter result");
+            assert_eq!(result, Some(KeyLoopAction::Continue));
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 2);
+            assert!(matches!(envelopes[0].action, AppAction::ClearInput));
+            match &envelopes[1].action {
+                AppAction::ProcessCommand { input } => assert_eq!(input, "hello"),
+                _ => panic!("unexpected action"),
+            }
+
+            let commands = handle.update(|app| apply_actions(app, envelopes)).await;
+            assert_eq!(commands.len(), 1);
+            assert!(matches!(commands[0], AppCommand::SpawnStream(_)));
+
+            let input_after = handle.read(|app| app.ui.get_input_text().to_string()).await;
+            assert!(input_after.is_empty());
+        });
+    }
+
+    #[test]
+    fn enter_key_completes_file_prompt_dump() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = AppHandle::new(Arc::new(Mutex::new(setup_app())));
+            handle
+                .update(|app| {
+                    app.ui.start_file_prompt_dump("dump.txt".into());
+                    app.ui.set_input_text("dump.txt".into());
+                })
+                .await;
+
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let (stream_service, _rx) = setup_service();
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+            let result = handle_enter_key(
+                &dispatcher,
+                &handle,
+                &key,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                &stream_service,
+            )
+            .await
+            .expect("enter result");
+            assert_eq!(result, Some(KeyLoopAction::Continue));
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 1);
+            match &envelopes[0].action {
+                AppAction::CompleteFilePromptDump {
+                    filename,
+                    overwrite,
+                } => {
+                    assert_eq!(filename, "dump.txt");
+                    assert!(!overwrite);
+                }
+                _ => panic!("unexpected action"),
+            }
+        });
+    }
+
+    #[test]
+    fn picker_key_event_dispatches_actions() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+
+            let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+            handle_picker_key_event(&dispatcher, &key, TERM_WIDTH, TERM_HEIGHT).await;
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 1);
+            assert!(matches!(envelopes[0].action, AppAction::PickerMoveDown));
+        });
+    }
+
+    #[test]
+    fn chunk_messages_append_to_response() {
         let mut app = setup_app();
         app.ui.messages.push_back(Message {
             role: "assistant".to_string(),
             content: String::new(),
         });
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(
+            &mut app,
+            AppAction::AppendResponseChunk {
+                content: "Hello".into(),
+            },
+            ctx,
+        );
 
         assert_eq!(app.ui.current_response, "Hello");
         assert_eq!(app.ui.messages.back().unwrap().content, "Hello");
@@ -1680,7 +1316,14 @@ mod tests {
         });
 
         let aggregated = chunks.concat();
-        append_coalesced_chunk(&mut coalesced_app, aggregated, TERM_WIDTH, TERM_HEIGHT);
+        let ctx = default_context();
+        apply_action(
+            &mut coalesced_app,
+            AppAction::AppendResponseChunk {
+                content: aggregated,
+            },
+            ctx,
+        );
 
         assert_eq!(
             coalesced_app.ui.current_response,
@@ -1694,15 +1337,17 @@ mod tests {
 
     #[test]
     fn error_messages_add_system_entries_and_stop_streaming() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::Error(" api failure \n".into()), 2);
-
         let mut app = setup_app();
         app.ui.is_streaming = true;
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(
+            &mut app,
+            AppAction::StreamErrored {
+                message: " api failure \n".into(),
+            },
+            ctx,
+        );
 
         assert!(!app.ui.is_streaming);
         let last_message = app.ui.messages.back().expect("system message added");
@@ -1712,19 +1357,97 @@ mod tests {
 
     #[test]
     fn end_messages_finalize_responses() {
-        let (service, mut rx) = setup_service();
-        service.send_for_test(StreamMessage::End, 3);
-
         let mut app = setup_app();
         app.ui.is_streaming = true;
         app.session.retrying_message_index = Some(0);
         app.ui.current_response = "partial".into();
 
-        while let Ok((message, _)) = rx.try_recv() {
-            handle_stream_message(&mut app, message, TERM_WIDTH, TERM_HEIGHT);
-        }
+        let ctx = default_context();
+        apply_action(&mut app, AppAction::StreamCompleted, ctx);
 
         assert!(!app.ui.is_streaming);
         assert!(app.session.retrying_message_index.is_none());
+    }
+
+    #[test]
+    fn submit_message_returns_spawn_command() {
+        let mut app = setup_app();
+        let ctx = default_context();
+        let result = apply_action(
+            &mut app,
+            AppAction::SubmitMessage {
+                message: "Hello".into(),
+            },
+            ctx,
+        );
+        assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
+    }
+
+    #[test]
+    fn retry_last_message_returns_none_without_history() {
+        let mut app = setup_app();
+        let ctx = default_context();
+        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn retry_last_message_emits_command_with_history() {
+        let mut app = setup_app();
+        app.ui.messages.push_back(Message {
+            role: "user".to_string(),
+            content: "Hi".into(),
+        });
+        app.ui.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: "Hello".into(),
+        });
+        app.session.last_retry_time = Instant::now() - Duration::from_millis(500);
+
+        let ctx = default_context();
+        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
+    }
+
+    #[test]
+    fn process_stream_updates_dispatches_actions() {
+        let (service, mut rx) = setup_service();
+        service.send_for_test(StreamMessage::Chunk("Hello".into()), 42);
+        service.send_for_test(StreamMessage::Chunk(" world".into()), 42);
+        service.send_for_test(StreamMessage::Error(" failure ".into()), 99);
+        service.send_for_test(StreamMessage::End, 42);
+
+        let mut app = setup_app();
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
+        app.session.current_stream_id = 42;
+        app.ui.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+        app.ui.is_streaming = true;
+
+        let dispatcher = AppActionDispatcher::new(action_tx);
+
+        let processed = process_stream_updates(&dispatcher, &mut rx, TERM_WIDTH, TERM_HEIGHT, 42);
+        assert!(processed);
+
+        let mut envelopes = Vec::new();
+        while let Ok(envelope) = action_rx.try_recv() {
+            envelopes.push(envelope);
+        }
+        let commands = apply_actions(&mut app, envelopes);
+        assert!(commands.is_empty());
+
+        assert_eq!(app.ui.current_response, "Hello world");
+        assert_eq!(app.ui.messages.back().unwrap().content, "Hello world");
+        assert!(!app.ui.is_streaming);
+
+        let last_message = app
+            .ui
+            .messages
+            .iter()
+            .rev()
+            .find(|msg| msg.role == "system");
+        assert!(last_message.is_none(), "non-matching error message ignored");
     }
 }

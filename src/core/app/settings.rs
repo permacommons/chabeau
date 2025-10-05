@@ -81,7 +81,8 @@ impl<'a> ThemeController<'a> {
         }
 
         if let Some(theme) = previous_theme {
-            self.apply_theme(theme);
+            self.ui.theme = theme;
+            self.ui.configure_textarea();
         }
     }
 

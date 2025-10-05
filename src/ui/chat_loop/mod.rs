@@ -194,7 +194,14 @@ async fn process_ui_events(
                 }
             }
             UiEvent::Crossterm(Event::Paste(text)) => {
-                handle_paste_event(app, term_size.width, text, last_input_layout_update).await;
+                handle_paste_event(
+                    dispatcher,
+                    term_size.width,
+                    term_size.height,
+                    text,
+                    last_input_layout_update,
+                )
+                .await;
                 outcome.request_redraw = true;
             }
             UiEvent::Crossterm(Event::Resize(_, _)) => {
@@ -281,24 +288,37 @@ async fn route_keyboard_event(
     Ok(outcome)
 }
 
+fn sanitize_pasted_text(text: &str) -> String {
+    let without_crlf = text.replace("\r\n", "\n");
+    let without_cr = without_crlf.replace('\r', "\n");
+    let expanded_tabs = without_cr.replace('\t', "    ");
+    expanded_tabs
+        .chars()
+        .filter(|&c| c == '\n' || !c.is_control())
+        .collect()
+}
+
 async fn handle_paste_event(
-    app: &AppHandle,
+    dispatcher: &AppActionDispatcher,
     term_width: u16,
+    term_height: u16,
     text: String,
     last_input_layout_update: &mut Instant,
 ) {
-    let sanitized_text = text
-        .replace('\t', "    ")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|&c| c == '\n' || !c.is_control())
-        .collect::<String>();
-    app.update(|app| {
-        app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
-            ta.insert_str(&sanitized_text);
-        });
-    })
-    .await;
+    let sanitized_text = sanitize_pasted_text(&text);
+    if sanitized_text.is_empty() {
+        return;
+    }
+
+    dispatcher.dispatch_many(
+        [AppAction::InsertIntoInput {
+            text: sanitized_text,
+        }],
+        AppActionContext {
+            term_width,
+            term_height,
+        },
+    );
     *last_input_layout_update = Instant::now();
 }
 
@@ -1051,8 +1071,10 @@ mod tests {
     };
     use crate::core::message::Message;
     use crate::ui::theme::Theme;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
     use tokio::sync::{mpsc, Mutex};
 
     const TERM_WIDTH: u16 = 80;
@@ -1094,6 +1116,156 @@ mod tests {
     #[test]
     fn wrap_next_wraps_to_start() {
         assert_eq!(wrap_next_index(4, 5), Some(0));
+    }
+
+    #[test]
+    fn sanitize_paste_text_removes_control_characters() {
+        let input = "Hello\tworld\r\nThis is\x01fine";
+        let sanitized = sanitize_pasted_text(input);
+        assert_eq!(sanitized, "Hello    world\nThis isfine");
+    }
+
+    #[test]
+    fn handle_paste_event_dispatches_insert_action() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let mut last_update = Instant::now();
+
+            handle_paste_event(
+                &dispatcher,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                "paste\tinput".into(),
+                &mut last_update,
+            )
+            .await;
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::InsertIntoInput { .. })));
+
+            let mut app = setup_app();
+            let commands = apply_actions(&mut app, envelopes);
+            assert!(commands.is_empty());
+            assert_eq!(app.ui.get_input_text(), "paste    input");
+        });
+    }
+
+    #[test]
+    fn enter_key_dispatches_process_command_action() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let app = Arc::new(Mutex::new(setup_app()));
+            let handle = AppHandle::new(app.clone());
+            handle
+                .update(|app| {
+                    app.ui.set_input_text("hello".into());
+                })
+                .await;
+
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let (stream_service, _rx) = setup_service();
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+            let result = handle_enter_key(
+                &dispatcher,
+                &handle,
+                &key,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                &stream_service,
+            )
+            .await
+            .expect("enter result");
+            assert_eq!(result, Some(KeyLoopAction::Continue));
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 2);
+            assert!(matches!(envelopes[0].action, AppAction::ClearInput));
+            match &envelopes[1].action {
+                AppAction::ProcessCommand { input } => assert_eq!(input, "hello"),
+                _ => panic!("unexpected action"),
+            }
+
+            let commands = handle.update(|app| apply_actions(app, envelopes)).await;
+            assert_eq!(commands.len(), 1);
+            assert!(matches!(commands[0], AppCommand::SpawnStream(_)));
+
+            let input_after = handle.read(|app| app.ui.get_input_text().to_string()).await;
+            assert!(input_after.is_empty());
+        });
+    }
+
+    #[test]
+    fn enter_key_completes_file_prompt_dump() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = AppHandle::new(Arc::new(Mutex::new(setup_app())));
+            handle
+                .update(|app| {
+                    app.ui.start_file_prompt_dump("dump.txt".into());
+                    app.ui.set_input_text("dump.txt".into());
+                })
+                .await;
+
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+            let (stream_service, _rx) = setup_service();
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+            let result = handle_enter_key(
+                &dispatcher,
+                &handle,
+                &key,
+                TERM_WIDTH,
+                TERM_HEIGHT,
+                &stream_service,
+            )
+            .await
+            .expect("enter result");
+            assert_eq!(result, Some(KeyLoopAction::Continue));
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 1);
+            match &envelopes[0].action {
+                AppAction::CompleteFilePromptDump {
+                    filename,
+                    overwrite,
+                } => {
+                    assert_eq!(filename, "dump.txt");
+                    assert!(!overwrite);
+                }
+                _ => panic!("unexpected action"),
+            }
+        });
+    }
+
+    #[test]
+    fn picker_key_event_dispatches_actions() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let (dispatcher, mut rx) = {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (AppActionDispatcher::new(tx), rx)
+            };
+
+            let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+            handle_picker_key_event(&dispatcher, &key, TERM_WIDTH, TERM_HEIGHT).await;
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 1);
+            assert!(matches!(envelopes[0].action, AppAction::PickerMoveDown));
+        });
     }
 
     #[test]
@@ -1237,47 +1409,40 @@ mod tests {
         assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
     }
 
-    #[tokio::test]
-    async fn process_stream_updates_dispatches_actions() {
+    #[test]
+    fn process_stream_updates_dispatches_actions() {
         let (service, mut rx) = setup_service();
         service.send_for_test(StreamMessage::Chunk("Hello".into()), 42);
         service.send_for_test(StreamMessage::Chunk(" world".into()), 42);
         service.send_for_test(StreamMessage::Error(" failure ".into()), 99);
         service.send_for_test(StreamMessage::End, 42);
 
-        let app = Arc::new(Mutex::new(setup_app()));
+        let mut app = setup_app();
         let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
-        {
-            let mut guard = app.lock().await;
-            guard.session.current_stream_id = 42;
-            guard.ui.messages.push_back(Message {
-                role: "assistant".to_string(),
-                content: String::new(),
-            });
-            guard.ui.is_streaming = true;
-        }
+        app.session.current_stream_id = 42;
+        app.ui.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+        app.ui.is_streaming = true;
 
         let dispatcher = AppActionDispatcher::new(action_tx);
 
         let processed = process_stream_updates(&dispatcher, &mut rx, TERM_WIDTH, TERM_HEIGHT, 42);
         assert!(processed);
 
-        {
-            let mut guard = app.lock().await;
-            let mut envelopes = Vec::new();
-            while let Ok(envelope) = action_rx.try_recv() {
-                envelopes.push(envelope);
-            }
-            let commands = apply_actions(&mut guard, envelopes);
-            assert!(commands.is_empty());
+        let mut envelopes = Vec::new();
+        while let Ok(envelope) = action_rx.try_recv() {
+            envelopes.push(envelope);
         }
+        let commands = apply_actions(&mut app, envelopes);
+        assert!(commands.is_empty());
 
-        let guard = app.lock().await;
-        assert_eq!(guard.ui.current_response, "Hello world");
-        assert_eq!(guard.ui.messages.back().unwrap().content, "Hello world");
-        assert!(!guard.ui.is_streaming);
+        assert_eq!(app.ui.current_response, "Hello world");
+        assert_eq!(app.ui.messages.back().unwrap().content, "Hello world");
+        assert!(!app.ui.is_streaming);
 
-        let last_message = guard
+        let last_message = app
             .ui
             .messages
             .iter()

@@ -28,6 +28,9 @@ pub enum AppAction {
         message: String,
     },
     ClearInput,
+    InsertIntoInput {
+        text: String,
+    },
     SubmitMessage {
         message: String,
     },
@@ -181,6 +184,15 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             app.ui.clear_input();
             if ctx.term_width > 0 {
                 app.ui.recompute_input_layout_after_edit(ctx.term_width);
+            }
+            None
+        }
+        AppAction::InsertIntoInput { text } => {
+            if !text.is_empty() {
+                app.ui
+                    .apply_textarea_edit_and_recompute(ctx.term_width, |ta| {
+                        ta.insert_str(&text);
+                    });
             }
             None
         }

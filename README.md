@@ -196,7 +196,8 @@ Modular design with focused components:
 - `core/` - Core application components
   - `app/` - Application state and controllers
     - `mod.rs` - App struct and module exports
-    - `actions.rs` - Internal action definitions and dispatcher for chat loop updates
+    - `actions.rs` - Internal action definitions and dispatcher for chat loop updates, including
+      queued input edits, picker navigation, and command submission
     - `conversation.rs` - Conversation controller for chat flow, retries, and streaming helpers
     - `session.rs` - Session bootstrap and provider/model state
     - `settings.rs` - Theme and provider controllers

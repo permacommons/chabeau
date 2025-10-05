@@ -65,7 +65,7 @@ Items are removed when completed.
     - **5b:** Translate command submission, file-prompt, and in-place edit workflows into action producers so command handling stops mutating shared state. Cover happy/error paths (dump, save-block, retries) with regression tests and ensure logging side effects remain intact. — **DONE** (Enter/Ctrl+J now dispatch `ProcessCommand`/file prompt completion actions, regression coverage added for dump/save-block/in-place edit flows)
     - **5c:** Drop the deprecated locking helpers from `chat_loop`, document the single-owner dispatcher model, and audit public APIs (especially `ChatStreamService`, picker controllers, and commands) for the new invariants before promoting the pattern in README/architecture notes. — **DONE** (chat loop now exposes an `AppHandle` owner, README documents dispatcher ownership, helper paths defer to handle methods; `ChatStreamService`/picker/command entry points align with queued actions)
       - Notes: follow up with a pass to convert remaining `AppHandle::lock` call sites in keybinding helpers to the higher-level `read/update` helpers so tests exercise the no-direct-locking rule end-to-end.
-  - **Step 6:** Post-migration cleanup — [OPEN]
+  - **Step 6:** Post-migration cleanup — [DONE]
     - Sweep for remaining call sites that take `Arc<Mutex<App>>` solely for mutation side effects and convert to read-only access or action emission.
     - Prune or rewrite legacy tests that still exercise the deprecated locking helpers; ensure action-centric tests cover enter, picker, and retry flows.
     - Remove helper functions that became redundant after the dispatcher rollout (e.g., old picker refresh utilities) and modernize docs/examples to show the action-first patterns.

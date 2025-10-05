@@ -608,7 +608,7 @@ mod tests {
         let mut app = create_test_app();
         let original_model = app.session.model.clone();
         let res = process_input(&mut app, "/model gpt-4");
-        matches!(res, CommandResult::Continue);
+        assert!(matches!(res, CommandResult::Continue));
         assert_eq!(app.session.model, "gpt-4");
         assert_ne!(app.session.model, original_model);
     }

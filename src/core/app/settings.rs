@@ -122,6 +122,19 @@ impl<'a> ProviderController<'a> {
     }
 
     pub fn apply_provider_by_id(&mut self, provider_id: &str) -> (Result<(), String>, bool) {
+        if provider_id.eq_ignore_ascii_case(self.session.provider_name.as_str())
+            && !self.picker.in_provider_model_transition
+        {
+            self.picker.in_provider_model_transition = false;
+            self.picker.provider_model_transition_state = None;
+
+            if let Some(state) = self.picker.provider_state_mut() {
+                state.before_provider = None;
+            }
+
+            return (Ok(()), false);
+        }
+
         let auth_manager = AuthManager::new();
         let config = Config::load_test_safe();
 
@@ -197,6 +210,8 @@ impl<'a> ProviderController<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::picker::{PickerData, PickerMode, PickerSession, ProviderPickerState};
+    use crate::ui::picker::{PickerItem, PickerState};
     use crate::utils::test_utils::create_test_app;
 
     #[test]
@@ -241,5 +256,53 @@ mod tests {
         assert_eq!(app.session.model, "new-model");
         assert!(!app.picker.in_provider_model_transition);
         assert!(app.picker.provider_model_transition_state.is_none());
+    }
+
+    #[test]
+    fn apply_provider_reuses_existing_session_credentials() {
+        let mut app = create_test_app();
+        app.picker.provider_model_transition_state = Some((
+            "prev-provider".into(),
+            "Prev".into(),
+            "prev-model".into(),
+            "prev-key".into(),
+            "https://prev.example".into(),
+        ));
+        app.picker.in_provider_model_transition = false;
+
+        let items = vec![PickerItem {
+            id: "test".into(),
+            label: "Test".into(),
+            metadata: None,
+            sort_key: None,
+        }];
+
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Provider,
+            state: PickerState::new("Pick Provider", items.clone(), 0),
+            data: PickerData::Provider(ProviderPickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_provider: Some(("other".into(), "Other".into())),
+            }),
+        });
+
+        let (result, should_open_model_picker) = {
+            let mut controller = ProviderController::new(&mut app.session, &mut app.picker);
+            controller.apply_provider_by_id("TEST")
+        };
+
+        assert!(result.is_ok());
+        assert!(!should_open_model_picker);
+        assert_eq!(app.session.provider_name, "test");
+        assert_eq!(app.session.api_key, "test-key");
+        assert!(app.picker.provider_model_transition_state.is_none());
+        assert!(!app.picker.in_provider_model_transition);
+
+        let provider_state = app
+            .picker
+            .provider_state()
+            .expect("provider picker state should exist");
+        assert!(provider_state.before_provider.is_none());
     }
 }

@@ -45,7 +45,6 @@ type SharedTerminal = Arc<Mutex<Terminal<OscBackend<io::Stdout>>>>;
 #[derive(Debug)]
 pub enum UiEvent {
     Crossterm(Event),
-    RequestRedraw,
 }
 
 fn language_to_extension(lang: Option<&str>) -> &'static str {
@@ -75,20 +74,7 @@ fn language_to_extension(lang: Option<&str>) -> &'static str {
 }
 
 /// Helper to generate status suffix for picker actions (persistent vs session-only)
-fn status_suffix(is_persistent: bool) -> &'static str {
-    if is_persistent {
-        " (saved to config)"
-    } else {
-        " (session only)"
-    }
-}
-
-fn spawn_model_picker_loader(
-    dispatcher: AppActionDispatcher,
-    event_tx: mpsc::UnboundedSender<UiEvent>,
-    request: ModelPickerRequest,
-) {
-    let _ = event_tx.send(UiEvent::RequestRedraw);
+fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPickerRequest) {
     tokio::spawn(async move {
         let ModelPickerRequest {
             client,
@@ -111,7 +97,6 @@ fn spawn_model_picker_loader(
         };
 
         dispatcher.dispatch_many([action], AppActionContext::default());
-        let _ = event_tx.send(UiEvent::RequestRedraw);
     });
 }
 
@@ -172,9 +157,6 @@ async fn process_ui_events(
     while let Ok(ev) = event_rx.try_recv() {
         outcome.events_processed = true;
         match ev {
-            UiEvent::RequestRedraw => {
-                outcome.request_redraw = true;
-            }
             UiEvent::Crossterm(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                 let keyboard_outcome = route_keyboard_event(
                     app,
@@ -355,6 +337,7 @@ fn process_stream_updates(
 
 async fn drain_action_queue(
     app: &Arc<Mutex<App>>,
+    dispatcher: &AppActionDispatcher,
     stream_service: &ChatStreamService,
     action_rx: &mut mpsc::UnboundedReceiver<AppActionEnvelope>,
 ) -> bool {
@@ -374,6 +357,9 @@ async fn drain_action_queue(
         match cmd {
             crate::core::app::AppCommand::SpawnStream(params) => {
                 stream_service.spawn_stream(params);
+            }
+            crate::core::app::AppCommand::LoadModelPicker(request) => {
+                spawn_model_picker_loader(dispatcher.clone(), request);
             }
         }
     }
@@ -438,8 +424,7 @@ pub async fn run_chat(
     };
 
     // Initialize mode-aware keybinding registry
-    let mode_registry =
-        build_mode_aware_registry(stream_service.clone(), terminal.clone(), event_tx.clone());
+    let mode_registry = build_mode_aware_registry(stream_service.clone(), terminal.clone());
 
     // Drawing cadence control
     const MAX_FPS: u64 = 60; // Limit to 60 FPS
@@ -502,7 +487,8 @@ pub async fn run_chat(
             request_redraw = true;
         }
 
-        let actions_applied = drain_action_queue(&app, &stream_service, &mut action_rx).await;
+        let actions_applied =
+            drain_action_queue(&app, &action_dispatcher, &stream_service, &mut action_rx).await;
         if actions_applied {
             request_redraw = true;
         }
@@ -843,7 +829,6 @@ async fn process_input_submission(
     input_text: String,
     term_width: u16,
     term_height: u16,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> SubmissionResult {
     let mut app_guard = app.lock().await;
 
@@ -859,15 +844,36 @@ async fn process_input_submission(
             SubmissionResult::Continue
         }
         CommandResult::OpenModelPicker => {
-            let request = app_guard.prepare_model_picker_request();
             drop(app_guard);
-            spawn_model_picker_loader(dispatcher.clone(), event_tx.clone(), request);
+            dispatcher.dispatch_many(
+                [AppAction::BeginModelPickerLoad],
+                AppActionContext {
+                    term_width,
+                    term_height,
+                },
+            );
             SubmissionResult::Continue
         }
         CommandResult::OpenProviderPicker => {
-            app_guard.open_provider_picker();
             drop(app_guard);
-            let _ = event_tx.send(UiEvent::RequestRedraw);
+            dispatcher.dispatch_many(
+                [AppAction::OpenProviderPicker],
+                AppActionContext {
+                    term_width,
+                    term_height,
+                },
+            );
+            SubmissionResult::Continue
+        }
+        CommandResult::OpenThemePicker => {
+            drop(app_guard);
+            dispatcher.dispatch_many(
+                [AppAction::OpenThemePicker],
+                AppActionContext {
+                    term_width,
+                    term_height,
+                },
+            );
             SubmissionResult::Continue
         }
         CommandResult::ProcessAsMessage(message) => {
@@ -885,7 +891,6 @@ async fn handle_enter_key(
     term_width: u16,
     term_height: u16,
     stream_service: &ChatStreamService,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
 
@@ -997,16 +1002,7 @@ async fn handle_enter_key(
         text
     };
 
-    match process_input_submission(
-        dispatcher,
-        app,
-        input_text,
-        term_width,
-        term_height,
-        event_tx,
-    )
-    .await
-    {
+    match process_input_submission(dispatcher, app, input_text, term_width, term_height).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_service.spawn_stream(params);
@@ -1022,7 +1018,6 @@ async fn handle_ctrl_j_shortcut(
     term_height: u16,
     stream_service: &ChatStreamService,
     last_input_layout_update: &mut Instant,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let send_now = {
         let app_guard = app.lock().await;
@@ -1050,16 +1045,7 @@ async fn handle_ctrl_j_shortcut(
         text
     };
 
-    match process_input_submission(
-        dispatcher,
-        app,
-        input_text,
-        term_width,
-        term_height,
-        event_tx,
-    )
-    .await
-    {
+    match process_input_submission(dispatcher, app, input_text, term_width, term_height).await {
         SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
         SubmissionResult::Spawn(params) => {
             stream_service.spawn_stream(params);
@@ -1104,466 +1090,47 @@ enum SubmissionResult {
 }
 
 async fn handle_picker_key_event(
-    app: &Arc<Mutex<App>>,
     dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,
-    event_tx: &mpsc::UnboundedSender<UiEvent>,
+    term_width: u16,
+    term_height: u16,
 ) {
-    let mut app_guard = app.lock().await;
-    let current_picker_mode = app_guard.current_picker_mode();
-    let provider_name = app_guard.session.provider_name.clone();
-    let mut should_request_redraw = false;
+    let mut actions = Vec::new();
 
-    let selection = if let Some(picker) = app_guard.picker_state_mut() {
-        match key.code {
-            KeyCode::Esc => {
-                match current_picker_mode {
-                    Some(crate::core::app::PickerMode::Theme) => {
-                        app_guard.revert_theme_preview();
-                        app_guard.close_picker();
-                    }
-                    Some(crate::core::app::PickerMode::Model) => {
-                        if app_guard.picker.startup_requires_model {
-                            // Startup mandatory model selection
-                            app_guard.close_picker();
-                            if app_guard.picker.startup_multiple_providers_available {
-                                // Go back to provider picker per spec
-                                app_guard.picker.startup_requires_model = false;
-                                app_guard.picker.startup_requires_provider = true;
-                                // Clear provider selection in title bar during startup bounce-back
-                                app_guard.session.provider_name.clear();
-                                app_guard.session.provider_display_name =
-                                    "(no provider selected)".to_string();
-                                app_guard.session.api_key.clear();
-                                app_guard.session.base_url.clear();
-                                app_guard.open_provider_picker();
-                                should_request_redraw = true;
-                            } else {
-                                // Exit app if no alternative provider
-                                app_guard.ui.exit_requested = true;
-                            }
-                        } else {
-                            app_guard.revert_model_preview();
-                            if app_guard.picker.in_provider_model_transition {
-                                app_guard.revert_provider_model_transition();
-                                app_guard.conversation().set_status("Selection cancelled");
-                            }
-                            app_guard.close_picker();
-                        }
-                    }
-                    Some(crate::core::app::PickerMode::Provider) => {
-                        if app_guard.picker.startup_requires_provider {
-                            // Startup mandatory provider selection: exit if cancelled
-                            app_guard.close_picker();
-                            app_guard.ui.exit_requested = true;
-                        } else {
-                            app_guard.revert_provider_preview();
-                            app_guard.close_picker();
-                        }
-                    }
-                    _ => {}
-                }
-                None
-            }
-            KeyCode::Up => {
-                picker.move_up();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Down => {
-                picker.move_down();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('k') => {
-                picker.move_up();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char('j') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                picker.move_down();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::Home => {
-                picker.move_to_start();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::End => {
-                picker.move_to_end();
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    picker.selected_id().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            }
-            KeyCode::F(6) => {
-                picker.cycle_sort_mode();
-                // Re-sort and update title
-                let _ = picker; // Release borrow
-                app_guard.sort_picker_items();
-                app_guard.update_picker_title();
-                None
-            }
-            // Apply selection: Enter (Alt=Persist) or Ctrl+J (Persist)
-            KeyCode::Enter | KeyCode::Char('j')
-                if key.code == KeyCode::Enter
-                    || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-            {
-                let is_persistent = if key.code == KeyCode::Enter {
-                    key.modifiers.contains(event::KeyModifiers::ALT)
-                } else {
-                    true
-                };
-                // Common apply path
-                // Theme
-                if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let res = {
-                            let mut controller = app_guard.theme_controller();
-                            if is_persistent {
-                                controller.apply_theme_by_id(&id)
-                            } else {
-                                controller.apply_theme_by_id_session_only(&id)
-                            }
-                        };
-                        match res {
-                            Ok(_) => app_guard.conversation().set_status(format!(
-                                "Theme set: {}{}",
-                                id,
-                                status_suffix(is_persistent)
-                            )),
-                            Err(_e) => app_guard.conversation().set_status("Theme error"),
-                        }
-                    }
-                    app_guard.close_picker();
-                    Some("__picker_handled__".to_string())
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let persist = is_persistent && !app_guard.session.startup_env_only;
-                        let res = {
-                            let mut controller = app_guard.provider_controller();
-                            if persist {
-                                controller.apply_model_by_id_persistent(&id)
-                            } else {
-                                controller.apply_model_by_id(&id);
-                                Ok(())
-                            }
-                        };
-                        match res {
-                            Ok(_) => {
-                                app_guard.conversation().set_status(format!(
-                                    "Model set: {}{}",
-                                    id,
-                                    status_suffix(persist)
-                                ));
-                                if app_guard.picker.in_provider_model_transition {
-                                    app_guard.complete_provider_model_transition();
-                                }
-                                if app_guard.picker.startup_requires_model {
-                                    app_guard.picker.startup_requires_model = false;
-                                }
-                            }
-                            Err(e) => app_guard
-                                .conversation()
-                                .set_status(format!("Model error: {}", e)),
-                        }
-                    }
-                    app_guard.close_picker();
-                    Some("__picker_handled__".to_string())
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                        let (res, should_open_model_picker) = {
-                            let mut controller = app_guard.provider_controller();
-                            if is_persistent {
-                                controller.apply_provider_by_id_persistent(&id)
-                            } else {
-                                controller.apply_provider_by_id(&id)
-                            }
-                        };
-                        match res {
-                            Ok(_) => {
-                                app_guard.conversation().set_status(format!(
-                                    "Provider set: {}{}",
-                                    id,
-                                    status_suffix(is_persistent)
-                                ));
-                                app_guard.close_picker();
-                                if should_open_model_picker {
-                                    if app_guard.picker.startup_requires_provider {
-                                        app_guard.picker.startup_requires_provider = false;
-                                        app_guard.picker.startup_requires_model = true;
-                                    }
-                                    let request = app_guard.prepare_model_picker_request();
-                                    spawn_model_picker_loader(
-                                        dispatcher.clone(),
-                                        event_tx.clone(),
-                                        request,
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Provider error: {}", e));
-                                app_guard.close_picker();
-                            }
-                        }
-                    }
-                    Some("__picker_handled__".to_string())
-                } else {
-                    Some("__picker_handled__".to_string())
-                }
-            }
-            // Ctrl+J: persist selection to config (documented only in /help)
-            KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                match current_picker_mode {
-                    Some(crate::core::app::PickerMode::Theme) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let res = {
-                                let mut controller = app_guard.theme_controller();
-                                controller.apply_theme_by_id(&id)
-                            };
-                            match res {
-                                Ok(_) => app_guard.conversation().set_status(format!(
-                                    "Theme set: {}{}",
-                                    id,
-                                    status_suffix(true)
-                                )),
-                                Err(_e) => app_guard.conversation().set_status("Theme error"),
-                            }
-                        }
-                        app_guard.close_picker();
-                        Some("__picker_handled__".to_string())
-                    }
-                    Some(crate::core::app::PickerMode::Model) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let persist = !app_guard.session.startup_env_only;
-                            let res = {
-                                let mut controller = app_guard.provider_controller();
-                                if persist {
-                                    controller.apply_model_by_id_persistent(&id)
-                                } else {
-                                    controller.apply_model_by_id(&id);
-                                    Ok(())
-                                }
-                            };
-                            match res {
-                                Ok(_) => {
-                                    app_guard.conversation().set_status(format!(
-                                        "Model set: {}{}",
-                                        id,
-                                        status_suffix(persist)
-                                    ));
-                                    if app_guard.picker.in_provider_model_transition {
-                                        app_guard.complete_provider_model_transition();
-                                    }
-                                    if app_guard.picker.startup_requires_model {
-                                        app_guard.picker.startup_requires_model = false;
-                                    }
-                                }
-                                Err(e) => app_guard
-                                    .conversation()
-                                    .set_status(format!("Model error: {}", e)),
-                            }
-                        }
-                        app_guard.close_picker();
-                        Some("__picker_handled__".to_string())
-                    }
-                    Some(crate::core::app::PickerMode::Provider) => {
-                        if let Some(id) = picker.selected_id().map(|s| s.to_string()) {
-                            let (res, should_open_model_picker) = {
-                                let mut controller = app_guard.provider_controller();
-                                controller.apply_provider_by_id_persistent(&id)
-                            };
-                            match res {
-                                Ok(_) => {
-                                    app_guard.conversation().set_status(format!(
-                                        "Provider set: {}{}",
-                                        id,
-                                        status_suffix(true)
-                                    ));
-                                    app_guard.close_picker();
-                                    if should_open_model_picker {
-                                        let request = app_guard.prepare_model_picker_request();
-                                        spawn_model_picker_loader(
-                                            dispatcher.clone(),
-                                            event_tx.clone(),
-                                            request,
-                                        );
-                                    }
-                                }
-                                Err(e) => app_guard
-                                    .conversation()
-                                    .set_status(format!("Provider error: {}", e)),
-                            }
-                        }
-                        Some("__picker_handled__".to_string())
-                    }
-                    _ => Some("__picker_handled__".to_string()),
-                }
-            }
-            KeyCode::Delete => {
-                // Del key to unset defaults - only works if current selection is a default (has *)
-                if let Some(selected_item) = picker.get_selected_item() {
-                    if selected_item.label.ends_with('*') {
-                        let item_id = selected_item.id.clone();
-
-                        // Release picker borrow by ending the scope
-                        let _ = picker;
-
-                        let result = match current_picker_mode {
-                            Some(crate::core::app::PickerMode::Model) => {
-                                let mut controller = app_guard.provider_controller();
-                                controller.unset_default_model(&provider_name)
-                            }
-                            Some(crate::core::app::PickerMode::Theme) => {
-                                let mut controller = app_guard.theme_controller();
-                                controller.unset_default_theme()
-                            }
-                            Some(crate::core::app::PickerMode::Provider) => {
-                                let mut controller = app_guard.provider_controller();
-                                controller.unset_default_provider()
-                            }
-                            _ => Err("Unknown picker mode".to_string()),
-                        };
-                        match result {
-                            Ok(_) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Removed default: {}", item_id));
-                                // Refresh the picker to remove the asterisk
-                                match current_picker_mode {
-                                    Some(crate::core::app::PickerMode::Model) => {
-                                        // Refresh future model list asynchronously
-                                        let request = app_guard.prepare_model_picker_request();
-                                        spawn_model_picker_loader(
-                                            dispatcher.clone(),
-                                            event_tx.clone(),
-                                            request,
-                                        );
-                                    }
-                                    Some(crate::core::app::PickerMode::Theme) => {
-                                        app_guard.open_theme_picker();
-                                        should_request_redraw = true;
-                                    }
-                                    Some(crate::core::app::PickerMode::Provider) => {
-                                        app_guard.open_provider_picker();
-                                        should_request_redraw = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            Err(e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Error removing default: {}", e));
-                            }
-                        }
-                    } else {
-                        app_guard
-                            .conversation()
-                            .set_status("Del key only works on default items (marked with *)");
-                    }
-                }
-                None
-            }
-            KeyCode::Backspace => {
-                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    if let Some(state) = app_guard.model_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_models();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    if let Some(state) = app_guard.theme_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_themes();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    if let Some(state) = app_guard.provider_picker_state_mut() {
-                        if !state.search_filter.is_empty() {
-                            state.search_filter.pop();
-                            app_guard.filter_providers();
-                        }
-                    }
-                }
-                None
-            }
-            KeyCode::Char(c) => {
-                if current_picker_mode == Some(crate::core::app::PickerMode::Model) {
-                    // Add character to filter for model picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.model_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_models();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-                    // Add character to filter for theme picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.theme_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_themes();
-                        }
-                    }
-                } else if current_picker_mode == Some(crate::core::app::PickerMode::Provider) {
-                    // Add character to filter for provider picker
-                    if !c.is_control() {
-                        if let Some(state) = app_guard.provider_picker_state_mut() {
-                            state.search_filter.push(c);
-                            app_guard.filter_providers();
-                        }
-                    }
-                }
-                None
-            }
-            // No block actions in picker modes
-            _ => None,
+    match key.code {
+        event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
+        event::KeyCode::Up => actions.push(AppAction::PickerMoveUp),
+        event::KeyCode::Down => actions.push(AppAction::PickerMoveDown),
+        event::KeyCode::Char('k') => actions.push(AppAction::PickerMoveUp),
+        event::KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            actions.push(AppAction::PickerApplySelection { persistent: true });
         }
-    } else {
-        None
-    };
-
-    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-        if let Some(selected_id) = selection.as_ref() {
-            if selected_id != "__picker_handled__" {
-                app_guard.preview_theme_by_id(selected_id);
+        event::KeyCode::Char('j') => actions.push(AppAction::PickerMoveDown),
+        event::KeyCode::Home => actions.push(AppAction::PickerMoveToStart),
+        event::KeyCode::End => actions.push(AppAction::PickerMoveToEnd),
+        event::KeyCode::F(6) => actions.push(AppAction::PickerCycleSortMode),
+        event::KeyCode::Enter => {
+            let persistent = key.modifiers.contains(event::KeyModifiers::ALT);
+            actions.push(AppAction::PickerApplySelection { persistent });
+        }
+        event::KeyCode::Delete => actions.push(AppAction::PickerUnsetDefault),
+        event::KeyCode::Backspace => actions.push(AppAction::PickerBackspace),
+        event::KeyCode::Char(c) => {
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                actions.push(AppAction::PickerTypeChar { ch: c });
             }
         }
+        _ => {}
     }
 
-    // Theme preview handling
-    if current_picker_mode == Some(crate::core::app::PickerMode::Theme) {
-        if let Some(selected_id) = selection.as_ref() {
-            if selected_id != "__picker_handled__" {
-                app_guard.preview_theme_by_id(selected_id);
-            }
-        }
-    }
-
-    drop(app_guard);
-    if should_request_redraw {
-        let _ = event_tx.send(UiEvent::RequestRedraw);
+    if !actions.is_empty() {
+        dispatcher.dispatch_many(
+            actions,
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
     }
 }
 

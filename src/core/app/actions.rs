@@ -4,6 +4,8 @@ use tokio::sync::mpsc;
 
 use super::App;
 use crate::api::ModelsResponse;
+use crate::core::app::picker::PickerMode;
+use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
 
 pub enum AppAction {
@@ -27,6 +29,23 @@ pub enum AppAction {
         message: String,
     },
     RetryLastMessage,
+    OpenThemePicker,
+    OpenProviderPicker,
+    BeginModelPickerLoad,
+    PickerEscape,
+    PickerMoveUp,
+    PickerMoveDown,
+    PickerMoveToStart,
+    PickerMoveToEnd,
+    PickerCycleSortMode,
+    PickerApplySelection {
+        persistent: bool,
+    },
+    PickerUnsetDefault,
+    PickerBackspace,
+    PickerTypeChar {
+        ch: char,
+    },
     ModelPickerLoaded {
         default_model_for_provider: Option<String>,
         models_response: ModelsResponse,
@@ -72,6 +91,7 @@ impl AppActionDispatcher {
 
 pub enum AppCommand {
     SpawnStream(StreamParams),
+    LoadModelPicker(ModelPickerRequest),
 }
 
 pub fn apply_actions(
@@ -138,14 +158,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             None
         }
         AppAction::SetStatus { message } => {
-            app.conversation().set_status(message);
-            if ctx.term_width > 0 && ctx.term_height > 0 {
-                let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
-                let mut conversation = app.conversation();
-                let available_height =
-                    conversation.calculate_available_height(ctx.term_height, input_area_height);
-                conversation.update_scroll_position(available_height, ctx.term_width);
-            }
+            set_status_message(app, message, ctx);
             None
         }
         AppAction::ClearInput => {
@@ -160,6 +173,54 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             Some(AppCommand::SpawnStream(params))
         }
         AppAction::RetryLastMessage => prepare_retry_stream(app, ctx),
+        AppAction::OpenThemePicker => {
+            app.open_theme_picker();
+            None
+        }
+        AppAction::OpenProviderPicker => {
+            app.open_provider_picker();
+            None
+        }
+        AppAction::BeginModelPickerLoad => {
+            let request = app.prepare_model_picker_request();
+            Some(AppCommand::LoadModelPicker(request))
+        }
+        AppAction::PickerEscape => {
+            handle_picker_escape(app, ctx);
+            None
+        }
+        AppAction::PickerMoveUp => {
+            handle_picker_movement(app, PickerMovement::Up);
+            None
+        }
+        AppAction::PickerMoveDown => {
+            handle_picker_movement(app, PickerMovement::Down);
+            None
+        }
+        AppAction::PickerMoveToStart => {
+            handle_picker_movement(app, PickerMovement::Start);
+            None
+        }
+        AppAction::PickerMoveToEnd => {
+            handle_picker_movement(app, PickerMovement::End);
+            None
+        }
+        AppAction::PickerCycleSortMode => {
+            handle_picker_cycle_sort_mode(app);
+            None
+        }
+        AppAction::PickerApplySelection { persistent } => {
+            handle_picker_apply_selection(app, persistent, ctx)
+        }
+        AppAction::PickerUnsetDefault => handle_picker_unset_default(app, ctx),
+        AppAction::PickerBackspace => {
+            handle_picker_backspace(app);
+            None
+        }
+        AppAction::PickerTypeChar { ch } => {
+            handle_picker_type_char(app, ch);
+            None
+        }
         AppAction::ModelPickerLoaded {
             default_model_for_provider,
             models_response,
@@ -167,15 +228,13 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             if let Err(e) =
                 app.complete_model_picker_request(default_model_for_provider, models_response)
             {
-                app.conversation()
-                    .set_status(format!("Model picker error: {}", e));
+                set_status_message(app, format!("Model picker error: {}", e), ctx);
             }
             None
         }
         AppAction::ModelPickerLoadFailed { error } => {
             app.fail_model_picker_request();
-            app.conversation()
-                .set_status(format!("Model picker error: {}", error));
+            set_status_message(app, format!("Model picker error: {}", error), ctx);
             None
         }
     }
@@ -191,6 +250,342 @@ fn append_response_chunk(app: &mut App, chunk: &str, ctx: AppActionContext) {
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.append_to_response(chunk, available_height, ctx.term_width);
+}
+
+fn set_status_message(app: &mut App, message: String, ctx: AppActionContext) {
+    app.conversation().set_status(message);
+    if ctx.term_width > 0 && ctx.term_height > 0 {
+        let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
+        let mut conversation = app.conversation();
+        let available_height =
+            conversation.calculate_available_height(ctx.term_height, input_area_height);
+        conversation.update_scroll_position(available_height, ctx.term_width);
+    }
+}
+
+enum PickerMovement {
+    Up,
+    Down,
+    Start,
+    End,
+}
+
+fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
+    let mode = app.current_picker_mode();
+    let selected_theme = {
+        let mut selected = None;
+        if let Some(state) = app.picker_state_mut() {
+            match movement {
+                PickerMovement::Up => state.move_up(),
+                PickerMovement::Down => state.move_down(),
+                PickerMovement::Start => state.move_to_start(),
+                PickerMovement::End => state.move_to_end(),
+            }
+            if mode == Some(PickerMode::Theme) {
+                selected = state.selected_id().map(|s| s.to_string());
+            }
+        }
+        selected
+    };
+    if let Some(id) = selected_theme {
+        app.preview_theme_by_id(&id);
+    }
+}
+
+fn handle_picker_cycle_sort_mode(app: &mut App) {
+    if let Some(state) = app.picker_state_mut() {
+        state.cycle_sort_mode();
+    }
+    app.sort_picker_items();
+    app.update_picker_title();
+}
+
+fn handle_picker_backspace(app: &mut App) {
+    match app.current_picker_mode() {
+        Some(PickerMode::Model) => {
+            if let Some(state) = app.model_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_models();
+                }
+            }
+        }
+        Some(PickerMode::Theme) => {
+            if let Some(state) = app.theme_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_themes();
+                }
+            }
+        }
+        Some(PickerMode::Provider) => {
+            if let Some(state) = app.provider_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_providers();
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+fn handle_picker_type_char(app: &mut App, ch: char) {
+    if ch.is_control() {
+        return;
+    }
+
+    match app.current_picker_mode() {
+        Some(PickerMode::Model) => {
+            if let Some(state) = app.model_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_models();
+            }
+        }
+        Some(PickerMode::Theme) => {
+            if let Some(state) = app.theme_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_themes();
+            }
+        }
+        Some(PickerMode::Provider) => {
+            if let Some(state) = app.provider_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_providers();
+            }
+        }
+        None => {}
+    }
+}
+
+fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
+    match app.current_picker_mode() {
+        Some(PickerMode::Theme) => {
+            app.revert_theme_preview();
+            app.close_picker();
+        }
+        Some(PickerMode::Model) => {
+            if app.picker.startup_requires_model {
+                app.close_picker();
+                if app.picker.startup_multiple_providers_available {
+                    app.picker.startup_requires_model = false;
+                    app.picker.startup_requires_provider = true;
+                    app.session.provider_name.clear();
+                    app.session.provider_display_name = "(no provider selected)".to_string();
+                    app.session.api_key.clear();
+                    app.session.base_url.clear();
+                    app.open_provider_picker();
+                } else {
+                    app.ui.exit_requested = true;
+                }
+            } else {
+                let was_transitioning = app.picker.in_provider_model_transition;
+                app.revert_model_preview();
+                if was_transitioning {
+                    set_status_message(app, "Selection cancelled".to_string(), ctx);
+                }
+                app.close_picker();
+            }
+        }
+        Some(PickerMode::Provider) => {
+            if app.picker.startup_requires_provider {
+                app.close_picker();
+                app.ui.exit_requested = true;
+            } else {
+                app.revert_provider_preview();
+                app.close_picker();
+            }
+        }
+        None => {}
+    }
+}
+
+fn handle_picker_apply_selection(
+    app: &mut App,
+    persistent: bool,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    match app.current_picker_mode() {
+        Some(PickerMode::Theme) => {
+            if let Some(id) = selected_picker_id(app) {
+                let result = {
+                    let mut controller = app.theme_controller();
+                    if persistent {
+                        controller.apply_theme_by_id(&id)
+                    } else {
+                        controller.apply_theme_by_id_session_only(&id)
+                    }
+                };
+                match result {
+                    Ok(_) => set_status_message(
+                        app,
+                        format!("Theme set: {}{}", id, picker_status_suffix(persistent)),
+                        ctx,
+                    ),
+                    Err(_) => set_status_message(app, "Theme error".to_string(), ctx),
+                }
+            }
+            app.close_picker();
+            None
+        }
+        Some(PickerMode::Model) => {
+            let Some(id) = selected_picker_id(app) else {
+                app.close_picker();
+                return None;
+            };
+            let persist_to_config = persistent && !app.session.startup_env_only;
+            let result = {
+                let mut controller = app.provider_controller();
+                if persist_to_config {
+                    controller.apply_model_by_id_persistent(&id)
+                } else {
+                    controller.apply_model_by_id(&id);
+                    Ok(())
+                }
+            };
+            match result {
+                Ok(_) => {
+                    set_status_message(
+                        app,
+                        format!(
+                            "Model set: {}{}",
+                            id,
+                            picker_status_suffix(persist_to_config)
+                        ),
+                        ctx,
+                    );
+                    if app.picker.in_provider_model_transition {
+                        app.complete_provider_model_transition();
+                    }
+                    if app.picker.startup_requires_model {
+                        app.picker.startup_requires_model = false;
+                    }
+                }
+                Err(e) => set_status_message(app, format!("Model error: {}", e), ctx),
+            }
+            app.close_picker();
+            None
+        }
+        Some(PickerMode::Provider) => {
+            let Some(id) = selected_picker_id(app) else {
+                app.close_picker();
+                return None;
+            };
+            let (result, should_open_model_picker) = {
+                let mut controller = app.provider_controller();
+                if persistent {
+                    controller.apply_provider_by_id_persistent(&id)
+                } else {
+                    controller.apply_provider_by_id(&id)
+                }
+            };
+
+            let mut followup = None;
+            match result {
+                Ok(_) => {
+                    set_status_message(
+                        app,
+                        format!("Provider set: {}{}", id, picker_status_suffix(persistent)),
+                        ctx,
+                    );
+                    app.close_picker();
+                    if should_open_model_picker {
+                        if app.picker.startup_requires_provider {
+                            app.picker.startup_requires_provider = false;
+                            app.picker.startup_requires_model = true;
+                        }
+                        let request = app.prepare_model_picker_request();
+                        followup = Some(AppCommand::LoadModelPicker(request));
+                    }
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Provider error: {}", e), ctx);
+                    app.close_picker();
+                }
+            }
+
+            followup
+        }
+        None => None,
+    }
+}
+
+fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
+    let mode = app.current_picker_mode();
+    let (selected_id, selected_label) = app.picker_state().and_then(|state| {
+        state
+            .get_selected_item()
+            .map(|item| (item.id.clone(), item.label.clone()))
+    })?;
+
+    if !selected_label.ends_with('*') {
+        set_status_message(
+            app,
+            "Del key only works on default items (marked with *)".to_string(),
+            ctx,
+        );
+        return None;
+    }
+
+    match mode {
+        Some(PickerMode::Model) => {
+            let provider_name = app.session.provider_name.clone();
+            let mut controller = app.provider_controller();
+            match controller.unset_default_model(&provider_name) {
+                Ok(_) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    let request = app.prepare_model_picker_request();
+                    Some(AppCommand::LoadModelPicker(request))
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
+        Some(PickerMode::Theme) => {
+            let mut controller = app.theme_controller();
+            match controller.unset_default_theme() {
+                Ok(_) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_theme_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
+        Some(PickerMode::Provider) => {
+            let mut controller = app.provider_controller();
+            match controller.unset_default_provider() {
+                Ok(_) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_provider_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+fn picker_status_suffix(is_persistent: bool) -> &'static str {
+    if is_persistent {
+        " (saved to config)"
+    } else {
+        " (session only)"
+    }
+}
+
+fn selected_picker_id(app: &App) -> Option<String> {
+    app.picker_state()
+        .and_then(|state| state.selected_id().map(|id| id.to_string()))
 }
 
 fn prepare_stream_params_for_message(
@@ -261,5 +656,90 @@ fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppComma
         }))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::app::picker::{ModelPickerState, PickerData, PickerMode, PickerSession};
+    use crate::ui::picker::{PickerItem, PickerState};
+    use crate::utils::test_utils::create_test_app;
+
+    fn default_ctx() -> AppActionContext {
+        AppActionContext {
+            term_width: 80,
+            term_height: 24,
+        }
+    }
+
+    #[test]
+    fn theme_picker_escape_reverts_preview() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        let original_color = app.ui.theme.background_color;
+
+        apply_action(&mut app, AppAction::OpenThemePicker, ctx);
+        apply_action(&mut app, AppAction::PickerMoveDown, ctx);
+
+        assert_ne!(app.ui.theme.background_color, original_color);
+
+        apply_action(&mut app, AppAction::PickerEscape, ctx);
+
+        assert_eq!(app.ui.theme.background_color, original_color);
+        assert!(app.picker_session().is_none());
+    }
+
+    #[test]
+    fn model_picker_escape_reverts_provider_transition() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        app.session.provider_name = "new-prov".into();
+        app.session.provider_display_name = "New Provider".into();
+        app.session.model = "new-model".into();
+        app.session.api_key = "new-key".into();
+        app.session.base_url = "https://api.new".into();
+
+        app.picker.in_provider_model_transition = true;
+        app.picker.provider_model_transition_state = Some((
+            "old-prov".into(),
+            "Old Provider".into(),
+            "old-model".into(),
+            "old-key".into(),
+            "https://api.old".into(),
+        ));
+
+        let items = vec![PickerItem {
+            id: "new-model".into(),
+            label: "New Model".into(),
+            metadata: None,
+            sort_key: None,
+        }];
+
+        let picker_state = PickerState::new("Pick Model", items.clone(), 0);
+
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Model,
+            state: picker_state,
+            data: PickerData::Model(ModelPickerState {
+                search_filter: String::new(),
+                all_items: items,
+                before_model: Some("old-model".into()),
+                has_dates: false,
+            }),
+        });
+
+        apply_action(&mut app, AppAction::PickerEscape, ctx);
+
+        assert_eq!(app.session.provider_name, "old-prov");
+        assert_eq!(app.session.provider_display_name, "Old Provider");
+        assert_eq!(app.session.model, "old-model");
+        assert_eq!(app.session.api_key, "old-key");
+        assert_eq!(app.session.base_url, "https://api.old");
+        assert!(!app.picker.in_provider_model_transition);
+        assert!(app.picker.provider_model_transition_state.is_none());
+        assert!(app.picker_session().is_none());
+        assert_eq!(app.ui.status.as_deref(), Some("Selection cancelled"));
     }
 }

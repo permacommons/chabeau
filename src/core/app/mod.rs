@@ -322,12 +322,6 @@ impl App {
         self.picker.revert_provider_preview(&mut self.session);
     }
 
-    /// Revert provider and model to previous state during provider->model transition cancellation
-    pub fn revert_provider_model_transition(&mut self) {
-        self.picker
-            .revert_provider_model_transition(&mut self.session);
-    }
-
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
         self.picker.complete_provider_model_transition();

@@ -135,7 +135,7 @@ pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn
 
 /// Load a character card from a file (JSON or PNG)
 /// Automatically detects the file type based on extension
-fn load_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
+pub fn load_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
     let path = path.as_ref();
     let extension = path.extension()
         .and_then(|e| e.to_str())

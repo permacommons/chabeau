@@ -50,10 +50,6 @@ impl AppHandle {
         Self { inner }
     }
 
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, App> {
-        self.inner.lock().await
-    }
-
     pub async fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let guard = self.inner.lock().await;
         f(&guard)

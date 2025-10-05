@@ -252,43 +252,41 @@ impl KeyHandler for NavigationHandler {
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        match key.code {
+        app.update(|app| match key.code {
             KeyCode::Home => {
-                app_guard.ui.scroll_to_top();
+                app.ui.scroll_to_top();
                 KeyResult::Handled
             }
             KeyCode::End => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard
-                    .ui
-                    .scroll_to_bottom_view(available_height, term_width);
+                app.ui.scroll_to_bottom_view(available_height, term_width);
                 KeyResult::Handled
             }
             KeyCode::PageUp => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard.ui.page_up(available_height);
+                app.ui.page_up(available_height);
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
-                let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                let input_area_height = app.ui.calculate_input_area_height(term_width);
                 let available_height = {
-                    let conversation = app_guard.conversation();
+                    let conversation = app.conversation();
                     conversation.calculate_available_height(term_height, input_area_height)
                 };
-                app_guard.ui.page_down(available_height, term_width);
+                app.ui.page_down(available_height, term_width);
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
-        }
+        })
+        .await
     }
 }
 
@@ -306,79 +304,74 @@ impl KeyHandler for ArrowKeyHandler {
         term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
 
-        match key.code {
+        app.update(|app| match key.code {
             KeyCode::Left => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.horizontal_scroll_offset =
-                        app_guard.ui.horizontal_scroll_offset.saturating_sub(1);
+                    app.ui.horizontal_scroll_offset =
+                        app.ui.horizontal_scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Right => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.horizontal_scroll_offset =
-                        app_guard.ui.horizontal_scroll_offset.saturating_add(1);
+                    app.ui.horizontal_scroll_offset =
+                        app.ui.horizontal_scroll_offset.saturating_add(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Up => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.auto_scroll = false;
-                    app_guard.ui.scroll_offset = app_guard.ui.scroll_offset.saturating_sub(1);
+                    app.ui.auto_scroll = false;
+                    app.ui.scroll_offset = app.ui.scroll_offset.saturating_sub(1);
                 }
                 KeyResult::Handled
             }
             KeyCode::Down => {
-                let compose = app_guard.ui.compose_mode;
+                let compose = app.ui.compose_mode;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
                 if (compose && !shift) || (!compose && shift) {
-                    app_guard
-                        .ui
+                    app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
-                    recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
-                    app_guard.ui.auto_scroll = false;
-                    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
+                    app.ui.auto_scroll = false;
+                    let input_area_height = app.ui.calculate_input_area_height(term_width);
                     let available_height = {
-                        let conversation = app_guard.conversation();
+                        let conversation = app.conversation();
                         conversation.calculate_available_height(term_height, input_area_height)
                     };
-                    let max_scroll = app_guard
+                    let max_scroll = app
                         .ui
                         .calculate_max_scroll_offset(available_height, term_width);
-                    app_guard.ui.scroll_offset =
-                        (app_guard.ui.scroll_offset.saturating_add(1)).min(max_scroll);
+                    app.ui.scroll_offset = (app.ui.scroll_offset.saturating_add(1)).min(max_scroll);
                 }
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
-        }
+        })
+        .await
     }
 }
 
@@ -400,40 +393,44 @@ impl KeyHandler for TextEditingHandler {
         _term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
 
         match key.code {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input(TAInput::from(*key));
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input(TAInput::from(*key));
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input(TAInput::from(*key));
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input(TAInput::from(*key));
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Char(c) => {
-                // Skip Ctrl+J - it has special compose mode logic that needs the stream service
                 if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return KeyResult::NotHandled;
                 }
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                app.update(|app| {
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input(TAInput::from(*key));
                     });
-                KeyResult::Handled
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Delete => {
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+                app.update(|app| {
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input_without_shortcuts(TAInput {
                             key: TAKey::Delete,
                             ctrl: false,
@@ -441,15 +438,20 @@ impl KeyHandler for TextEditingHandler {
                             shift: false,
                         });
                     });
-                KeyResult::Handled
+                    KeyResult::Handled
+                })
+                .await
             }
             KeyCode::Backspace => {
                 let input = TAInput::from(*key);
-                app_guard.ui.apply_textarea_edit(|ta| {
-                    ta.input_without_shortcuts(input);
-                });
-                recompute_input_layout_if_due(&mut app_guard, term_width, &mut last_update);
-                KeyResult::Handled
+                app.update(|app| {
+                    app.ui.apply_textarea_edit(|ta| {
+                        ta.input_without_shortcuts(input);
+                    });
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    KeyResult::Handled
+                })
+                .await
             }
             _ => KeyResult::NotHandled,
         }
@@ -501,112 +503,109 @@ impl KeyHandler for CommandAutocompleteHandler {
         _term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        let input = app_guard.ui.get_input_text().to_string();
+        app.update(|app| {
+            let input = app.ui.get_input_text().to_string();
 
-        if !input.starts_with('/') {
-            return KeyResult::NotHandled;
-        }
-
-        let cursor_char_index = app_guard.ui.input_cursor_position;
-        let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
-
-        if cursor_byte_index == 0 {
-            return KeyResult::NotHandled;
-        }
-
-        let command_region_end = {
-            let after_slash = &input[1..];
-            after_slash
-                .char_indices()
-                .find(|(_, c)| c.is_whitespace())
-                .map(|(idx, _)| idx + 1)
-                .unwrap_or_else(|| input.len())
-        };
-
-        if cursor_byte_index > command_region_end {
-            return KeyResult::NotHandled;
-        }
-
-        let command_prefix = &input[1..cursor_byte_index];
-        let matches = (self.matcher)(command_prefix);
-
-        if matches.is_empty() {
-            let message = if command_prefix.is_empty() {
-                "No commands available".to_string()
-            } else {
-                format!("No commands matching \"/{}\"", command_prefix)
-            };
-            app_guard.conversation().set_status(message);
-            return KeyResult::Handled;
-        }
-
-        let rest = &input[command_region_end..];
-
-        if matches.len() == 1 {
-            let command_name = &matches[0];
-            let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
-            new_text.push('/');
-            new_text.push_str(command_name);
-            if rest.is_empty() {
-                new_text.push(' ');
-            } else {
-                new_text.push_str(rest);
+            if !input.starts_with('/') {
+                return KeyResult::NotHandled;
             }
 
-            if new_text != input {
-                let target_col_base = command_name.chars().count() + 1;
-                let target_col = if rest.is_empty() {
-                    target_col_base + 1
-                } else {
-                    target_col_base
-                } as u16;
+            let cursor_char_index = app.ui.input_cursor_position;
+            let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
 
-                app_guard
-                    .ui
-                    .apply_textarea_edit_and_recompute(term_width, |ta| {
+            if cursor_byte_index == 0 {
+                return KeyResult::NotHandled;
+            }
+
+            let command_region_end = {
+                let after_slash = &input[1..];
+                after_slash
+                    .char_indices()
+                    .find(|(_, c)| c.is_whitespace())
+                    .map(|(idx, _)| idx + 1)
+                    .unwrap_or_else(|| input.len())
+            };
+
+            if cursor_byte_index > command_region_end {
+                return KeyResult::NotHandled;
+            }
+
+            let command_prefix = &input[1..cursor_byte_index];
+            let matches = (self.matcher)(command_prefix);
+
+            if matches.is_empty() {
+                let message = if command_prefix.is_empty() {
+                    "No commands available".to_string()
+                } else {
+                    format!("No commands matching \"/{}\"", command_prefix)
+                };
+                app.conversation().set_status(message);
+                return KeyResult::Handled;
+            }
+
+            let rest = &input[command_region_end..];
+
+            if matches.len() == 1 {
+                let command_name = &matches[0];
+                let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
+                new_text.push('/');
+                new_text.push_str(command_name);
+                if rest.is_empty() {
+                    new_text.push(' ');
+                } else {
+                    new_text.push_str(rest);
+                }
+
+                if new_text != input {
+                    let target_col_base = command_name.chars().count() + 1;
+                    let target_col = if rest.is_empty() {
+                        target_col_base + 1
+                    } else {
+                        target_col_base
+                    } as u16;
+
+                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.select_all();
                         ta.cut();
                         ta.insert_str(&new_text);
                         ta.move_cursor(CursorMove::Jump(0, target_col));
                     });
+                }
+
+                return KeyResult::Handled;
             }
 
-            return KeyResult::Handled;
-        }
+            let prefix_char_len = command_prefix.chars().count();
+            let common_prefix_len = longest_common_prefix_len(&matches);
+            let target_prefix_len = common_prefix_len.max(prefix_char_len);
+            let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
 
-        let prefix_char_len = command_prefix.chars().count();
-        let common_prefix_len = longest_common_prefix_len(&matches);
-        let target_prefix_len = common_prefix_len.max(prefix_char_len);
-        let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
+            let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
+            new_text.push('/');
+            new_text.push_str(&canonical_prefix);
+            new_text.push_str(rest);
 
-        let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
-        new_text.push('/');
-        new_text.push_str(&canonical_prefix);
-        new_text.push_str(rest);
-
-        if new_text != input {
-            let target_col = (canonical_prefix.chars().count() + 1) as u16;
-            app_guard
-                .ui
-                .apply_textarea_edit_and_recompute(term_width, |ta| {
+            if new_text != input {
+                let target_col = (canonical_prefix.chars().count() + 1) as u16;
+                app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                     ta.select_all();
                     ta.cut();
                     ta.insert_str(&new_text);
                     ta.move_cursor(CursorMove::Jump(0, target_col));
                 });
-        }
+            }
 
-        let status = matches
-            .iter()
-            .map(|name| format!("/{}", name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        app_guard
-            .conversation()
-            .set_status(format!("Commands: {}", status));
+            let status = matches
+                .iter()
+                .map(|name| format!("/{}", name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            app.conversation()
+                .set_status(format!("Commands: {}", status));
 
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -662,43 +661,44 @@ impl KeyHandler for CtrlBHandler {
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if !app_guard.ui.markdown_enabled {
-            app_guard
-                .conversation()
-                .set_status("Markdown disabled (/markdown on)");
-            return KeyResult::Handled;
-        }
+        app.update(|app| {
+            if !app.ui.markdown_enabled {
+                app.conversation()
+                    .set_status("Markdown disabled (/markdown on)");
+                return KeyResult::Handled;
+            }
 
-        let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &app_guard.ui.messages,
-            &app_guard.ui.theme,
-            Some(term_width as usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            app_guard.ui.syntax_enabled,
-        );
+            let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+                &app.ui.messages,
+                &app.ui.theme,
+                Some(term_width as usize),
+                crate::ui::layout::TableOverflowPolicy::WrapCells,
+                app.ui.syntax_enabled,
+            );
 
-        if app_guard.ui.in_block_select_mode() {
-            if let Some(cur) = app_guard.ui.selected_block_index() {
-                let total = blocks.len();
-                if let Some(next) = wrap_previous_index(cur, total) {
-                    app_guard.ui.set_selected_block_index(next);
-                    if let Some((start, _len, _)) = blocks.get(next) {
-                        scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
+            if app.ui.in_block_select_mode() {
+                if let Some(cur) = app.ui.selected_block_index() {
+                    let total = blocks.len();
+                    if let Some(next) = wrap_previous_index(cur, total) {
+                        app.ui.set_selected_block_index(next);
+                        if let Some((start, _len, _)) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, *start);
+                        }
                     }
                 }
+            } else if blocks.is_empty() {
+                app.conversation().set_status("No code blocks");
+            } else {
+                let last = blocks.len().saturating_sub(1);
+                app.ui.enter_block_select_mode(last);
+                if let Some((start, _len, _)) = blocks.get(last) {
+                    scroll_block_into_view(app, term_width, term_height, *start);
+                }
             }
-        } else if blocks.is_empty() {
-            app_guard.conversation().set_status("No code blocks");
-        } else {
-            let last = blocks.len().saturating_sub(1);
-            app_guard.ui.enter_block_select_mode(last);
-            if let Some((start, _len, _)) = blocks.get(last) {
-                scroll_block_into_view(&mut app_guard, term_width, term_height, *start);
-            }
-        }
 
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -716,40 +716,40 @@ impl KeyHandler for CtrlPHandler {
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
+        app.update(|app| {
+            if app.ui.last_user_message_index().is_none() {
+                app.conversation().set_status("No user messages");
+                return KeyResult::Handled;
+            }
 
-        if app_guard.ui.last_user_message_index().is_none() {
-            app_guard.conversation().set_status("No user messages");
-            return KeyResult::Handled;
-        }
-
-        if app_guard.ui.in_edit_select_mode() {
-            if let Some(current) = app_guard.ui.selected_user_message_index() {
-                let prev = {
-                    let ui = &app_guard.ui;
-                    ui.prev_user_message_index(current)
-                        .or_else(|| ui.last_user_message_index())
-                };
-                if let Some(prev) = prev {
-                    app_guard.ui.set_selected_user_message_index(prev);
+            if app.ui.in_edit_select_mode() {
+                if let Some(current) = app.ui.selected_user_message_index() {
+                    let prev = {
+                        let ui = &app.ui;
+                        ui.prev_user_message_index(current)
+                            .or_else(|| ui.last_user_message_index())
+                    };
+                    if let Some(prev) = prev {
+                        app.ui.set_selected_user_message_index(prev);
+                    }
+                } else if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
                 }
-            } else if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
+            } else {
+                app.ui.enter_edit_select_mode();
+                if let Some(last) = app.ui.last_user_message_index() {
+                    app.ui.set_selected_user_message_index(last);
+                }
             }
-        } else {
-            app_guard.ui.enter_edit_select_mode();
-            if let Some(last) = app_guard.ui.last_user_message_index() {
-                app_guard.ui.set_selected_user_message_index(last);
+
+            if let Some(idx) = app.ui.selected_user_message_index() {
+                app.conversation()
+                    .scroll_index_into_view(idx, term_width, term_height);
             }
-        }
 
-        if let Some(idx) = app_guard.ui.selected_user_message_index() {
-            app_guard
-                .conversation()
-                .scroll_index_into_view(idx, term_width, term_height);
-        }
-
-        KeyResult::Handled
+            KeyResult::Handled
+        })
+        .await
     }
 }
 
@@ -987,10 +987,7 @@ impl KeyHandler for PickerHandler {
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         // Check if there's a picker session before handling the key
-        let had_picker_before = {
-            let app_guard = app.lock().await;
-            app_guard.picker_session().is_some()
-        };
+        let had_picker_before = app.read(|app| app.picker_session().is_some()).await;
 
         handle_picker_key_event(dispatcher, key, term_width, term_height).await;
 
@@ -1072,8 +1069,8 @@ mod tests {
                 .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let app_guard = app.lock().await;
-            assert_eq!(app_guard.ui.get_input_text(), "/model ");
+            let input = app.read(|app| app.ui.get_input_text().to_string()).await;
+            assert_eq!(input, "/model ");
             assert!(action_rx.try_recv().is_err());
         });
     }
@@ -1107,12 +1104,16 @@ mod tests {
                 .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let app_guard = app.lock().await;
-            assert_eq!(app_guard.ui.get_input_text(), "/the");
-            assert_eq!(
-                app_guard.ui.status.as_deref(),
-                Some("Commands: /theme, /theory")
-            );
+            let (input, status) = app
+                .read(|app| {
+                    (
+                        app.ui.get_input_text().to_string(),
+                        app.ui.status.as_deref().map(str::to_string),
+                    )
+                })
+                .await;
+            assert_eq!(input, "/the");
+            assert_eq!(status.as_deref(), Some("Commands: /theme, /theory"));
             assert!(action_rx.try_recv().is_err());
         });
     }
@@ -1144,12 +1145,14 @@ mod tests {
                 .iter()
                 .any(|env| matches!(env.action, AppAction::ClearStatus)));
 
-            {
-                let mut guard = app.lock().await;
-                let commands = apply_actions(&mut guard, envelopes);
-                assert!(commands.is_empty());
-                assert!(guard.ui.status.is_none());
-            }
+            let (commands, status_is_none) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (commands, app.ui.status.is_none())
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(status_is_none);
         });
     }
 
@@ -1175,13 +1178,17 @@ mod tests {
                 .iter()
                 .any(|env| matches!(env.action, AppAction::ToggleComposeMode)));
 
-            {
-                let mut guard = app.lock().await;
-                assert!(!guard.ui.compose_mode);
-                let commands = apply_actions(&mut guard, envelopes);
-                assert!(commands.is_empty());
-                assert!(guard.ui.compose_mode);
-            }
+            let compose_before = app.read(|app| app.ui.compose_mode).await;
+            assert!(!compose_before);
+
+            let (commands, compose_after) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (commands, app.ui.compose_mode)
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(compose_after);
         });
     }
 
@@ -1212,13 +1219,19 @@ mod tests {
                 .iter()
                 .any(|env| matches!(env.action, AppAction::CancelFilePrompt)));
 
-            {
-                let mut guard = app.lock().await;
-                let commands = apply_actions(&mut guard, envelopes);
-                assert!(commands.is_empty());
-                assert!(guard.ui.file_prompt().is_none());
-                assert!(guard.ui.get_input_text().is_empty());
-            }
+            let (commands, prompt_cleared, input_empty) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.file_prompt().is_none(),
+                        app.ui.get_input_text().is_empty(),
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(prompt_cleared);
+            assert!(input_empty);
         });
     }
 
@@ -1249,13 +1262,19 @@ mod tests {
                 .iter()
                 .any(|env| matches!(env.action, AppAction::CancelInPlaceEdit)));
 
-            {
-                let mut guard = app.lock().await;
-                let commands = apply_actions(&mut guard, envelopes);
-                assert!(commands.is_empty());
-                assert!(guard.ui.in_place_edit_index().is_none());
-                assert!(guard.ui.get_input_text().is_empty());
-            }
+            let (commands, in_place_cleared, input_empty) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.in_place_edit_index().is_none(),
+                        app.ui.get_input_text().is_empty(),
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(in_place_cleared);
+            assert!(input_empty);
         });
     }
 
@@ -1286,14 +1305,21 @@ mod tests {
                 .iter()
                 .any(|env| matches!(env.action, AppAction::CancelStreaming)));
 
-            {
-                let mut guard = app.lock().await;
-                let commands = apply_actions(&mut guard, envelopes);
-                assert!(commands.is_empty());
-                assert!(!guard.ui.is_streaming);
-                assert!(guard.session.stream_cancel_token.is_none());
-                assert!(guard.ui.stream_interrupted);
-            }
+            let (commands, is_streaming, cancel_cleared, interrupted) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.ui.is_streaming,
+                        app.session.stream_cancel_token.is_none(),
+                        app.ui.stream_interrupted,
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(!is_streaming);
+            assert!(cancel_cleared);
+            assert!(interrupted);
         });
     }
 }

@@ -55,7 +55,7 @@ Inside the TUI, use `/provider` and `/model` to switch, and `/help` to see a ful
 chabeau                              # Start chat with defaults (pickers on demand)
 chabeau --provider openai            # Use specific provider
 chabeau --model gpt-5                # Use specific model
-chabeau --log conversation.log       # Enable logging
+chabeau --log conversation.log       # Enable logging immediately on startup
 ```
 
 ### Discovery

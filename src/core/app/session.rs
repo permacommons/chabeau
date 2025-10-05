@@ -1,6 +1,5 @@
 use std::time::Instant;
 
-use chrono::Utc;
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -47,11 +46,13 @@ pub struct UninitializedSessionBootstrap {
 pub(crate) fn initialize_logging(
     log_file: Option<String>,
 ) -> Result<LoggingState, Box<dyn std::error::Error>> {
-    let logging = LoggingState::new(log_file.clone())?;
-    if let Some(_log_path) = log_file {
-        let timestamp = Utc::now().to_rfc3339();
-        if let Err(e) = logging.log_message(&format!("## Logging started at {}", timestamp)) {
-            eprintln!("Warning: Failed to write initial log timestamp: {}", e);
+    let mut logging = LoggingState::new(log_file.clone())?;
+    if let Some(log_path) = log_file {
+        if let Err(e) = logging.set_log_file(log_path.clone()) {
+            eprintln!(
+                "Warning: Failed to enable startup logging ({}): {}",
+                log_path, e
+            );
         }
     }
     Ok(logging)
@@ -177,6 +178,7 @@ mod tests {
     use super::*;
     use crate::core::config::Config;
     use crate::core::providers::ProviderSession;
+    use tempfile::tempdir;
 
     #[test]
     fn theme_from_appearance_matches_light_theme() {
@@ -243,5 +245,21 @@ mod tests {
         );
         assert!(!bootstrap.startup_requires_provider);
         assert!(!bootstrap.session.startup_env_only);
+    }
+
+    #[test]
+    fn initialize_logging_with_file_writes_initial_entry() {
+        let temp_dir = tempdir().expect("tempdir");
+        let log_path = temp_dir.path().join("startup.log");
+        let log_file = log_path.to_string_lossy().to_string();
+
+        let logging = initialize_logging(Some(log_file.clone())).expect("logging initialized");
+        logging
+            .log_message("Hello from startup")
+            .expect("log message");
+
+        let contents = std::fs::read_to_string(&log_path).expect("read log file");
+        assert!(contents.contains("## Logging started"));
+        assert!(contents.contains("Hello from startup"));
     }
 }

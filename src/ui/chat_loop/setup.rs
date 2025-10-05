@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use super::AppHandle;
+
 use crate::{
     auth::AuthManager,
     core::{
-        app::{self, App},
-        builtin_providers::load_builtin_providers,
-        config::Config,
+        app, builtin_providers::load_builtin_providers, config::Config,
         providers::ProviderResolutionError,
     },
 };
@@ -21,7 +21,7 @@ pub async fn bootstrap_app(
     log: Option<String>,
     provider: Option<String>,
     env_only: bool,
-) -> Result<Arc<Mutex<App>>, Box<dyn std::error::Error>> {
+) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let auth_manager = AuthManager::new();
 
@@ -139,5 +139,5 @@ pub async fn bootstrap_app(
         app
     };
 
-    Ok(app)
+    Ok(AppHandle::new(app))
 }

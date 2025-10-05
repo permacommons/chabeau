@@ -4,12 +4,10 @@
 //! in a mode-aware manner, including types, registry, and builder.
 
 use crate::core::app::ui_state::UiMode;
-use crate::core::app::{App, AppActionDispatcher};
-use crate::ui::chat_loop::KeyLoopAction;
+use crate::core::app::AppActionDispatcher;
+use crate::ui::chat_loop::{AppHandle, KeyLoopAction};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // ============================================================================
 // Types and Traits
@@ -53,7 +51,7 @@ pub trait KeyHandler: Send + Sync {
     /// Handle a key event
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -230,7 +228,7 @@ impl ModeAwareRegistry {
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_key_event(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         context: KeyContext,

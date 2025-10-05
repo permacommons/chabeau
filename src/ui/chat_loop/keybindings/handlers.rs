@@ -14,7 +14,8 @@ use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
-    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event, KeyLoopAction,
+    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event, AppHandle,
+    KeyLoopAction,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
@@ -97,7 +98,7 @@ pub struct CtrlCHandler;
 impl KeyHandler for CtrlCHandler {
     async fn handle(
         &self,
-        _app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         _term_width: u16,
@@ -115,17 +116,14 @@ pub struct CtrlLHandler;
 impl KeyHandler for CtrlLHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let should_clear = {
-            let app_guard = app.lock().await;
-            app_guard.ui.status.is_some()
-        };
+        let should_clear = app.read(|app| app.ui.status.is_some()).await;
 
         if should_clear {
             let ctx = AppActionContext {
@@ -145,7 +143,7 @@ pub struct F4Handler;
 impl KeyHandler for F4Handler {
     async fn handle(
         &self,
-        _app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -168,24 +166,26 @@ pub struct EscapeHandler;
 impl KeyHandler for EscapeHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut actions = Vec::new();
-        {
-            let app_guard = app.lock().await;
-            if app_guard.ui.file_prompt().is_some() {
-                actions.push(AppAction::CancelFilePrompt);
-            } else if app_guard.ui.in_place_edit_index().is_some() {
-                actions.push(AppAction::CancelInPlaceEdit);
-            } else if app_guard.ui.is_streaming {
-                actions.push(AppAction::CancelStreaming);
-            }
-        }
+        let actions = app
+            .read(|app| {
+                let mut actions = Vec::new();
+                if app.ui.file_prompt().is_some() {
+                    actions.push(AppAction::CancelFilePrompt);
+                } else if app.ui.in_place_edit_index().is_some() {
+                    actions.push(AppAction::CancelInPlaceEdit);
+                } else if app.ui.is_streaming {
+                    actions.push(AppAction::CancelStreaming);
+                }
+                actions
+            })
+            .await;
 
         if actions.is_empty() {
             return KeyResult::NotHandled;
@@ -207,20 +207,19 @@ pub struct CtrlDHandler;
 impl KeyHandler for CtrlDHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
         _term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().is_empty() {
+        let is_empty = app.read(|app| app.ui.get_input_text().is_empty()).await;
+        if is_empty {
             KeyLoopAction::Break.into()
         } else {
-            app_guard
-                .ui
-                .apply_textarea_edit_and_recompute(term_width, |ta| {
+            app.update(|app| {
+                app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                     ta.input_without_shortcuts(TAInput {
                         key: TAKey::Delete,
                         ctrl: false,
@@ -228,6 +227,8 @@ impl KeyHandler for CtrlDHandler {
                         shift: false,
                     });
                 });
+            })
+            .await;
             KeyLoopAction::Continue.into()
         }
     }
@@ -244,7 +245,7 @@ pub struct NavigationHandler;
 impl KeyHandler for NavigationHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -298,7 +299,7 @@ pub struct ArrowKeyHandler;
 impl KeyHandler for ArrowKeyHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -392,7 +393,7 @@ pub struct TextEditingHandler;
 impl KeyHandler for TextEditingHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -493,7 +494,7 @@ impl Default for CommandAutocompleteHandler {
 impl KeyHandler for CommandAutocompleteHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -654,7 +655,7 @@ pub struct CtrlBHandler;
 impl KeyHandler for CtrlBHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -708,7 +709,7 @@ pub struct CtrlPHandler;
 impl KeyHandler for CtrlPHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -765,7 +766,7 @@ pub struct CtrlJHandler {
 impl KeyHandler for CtrlJHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -801,7 +802,7 @@ pub struct EnterHandler {
 impl KeyHandler for EnterHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -835,7 +836,7 @@ pub struct AltEnterHandler {
 impl KeyHandler for AltEnterHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -867,7 +868,7 @@ pub struct CtrlRHandler;
 impl KeyHandler for CtrlRHandler {
     async fn handle(
         &self,
-        _app: &Arc<Mutex<App>>,
+        _app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -895,7 +896,7 @@ pub struct CtrlTHandler {
 impl KeyHandler for CtrlTHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         _key: &KeyEvent,
         term_width: u16,
@@ -934,7 +935,7 @@ pub struct EditSelectHandler;
 impl KeyHandler for EditSelectHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -956,7 +957,7 @@ pub struct BlockSelectHandler;
 impl KeyHandler for BlockSelectHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         _dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -978,7 +979,7 @@ pub struct PickerHandler;
 impl KeyHandler for PickerHandler {
     async fn handle(
         &self,
-        app: &Arc<Mutex<App>>,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
@@ -1012,6 +1013,7 @@ mod tests {
     use crate::core::app::actions::{
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
     };
+    use crate::ui::chat_loop::AppHandle;
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
@@ -1058,7 +1060,7 @@ mod tests {
 
         let mut app = create_test_app();
         app.ui.set_input_text("/mo".to_string());
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
 
         let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
 
@@ -1093,7 +1095,7 @@ mod tests {
 
         let mut app = create_test_app();
         app.ui.set_input_text("/t".to_string());
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
 
         let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
 
@@ -1123,7 +1125,7 @@ mod tests {
             let mut conversation = app.conversation();
             conversation.set_status("Busy");
         }
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
         let key_event = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
 
         let runtime = Runtime::new().unwrap();
@@ -1154,7 +1156,7 @@ mod tests {
     #[test]
     fn f4_handler_toggles_compose_mode_via_action() {
         let handler = F4Handler;
-        let app = Arc::new(Mutex::new(create_test_app()));
+        let app = AppHandle::new(Arc::new(Mutex::new(create_test_app())));
         let key_event = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
@@ -1191,7 +1193,7 @@ mod tests {
             app.ui
                 .start_file_prompt_save_block("snippet.rs".into(), "fn main() {}".into());
         }
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
@@ -1228,7 +1230,7 @@ mod tests {
             app.ui.start_in_place_edit(0);
             app.ui.set_input_text("editing".into());
         }
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
@@ -1265,7 +1267,7 @@ mod tests {
             app.session.stream_cancel_token = Some(CancellationToken::new());
             app.ui.begin_streaming();
         }
-        let app = Arc::new(Mutex::new(app));
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();

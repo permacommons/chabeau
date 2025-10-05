@@ -710,80 +710,8 @@ impl ProviderAuthSource for AuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
+    use crate::utils::test_utils::with_test_config_env;
     use std::env;
-    use std::ffi::OsString;
-    use std::path::Path;
-    use std::sync::{Mutex, MutexGuard};
-    use tempfile::TempDir;
-
-    static TEST_CONFIG_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    struct TestConfigEnv {
-        _lock: MutexGuard<'static, ()>,
-        temp_dir: TempDir,
-        previous_vars: Vec<(String, Option<OsString>)>,
-    }
-
-    impl TestConfigEnv {
-        fn new() -> Self {
-            let lock = TEST_CONFIG_ENV_GUARD
-                .lock()
-                .expect("config env mutex poisoned");
-            let temp_dir = TempDir::new().expect("failed to create temp dir for config");
-            let mut guard = Self {
-                _lock: lock,
-                temp_dir,
-                previous_vars: Vec::new(),
-            };
-
-            guard.capture_and_set("XDG_CONFIG_HOME");
-
-            #[cfg(target_os = "windows")]
-            {
-                guard.capture_and_set("APPDATA");
-                guard.capture_and_set("LOCALAPPDATA");
-            }
-
-            #[cfg(target_os = "macos")]
-            {
-                guard.capture_and_set("HOME");
-            }
-
-            guard
-        }
-
-        fn capture_and_set(&mut self, key: &str) {
-            let previous = env::var_os(key);
-            self.previous_vars.push((key.to_string(), previous));
-            env::set_var(key, self.temp_dir.path());
-        }
-
-        fn config_root(&self) -> &Path {
-            self.temp_dir.path()
-        }
-    }
-
-    impl Drop for TestConfigEnv {
-        fn drop(&mut self) {
-            for (key, value) in self.previous_vars.drain(..).rev() {
-                if let Some(val) = value {
-                    env::set_var(&key, val);
-                } else {
-                    env::remove_var(&key);
-                }
-            }
-        }
-    }
-
-    fn with_test_config_env<F, T>(f: F) -> T
-    where
-        F: FnOnce(&Path) -> T,
-    {
-        let guard = TestConfigEnv::new();
-        let result = f(guard.config_root());
-        result
-    }
 
     #[test]
     fn collect_configured_providers_skips_duplicate_custom_entries() {

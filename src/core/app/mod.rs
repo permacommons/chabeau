@@ -3,6 +3,7 @@ use crate::api::ModelsResponse;
 use crate::core::config::Config;
 #[cfg(test)]
 use crate::core::message::Message;
+use crate::core::providers::ProviderSession;
 use crate::ui::picker::PickerState;
 use crate::ui::span::SpanKind;
 #[cfg(any(test, feature = "bench"))]
@@ -37,12 +38,21 @@ pub async fn new_with_auth(
     provider: Option<String>,
     env_only: bool,
     config: &Config,
+    pre_resolved_session: Option<ProviderSession>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
         theme,
         startup_requires_provider,
-    } = session::prepare_with_auth(model, log_file, provider, env_only, config).await?;
+    } = session::prepare_with_auth(
+        model,
+        log_file,
+        provider,
+        env_only,
+        config,
+        pre_resolved_session,
+    )
+    .await?;
 
     let mut app = App {
         session,

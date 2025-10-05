@@ -7,8 +7,10 @@ use super::AppHandle;
 use crate::{
     auth::AuthManager,
     core::{
-        app, builtin_providers::load_builtin_providers, config::Config,
-        providers::ProviderResolutionError,
+        app,
+        builtin_providers::load_builtin_providers,
+        config::Config,
+        providers::{resolve_session, ProviderResolutionError, ResolveSessionError},
     },
 };
 
@@ -82,12 +84,38 @@ pub async fn bootstrap_app(
         app.open_provider_picker();
         app
     } else {
+        let provider_override = selected_provider.clone();
+        let pre_resolved_session = if env_only {
+            None
+        } else {
+            match resolve_session(&auth_manager, &config, provider_override.as_deref()) {
+                Ok(session) => Some(session),
+                Err(ResolveSessionError::Provider(err)) => {
+                    eprintln!("{}", err);
+                    let fixes = err.quick_fixes();
+                    if !fixes.is_empty() {
+                        eprintln!();
+                        eprintln!("💡 Quick fixes:");
+                        for fix in fixes {
+                            eprintln!("  • {fix}");
+                        }
+                    }
+                    std::process::exit(err.exit_code());
+                }
+                Err(ResolveSessionError::Source(err)) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        };
+
         let mut app = match app::new_with_auth(
             model.clone(),
             log.clone(),
-            selected_provider,
+            provider_override,
             env_only,
             &config,
+            pre_resolved_session,
         )
         .await
         {

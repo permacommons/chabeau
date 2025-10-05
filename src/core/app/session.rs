@@ -6,7 +6,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::AuthManager;
 use crate::core::config::Config;
-use crate::core::providers::{resolve_env_session, resolve_session, ResolveSessionError};
+use crate::core::providers::{
+    resolve_env_session, resolve_session, ProviderSession, ResolveSessionError,
+};
 use crate::ui::appearance::{detect_preferred_appearance, Appearance};
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
 use crate::ui::theme::Theme;
@@ -87,12 +89,14 @@ pub(crate) async fn prepare_with_auth(
     provider: Option<String>,
     env_only: bool,
     config: &Config,
+    pre_resolved_session: Option<ProviderSession>,
 ) -> Result<SessionBootstrap, Box<dyn std::error::Error>> {
-    let auth_manager = AuthManager::new();
-
-    let session = if env_only {
+    let session = if let Some(session) = pre_resolved_session {
+        session
+    } else if env_only {
         resolve_env_session().map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?
     } else {
+        let auth_manager = AuthManager::new();
         match resolve_session(&auth_manager, config, provider.as_deref()) {
             Ok(session) => session,
             Err(ResolveSessionError::Provider(err)) => return Err(Box::new(err)),
@@ -172,6 +176,7 @@ pub(crate) async fn prepare_uninitialized(
 mod tests {
     use super::*;
     use crate::core::config::Config;
+    use crate::core::providers::ProviderSession;
 
     #[test]
     fn theme_from_appearance_matches_light_theme() {
@@ -201,5 +206,42 @@ mod tests {
             resolved_theme.background_color,
             expected_theme.background_color
         );
+    }
+
+    #[test]
+    fn prepare_with_auth_uses_pre_resolved_session() {
+        let provider_session = ProviderSession {
+            api_key: "test-key".to_string(),
+            base_url: "https://example.invalid".to_string(),
+            provider_id: "test-provider".to_string(),
+            provider_display_name: "Test Provider".to_string(),
+        };
+
+        let config = Config::default();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let bootstrap = runtime
+            .block_on(super::prepare_with_auth(
+                "default".to_string(),
+                None,
+                None,
+                false,
+                &config,
+                Some(provider_session.clone()),
+            ))
+            .expect("prepare_with_auth");
+
+        assert_eq!(bootstrap.session.api_key, provider_session.api_key);
+        assert_eq!(bootstrap.session.base_url, provider_session.base_url);
+        assert_eq!(
+            bootstrap.session.provider_name,
+            provider_session.provider_id
+        );
+        assert_eq!(
+            bootstrap.session.provider_display_name,
+            provider_session.provider_display_name
+        );
+        assert!(!bootstrap.startup_requires_provider);
+        assert!(!bootstrap.session.startup_env_only);
     }
 }

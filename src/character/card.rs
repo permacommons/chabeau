@@ -163,7 +163,8 @@ mod tests {
     fn test_optional_fields() {
         let mut card = create_test_card();
         card.data.creator_notes = Some("Test notes".to_string());
-        card.data.alternate_greetings = Some(vec!["Hi there!".to_string(), "Greetings!".to_string()]);
+        card.data.alternate_greetings =
+            Some(vec!["Hi there!".to_string(), "Greetings!".to_string()]);
         card.data.tags = Some(vec!["helpful".to_string(), "friendly".to_string()]);
         card.data.creator = Some("Test Creator".to_string());
         card.data.character_version = Some("1.0".to_string());

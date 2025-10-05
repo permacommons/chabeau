@@ -2,8 +2,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64::Engine;
 use crate::character::CharacterCard;
+use base64::Engine;
 
 /// Errors that can occur when loading character cards
 #[derive(Debug)]
@@ -61,25 +61,26 @@ pub fn get_cards_dir() -> PathBuf {
 #[allow(dead_code)] // Will be used in future tasks
 pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
     let cards_dir = get_cards_dir();
-    
+
     // If the cards directory doesn't exist, return an empty list
     if !cards_dir.exists() {
         return Ok(Vec::new());
     }
-    
+
     let mut cards = Vec::new();
-    
+
     // Scan the directory for card files
     for entry in fs::read_dir(cards_dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         // Only process files (not directories)
         if path.is_file() {
-            let extension = path.extension()
+            let extension = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .map(|s| s.to_lowercase());
-            
+
             // Check if it's a JSON or PNG file
             if matches!(extension.as_deref(), Some("json") | Some("png")) {
                 // Try to load the card to get its name
@@ -96,24 +97,26 @@ pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
             }
         }
     }
-    
+
     // Sort by character name for consistent ordering
     cards.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(cards)
 }
 
 /// Find a character card by name with fallback logic
-/// 
+///
 /// Search order:
 /// 1. Check for {name}.json in cards directory
 /// 2. Check for {name}.png in cards directory
 /// 3. Search all cards for a matching character name (case-insensitive)
-/// 
+///
 /// Returns the loaded card and its file path
 #[allow(dead_code)] // Will be used in future tasks
-pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn std::error::Error>> {
+pub fn find_card_by_name(
+    name: &str,
+) -> Result<(CharacterCard, PathBuf), Box<dyn std::error::Error>> {
     let cards_dir = get_cards_dir();
-    
+
     // Try as direct filename (without extension)
     for ext in &["json", "png"] {
         let path = cards_dir.join(format!("{}.{}", name, ext));
@@ -122,7 +125,7 @@ pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn
             return Ok((card, path));
         }
     }
-    
+
     // Try as character name (search all cards)
     let cards = list_available_cards()?;
     for (card_name, path) in cards {
@@ -131,7 +134,7 @@ pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn
             return Ok((card, path));
         }
     }
-    
+
     Err(format!("Character '{}' not found in cards directory", name).into())
 }
 
@@ -139,54 +142,53 @@ pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn
 /// Automatically detects the file type based on extension
 pub fn load_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
     let path = path.as_ref();
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_lowercase());
-    
+
     match extension.as_deref() {
         Some("json") => load_json_card(path),
         Some("png") => load_png_card(path),
-        _ => Err(CardLoadError::InvalidJson(
-            format!("{}: File must be .json or .png", path.display())
-        )),
+        _ => Err(CardLoadError::InvalidJson(format!(
+            "{}: File must be .json or .png",
+            path.display()
+        ))),
     }
 }
 
 /// Load a character card from a JSON file
 pub fn load_json_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
     let path = path.as_ref();
-    
+
     // Read file contents
-    let contents = fs::read_to_string(path).map_err(|e| {
-        CardLoadError::FileNotFound(format!("{}: {}", path.display(), e))
-    })?;
-    
+    let contents = fs::read_to_string(path)
+        .map_err(|e| CardLoadError::FileNotFound(format!("{}: {}", path.display(), e)))?;
+
     // Parse JSON
-    let card: CharacterCard = serde_json::from_str(&contents).map_err(|e| {
-        CardLoadError::InvalidJson(format!("{}: {}", path.display(), e))
-    })?;
-    
+    let card: CharacterCard = serde_json::from_str(&contents)
+        .map_err(|e| CardLoadError::InvalidJson(format!("{}: {}", path.display(), e)))?;
+
     // Validate the card
     validate_card(&card)?;
-    
+
     Ok(card)
 }
 
 /// Load a character card from a PNG file with embedded metadata
 pub fn load_png_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
     let path = path.as_ref();
-    
+
     // Open the PNG file
-    let file = fs::File::open(path).map_err(|e| {
-        CardLoadError::FileNotFound(format!("{}: {}", path.display(), e))
-    })?;
-    
+    let file = fs::File::open(path)
+        .map_err(|e| CardLoadError::FileNotFound(format!("{}: {}", path.display(), e)))?;
+
     // Create PNG decoder
     let decoder = png::Decoder::new(file);
-    let reader = decoder.read_info().map_err(|e| {
-        CardLoadError::InvalidPng(format!("{}: {}", path.display(), e))
-    })?;
-    
+    let reader = decoder
+        .read_info()
+        .map_err(|e| CardLoadError::InvalidPng(format!("{}: {}", path.display(), e)))?;
+
     // Extract tEXt chunk with key "chara"
     let info = reader.info();
     let chara_text = info
@@ -199,34 +201,33 @@ pub fn load_png_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadE
                 path.display()
             ))
         })?;
-    
+
     // Base64 decode the chara data
     let decoded = base64::prelude::BASE64_STANDARD
         .decode(&chara_text.text)
         .map_err(|e| {
             CardLoadError::InvalidJson(format!("{}: Base64 decode failed: {}", path.display(), e))
         })?;
-    
+
     // Convert to UTF-8 string
     let json_str = String::from_utf8(decoded).map_err(|e| {
         CardLoadError::InvalidJson(format!("{}: UTF-8 decode failed: {}", path.display(), e))
     })?;
-    
+
     // Parse JSON
-    let card: CharacterCard = serde_json::from_str(&json_str).map_err(|e| {
-        CardLoadError::InvalidJson(format!("{}: {}", path.display(), e))
-    })?;
-    
+    let card: CharacterCard = serde_json::from_str(&json_str)
+        .map_err(|e| CardLoadError::InvalidJson(format!("{}: {}", path.display(), e)))?;
+
     // Validate the card
     validate_card(&card)?;
-    
+
     Ok(card)
 }
 
 /// Validate a character card against the v2 specification
 pub fn validate_card(card: &CharacterCard) -> Result<(), CardLoadError> {
     let mut errors = Vec::new();
-    
+
     // Check spec field
     if card.spec != "chara_card_v2" {
         errors.push(format!(
@@ -234,30 +235,30 @@ pub fn validate_card(card: &CharacterCard) -> Result<(), CardLoadError> {
             card.spec
         ));
     }
-    
+
     // Check that name is not empty (this is the most critical field)
     if card.data.name.is_empty() {
         errors.push("Character name is required and cannot be empty".to_string());
     }
-    
+
     // Note: Other fields (description, personality, scenario, first_mes, mes_example)
     // are required by the struct definition (serde will fail if they're missing),
     // but they can be empty strings in practice. Many real-world character cards
     // have empty values for some of these fields.
-    
+
     if !errors.is_empty() {
         return Err(CardLoadError::ValidationFailed(errors));
     }
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::CharacterData;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    use crate::character::CharacterData;
 
     fn create_valid_card_json() -> String {
         serde_json::json!({
@@ -278,7 +279,9 @@ mod tests {
     #[test]
     fn test_load_valid_json_card() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        temp_file.write_all(create_valid_card_json().as_bytes()).unwrap();
+        temp_file
+            .write_all(create_valid_card_json().as_bytes())
+            .unwrap();
         temp_file.flush().unwrap();
 
         let result = load_json_card(temp_file.path());
@@ -554,10 +557,8 @@ mod tests {
         let error = CardLoadError::InvalidJson("test.json: Parse error".to_string());
         assert_eq!(format!("{}", error), "Invalid JSON: test.json: Parse error");
 
-        let error = CardLoadError::ValidationFailed(vec![
-            "Error 1".to_string(),
-            "Error 2".to_string(),
-        ]);
+        let error =
+            CardLoadError::ValidationFailed(vec!["Error 1".to_string(), "Error 2".to_string()]);
         let display = format!("{}", error);
         assert!(display.contains("Card validation failed"));
         assert!(display.contains("Error 1"));
@@ -570,7 +571,11 @@ mod tests {
         let picard_path = "test-cards/picard.json";
         if std::path::Path::new(picard_path).exists() {
             let result = load_json_card(picard_path);
-            assert!(result.is_ok(), "Failed to load picard.json: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "Failed to load picard.json: {:?}",
+                result.err()
+            );
 
             let card = result.unwrap();
             assert_eq!(card.spec, "chara_card_v2");
@@ -588,12 +593,19 @@ mod tests {
         let test_path = "test-cards/test_simple.json";
         if std::path::Path::new(test_path).exists() {
             let result = load_json_card(test_path);
-            assert!(result.is_ok(), "Failed to load test_simple.json: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "Failed to load test_simple.json: {:?}",
+                result.err()
+            );
 
             let card = result.unwrap();
             assert_eq!(card.spec, "chara_card_v2");
             assert_eq!(card.data.name, "Simple Test Character");
-            assert_eq!(card.data.description, "A simple test character for validation");
+            assert_eq!(
+                card.data.description,
+                "A simple test character for validation"
+            );
             assert_eq!(card.data.personality, "Friendly and helpful");
         }
     }
@@ -610,7 +622,9 @@ mod tests {
                 CardLoadError::ValidationFailed(errors) => {
                     // Should have errors for wrong spec and empty name
                     assert!(!errors.is_empty());
-                    assert!(errors.iter().any(|e| e.contains("spec") || e.contains("name")));
+                    assert!(errors
+                        .iter()
+                        .any(|e| e.contains("spec") || e.contains("name")));
                 }
                 _ => panic!("Expected ValidationFailed error"),
             }
@@ -623,7 +637,7 @@ mod tests {
     fn test_load_png_card_with_metadata() {
         // Create a test PNG with embedded character data
         use std::io::BufWriter;
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let file = fs::File::create(temp_file.path()).unwrap();
         let w = BufWriter::new(file);
@@ -637,10 +651,12 @@ mod tests {
         let encoded = base64::prelude::BASE64_STANDARD.encode(card_json.as_bytes());
 
         // Add tEXt chunk with chara metadata
-        encoder.add_text_chunk("chara".to_string(), encoded).unwrap();
+        encoder
+            .add_text_chunk("chara".to_string(), encoded)
+            .unwrap();
 
         let mut writer = encoder.write_header().unwrap();
-        
+
         // Write a simple RGB image (100x100 pixels, all black)
         let data = vec![0u8; 100 * 100 * 3];
         writer.write_image_data(&data).unwrap();
@@ -648,7 +664,11 @@ mod tests {
 
         // Now try to load the PNG card
         let result = load_png_card(temp_file.path());
-        assert!(result.is_ok(), "Failed to load PNG card: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to load PNG card: {:?}",
+            result.err()
+        );
 
         let card = result.unwrap();
         assert_eq!(card.spec, "chara_card_v2");
@@ -660,7 +680,7 @@ mod tests {
     fn test_load_png_card_without_metadata() {
         // Create a PNG without chara metadata
         use std::io::BufWriter;
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let file = fs::File::create(temp_file.path()).unwrap();
         let w = BufWriter::new(file);
@@ -690,7 +710,7 @@ mod tests {
     fn test_load_png_card_invalid_base64() {
         // Create a PNG with invalid base64 in chara metadata
         use std::io::BufWriter;
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let file = fs::File::create(temp_file.path()).unwrap();
         let w = BufWriter::new(file);
@@ -700,7 +720,9 @@ mod tests {
         encoder.set_depth(png::BitDepth::Eight);
 
         // Add invalid base64
-        encoder.add_text_chunk("chara".to_string(), "not-valid-base64!!!".to_string()).unwrap();
+        encoder
+            .add_text_chunk("chara".to_string(), "not-valid-base64!!!".to_string())
+            .unwrap();
 
         let mut writer = encoder.write_header().unwrap();
         let data = vec![0u8; 100 * 100 * 3];
@@ -712,7 +734,11 @@ mod tests {
 
         match result.unwrap_err() {
             CardLoadError::InvalidJson(msg) => {
-                assert!(msg.contains("Base64 decode failed") || msg.contains("UTF-8 decode failed") || msg.contains("expected"));
+                assert!(
+                    msg.contains("Base64 decode failed")
+                        || msg.contains("UTF-8 decode failed")
+                        || msg.contains("expected")
+                );
             }
             _ => panic!("Expected InvalidJson error"),
         }
@@ -722,7 +748,7 @@ mod tests {
     fn test_load_png_card_invalid_json() {
         // Create a PNG with valid base64 but invalid JSON
         use std::io::BufWriter;
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let file = fs::File::create(temp_file.path()).unwrap();
         let w = BufWriter::new(file);
@@ -734,7 +760,9 @@ mod tests {
         // Encode invalid JSON
         let invalid_json = "{ this is not valid json }";
         let encoded = base64::prelude::BASE64_STANDARD.encode(invalid_json.as_bytes());
-        encoder.add_text_chunk("chara".to_string(), encoded).unwrap();
+        encoder
+            .add_text_chunk("chara".to_string(), encoded)
+            .unwrap();
 
         let mut writer = encoder.write_header().unwrap();
         let data = vec![0u8; 100 * 100 * 3];
@@ -785,7 +813,11 @@ mod tests {
         let picard_path = "test-cards/picard.png";
         if std::path::Path::new(picard_path).exists() {
             let result = load_png_card(picard_path);
-            assert!(result.is_ok(), "Failed to load picard.png: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "Failed to load picard.png: {:?}",
+                result.err()
+            );
 
             let card = result.unwrap();
             assert_eq!(card.spec, "chara_card_v2");
@@ -844,7 +876,10 @@ mod tests {
     #[test]
     fn test_card_load_error_display_png_errors() {
         let error = CardLoadError::InvalidPng("test.png: Invalid format".to_string());
-        assert_eq!(format!("{}", error), "Invalid PNG: test.png: Invalid format");
+        assert_eq!(
+            format!("{}", error),
+            "Invalid PNG: test.png: Invalid format"
+        );
 
         let error = CardLoadError::MissingMetadata("test.png: No chara chunk".to_string());
         assert_eq!(
@@ -879,7 +914,7 @@ mod tests {
         // we need to test with actual config directory cards
         let result = list_available_cards();
         assert!(result.is_ok());
-        
+
         let cards = result.unwrap();
         // Cards should be sorted by name
         for i in 1..cards.len() {
@@ -891,7 +926,7 @@ mod tests {
     fn test_find_card_by_name_not_found() {
         let result = find_card_by_name("nonexistent_character_that_does_not_exist");
         assert!(result.is_err());
-        
+
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
@@ -903,7 +938,7 @@ mod tests {
         if std::path::Path::new(test_path).exists() {
             let result = load_card(test_path);
             assert!(result.is_ok());
-            
+
             let card = result.unwrap();
             assert_eq!(card.data.name, "Simple Test Character");
         }
@@ -916,7 +951,7 @@ mod tests {
         if std::path::Path::new(test_path).exists() {
             let result = load_card(test_path);
             assert!(result.is_ok());
-            
+
             let card = result.unwrap();
             assert_eq!(card.data.name, "Jean Luc Picard");
         }
@@ -927,10 +962,10 @@ mod tests {
         let mut temp_file = NamedTempFile::with_suffix(".txt").unwrap();
         temp_file.write_all(b"some content").unwrap();
         temp_file.flush().unwrap();
-        
+
         let result = load_card(temp_file.path());
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             CardLoadError::InvalidJson(msg) => {
                 assert!(msg.contains("must be .json or .png"));
@@ -943,14 +978,14 @@ mod tests {
     fn test_card_discovery_with_temp_directory() {
         // Create a temporary directory structure to test card discovery
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-        
+
         // Create a valid JSON card
         let card1_path = temp_path.join("alice.json");
         fs::write(&card1_path, create_valid_card_json()).unwrap();
-        
+
         // Create another valid JSON card with different name
         let card2_json = serde_json::json!({
             "spec": "chara_card_v2",
@@ -963,32 +998,34 @@ mod tests {
                 "first_mes": "Hello, I'm Bob.",
                 "mes_example": "Example"
             }
-        }).to_string();
+        })
+        .to_string();
         let card2_path = temp_path.join("bob.json");
         fs::write(&card2_path, card2_json).unwrap();
-        
+
         // Create an invalid file that should be skipped
         let invalid_path = temp_path.join("invalid.json");
         fs::write(&invalid_path, "not valid json").unwrap();
-        
+
         // Create a non-card file that should be ignored
         let other_path = temp_path.join("readme.txt");
         fs::write(&other_path, "This is not a card").unwrap();
-        
+
         // Note: We can't easily test list_available_cards() with a temp directory
         // because it uses the actual config directory. Instead, we test the logic
         // by manually scanning the temp directory using the same pattern.
-        
+
         let mut cards = Vec::new();
         for entry in fs::read_dir(temp_path).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            
+
             if path.is_file() {
-                let extension = path.extension()
+                let extension = path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_lowercase());
-                
+
                 if matches!(extension.as_deref(), Some("json") | Some("png")) {
                     if let Ok(card) = load_card(&path) {
                         cards.push((card.data.name.clone(), path));
@@ -996,9 +1033,9 @@ mod tests {
                 }
             }
         }
-        
+
         cards.sort_by(|a, b| a.0.cmp(&b.0));
-        
+
         // Should have found 2 valid cards (alice and bob), skipped invalid and readme
         assert_eq!(cards.len(), 2);
         assert_eq!(cards[0].0, "Bob");
@@ -1009,21 +1046,21 @@ mod tests {
     fn test_find_card_by_filename_without_extension() {
         // Create a temporary directory with a test card
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-        
+
         // Create a card file
         let card_path = temp_path.join("testchar.json");
         fs::write(&card_path, create_valid_card_json()).unwrap();
-        
+
         // Test the logic of finding by filename (without actually using find_card_by_name
         // since it uses the config directory)
-        
+
         // Check that the file exists with .json extension
         let json_path = temp_path.join("testchar.json");
         assert!(json_path.exists());
-        
+
         // Check that we can load it
         let result = load_card(&json_path);
         assert!(result.is_ok());
@@ -1033,10 +1070,10 @@ mod tests {
     fn test_find_card_by_character_name_case_insensitive() {
         // Test that character name matching is case-insensitive
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-        
+
         // Create a card with a specific character name
         let card_json = serde_json::json!({
             "spec": "chara_card_v2",
@@ -1049,24 +1086,31 @@ mod tests {
                 "first_mes": "Test",
                 "mes_example": "Test"
             }
-        }).to_string();
+        })
+        .to_string();
         let card_path = temp_path.join("picard_card.json");
         fs::write(&card_path, card_json).unwrap();
-        
+
         // Simulate the search logic
         let cards = [("Captain Picard".to_string(), card_path.clone())];
-        
+
         // Test case-insensitive matching
         let search_name = "captain picard";
-        let found = cards.iter().find(|(name, _)| name.eq_ignore_ascii_case(search_name));
+        let found = cards
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
         assert!(found.is_some());
-        
+
         let search_name = "CAPTAIN PICARD";
-        let found = cards.iter().find(|(name, _)| name.eq_ignore_ascii_case(search_name));
+        let found = cards
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
         assert!(found.is_some());
-        
+
         let search_name = "CaPtAiN pIcArD";
-        let found = cards.iter().find(|(name, _)| name.eq_ignore_ascii_case(search_name));
+        let found = cards
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
         assert!(found.is_some());
     }
 
@@ -1075,22 +1119,22 @@ mod tests {
         // Test that when both .json and .png exist with the same name,
         // the search finds the .json first
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-        
+
         // Create both JSON and PNG versions
         let json_path = temp_path.join("character.json");
         let png_path = temp_path.join("character.png");
-        
+
         fs::write(&json_path, create_valid_card_json()).unwrap();
         // Create a dummy PNG file (we're just testing the search order)
         fs::write(&png_path, b"fake png").unwrap();
-        
+
         // Test the search order logic
         let name = "character";
         let mut found_path = None;
-        
+
         for ext in &["json", "png"] {
             let path = temp_path.join(format!("{}.{}", name, ext));
             if path.exists() {
@@ -1098,7 +1142,7 @@ mod tests {
                 break;
             }
         }
-        
+
         assert!(found_path.is_some());
         assert_eq!(found_path.unwrap(), json_path);
     }
@@ -1107,32 +1151,33 @@ mod tests {
     fn test_list_cards_ignores_subdirectories() {
         // Test that subdirectories are ignored during card discovery
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-        
+
         // Create a valid card file
         let card_path = temp_path.join("valid.json");
         fs::write(&card_path, create_valid_card_json()).unwrap();
-        
+
         // Create a subdirectory with a card in it (should be ignored)
         let subdir = temp_path.join("subdir");
         fs::create_dir(&subdir).unwrap();
         let subcard_path = subdir.join("subcard.json");
         fs::write(&subcard_path, create_valid_card_json()).unwrap();
-        
+
         // Scan the directory (simulating list_available_cards logic)
         let mut cards = Vec::new();
         for entry in fs::read_dir(temp_path).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            
+
             // Only process files, not directories
             if path.is_file() {
-                let extension = path.extension()
+                let extension = path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_lowercase());
-                
+
                 if matches!(extension.as_deref(), Some("json") | Some("png")) {
                     if let Ok(card) = load_card(&path) {
                         cards.push((card.data.name.clone(), path));
@@ -1140,7 +1185,7 @@ mod tests {
                 }
             }
         }
-        
+
         // Should only find the card in the root directory, not the subdirectory
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].1, card_path);

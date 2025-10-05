@@ -45,6 +45,12 @@ pub struct Config {
     pub markdown: Option<bool>,
     /// Enable syntax highlighting for fenced code blocks when markdown is enabled
     pub syntax: Option<bool>,
+    /// Default character cards for provider/model combinations
+    /// Outer key: provider (e.g., "openai")
+    /// Inner key: model (e.g., "gpt-4")
+    /// Value: character card filename without extension (e.g., "alice" for alice.json or alice.png)
+    #[serde(default)]
+    pub default_characters: HashMap<String, HashMap<String, String>>,
 }
 
 impl Config {
@@ -133,6 +139,7 @@ impl Config {
                 println!("    {provider}: {model}");
             }
         }
+        self.print_default_characters();
     }
 
     pub fn get_default_model(&self, provider: &str) -> Option<&String> {
@@ -145,6 +152,61 @@ impl Config {
 
     pub fn unset_default_model(&mut self, provider: &str) {
         self.default_models.remove(provider);
+    }
+
+    /// Get the default character for a provider/model combination
+    /// Returns the character filename (without extension)
+    #[allow(dead_code)]
+    pub fn get_default_character(&self, provider: &str, model: &str) -> Option<&String> {
+        self.default_characters
+            .get(&provider.to_lowercase())
+            .and_then(|models| models.get(model))
+    }
+
+    /// Set the default character for a provider/model combination
+    /// character_name should be the filename without extension
+    #[allow(dead_code)]
+    pub fn set_default_character(
+        &mut self,
+        provider: String,
+        model: String,
+        character_name: String,
+    ) {
+        let provider_key = provider.to_lowercase();
+        self.default_characters
+            .entry(provider_key)
+            .or_default()
+            .insert(model, character_name);
+    }
+
+    /// Unset the default character for a provider/model combination
+    #[allow(dead_code)]
+    pub fn unset_default_character(&mut self, provider: &str, model: &str) {
+        if let Some(models) = self.default_characters.get_mut(&provider.to_lowercase()) {
+            models.remove(model);
+            // Clean up empty provider entries
+            if models.is_empty() {
+                self.default_characters.remove(&provider.to_lowercase());
+            }
+        }
+    }
+
+    /// Print all default characters
+    pub fn print_default_characters(&self) {
+        if self.default_characters.is_empty() {
+            println!("  default-characters: (none set)");
+        } else {
+            println!("  default-characters:");
+            let mut providers: Vec<_> = self.default_characters.iter().collect();
+            providers.sort_by_key(|(k, _)| *k);
+            for (provider, models) in providers {
+                let mut model_entries: Vec<_> = models.iter().collect();
+                model_entries.sort_by_key(|(k, _)| *k);
+                for (model, character) in model_entries {
+                    println!("    {}:{}: {}", provider, model, character);
+                }
+            }
+        }
     }
 
     pub fn add_custom_provider(&mut self, provider: CustomProvider) {
@@ -537,5 +599,258 @@ mod tests {
             .expect("missing custom theme");
         assert_eq!(t.display_name, "My Theme");
         assert_eq!(t.background.as_deref(), Some("black"));
+    }
+
+    #[test]
+    fn test_set_and_get_default_character() {
+        let mut config = Config::default();
+
+        // Set a default character for openai/gpt-4
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+
+        // Verify we can retrieve it
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+
+        // Verify it returns None for non-existent combinations
+        assert_eq!(
+            config.get_default_character("openai", "gpt-3.5-turbo"),
+            None
+        );
+        assert_eq!(
+            config.get_default_character("anthropic", "claude-3-opus"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_set_multiple_default_characters() {
+        let mut config = Config::default();
+
+        // Set default characters for multiple provider/model combinations
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "alice".to_string(),
+        );
+        config.set_default_character(
+            "anthropic".to_string(),
+            "claude-3-opus-20240229".to_string(),
+            "bob".to_string(),
+        );
+        config.set_default_character(
+            "anthropic".to_string(),
+            "claude-3-5-sonnet-20241022".to_string(),
+            "charlie".to_string(),
+        );
+
+        // Verify all can be retrieved
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4o"),
+            Some(&"alice".to_string())
+        );
+        assert_eq!(
+            config.get_default_character("anthropic", "claude-3-opus-20240229"),
+            Some(&"bob".to_string())
+        );
+        assert_eq!(
+            config.get_default_character("anthropic", "claude-3-5-sonnet-20241022"),
+            Some(&"charlie".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unset_default_character() {
+        let mut config = Config::default();
+
+        // Set default characters
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "bob".to_string(),
+        );
+
+        // Verify they're set
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4o"),
+            Some(&"bob".to_string())
+        );
+
+        // Unset one
+        config.unset_default_character("openai", "gpt-4");
+
+        // Verify it's gone but the other remains
+        assert_eq!(config.get_default_character("openai", "gpt-4"), None);
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4o"),
+            Some(&"bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unset_last_character_cleans_up_provider() {
+        let mut config = Config::default();
+
+        // Set a single default character
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+
+        // Verify the provider exists in the map
+        assert!(config.default_characters.contains_key("openai"));
+
+        // Unset the character
+        config.unset_default_character("openai", "gpt-4");
+
+        // Verify the provider entry is cleaned up
+        assert!(!config.default_characters.contains_key("openai"));
+    }
+
+    #[test]
+    fn test_default_character_case_insensitive_provider() {
+        let mut config = Config::default();
+
+        // Set with mixed case provider name
+        config.set_default_character(
+            "OpenAI".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+
+        // Verify we can retrieve with lowercase
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+
+        // Verify we can retrieve with mixed case
+        assert_eq!(
+            config.get_default_character("OpenAI", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+
+        // Verify we can retrieve with uppercase
+        assert_eq!(
+            config.get_default_character("OPENAI", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_overwrite_default_character() {
+        let mut config = Config::default();
+
+        // Set a default character
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+
+        // Verify it's set
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+
+        // Overwrite with a different character
+        config.set_default_character("openai".to_string(), "gpt-4".to_string(), "bob".to_string());
+
+        // Verify it's updated
+        assert_eq!(
+            config.get_default_character("openai", "gpt-4"),
+            Some(&"bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_save_and_load_default_characters() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_characters.toml");
+
+        let mut config = Config::default();
+
+        // Set multiple default characters
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+        config.set_default_character(
+            "anthropic".to_string(),
+            "claude-3-opus-20240229".to_string(),
+            "bob".to_string(),
+        );
+
+        // Save the config
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load it back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify the characters are preserved
+        assert_eq!(
+            loaded_config.get_default_character("openai", "gpt-4"),
+            Some(&"alice".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_character("anthropic", "claude-3-opus-20240229"),
+            Some(&"bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_print_default_characters_empty() {
+        let config = Config::default();
+
+        // This should not panic and should print "(none set)"
+        config.print_default_characters();
+    }
+
+    #[test]
+    fn test_print_default_characters_with_data() {
+        let mut config = Config::default();
+
+        config.set_default_character(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice".to_string(),
+        );
+        config.set_default_character(
+            "anthropic".to_string(),
+            "claude-3-opus-20240229".to_string(),
+            "bob".to_string(),
+        );
+
+        // This should not panic and should print the characters
+        config.print_default_characters();
     }
 }

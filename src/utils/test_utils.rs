@@ -9,7 +9,92 @@ use crate::ui::theme::Theme;
 #[cfg(test)]
 use crate::utils::logging::LoggingState;
 #[cfg(test)]
+use once_cell::sync::Lazy;
+#[cfg(test)]
 use std::collections::VecDeque;
+#[cfg(test)]
+use std::env;
+#[cfg(test)]
+use std::ffi::OsString;
+#[cfg(test)]
+use std::path::Path;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
+#[cfg(test)]
+use tempfile::TempDir;
+
+#[cfg(test)]
+static TEST_CONFIG_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+#[cfg(test)]
+pub struct TestConfigEnv {
+    _lock: MutexGuard<'static, ()>,
+    temp_dir: TempDir,
+    previous_vars: Vec<(String, Option<OsString>)>,
+}
+
+#[cfg(test)]
+impl TestConfigEnv {
+    pub fn new() -> Self {
+        let lock = TEST_CONFIG_ENV_GUARD
+            .lock()
+            .expect("config env mutex poisoned");
+        let temp_dir = TempDir::new().expect("failed to create temp dir for config");
+        let mut guard = Self {
+            _lock: lock,
+            temp_dir,
+            previous_vars: Vec::new(),
+        };
+
+        guard.capture_and_set("XDG_CONFIG_HOME");
+
+        #[cfg(target_os = "windows")]
+        {
+            guard.capture_and_set("APPDATA");
+            guard.capture_and_set("LOCALAPPDATA");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            guard.capture_and_set("HOME");
+        }
+
+        guard
+    }
+
+    fn capture_and_set(&mut self, key: &str) {
+        let previous = env::var_os(key);
+        self.previous_vars.push((key.to_string(), previous));
+        env::set_var(key, self.temp_dir.path());
+    }
+
+    pub fn config_root(&self) -> &Path {
+        self.temp_dir.path()
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestConfigEnv {
+    fn drop(&mut self) {
+        for (key, value) in self.previous_vars.drain(..).rev() {
+            if let Some(val) = value {
+                env::set_var(&key, val);
+            } else {
+                env::remove_var(&key);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn with_test_config_env<F, T>(f: F) -> T
+where
+    F: FnOnce(&Path) -> T,
+{
+    let guard = TestConfigEnv::new();
+    let result = f(guard.config_root());
+    result
+}
 
 #[cfg(test)]
 pub fn create_test_app() -> App {

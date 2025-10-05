@@ -248,6 +248,44 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             config.print_all();
                         }
                     }
+                    "default-character" => {
+                        if value.len() >= 3 {
+                            let provider = value[0].to_string();
+                            let model = value[1].to_string();
+                            let character = value[2..].join(" ");
+
+                            // Validate that the character exists
+                            match crate::character::loader::find_card_by_name(&character) {
+                                Ok(_) => {
+                                    config.set_default_character(
+                                        provider.clone(),
+                                        model.clone(),
+                                        character.clone(),
+                                    );
+                                    config.save()?;
+                                    println!(
+                                        "✅ Set default character for '{}:{}' to: {}",
+                                        provider, model, character
+                                    );
+                                }
+                                Err(_) => {
+                                    eprintln!(
+                                        "❌ Character '{}' not found in cards directory",
+                                        character
+                                    );
+                                    eprintln!(
+                                        "   Run 'chabeau import -c <file>' to import a character card first"
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "⚠️  To set a default character, specify provider, model, and character:"
+                            );
+                            eprintln!("Example: chabeau set default-character openai gpt-4 alice");
+                        }
+                    }
                     _ => {
                         eprintln!("❌ Unknown config key: {key}");
                         std::process::exit(1);
@@ -279,6 +317,26 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     } else {
                         eprintln!("⚠️  To unset a default model, specify the provider:");
                         eprintln!("Example: chabeau unset default-model openai");
+                    }
+                }
+                "default-character" => {
+                    if let Some(val) = value {
+                        let parts: Vec<&str> = val.splitn(2, ' ').collect();
+                        if parts.len() == 2 {
+                            let provider = parts[0];
+                            let model = parts[1];
+                            config.unset_default_character(provider, model);
+                            config.save()?;
+                            println!("✅ Unset default character for '{}:{}'", provider, model);
+                        } else {
+                            eprintln!(
+                                "⚠️  To unset a default character, specify provider and model:"
+                            );
+                            eprintln!("Example: chabeau unset default-character openai gpt-4");
+                        }
+                    } else {
+                        eprintln!("⚠️  To unset a default character, specify provider and model:");
+                        eprintln!("Example: chabeau unset default-character openai gpt-4");
                     }
                 }
                 _ => {

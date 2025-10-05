@@ -4,6 +4,7 @@ use std::time::SystemTime;
 
 /// Metadata for a cached character card
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Will be used in future tasks
 pub struct CachedCardMetadata {
     pub name: String,
     pub path: PathBuf,
@@ -11,6 +12,7 @@ pub struct CachedCardMetadata {
 }
 
 /// Cache for character card metadata
+#[allow(dead_code)] // Will be used in future tasks
 pub struct CardCache {
     metadata: HashMap<String, CachedCardMetadata>,
     cache_key: Option<String>,
@@ -18,6 +20,7 @@ pub struct CardCache {
 
 impl CardCache {
     /// Create a new empty cache
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn new() -> Self {
         Self {
             metadata: HashMap::new(),
@@ -26,6 +29,7 @@ impl CardCache {
     }
     
     /// Compute a cache key based on directory modification times
+    #[allow(dead_code)] // Will be used in future tasks
     fn compute_cache_key() -> Result<String, Box<dyn std::error::Error>> {
         let cards_dir = crate::character::loader::get_cards_dir();
         
@@ -51,6 +55,7 @@ impl CardCache {
     }
     
     /// Load all card metadata, using cache if valid
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn get_all_metadata(&mut self) -> Result<Vec<CachedCardMetadata>, Box<dyn std::error::Error>> {
         let current_key = Self::compute_cache_key()?;
         
@@ -86,6 +91,7 @@ impl CardCache {
     }
     
     /// Invalidate the cache
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn invalidate(&mut self) {
         self.cache_key = None;
         self.metadata.clear();

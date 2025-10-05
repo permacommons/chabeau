@@ -292,8 +292,7 @@ mod tests {
         }
         
         // Now check the result
-        if result.is_ok() {
-            let message = result.unwrap();
+        if let Ok(message) = result {
             assert!(message.contains("✅"));
             assert!(message.contains("Test Import Character"));
         }
@@ -308,7 +307,7 @@ mod tests {
             .as_millis();
         
         // Create a card file with a specific name
-        let mut temp_file = NamedTempFile::with_suffix(&format!("_{}.json", timestamp)).unwrap();
+        let mut temp_file = NamedTempFile::with_suffix(format!("_{}.json", timestamp)).unwrap();
         temp_file.write_all(create_valid_card_json().as_bytes()).unwrap();
         temp_file.flush().unwrap();
         
@@ -329,17 +328,15 @@ mod tests {
         }
         
         // Verify results
-        if result1.is_ok() && result2.is_err() {
-            match result2.unwrap_err() {
-                ImportError::AlreadyExists(_) => {
-                    // Expected behavior
-                }
-                other => panic!("Expected AlreadyExists error, got {:?}", other),
+        if result1.is_ok() {
+            if let Err(ImportError::AlreadyExists(_)) = result2 {
+                // Expected behavior
+            } else {
+                panic!("Expected AlreadyExists error, got {:?}", result2);
             }
         }
         
-        if result3.is_ok() {
-            let message = result3.unwrap();
+        if let Ok(message) = result3 {
             assert!(message.contains("✅"));
         }
     }
@@ -360,8 +357,7 @@ mod tests {
         }
         
         // Check result
-        if result.is_ok() {
-            let message = result.unwrap();
+        if let Ok(message) = result {
             assert!(message.contains("✅"));
             assert!(message.contains("Test Import Character"));
         }

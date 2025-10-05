@@ -36,6 +36,7 @@ pub struct CharacterData {
 
 impl CharacterCard {
     /// Build the system prompt from character data
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn build_system_prompt(&self) -> String {
         let mut prompt = String::new();
 
@@ -57,11 +58,13 @@ impl CharacterCard {
     }
 
     /// Get the first greeting message
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn get_greeting(&self) -> &str {
         &self.data.first_mes
     }
 
     /// Get post-history instructions if present
+    #[allow(dead_code)] // Will be used in future tasks
     pub fn get_post_history_instructions(&self) -> Option<&str> {
         self.data.post_history_instructions.as_deref()
     }

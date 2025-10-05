@@ -159,6 +159,15 @@ pub enum Commands {
     PickDefaultProvider,
     /// List available themes (built-in and custom)
     Themes,
+    /// Import and validate a character card
+    Import {
+        /// Path to character card file (JSON or PNG)
+        #[arg(short = 'c', long)]
+        card: String,
+        /// Force overwrite if card already exists
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 }
 
 pub fn main() -> Result<(), Box<dyn Error>> {
@@ -334,6 +343,18 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         Some(Commands::Themes) => {
             list_themes().await?;
             Ok(())
+        }
+        Some(Commands::Import { card, force }) => {
+            match crate::character::import::import_card(&card, force) {
+                Ok(message) => {
+                    println!("{}", message);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("❌ Import failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

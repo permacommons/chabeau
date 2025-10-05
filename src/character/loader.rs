@@ -36,9 +36,9 @@ impl fmt::Display for CardLoadError {
                 write!(f, "Missing metadata: {}", msg)
             }
             CardLoadError::ValidationFailed(errors) => {
-                write!(f, "Card validation failed:\n")?;
+                writeln!(f, "Card validation failed:")?;
                 for error in errors {
-                    write!(f, "  • {}\n", error)?;
+                    writeln!(f, "  • {}", error)?;
                 }
                 Ok(())
             }
@@ -58,6 +58,7 @@ pub fn get_cards_dir() -> PathBuf {
 
 /// List all available character cards in the cards directory
 /// Returns a vector of tuples containing (character_name, file_path)
+#[allow(dead_code)] // Will be used in future tasks
 pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
     let cards_dir = get_cards_dir();
     
@@ -109,6 +110,7 @@ pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
 /// 3. Search all cards for a matching character name (case-insensitive)
 /// 
 /// Returns the loaded card and its file path
+#[allow(dead_code)] // Will be used in future tasks
 pub fn find_card_by_name(name: &str) -> Result<(CharacterCard, PathBuf), Box<dyn std::error::Error>> {
     let cards_dir = get_cards_dir();
     
@@ -607,7 +609,7 @@ mod tests {
             match result.unwrap_err() {
                 CardLoadError::ValidationFailed(errors) => {
                     // Should have errors for wrong spec and empty name
-                    assert!(errors.len() >= 1);
+                    assert!(!errors.is_empty());
                     assert!(errors.iter().any(|e| e.contains("spec") || e.contains("name")));
                 }
                 _ => panic!("Expected ValidationFailed error"),
@@ -1052,7 +1054,7 @@ mod tests {
         fs::write(&card_path, card_json).unwrap();
         
         // Simulate the search logic
-        let cards = vec![("Captain Picard".to_string(), card_path.clone())];
+        let cards = [("Captain Picard".to_string(), card_path.clone())];
         
         // Test case-insensitive matching
         let search_name = "captain picard";

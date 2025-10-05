@@ -13,11 +13,9 @@ use self::keybindings::{
 
 use self::setup::bootstrap_app;
 
-use crate::core::chat_stream::{ChatStreamService, StreamMessage, StreamParams};
+use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 
 use crate::api::models::fetch_models;
-use crate::commands::process_input;
-use crate::commands::CommandResult;
 use crate::core::app::ui_state::FilePromptKind;
 use crate::core::app::{
     apply_actions, App, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
@@ -826,62 +824,28 @@ async fn handle_external_editor_shortcut(
 async fn process_input_submission(
     dispatcher: &AppActionDispatcher,
     app: &Arc<Mutex<App>>,
-    input_text: String,
     term_width: u16,
     term_height: u16,
-) -> SubmissionResult {
-    let mut app_guard = app.lock().await;
+) {
+    let input_text = {
+        let app_guard = app.lock().await;
+        let text = app_guard.ui.get_input_text().to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        text
+    };
 
-    match process_input(&mut app_guard, &input_text) {
-        CommandResult::Continue => {
-            let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-            {
-                let mut conversation = app_guard.conversation();
-                let available_height =
-                    conversation.calculate_available_height(term_height, input_area_height);
-                conversation.update_scroll_position(available_height, term_width);
-            }
-            SubmissionResult::Continue
-        }
-        CommandResult::OpenModelPicker => {
-            drop(app_guard);
-            dispatcher.dispatch_many(
-                [AppAction::BeginModelPickerLoad],
-                AppActionContext {
-                    term_width,
-                    term_height,
-                },
-            );
-            SubmissionResult::Continue
-        }
-        CommandResult::OpenProviderPicker => {
-            drop(app_guard);
-            dispatcher.dispatch_many(
-                [AppAction::OpenProviderPicker],
-                AppActionContext {
-                    term_width,
-                    term_height,
-                },
-            );
-            SubmissionResult::Continue
-        }
-        CommandResult::OpenThemePicker => {
-            drop(app_guard);
-            dispatcher.dispatch_many(
-                [AppAction::OpenThemePicker],
-                AppActionContext {
-                    term_width,
-                    term_height,
-                },
-            );
-            SubmissionResult::Continue
-        }
-        CommandResult::ProcessAsMessage(message) => {
-            let params =
-                prepare_stream_params_for_message(&mut app_guard, message, term_width, term_height);
-            SubmissionResult::Spawn(params)
-        }
-    }
+    dispatcher.dispatch_many(
+        [
+            AppAction::ClearInput,
+            AppAction::ProcessCommand { input: input_text },
+        ],
+        AppActionContext {
+            term_width,
+            term_height,
+        },
+    );
 }
 
 async fn handle_enter_key(
@@ -890,68 +854,54 @@ async fn handle_enter_key(
     key: &event::KeyEvent,
     term_width: u16,
     term_height: u16,
-    stream_service: &ChatStreamService,
+    _stream_service: &ChatStreamService,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
 
-    {
-        let mut app_guard = app.lock().await;
-        if let Some(prompt) = app_guard.ui.file_prompt().cloned() {
+    let file_prompt_action = {
+        let app_guard = app.lock().await;
+        app_guard.ui.file_prompt().cloned().map(|prompt| {
             let filename = app_guard.ui.get_input_text().trim().to_string();
-            if filename.is_empty() {
-                return Ok(Some(KeyLoopAction::Continue));
-            }
             let overwrite = modifiers.contains(event::KeyModifiers::ALT);
-            match prompt.kind {
-                FilePromptKind::Dump => {
-                    let res = crate::commands::dump_conversation_with_overwrite(
-                        &app_guard, &filename, overwrite,
-                    );
-                    match res {
-                        Ok(()) => {
-                            app_guard
-                                .conversation()
-                                .set_status(format!("Dumped: {}", filename));
-                            app_guard.ui.cancel_file_prompt();
-                        }
-                        Err(e) => {
-                            let msg = e.to_string();
-                            if msg.contains("exists") && !overwrite {
-                                app_guard
-                                    .conversation()
-                                    .set_status("File exists (Alt+Enter to overwrite)");
-                            } else {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Dump error: {}", msg));
-                            }
-                        }
-                    }
-                }
-                FilePromptKind::SaveCodeBlock => {
-                    use std::fs;
-                    let exists = std::path::Path::new(&filename).exists();
-                    if exists && !overwrite {
-                        app_guard.conversation().set_status("File already exists.");
-                    } else if let Some(content) = prompt.content {
-                        match fs::write(&filename, content) {
-                            Ok(()) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status(format!("Saved to {}", filename));
-                                app_guard.ui.cancel_file_prompt();
-                            }
-                            Err(_e) => {
-                                app_guard
-                                    .conversation()
-                                    .set_status("Error saving code block");
-                            }
-                        }
-                    }
-                }
-            }
+            (prompt, filename, overwrite)
+        })
+    };
+
+    if let Some((prompt, filename, overwrite)) = file_prompt_action {
+        if filename.is_empty() {
             return Ok(Some(KeyLoopAction::Continue));
         }
+
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+
+        match prompt.kind {
+            FilePromptKind::Dump => {
+                dispatcher.dispatch_many(
+                    [AppAction::CompleteFilePromptDump {
+                        filename,
+                        overwrite,
+                    }],
+                    ctx,
+                );
+            }
+            FilePromptKind::SaveCodeBlock => {
+                if let Some(content) = prompt.content {
+                    dispatcher.dispatch_many(
+                        [AppAction::CompleteFilePromptSaveBlock {
+                            filename,
+                            content,
+                            overwrite,
+                        }],
+                        ctx,
+                    );
+                }
+            }
+        }
+
+        return Ok(Some(KeyLoopAction::Continue));
     }
 
     let should_insert_newline = {
@@ -975,40 +925,33 @@ async fn handle_enter_key(
         return Ok(Some(KeyLoopAction::Continue));
     }
 
-    {
-        let mut app_guard = app.lock().await;
-        if let Some(idx) = app_guard.ui.take_in_place_edit_index() {
-            if idx < app_guard.ui.messages.len() && app_guard.ui.messages[idx].role == "user" {
-                let new_text = app_guard.ui.get_input_text().to_string();
-                app_guard.ui.messages[idx].content = new_text;
-                app_guard.invalidate_prewrap_cache();
-                let _ = app_guard
-                    .session
-                    .logging
-                    .rewrite_log_without_last_response(&app_guard.ui.messages);
-            }
-            app_guard.ui.clear_input();
-            return Ok(Some(KeyLoopAction::Continue));
-        }
-    }
-
-    let input_text = {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().trim().is_empty() {
-            return Ok(Some(KeyLoopAction::Continue));
-        }
-        let text = app_guard.ui.get_input_text().to_string();
-        app_guard.ui.clear_input();
-        text
+    let in_place_edit = {
+        let app_guard = app.lock().await;
+        app_guard
+            .ui
+            .in_place_edit_index()
+            .map(|idx| (idx, app_guard.ui.get_input_text().to_string()))
     };
 
-    match process_input_submission(dispatcher, app, input_text, term_width, term_height).await {
-        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
-        SubmissionResult::Spawn(params) => {
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
+    if let Some((idx, new_text)) = in_place_edit {
+        dispatcher.dispatch_many(
+            [
+                AppAction::CompleteInPlaceEdit {
+                    index: idx,
+                    new_text,
+                },
+                AppAction::ClearInput,
+            ],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        return Ok(Some(KeyLoopAction::Continue));
     }
+
+    process_input_submission(dispatcher, app, term_width, term_height).await;
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn handle_ctrl_j_shortcut(
@@ -1016,7 +959,7 @@ async fn handle_ctrl_j_shortcut(
     app: &Arc<Mutex<App>>,
     term_width: u16,
     term_height: u16,
-    stream_service: &ChatStreamService,
+    _stream_service: &ChatStreamService,
     last_input_layout_update: &mut Instant,
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let send_now = {
@@ -1035,58 +978,8 @@ async fn handle_ctrl_j_shortcut(
         return Ok(Some(KeyLoopAction::Continue));
     }
 
-    let input_text = {
-        let mut app_guard = app.lock().await;
-        if app_guard.ui.get_input_text().trim().is_empty() {
-            return Ok(Some(KeyLoopAction::Continue));
-        }
-        let text = app_guard.ui.get_input_text().to_string();
-        app_guard.ui.clear_input();
-        text
-    };
-
-    match process_input_submission(dispatcher, app, input_text, term_width, term_height).await {
-        SubmissionResult::Continue => Ok(Some(KeyLoopAction::Continue)),
-        SubmissionResult::Spawn(params) => {
-            stream_service.spawn_stream(params);
-            Ok(Some(KeyLoopAction::Continue))
-        }
-    }
-}
-
-fn prepare_stream_params_for_message(
-    app_guard: &mut App,
-    message: String,
-    term_width: u16,
-    term_height: u16,
-) -> StreamParams {
-    app_guard.ui.auto_scroll = true;
-    let input_area_height = app_guard.ui.calculate_input_area_height(term_width);
-    let (cancel_token, stream_id, api_messages) = {
-        let mut conversation = app_guard.conversation();
-        let (cancel_token, stream_id) = conversation.start_new_stream();
-        let api_messages = conversation.add_user_message(message);
-        let available_height =
-            conversation.calculate_available_height(term_height, input_area_height);
-        conversation.update_scroll_position(available_height, term_width);
-        (cancel_token, stream_id, api_messages)
-    };
-
-    StreamParams {
-        client: app_guard.session.client.clone(),
-        base_url: app_guard.session.base_url.clone(),
-        api_key: app_guard.session.api_key.clone(),
-        provider_name: app_guard.session.provider_name.clone(),
-        model: app_guard.session.model.clone(),
-        api_messages,
-        cancel_token,
-        stream_id,
-    }
-}
-
-enum SubmissionResult {
-    Continue,
-    Spawn(StreamParams),
+    process_input_submission(dispatcher, app, term_width, term_height).await;
+    Ok(Some(KeyLoopAction::Continue))
 }
 
 async fn handle_picker_key_event(

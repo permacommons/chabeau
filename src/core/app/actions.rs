@@ -1,9 +1,12 @@
+use std::fs;
+use std::path::Path;
 use std::time::Instant;
 
 use tokio::sync::mpsc;
 
 use super::App;
 use crate::api::ModelsResponse;
+use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::PickerMode;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
@@ -29,9 +32,9 @@ pub enum AppAction {
         message: String,
     },
     RetryLastMessage,
-    OpenThemePicker,
-    OpenProviderPicker,
-    BeginModelPickerLoad,
+    ProcessCommand {
+        input: String,
+    },
     PickerEscape,
     PickerMoveUp,
     PickerMoveDown,
@@ -45,6 +48,19 @@ pub enum AppAction {
     PickerBackspace,
     PickerTypeChar {
         ch: char,
+    },
+    CompleteFilePromptDump {
+        filename: String,
+        overwrite: bool,
+    },
+    CompleteFilePromptSaveBlock {
+        filename: String,
+        content: String,
+        overwrite: bool,
+    },
+    CompleteInPlaceEdit {
+        index: usize,
+        new_text: String,
     },
     ModelPickerLoaded {
         default_model_for_provider: Option<String>,
@@ -173,18 +189,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             Some(AppCommand::SpawnStream(params))
         }
         AppAction::RetryLastMessage => prepare_retry_stream(app, ctx),
-        AppAction::OpenThemePicker => {
-            app.open_theme_picker();
-            None
-        }
-        AppAction::OpenProviderPicker => {
-            app.open_provider_picker();
-            None
-        }
-        AppAction::BeginModelPickerLoad => {
-            let request = app.prepare_model_picker_request();
-            Some(AppCommand::LoadModelPicker(request))
-        }
+        AppAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
         AppAction::PickerEscape => {
             handle_picker_escape(app, ctx);
             None
@@ -219,6 +224,25 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         }
         AppAction::PickerTypeChar { ch } => {
             handle_picker_type_char(app, ch);
+            None
+        }
+        AppAction::CompleteFilePromptDump {
+            filename,
+            overwrite,
+        } => {
+            handle_file_prompt_dump(app, filename, overwrite, ctx);
+            None
+        }
+        AppAction::CompleteFilePromptSaveBlock {
+            filename,
+            content,
+            overwrite,
+        } => {
+            handle_file_prompt_save_block(app, filename, content, overwrite, ctx);
+            None
+        }
+        AppAction::CompleteInPlaceEdit { index, new_text } => {
+            handle_in_place_edit(app, index, new_text);
             None
         }
         AppAction::ModelPickerLoaded {
@@ -356,6 +380,125 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
         }
         None => {}
     }
+}
+
+fn handle_process_command(
+    app: &mut App,
+    input: String,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    if input.trim().is_empty() {
+        return None;
+    }
+
+    match process_input(app, &input) {
+        CommandResult::Continue => {
+            update_scroll_after_command(app, ctx);
+            None
+        }
+        CommandResult::ProcessAsMessage(message) => {
+            let params = prepare_stream_params_for_message(app, message, ctx);
+            Some(AppCommand::SpawnStream(params))
+        }
+        CommandResult::OpenModelPicker => {
+            let request = app.prepare_model_picker_request();
+            Some(AppCommand::LoadModelPicker(request))
+        }
+        CommandResult::OpenProviderPicker => {
+            app.open_provider_picker();
+            None
+        }
+        CommandResult::OpenThemePicker => {
+            app.open_theme_picker();
+            None
+        }
+    }
+}
+
+fn update_scroll_after_command(app: &mut App, ctx: AppActionContext) {
+    if ctx.term_width == 0 || ctx.term_height == 0 {
+        return;
+    }
+
+    let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
+    let mut conversation = app.conversation();
+    let available_height =
+        conversation.calculate_available_height(ctx.term_height, input_area_height);
+    conversation.update_scroll_position(available_height, ctx.term_width);
+}
+
+fn handle_file_prompt_dump(
+    app: &mut App,
+    filename: String,
+    overwrite: bool,
+    ctx: AppActionContext,
+) {
+    if filename.is_empty() {
+        return;
+    }
+
+    match crate::commands::dump_conversation_with_overwrite(app, &filename, overwrite) {
+        Ok(()) => {
+            set_status_message(app, format!("Dumped: {}", filename), ctx);
+            app.ui.cancel_file_prompt();
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("exists") && !overwrite {
+                set_status_message(app, "File exists (Alt+Enter to overwrite)".to_string(), ctx);
+            } else {
+                set_status_message(app, format!("Dump error: {}", msg), ctx);
+            }
+        }
+    }
+}
+
+fn handle_file_prompt_save_block(
+    app: &mut App,
+    filename: String,
+    content: String,
+    overwrite: bool,
+    ctx: AppActionContext,
+) {
+    if filename.is_empty() {
+        return;
+    }
+
+    if Path::new(&filename).exists() && !overwrite {
+        set_status_message(app, "File already exists.".to_string(), ctx);
+        return;
+    }
+
+    match fs::write(&filename, content) {
+        Ok(()) => {
+            set_status_message(app, format!("Saved to {}", filename), ctx);
+            app.ui.cancel_file_prompt();
+        }
+        Err(_e) => {
+            set_status_message(app, "Error saving code block".to_string(), ctx);
+        }
+    }
+}
+
+fn handle_in_place_edit(app: &mut App, index: usize, new_text: String) {
+    let Some(actual_index) = app.ui.take_in_place_edit_index() else {
+        return;
+    };
+
+    if actual_index != index {
+        return;
+    }
+
+    if actual_index >= app.ui.messages.len() || app.ui.messages[actual_index].role != "user" {
+        return;
+    }
+
+    app.ui.messages[actual_index].content = new_text;
+    app.invalidate_prewrap_cache();
+    let _ = app
+        .session
+        .logging
+        .rewrite_log_without_last_response(&app.ui.messages);
 }
 
 fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
@@ -664,7 +807,8 @@ mod tests {
     use super::*;
     use crate::core::app::picker::{ModelPickerState, PickerData, PickerMode, PickerSession};
     use crate::ui::picker::{PickerItem, PickerState};
-    use crate::utils::test_utils::create_test_app;
+    use crate::utils::test_utils::{create_test_app, create_test_message};
+    use tempfile::tempdir;
 
     fn default_ctx() -> AppActionContext {
         AppActionContext {
@@ -679,7 +823,7 @@ mod tests {
         let ctx = default_ctx();
         let original_color = app.ui.theme.background_color;
 
-        apply_action(&mut app, AppAction::OpenThemePicker, ctx);
+        app.open_theme_picker();
         apply_action(&mut app, AppAction::PickerMoveDown, ctx);
 
         assert_ne!(app.ui.theme.background_color, original_color);
@@ -741,5 +885,141 @@ mod tests {
         assert!(app.picker.provider_model_transition_state.is_none());
         assert!(app.picker_session().is_none());
         assert_eq!(app.ui.status.as_deref(), Some("Selection cancelled"));
+    }
+
+    #[test]
+    fn process_command_submits_message() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        let cmd = apply_action(
+            &mut app,
+            AppAction::ProcessCommand {
+                input: "hello there".into(),
+            },
+            ctx,
+        );
+
+        assert!(matches!(cmd, Some(AppCommand::SpawnStream(_))));
+    }
+
+    #[test]
+    fn process_command_opens_theme_picker() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        let _ = apply_action(
+            &mut app,
+            AppAction::ProcessCommand {
+                input: "/theme".into(),
+            },
+            ctx,
+        );
+
+        assert!(app.picker_session().is_some());
+    }
+
+    #[test]
+    fn file_prompt_dump_success_sets_status_and_closes_prompt() {
+        let mut app = create_test_app();
+        app.ui.messages.push_back(create_test_message("user", "hi"));
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("dump.txt");
+        let filename = path.to_str().unwrap().to_string();
+
+        app.ui.start_file_prompt_dump(filename.clone());
+
+        handle_file_prompt_dump(&mut app, filename.clone(), false, default_ctx());
+
+        assert!(path.exists());
+        assert_eq!(
+            app.ui.status.as_deref(),
+            Some(&format!("Dumped: {}", filename)[..])
+        );
+        assert!(app.ui.file_prompt().is_none());
+    }
+
+    #[test]
+    fn file_prompt_dump_existing_without_overwrite_sets_status() {
+        let mut app = create_test_app();
+        app.ui.messages.push_back(create_test_message("user", "hi"));
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("dump.txt");
+        std::fs::write(&path, "existing").unwrap();
+        let filename = path.to_str().unwrap().to_string();
+
+        app.ui.start_file_prompt_dump(filename.clone());
+
+        handle_file_prompt_dump(&mut app, filename, false, default_ctx());
+
+        assert_eq!(
+            app.ui.status.as_deref(),
+            Some("File exists (Alt+Enter to overwrite)")
+        );
+        assert!(app.ui.file_prompt().is_some());
+    }
+
+    #[test]
+    fn file_prompt_save_block_success_writes_file() {
+        let mut app = create_test_app();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snippet.rs");
+        let filename = path.to_str().unwrap().to_string();
+
+        app.ui
+            .start_file_prompt_save_block(filename.clone(), "fn main() {}".into());
+
+        handle_file_prompt_save_block(
+            &mut app,
+            filename.clone(),
+            "fn main() {}".into(),
+            false,
+            default_ctx(),
+        );
+
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}");
+        assert_eq!(
+            app.ui.status.as_deref(),
+            Some(&format!("Saved to {}", filename)[..])
+        );
+        assert!(app.ui.file_prompt().is_none());
+    }
+
+    #[test]
+    fn file_prompt_save_block_existing_without_overwrite_sets_status() {
+        let mut app = create_test_app();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snippet.rs");
+        std::fs::write(&path, "old").unwrap();
+        let filename = path.to_str().unwrap().to_string();
+
+        app.ui
+            .start_file_prompt_save_block(filename.clone(), "fn main() {}".into());
+
+        handle_file_prompt_save_block(
+            &mut app,
+            filename,
+            "fn main() {}".into(),
+            false,
+            default_ctx(),
+        );
+
+        assert_eq!(app.ui.status.as_deref(), Some("File already exists."));
+        assert!(app.ui.file_prompt().is_some());
+    }
+
+    #[test]
+    fn complete_in_place_edit_updates_message() {
+        let mut app = create_test_app();
+        app.ui.messages.push_back(crate::core::message::Message {
+            role: "user".into(),
+            content: "old".into(),
+        });
+        app.ui.start_in_place_edit(0);
+
+        handle_in_place_edit(&mut app, 0, "new content".into());
+
+        assert_eq!(app.ui.messages[0].content, "new content");
+        assert!(app.ui.in_place_edit_index().is_none());
     }
 }

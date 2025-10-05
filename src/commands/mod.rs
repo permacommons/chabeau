@@ -614,6 +614,28 @@ mod tests {
     }
 
     #[test]
+    fn provider_command_with_same_id_reuses_session() {
+        let mut app = create_test_app();
+        app.picker.provider_model_transition_state = Some((
+            "prev-provider".into(),
+            "Prev".into(),
+            "prev-model".into(),
+            "prev-key".into(),
+            "https://prev.example".into(),
+        ));
+        app.picker.in_provider_model_transition = false;
+
+        let result = process_input(&mut app, "/provider TEST");
+
+        assert!(matches!(result, CommandResult::Continue));
+        assert_eq!(app.session.provider_name, "test");
+        assert_eq!(app.session.api_key, "test-key");
+        assert_eq!(app.ui.status.as_deref(), Some("Provider set: TEST"));
+        assert!(!app.picker.in_provider_model_transition);
+        assert!(app.picker.provider_model_transition_state.is_none());
+    }
+
+    #[test]
     fn theme_picker_supports_filtering() {
         let mut app = create_test_app();
         app.open_theme_picker();

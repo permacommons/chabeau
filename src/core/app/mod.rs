@@ -39,6 +39,7 @@ pub async fn new_with_auth(
     env_only: bool,
     config: &Config,
     pre_resolved_session: Option<ProviderSession>,
+    character: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
@@ -51,6 +52,7 @@ pub async fn new_with_auth(
         env_only,
         config,
         pre_resolved_session,
+        character,
     )
     .await?;
 
@@ -206,6 +208,8 @@ impl App {
             last_retry_time: std::time::Instant::now(),
             retrying_message_index: None,
             startup_env_only: false,
+            active_character: None,
+            character_greeting_shown: false,
         };
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);

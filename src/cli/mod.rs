@@ -391,6 +391,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
+                                args.character,
                             )
                             .await
                         }
@@ -401,6 +402,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
+                                args.character,
                             )
                             .await
                         }

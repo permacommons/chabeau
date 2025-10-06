@@ -23,6 +23,7 @@ pub async fn bootstrap_app(
     log: Option<String>,
     provider: Option<String>,
     env_only: bool,
+    character: Option<String>,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let auth_manager = AuthManager::new();
@@ -116,6 +117,7 @@ pub async fn bootstrap_app(
             env_only,
             &config,
             pre_resolved_session,
+            character.clone(),
         )
         .await
         {

@@ -383,11 +383,20 @@ fn build_main_title(app: &App) -> String {
     } else {
         app.session.provider_display_name.clone()
     };
+    
+    // Include character name if active
+    let character_display = if let Some(character) = &app.session.active_character {
+        format!(" • Character: {}", character.data.name)
+    } else {
+        String::new()
+    };
+    
     format!(
-        "Chabeau v{} - {} ({}) • Logging: {}",
+        "Chabeau v{} - {} ({}){} • Logging: {}",
         env!("CARGO_PKG_VERSION"),
         provider_display,
         model_display,
+        character_display,
         app.get_logging_status()
     )
 }
@@ -702,5 +711,54 @@ mod tests {
         // Should still generate basic help text
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn title_shows_character_name_when_active() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+
+        // Set an active character
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+        app.session.active_character = Some(card);
+
+        let title = build_main_title(&app);
+        assert!(title.contains("Character: Alice"));
+        assert!(title.contains("OpenAI"));
+        assert!(title.contains("gpt-4"));
+    }
+
+    #[test]
+    fn title_does_not_show_character_when_none() {
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+        app.session.active_character = None;
+
+        let title = build_main_title(&app);
+        assert!(!title.contains("Character:"));
+        assert!(title.contains("OpenAI"));
+        assert!(title.contains("gpt-4"));
     }
 }

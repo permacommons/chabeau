@@ -8,6 +8,9 @@ use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
 
+/// Special ID for the "turn off character mode" picker entry
+pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
+
 /// Sanitize metadata text for display in picker
 ///
 /// Removes newlines, carriage returns, and other control characters that could
@@ -664,32 +667,48 @@ impl PickerController {
         let prefers_alpha = self.prefers_alphabetical();
         if let Some(session) = self.session_mut() {
             let picker = &mut session.state;
+
+            // Extract special entries (like "turn off character mode") that should stay at top
+            let mut special_entries = Vec::new();
+            let mut regular_items = Vec::new();
+
+            for item in picker.items.drain(..) {
+                if item.id == TURN_OFF_CHARACTER_ID {
+                    special_entries.push(item);
+                } else {
+                    regular_items.push(item);
+                }
+            }
+
+            // Sort regular items
             if prefers_alpha {
                 match picker.sort_mode {
                     SortMode::Date => {
-                        picker.items.sort_by(|a, b| b.label.cmp(&a.label));
+                        regular_items.sort_by(|a, b| b.label.cmp(&a.label));
                     }
                     SortMode::Name => {
-                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                        regular_items.sort_by(|a, b| a.label.cmp(&b.label));
                     }
                 }
             } else {
                 match picker.sort_mode {
                     SortMode::Date => {
-                        picker
-                            .items
-                            .sort_by(|a, b| match (&a.sort_key, &b.sort_key) {
-                                (Some(a_key), Some(b_key)) => b_key.cmp(a_key),
-                                (Some(_), None) => std::cmp::Ordering::Less,
-                                (None, Some(_)) => std::cmp::Ordering::Greater,
-                                (None, None) => b.label.cmp(&a.label),
-                            });
+                        regular_items.sort_by(|a, b| match (&a.sort_key, &b.sort_key) {
+                            (Some(a_key), Some(b_key)) => b_key.cmp(a_key),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => b.label.cmp(&a.label),
+                        });
                     }
                     SortMode::Name => {
-                        picker.items.sort_by(|a, b| a.label.cmp(&b.label));
+                        regular_items.sort_by(|a, b| a.label.cmp(&b.label));
                     }
                 }
             }
+
+            // Rebuild items with special entries first
+            picker.items = special_entries;
+            picker.items.extend(regular_items);
 
             if picker.selected >= picker.items.len() {
                 picker.selected = 0;
@@ -872,7 +891,9 @@ impl PickerController {
                     .all_items
                     .iter()
                     .filter(|item| {
-                        item.id.to_lowercase().contains(&search_term)
+                        // Always include the special "turn off" entry
+                        item.id == TURN_OFF_CHARACTER_ID
+                            || item.id.to_lowercase().contains(&search_term)
                             || item.label.to_lowercase().contains(&search_term)
                             || item
                                 .metadata
@@ -914,7 +935,7 @@ impl PickerController {
         let default_character =
             cfg.get_default_character(&session_context.provider_name, &session_context.model);
 
-        let items: Vec<PickerItem> = cards
+        let mut items: Vec<PickerItem> = cards
             .into_iter()
             .map(|card| {
                 let sanitized_description = sanitize_picker_metadata(&card.description);
@@ -934,6 +955,19 @@ impl PickerController {
                 }
             })
             .collect();
+
+        // Add "turn off character mode" entry at the beginning if a character is active
+        if session_context.active_character.is_some() {
+            items.insert(
+                0,
+                PickerItem {
+                    id: TURN_OFF_CHARACTER_ID.to_string(),
+                    label: "[Turn off character mode]".to_string(),
+                    metadata: Some("Disable character and return to normal mode".to_string()),
+                    sort_key: None,
+                },
+            );
+        }
 
         let selected = 0;
         let picker_state = PickerState::new("Pick Character", items.clone(), selected);
@@ -1020,5 +1054,192 @@ mod tests {
         let input = "\n\r\t   \n";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_turn_off_character_entry_added_when_character_active() {
+        use crate::character::cache::CardCache;
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::utils::test_utils::create_test_app;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        let card_json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "TestChar",
+                "description": "Test",
+                "personality": "Friendly",
+                "scenario": "Testing",
+                "first_mes": "Hello!",
+                "mes_example": ""
+            }
+        });
+
+        fs::write(cards_dir.join("test.json"), card_json.to_string()).unwrap();
+
+        let mut app = create_test_app();
+        let mut cache = CardCache::new();
+
+        app.session.set_character(CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestChar".to_string(),
+                description: "Test".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        });
+
+        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+
+        let result = app.picker.open_character_picker(&mut cache, &app.session);
+
+        std::env::remove_var("CHABEAU_CARDS_DIR");
+
+        assert!(result.is_ok());
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        assert!(picker_items.len() >= 2);
+        assert_eq!(picker_items[0].id, TURN_OFF_CHARACTER_ID);
+        assert_eq!(picker_items[0].label, "[Turn off character mode]");
+    }
+
+    #[test]
+    fn test_turn_off_character_entry_not_added_when_no_character() {
+        use crate::character::cache::CardCache;
+        use crate::utils::test_utils::create_test_app;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        let card_json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "TestChar",
+                "description": "Test",
+                "personality": "Friendly",
+                "scenario": "Testing",
+                "first_mes": "Hello!",
+                "mes_example": ""
+            }
+        });
+
+        fs::write(cards_dir.join("test.json"), card_json.to_string()).unwrap();
+
+        let mut app = create_test_app();
+        let mut cache = CardCache::new();
+
+        assert!(app.session.active_character.is_none());
+
+        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+
+        let result = app.picker.open_character_picker(&mut cache, &app.session);
+
+        std::env::remove_var("CHABEAU_CARDS_DIR");
+
+        assert!(result.is_ok());
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        assert!(!picker_items
+            .iter()
+            .any(|item| item.id == TURN_OFF_CHARACTER_ID));
+    }
+
+    #[test]
+    fn test_turn_off_character_stays_at_top_after_sort() {
+        use crate::character::cache::CardCache;
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::utils::test_utils::create_test_app;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        for name in &["Alice", "Bob", "Charlie"] {
+            let card_json = serde_json::json!({
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": name,
+                    "description": "Test",
+                    "personality": "Friendly",
+                    "scenario": "Testing",
+                    "first_mes": "Hello!",
+                    "mes_example": ""
+                }
+            });
+            fs::write(
+                cards_dir.join(format!("{}.json", name.to_lowercase())),
+                card_json.to_string(),
+            )
+            .unwrap();
+        }
+
+        let mut app = create_test_app();
+        let mut cache = CardCache::new();
+
+        app.session.set_character(CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "Test".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        });
+
+        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+
+        let result = app.picker.open_character_picker(&mut cache, &app.session);
+
+        std::env::remove_var("CHABEAU_CARDS_DIR");
+
+        assert!(result.is_ok());
+
+        let items_before_sort = app.picker.session().unwrap().state.items.len();
+        assert!(items_before_sort >= 4); // turn off + 3 characters
+
+        app.picker.sort_items();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+
+        // First item should always be the turn off entry, regardless of sort
+        assert_eq!(picker_items[0].id, TURN_OFF_CHARACTER_ID);
+        assert_eq!(picker_items[0].label, "[Turn off character mode]");
+
+        // Verify we still have all items after sorting
+        assert_eq!(picker_items.len(), items_before_sort);
     }
 }

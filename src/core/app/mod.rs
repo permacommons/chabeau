@@ -365,6 +365,15 @@ impl App {
             .map(|s| s.to_string());
 
         if let Some(character_name) = character_name {
+            // Check if user selected "turn off character mode"
+            if character_name == picker::TURN_OFF_CHARACTER_ID {
+                self.session.clear_character();
+                self.conversation()
+                    .set_status("Character mode disabled".to_string());
+                self.close_picker();
+                return;
+            }
+
             match crate::character::loader::find_card_by_name(&character_name) {
                 Ok((card, _path)) => {
                     let card_name = card.data.name.clone();
@@ -1286,5 +1295,58 @@ Some additional text after the table."#;
         let lines = app.ui.textarea.lines();
         assert_eq!(row, lines.len() - 1);
         assert_eq!(col, lines.last().unwrap().chars().count());
+    }
+
+    #[test]
+    fn test_turn_off_character_mode_from_picker() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestChar".to_string(),
+                description: "Test".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+        assert!(app.session.active_character.is_some());
+
+        app.picker.picker_session = Some(picker::PickerSession {
+            mode: picker::PickerMode::Character,
+            state: PickerState::new(
+                "Pick Character",
+                vec![PickerItem {
+                    id: picker::TURN_OFF_CHARACTER_ID.to_string(),
+                    label: "[Turn off character mode]".to_string(),
+                    metadata: Some("Disable character".to_string()),
+                    sort_key: None,
+                }],
+                0,
+            ),
+            data: picker::PickerData::Character(picker::CharacterPickerState {
+                search_filter: String::new(),
+                all_items: vec![],
+            }),
+        });
+
+        app.apply_selected_character(false);
+
+        assert!(app.session.active_character.is_none());
+        assert_eq!(app.ui.status.as_deref(), Some("Character mode disabled"));
     }
 }

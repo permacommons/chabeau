@@ -419,6 +419,13 @@ pub async fn run_chat(
         character,
     )
     .await?;
+
+    // Show character greeting if a character was loaded at startup
+    app.update(|app| {
+        app.conversation().show_character_greeting_if_needed();
+    })
+    .await;
+
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     let action_dispatcher = AppActionDispatcher::new(action_tx);
 

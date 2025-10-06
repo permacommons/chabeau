@@ -420,6 +420,8 @@ fn handle_process_command(
 
     match process_input(app, &input) {
         CommandResult::Continue => {
+            // Show character greeting if needed (after character activation)
+            app.conversation().show_character_greeting_if_needed();
             update_scroll_after_command(app, ctx);
             None
         }
@@ -799,7 +801,9 @@ fn load_default_character_if_configured(app: &mut App) {
     {
         match crate::character::loader::find_card_by_name(character_name) {
             Ok((card, _path)) => {
-                app.session.active_character = Some(card);
+                app.session.set_character(card);
+                // Show character greeting if present
+                app.conversation().show_character_greeting_if_needed();
             }
             Err(e) => {
                 eprintln!(

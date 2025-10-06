@@ -358,52 +358,60 @@ impl App {
 
     /// Apply the selected character from the picker
     pub fn apply_selected_character(&mut self, set_as_default: bool) {
-        if let Some(picker) = self.picker.session() {
-            if let Some(character_name) = picker.state.selected_id() {
-                match crate::character::loader::find_card_by_name(character_name) {
-                    Ok((card, _path)) => {
-                        self.session.set_character(card.clone());
+        let character_name = self
+            .picker
+            .session()
+            .and_then(|picker| picker.state.selected_id())
+            .map(|s| s.to_string());
 
-                        if set_as_default {
-                            // Set as default for current provider/model
-                            let provider = self.session.provider_name.clone();
-                            let model = self.session.model.clone();
+        if let Some(character_name) = character_name {
+            match crate::character::loader::find_card_by_name(&character_name) {
+                Ok((card, _path)) => {
+                    let card_name = card.data.name.clone();
+                    self.session.set_character(card);
 
-                            match Config::load() {
-                                Ok(mut config) => {
-                                    config.set_default_character(
-                                        provider.clone(),
-                                        model.clone(),
-                                        character_name.to_string(),
-                                    );
-                                    if let Err(e) = config.save() {
-                                        self.conversation().set_status(format!(
-                                            "Character set: {} (failed to save as default: {})",
-                                            card.data.name, e
-                                        ));
-                                    } else {
-                                        self.conversation().set_status(format!(
-                                            "Character set: {} (saved as default for {}:{})",
-                                            card.data.name, provider, model
-                                        ));
-                                    }
-                                }
-                                Err(e) => {
+                    // Show character greeting if present
+                    self.conversation().show_character_greeting_if_needed();
+
+                    if set_as_default {
+                        // Set as default for current provider/model
+                        let provider = self.session.provider_name.clone();
+                        let model = self.session.model.clone();
+
+                        match Config::load() {
+                            Ok(mut config) => {
+                                config.set_default_character(
+                                    provider.clone(),
+                                    model.clone(),
+                                    character_name.to_string(),
+                                );
+                                if let Err(e) = config.save() {
                                     self.conversation().set_status(format!(
-                                        "Character set: {} (failed to load config: {})",
-                                        card.data.name, e
+                                        "Character set: {} (failed to save as default: {})",
+                                        card_name, e
+                                    ));
+                                } else {
+                                    self.conversation().set_status(format!(
+                                        "Character set: {} (saved as default for {}:{})",
+                                        card_name, provider, model
                                     ));
                                 }
                             }
-                        } else {
-                            self.conversation()
-                                .set_status(format!("Character set: {}", card.data.name));
+                            Err(e) => {
+                                self.conversation().set_status(format!(
+                                    "Character set: {} (failed to load config: {})",
+                                    card_name, e
+                                ));
+                            }
                         }
-                    }
-                    Err(e) => {
+                    } else {
                         self.conversation()
-                            .set_status(format!("Error loading character: {}", e));
+                            .set_status(format!("Character set: {}", card_name));
                     }
+                }
+                Err(e) => {
+                    self.conversation()
+                        .set_status(format!("Error loading character: {}", e));
                 }
             }
         }

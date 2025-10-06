@@ -14,6 +14,21 @@ impl<'a> ConversationController<'a> {
         Self { session, ui }
     }
 
+    /// Display character greeting if not yet shown
+    pub fn show_character_greeting_if_needed(&mut self) {
+        if self.session.should_show_greeting() {
+            if let Some(character) = self.session.get_character() {
+                let greeting = character.get_greeting().to_string();
+                let greeting_message = Message {
+                    role: "assistant".to_string(),
+                    content: greeting,
+                };
+                self.ui.messages.push_back(greeting_message);
+                self.session.mark_greeting_shown();
+            }
+        }
+    }
+
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
         self.clear_status();
 
@@ -680,5 +695,172 @@ mod tests {
         for msg in &api_messages {
             assert_ne!(msg.content, "Help text displayed in UI");
         }
+    }
+
+    #[test]
+    fn test_show_character_greeting_if_needed() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character with a greeting
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello! I'm TestBot.".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Initially no messages
+        assert_eq!(app.ui.messages.len(), 0);
+
+        // Show greeting
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        // Should have added greeting as assistant message
+        assert_eq!(app.ui.messages.len(), 1);
+        let greeting_msg = app.ui.messages.front().unwrap();
+        assert_eq!(greeting_msg.role, "assistant");
+        assert_eq!(greeting_msg.content, "Hello! I'm TestBot.");
+
+        // Greeting should be marked as shown
+        assert!(app.session.character_greeting_shown);
+
+        // Calling again should not add another greeting
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.show_character_greeting_if_needed();
+        }
+        assert_eq!(app.ui.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_show_character_greeting_empty_greeting() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character with empty greeting
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "   ".to_string(), // Empty/whitespace greeting
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Show greeting
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        // Should not have added any messages (empty greeting)
+        assert_eq!(app.ui.messages.len(), 0);
+        assert!(!app.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn test_show_character_greeting_no_character() {
+        let mut app = create_test_app();
+
+        // No character set
+        assert!(app.session.get_character().is_none());
+
+        // Show greeting
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        // Should not have added any messages
+        assert_eq!(app.ui.messages.len(), 0);
+        assert!(!app.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn test_character_greeting_included_in_api_messages() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character with a greeting
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Greetings!".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Show greeting
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        // Add user message
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_user_message("Hello".to_string())
+        };
+
+        // Should have: system prompt, greeting (assistant), user message
+        assert_eq!(api_messages.len(), 3);
+
+        assert_eq!(api_messages[0].role, "system");
+        assert!(api_messages[0].content.contains("You are TestBot."));
+
+        assert_eq!(api_messages[1].role, "assistant");
+        assert_eq!(api_messages[1].content, "Greetings!");
+
+        assert_eq!(api_messages[2].role, "user");
+        assert_eq!(api_messages[2].content, "Hello");
     }
 }

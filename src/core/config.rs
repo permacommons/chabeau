@@ -2,7 +2,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomProvider {
@@ -51,6 +51,31 @@ pub struct Config {
     /// Value: character card filename without extension (e.g., "alice" for alice.json or alice.png)
     #[serde(default)]
     pub default_characters: HashMap<String, HashMap<String, String>>,
+}
+
+/// Get a user-friendly display string for a path
+/// Converts absolute paths to use ~ notation on Unix-like systems when possible
+///
+/// # Examples
+/// - Unix: `/home/user/.config/chabeau/cards` → `~/.config/chabeau/cards`
+/// - Windows: `C:\Users\user\AppData\Roaming\chabeau\cards` → `C:\Users\user\AppData\Roaming\chabeau\cards`
+/// - macOS: `/Users/user/Library/Application Support/...` → `~/Library/Application Support/...`
+pub fn path_display<P: AsRef<Path>>(path: P) -> String {
+    let path = path.as_ref();
+
+    // Try to use ~ for home directory on Unix-like systems
+    #[cfg(unix)]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home_path = PathBuf::from(home);
+            if let Ok(relative) = path.strip_prefix(&home_path) {
+                return format!("~/{}", relative.display());
+            }
+        }
+    }
+
+    // Fall back to full path
+    path.display().to_string()
 }
 
 impl Config {
@@ -852,5 +877,57 @@ mod tests {
 
         // This should not panic and should print the characters
         config.print_default_characters();
+    }
+
+    #[test]
+    fn test_path_display() {
+        // Test with a simple path
+        let path = PathBuf::from("/some/absolute/path");
+        let display = path_display(&path);
+        assert!(!display.is_empty());
+
+        // On Unix, test home directory substitution
+        #[cfg(unix)]
+        {
+            if let Some(home) = std::env::var_os("HOME") {
+                let home_path = PathBuf::from(&home);
+                let subpath = home_path.join("test/path");
+                let display = path_display(&subpath);
+                assert!(
+                    display.starts_with("~/"),
+                    "Expected path to start with ~/, got: {}",
+                    display
+                );
+                assert!(display.contains("test/path"));
+            }
+        }
+
+        // Test that non-home paths are not modified
+        let abs_path = PathBuf::from("/usr/local/bin");
+        let display = path_display(&abs_path);
+        assert_eq!(display, "/usr/local/bin");
+    }
+
+    #[test]
+    fn test_path_display_with_config_dir() {
+        // Test with actual config directory
+        let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
+            .expect("Failed to determine config directory");
+        let config_dir = proj_dirs.config_dir();
+        let display = path_display(config_dir);
+
+        // Should not be empty
+        assert!(!display.is_empty());
+
+        // Should contain "chabeau"
+        assert!(display.contains("chabeau"));
+
+        // On Unix with HOME set, should use tilde
+        #[cfg(unix)]
+        {
+            if std::env::var_os("HOME").is_some() {
+                assert!(display.starts_with('~') || display.starts_with('/'));
+            }
+        }
     }
 }

@@ -11,6 +11,7 @@ pub mod theme_list;
 use std::error::Error;
 
 use clap::{Parser, Subcommand};
+use once_cell::sync::Lazy;
 
 // Import specific items we need
 use crate::auth::AuthManager;
@@ -79,7 +80,11 @@ fn print_version_info() {
 }
 
 // Unified help text used for both short and long help
-const HELP_ABOUT: &str = "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
+// Uses Lazy to compute the cards directory path at runtime
+static HELP_ABOUT: Lazy<String> = Lazy::new(|| {
+    let cards_dir = crate::core::config::path_display(crate::character::loader::get_cards_dir());
+    format!(
+        "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
 Authentication:\n\
   Use 'chabeau auth' to set up credentials (OpenAI, OpenRouter, Poe, Anthropic, custom).\n\n\
 For one-off use, you can set environment variables (used only if no providers are configured, or with --env):\n\
@@ -90,16 +95,25 @@ To select providers (e.g., Anthropic, OpenAI) and their models:\n\
   • If only one provider is configured, Chabeau will use it.\n\
   • Otherwise, it will ask you to select the provider.\n\
   • It will then give you a choice of models.\n\n\
+Character cards:\n\
+  • Import character cards with 'chabeau import -c <file.json|file.png>'.\n\
+  • Use '-c [CHARACTER]' to start a chat with a specific character:\n\
+    - By name: '-c alice' (looks in {cards_dir})\n\
+    - By path: '-c ./alice.json' or '-c /path/to/alice.json'\n\
+  • Inside the TUI, type '/character' to select a character.\n\n\
   Tips:\n\
   • To make a choice the default, select it with [Alt+Enter], or use the CLI commands below.\n\
   • Inside the TUI, type '/help' for keys and commands.\n\
-  • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n";
+  • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n",
+        cards_dir = cards_dir
+    )
+});
 
 #[derive(Parser)]
 #[command(name = "chabeau")]
-#[command(about = HELP_ABOUT)]
+#[command(about = HELP_ABOUT.as_str())]
 #[command(disable_version_flag = true, disable_help_flag = true)]
-#[command(long_about = HELP_ABOUT)]
+#[command(long_about = HELP_ABOUT.as_str())]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -123,6 +137,10 @@ pub struct Args {
     /// Use environment variables for auth (ignore keyring/config)
     #[arg(long = "env", global = true, action = clap::ArgAction::SetTrue)]
     pub env_only: bool,
+
+    /// Character card to use (name from cards dir, or file path)
+    #[arg(short = 'c', long, global = true, value_name = "CHARACTER")]
+    pub character: Option<String>,
 
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
@@ -414,5 +432,39 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_character_flag_parsing() {
+        // Test short flag
+        let args = Args::try_parse_from(["chabeau", "-c", "alice"]).unwrap();
+        assert_eq!(args.character, Some("alice".to_string()));
+
+        // Test long flag
+        let args = Args::try_parse_from(["chabeau", "--character", "bob"]).unwrap();
+        assert_eq!(args.character, Some("bob".to_string()));
+
+        // Test no character flag
+        let args = Args::try_parse_from(["chabeau"]).unwrap();
+        assert_eq!(args.character, None);
+
+        // Test character flag with path
+        let args = Args::try_parse_from(["chabeau", "-c", "path/to/card.json"]).unwrap();
+        assert_eq!(args.character, Some("path/to/card.json".to_string()));
+    }
+
+    #[test]
+    fn test_character_flag_with_other_flags() {
+        // Test character flag combined with model and provider
+        let args = Args::try_parse_from(["chabeau", "-c", "alice", "-m", "gpt-4", "-p", "openai"])
+            .unwrap();
+        assert_eq!(args.character, Some("alice".to_string()));
+        assert_eq!(args.model, Some("gpt-4".to_string()));
+        assert_eq!(args.provider, Some("openai".to_string()));
     }
 }

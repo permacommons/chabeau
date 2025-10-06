@@ -383,14 +383,14 @@ fn build_main_title(app: &App) -> String {
     } else {
         app.session.provider_display_name.clone()
     };
-    
+
     // Include character name if active
     let character_display = if let Some(character) = &app.session.active_character {
         format!(" • Character: {}", character.data.name)
     } else {
         String::new()
     };
-    
+
     format!(
         "Chabeau v{} - {} ({}){} • Logging: {}",
         env!("CARGO_PKG_VERSION"),

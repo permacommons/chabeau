@@ -410,7 +410,14 @@ pub async fn run_chat(
     env_only: bool,
     character: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only, character).await?;
+    let app = bootstrap_app(
+        model.clone(),
+        log.clone(),
+        provider.clone(),
+        env_only,
+        character,
+    )
+    .await?;
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     let action_dispatcher = AppActionDispatcher::new(action_tx);
 

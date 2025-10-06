@@ -38,6 +38,18 @@ impl<'a> ConversationController<'a> {
         self.session.retrying_message_index = None;
 
         let mut api_messages = Vec::new();
+
+        // Inject character instructions as API system message if active
+        // Note: This is role="system" for the API, not a transcript system message
+        if let Some(character) = self.session.get_character() {
+            api_messages.push(crate::api::ChatMessage {
+                role: "system".to_string(),
+                content: character.build_system_prompt(),
+            });
+        }
+
+        // Add conversation history (including greeting if present)
+        // Note: Transcript system messages (help, status) are excluded here
         for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
             if msg.role == "user" || msg.role == "assistant" {
                 api_messages.push(crate::api::ChatMessage {
@@ -46,6 +58,17 @@ impl<'a> ConversationController<'a> {
                 });
             }
         }
+
+        // Add post-history instructions as API system message if present
+        if let Some(character) = self.session.get_character() {
+            if let Some(post_instructions) = character.get_post_history_instructions() {
+                api_messages.push(crate::api::ChatMessage {
+                    role: "system".to_string(),
+                    content: post_instructions.to_string(),
+                });
+            }
+        }
+
         api_messages
     }
 
@@ -239,6 +262,16 @@ impl<'a> ConversationController<'a> {
         self.ui.auto_scroll = true;
 
         let mut api_messages = Vec::new();
+
+        // Inject character instructions as API system message if active
+        if let Some(character) = self.session.get_character() {
+            api_messages.push(crate::api::ChatMessage {
+                role: "system".to_string(),
+                content: character.build_system_prompt(),
+            });
+        }
+
+        // Add conversation history up to retry point
         if let Some(retry_index) = self.session.retrying_message_index {
             for (i, msg) in self.ui.messages.iter().enumerate() {
                 if i < retry_index && (msg.role == "user" || msg.role == "assistant") {
@@ -247,6 +280,16 @@ impl<'a> ConversationController<'a> {
                         content: msg.content.clone(),
                     });
                 }
+            }
+        }
+
+        // Add post-history instructions as API system message if present
+        if let Some(character) = self.session.get_character() {
+            if let Some(post_instructions) = character.get_post_history_instructions() {
+                api_messages.push(crate::api::ChatMessage {
+                    role: "system".to_string(),
+                    content: post_instructions.to_string(),
+                });
             }
         }
 
@@ -342,6 +385,300 @@ mod tests {
 
         for msg in &api_messages {
             assert_ne!(msg.role, "system");
+        }
+    }
+
+    #[test]
+    fn test_add_user_message_with_character_active() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character with system prompt and post-history instructions
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful and friendly".to_string(),
+                scenario: "Testing scenario".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "Example dialogue".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: Some("Always be polite.".to_string()),
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Add a previous message
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Previous message"));
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "Previous response"));
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_user_message("New message".to_string())
+        };
+
+        // Should have: system prompt, previous user, previous assistant, new user, post-history
+        assert_eq!(api_messages.len(), 5);
+
+        // First message should be character system prompt
+        assert_eq!(api_messages[0].role, "system");
+        assert!(api_messages[0].content.contains("You are TestBot."));
+        assert!(api_messages[0].content.contains("Character: TestBot"));
+
+        // Middle messages should be conversation history
+        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].content, "Previous message");
+        assert_eq!(api_messages[2].role, "assistant");
+        assert_eq!(api_messages[2].content, "Previous response");
+        assert_eq!(api_messages[3].role, "user");
+        assert_eq!(api_messages[3].content, "New message");
+
+        // Last message should be post-history instructions
+        assert_eq!(api_messages[4].role, "system");
+        assert_eq!(api_messages[4].content, "Always be polite.");
+    }
+
+    #[test]
+    fn test_add_user_message_with_character_no_post_history() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character without post-history instructions
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hi".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_user_message("Test message".to_string())
+        };
+
+        // Should have: system prompt, user message (no post-history)
+        assert_eq!(api_messages.len(), 2);
+        assert_eq!(api_messages[0].role, "system");
+        assert!(api_messages[0].content.contains("Character: TestBot"));
+        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].content, "Test message");
+    }
+
+    #[test]
+    fn test_add_user_message_without_character() {
+        let mut app = create_test_app();
+
+        // No character set
+        assert!(app.session.get_character().is_none());
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_user_message("Test message".to_string())
+        };
+
+        // Should only have the user message, no system messages
+        assert_eq!(api_messages.len(), 1);
+        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].content, "Test message");
+    }
+
+    #[test]
+    fn test_prepare_retry_with_character_active() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: Some("Be concise.".to_string()),
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Add messages
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "First question"));
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "First response"));
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Second question"));
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "Second response to retry"));
+
+        // Set retry index to the last assistant message
+        app.session.retrying_message_index = Some(3);
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.prepare_retry(10, 80).unwrap()
+        };
+
+        // Should have: system prompt, first user, first assistant, second user, post-history
+        assert_eq!(api_messages.len(), 5);
+
+        // First should be character system prompt
+        assert_eq!(api_messages[0].role, "system");
+        assert!(api_messages[0].content.contains("You are TestBot."));
+
+        // Middle should be conversation history up to retry point
+        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].content, "First question");
+        assert_eq!(api_messages[2].role, "assistant");
+        assert_eq!(api_messages[2].content, "First response");
+        assert_eq!(api_messages[3].role, "user");
+        assert_eq!(api_messages[3].content, "Second question");
+
+        // Last should be post-history instructions
+        assert_eq!(api_messages[4].role, "system");
+        assert_eq!(api_messages[4].content, "Be concise.");
+    }
+
+    #[test]
+    fn test_prepare_retry_without_character() {
+        let mut app = create_test_app();
+
+        // No character set
+        assert!(app.session.get_character().is_none());
+
+        // Add messages
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Question"));
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "Response to retry"));
+
+        app.session.retrying_message_index = Some(1);
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.prepare_retry(10, 80).unwrap()
+        };
+
+        // Should only have the user message, no system messages
+        assert_eq!(api_messages.len(), 1);
+        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].content, "Question");
+    }
+
+    #[test]
+    fn test_character_messages_with_transcript_system_messages() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Add user message
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+
+        // Add transcript system message (should be excluded from API)
+        {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_system_message("Help text displayed in UI".to_string());
+        }
+
+        // Add assistant response
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "Hi there!"));
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            conversation.add_user_message("How are you?".to_string())
+        };
+
+        // Should have: character system prompt, first user, first assistant, new user
+        // Transcript system message should be excluded
+        assert_eq!(api_messages.len(), 4);
+
+        assert_eq!(api_messages[0].role, "system");
+        assert!(api_messages[0].content.contains("You are TestBot."));
+
+        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].content, "Hello");
+
+        assert_eq!(api_messages[2].role, "assistant");
+        assert_eq!(api_messages[2].content, "Hi there!");
+
+        assert_eq!(api_messages[3].role, "user");
+        assert_eq!(api_messages[3].content, "How are you?");
+
+        // Verify transcript system message is not in API messages
+        for msg in &api_messages {
+            assert_ne!(msg.content, "Help text displayed in UI");
         }
     }
 }

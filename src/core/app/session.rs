@@ -195,12 +195,8 @@ pub(crate) async fn prepare_with_auth(
     let resolved_theme = resolve_theme(config);
 
     // Load character card if specified via CLI or config
-    let active_character = load_character_for_session(
-        character.as_deref(),
-        &provider_name,
-        &final_model,
-        config,
-    )?;
+    let active_character =
+        load_character_for_session(character.as_deref(), &provider_name, &final_model, config)?;
 
     let session = SessionContext {
         client: Client::new(),

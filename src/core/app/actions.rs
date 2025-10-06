@@ -424,6 +424,12 @@ fn handle_process_command(
             app.open_theme_picker();
             None
         }
+        CommandResult::OpenCharacterPicker => {
+            // Character picker will be implemented in task 14
+            app.conversation()
+                .set_status("Character picker not yet implemented");
+            None
+        }
     }
 }
 

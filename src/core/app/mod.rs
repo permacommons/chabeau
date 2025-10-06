@@ -379,7 +379,7 @@ impl App {
                     let card_name = card.data.name.clone();
                     self.session.set_character(card);
 
-                    // Show character greeting if present
+                    // Show character greeting if present (won't show if already shown)
                     self.conversation().show_character_greeting_if_needed();
 
                     if set_as_default {

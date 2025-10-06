@@ -50,8 +50,19 @@ impl SessionContext {
     /// Set the active character card
     #[allow(dead_code)] // Will be used in future tasks
     pub fn set_character(&mut self, card: CharacterCard) {
+        // Check if this is the same character that's already active
+        let is_same_character = self
+            .active_character
+            .as_ref()
+            .map(|current| current.data.name == card.data.name)
+            .unwrap_or(false);
+
         self.active_character = Some(card);
-        self.character_greeting_shown = false;
+
+        // Only reset greeting flag if this is a different character
+        if !is_same_character {
+            self.character_greeting_shown = false;
+        }
     }
 
     /// Clear the active character card
@@ -676,5 +687,134 @@ mod tests {
 
         // Should not show greeting after clearing
         assert!(!session.should_show_greeting());
+    }
+
+    #[test]
+    fn session_context_reselecting_same_character_preserves_greeting_flag() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut session = SessionContext {
+            client: Client::new(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            provider_name: String::new(),
+            provider_display_name: String::new(),
+            logging: LoggingState::new(None).unwrap(),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            startup_env_only: false,
+            active_character: None,
+            character_greeting_shown: false,
+        };
+
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Test".to_string(),
+                description: "Test character".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello there!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        // Set character and mark greeting as shown
+        session.set_character(card.clone());
+        assert!(session.should_show_greeting());
+        session.mark_greeting_shown();
+        assert!(!session.should_show_greeting());
+
+        // Re-select the same character
+        session.set_character(card);
+
+        // Greeting flag should still be true (greeting already shown)
+        assert!(!session.should_show_greeting());
+        assert!(session.character_greeting_shown);
+    }
+
+    #[test]
+    fn session_context_selecting_different_character_resets_greeting_flag() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut session = SessionContext {
+            client: Client::new(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            provider_name: String::new(),
+            provider_display_name: String::new(),
+            logging: LoggingState::new(None).unwrap(),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            startup_env_only: false,
+            active_character: None,
+            character_greeting_shown: false,
+        };
+
+        let card1 = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Test1".to_string(),
+                description: "Test character 1".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello from Test1!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let card2 = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Test2".to_string(),
+                description: "Test character 2".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello from Test2!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        // Set first character and mark greeting as shown
+        session.set_character(card1);
+        session.mark_greeting_shown();
+        assert!(!session.should_show_greeting());
+
+        // Select a different character
+        session.set_character(card2);
+
+        // Greeting flag should be reset (new character, should show greeting)
+        assert!(session.should_show_greeting());
+        assert!(!session.character_greeting_shown);
     }
 }

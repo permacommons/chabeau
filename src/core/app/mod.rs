@@ -208,6 +208,16 @@ impl App {
             startup_env_only: false,
         };
 
+        Self::new_mock(session, theme, markdown_enabled, syntax_enabled)
+    }
+
+    #[cfg(any(test, feature = "bench"))]
+    pub(crate) fn new_mock(
+        session: SessionContext,
+        theme: Theme,
+        markdown_enabled: bool,
+        syntax_enabled: bool,
+    ) -> Self {
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
 
         App {

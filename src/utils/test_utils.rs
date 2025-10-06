@@ -1,7 +1,5 @@
 #[cfg(test)]
-use crate::core::app::ui_state::UiState;
-#[cfg(test)]
-use crate::core::app::{App, PickerController, SessionContext};
+use crate::core::app::{App, SessionContext};
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
@@ -191,13 +189,7 @@ pub fn create_test_app() -> App {
         startup_env_only: false,
     };
 
-    let ui = UiState::new_basic(Theme::dark_default(), true, true, None);
-
-    App {
-        session,
-        ui,
-        picker: PickerController::new(),
-    }
+    App::new_mock(session, Theme::dark_default(), true, true)
 }
 
 #[cfg(test)]

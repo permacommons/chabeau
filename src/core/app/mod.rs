@@ -348,7 +348,10 @@ impl App {
 
     /// Open a character picker modal with available character cards
     pub fn open_character_picker(&mut self) {
-        if let Err(message) = self.picker.open_character_picker(&mut self.character_cache) {
+        if let Err(message) = self
+            .picker
+            .open_character_picker(&mut self.character_cache, &self.session)
+        {
             self.conversation().set_status(message);
         }
     }
@@ -393,14 +396,13 @@ impl App {
                                 }
                             }
                         } else {
-                            self.conversation().set_status(format!(
-                                "Character set: {}",
-                                card.data.name
-                            ));
+                            self.conversation()
+                                .set_status(format!("Character set: {}", card.data.name));
                         }
                     }
                     Err(e) => {
-                        self.conversation().set_status(format!("Error loading character: {}", e));
+                        self.conversation()
+                            .set_status(format!("Error loading character: {}", e));
                     }
                 }
             }

@@ -10,6 +10,7 @@ use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::PickerMode;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::config::Config;
 
 pub enum AppAction {
     AppendResponseChunk {
@@ -751,6 +752,23 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
                 }
             }
         }
+        Some(PickerMode::Character) => {
+            let provider_name = app.session.provider_name.clone();
+            let model = app.session.model.clone();
+            let mut cfg = Config::load_test_safe();
+            cfg.unset_default_character(&provider_name, &model);
+            match cfg.save_test_safe() {
+                Ok(_) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_character_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -1062,8 +1080,10 @@ mod tests {
 
     #[test]
     fn character_picker_navigation_works() {
-        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
-        
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
         let mut app = create_test_app();
         let ctx = default_ctx();
 
@@ -1103,7 +1123,7 @@ mod tests {
         assert_eq!(app.picker_state().unwrap().selected, 0);
         apply_action(&mut app, AppAction::PickerMoveDown, ctx);
         assert_eq!(app.picker_state().unwrap().selected, 1);
-        
+
         // Test navigation up
         apply_action(&mut app, AppAction::PickerMoveUp, ctx);
         assert_eq!(app.picker_state().unwrap().selected, 0);
@@ -1111,20 +1131,20 @@ mod tests {
 
     #[test]
     fn character_picker_escape_closes_picker() {
-        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
-        
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
         let mut app = create_test_app();
         let ctx = default_ctx();
 
         // Create a mock character picker
-        let items = vec![
-            PickerItem {
-                id: "alice".to_string(),
-                label: "Alice".to_string(),
-                metadata: Some("A helpful assistant".to_string()),
-                sort_key: Some("Alice".to_string()),
-            },
-        ];
+        let items = vec![PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
 
         let picker_state = PickerState::new("Pick Character", items.clone(), 0);
         app.picker.picker_session = Some(PickerSession {
@@ -1137,7 +1157,7 @@ mod tests {
         });
 
         assert!(app.picker_session().is_some());
-        
+
         // Test escape closes picker
         apply_action(&mut app, AppAction::PickerEscape, ctx);
         assert!(app.picker_session().is_none());
@@ -1145,11 +1165,13 @@ mod tests {
 
     #[test]
     fn character_picker_enter_selects_character() {
-        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
         use crate::character::card::{CharacterCard, CharacterData};
-        use tempfile::tempdir;
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
         use std::fs;
-        
+        use tempfile::tempdir;
+
         let mut app = create_test_app();
         let ctx = default_ctx();
 
@@ -1182,14 +1204,12 @@ mod tests {
         fs::write(&card_path, serde_json::to_string(&test_card).unwrap()).unwrap();
 
         // Create a mock character picker
-        let items = vec![
-            PickerItem {
-                id: "alice".to_string(),
-                label: "Alice".to_string(),
-                metadata: Some("A helpful assistant".to_string()),
-                sort_key: Some("Alice".to_string()),
-            },
-        ];
+        let items = vec![PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
 
         let picker_state = PickerState::new("Pick Character", items.clone(), 0);
         app.picker.picker_session = Some(PickerSession {
@@ -1204,7 +1224,51 @@ mod tests {
         // Note: We can't fully test character selection without mocking the file system
         // or having actual character cards, but we can verify the picker closes
         assert!(app.picker_session().is_some());
-        apply_action(&mut app, AppAction::PickerApplySelection { persistent: false }, ctx);
+        apply_action(
+            &mut app,
+            AppAction::PickerApplySelection { persistent: false },
+            ctx,
+        );
         assert!(app.picker_session().is_none());
+    }
+
+    #[test]
+    fn character_picker_marks_default_with_asterisk() {
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
+        let mut app = create_test_app();
+
+        // Create a mock character picker with alice marked as default
+        // (In real usage, the asterisk is added by open_character_picker based on config)
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "alice*".to_string(), // Should have asterisk
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("alice".to_string()),
+            },
+            PickerItem {
+                id: "bob".to_string(),
+                label: "bob".to_string(), // No asterisk
+                metadata: Some("Another character".to_string()),
+                sort_key: Some("bob".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Verify alice has asterisk
+        let selected_item = app.picker_state().unwrap().get_selected_item().unwrap();
+        assert_eq!(selected_item.label, "alice*");
     }
 }

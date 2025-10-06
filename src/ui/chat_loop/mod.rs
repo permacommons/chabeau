@@ -235,7 +235,8 @@ async fn route_keyboard_event(
         .read(|app| {
             let picker_open = app.model_picker_state().is_some()
                 || app.theme_picker_state().is_some()
-                || app.provider_picker_state().is_some();
+                || app.provider_picker_state().is_some()
+                || app.character_picker_state().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
@@ -1026,7 +1027,7 @@ async fn handle_ctrl_j_shortcut(
 }
 
 /// Handle key events for all picker modes (theme, model, provider, character)
-/// 
+///
 /// Keybindings:
 /// - Up/Down arrows or j/k: Navigate through items
 /// - Enter: Select item (non-persistent)

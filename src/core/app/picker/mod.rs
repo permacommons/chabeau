@@ -8,6 +8,25 @@ use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
 
+/// Sanitize metadata text for display in picker
+///
+/// Removes newlines, carriage returns, and other control characters that could
+/// break the TUI layout. Replaces sequences of whitespace with a single space.
+fn sanitize_picker_metadata(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c == '\n' || c == '\r' || c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerMode {
     Theme,
@@ -66,9 +85,7 @@ pub struct PickerSession {
 impl PickerSession {
     fn prefers_alphabetical(&self) -> bool {
         match (&self.mode, &self.data) {
-            (PickerMode::Theme, _) | (PickerMode::Provider, _) | (PickerMode::Character, _) => {
-                true
-            }
+            (PickerMode::Theme, _) | (PickerMode::Provider, _) | (PickerMode::Character, _) => true,
             (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
             _ => false,
         }
@@ -878,6 +895,7 @@ impl PickerController {
     pub fn open_character_picker(
         &mut self,
         character_cache: &mut crate::character::cache::CardCache,
+        session_context: &SessionContext,
     ) -> Result<(), String> {
         // Load all character metadata (uses cache)
         let cards = character_cache
@@ -891,13 +909,29 @@ impl PickerController {
             );
         }
 
+        // Get the default character for the current provider/model
+        let cfg = Config::load_test_safe();
+        let default_character =
+            cfg.get_default_character(&session_context.provider_name, &session_context.model);
+
         let items: Vec<PickerItem> = cards
             .into_iter()
-            .map(|card| PickerItem {
-                id: card.name.clone(),
-                label: card.name.clone(),
-                metadata: Some(card.description.clone()),
-                sort_key: Some(card.name.clone()),
+            .map(|card| {
+                let sanitized_description = sanitize_picker_metadata(&card.description);
+                let is_default = default_character
+                    .map(|def| def == &card.name)
+                    .unwrap_or(false);
+                let label = if is_default {
+                    format!("{}*", card.name)
+                } else {
+                    card.name.clone()
+                };
+                PickerItem {
+                    id: card.name.clone(),
+                    label,
+                    metadata: Some(sanitized_description),
+                    sort_key: Some(card.name.clone()),
+                }
             })
             .collect();
 
@@ -925,5 +959,66 @@ impl PickerController {
         self.session()
             .map(|session| session.prefers_alphabetical())
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_picker_metadata_removes_newlines() {
+        let input = "Line 1\nLine 2\nLine 3";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Line 1 Line 2 Line 3");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_removes_carriage_returns() {
+        let input = "Line 1\r\nLine 2\r\nLine 3";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Line 1 Line 2 Line 3");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_collapses_whitespace() {
+        let input = "Too    many     spaces";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Too many spaces");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_removes_control_chars() {
+        let input = "Text\twith\ttabs\x00and\x01control\x02chars";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Text with tabs and control chars");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_handles_mixed_whitespace() {
+        let input = "Mixed\n\r\t  whitespace\n\n\nhere";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Mixed whitespace here");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_preserves_normal_text() {
+        let input = "Normal text with spaces";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "Normal text with spaces");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_handles_empty_string() {
+        let input = "";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_sanitize_picker_metadata_handles_only_whitespace() {
+        let input = "\n\r\t   \n";
+        let result = sanitize_picker_metadata(input);
+        assert_eq!(result, "");
     }
 }

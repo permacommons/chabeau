@@ -495,11 +495,7 @@ mod tests {
         ThemePickerState,
     };
     use crate::ui::picker::PickerState;
-    use crate::ui::theme::Theme;
-
-    fn create_test_app() -> App {
-        App::new_bench(Theme::dark_default(), true, false)
-    }
+    use crate::utils::test_utils::create_test_app;
 
     fn set_model_picker(
         app: &mut App,
@@ -561,6 +557,7 @@ mod tests {
     #[test]
     fn title_shows_no_model_selected_during_transition() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         app.session.provider_display_name = "Cerebras".to_string();
         app.session.model = "foo-model".to_string();
         app.picker.in_provider_model_transition = true;
@@ -573,6 +570,7 @@ mod tests {
     #[test]
     fn title_shows_model_when_not_in_transition() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         app.session.provider_display_name = "Cerebras".to_string();
         app.session.model = "foo-model".to_string();
         app.picker.in_provider_model_transition = false;
@@ -585,6 +583,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_no_filter_no_default() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         // Create picker with non-default item
         let items = vec![crate::ui::picker::PickerItem {
             id: "test-model".to_string(),
@@ -604,6 +603,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_with_filter() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         let items = vec![crate::ui::picker::PickerItem {
             id: "test-model".to_string(),
             label: "Test Model".to_string(),
@@ -622,6 +622,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_with_default_selected() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         // Create picker with default item (has asterisk)
         let items = vec![crate::ui::picker::PickerItem {
             id: "default-provider".to_string(),
@@ -641,6 +642,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_model_with_default_selected() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         // Create picker with default item (has asterisk)
         let items = vec![crate::ui::picker::PickerItem {
             id: "default-model".to_string(),
@@ -660,6 +662,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_theme_picker() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         let items = vec![crate::ui::picker::PickerItem {
             id: "dark".to_string(),
             label: "Dark Theme".to_string(),
@@ -678,6 +681,7 @@ mod tests {
     #[test]
     fn test_generate_picker_help_text_theme_with_default_selected() {
         let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         // Default theme: asterisk on label
         let items = vec![crate::ui::picker::PickerItem {
             id: "dark".to_string(),
@@ -694,7 +698,8 @@ mod tests {
 
     #[test]
     fn test_generate_picker_help_text_no_picker() {
-        let app = create_test_app();
+        let mut app = create_test_app();
+        app.ui.syntax_enabled = false;
         // No picker set
 
         let help_text = generate_picker_help_text(&app);

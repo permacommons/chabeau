@@ -338,7 +338,7 @@ impl App {
     }
 }
 
-#[cfg(all(feature = "bench", not(test)))]
+#[cfg(any(test, feature = "bench"))]
 const _: fn(Theme, bool, bool) -> App = App::new_bench;
 
 #[cfg(test)]

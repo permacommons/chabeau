@@ -1070,7 +1070,7 @@ mod tests {
         AppActionEnvelope, AppCommand,
     };
     use crate::core::message::Message;
-    use crate::ui::theme::Theme;
+    use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     fn setup_app() -> App {
-        App::new_bench(Theme::dark_default(), true, true)
+        create_test_app()
     }
 
     fn default_context() -> AppActionContext {

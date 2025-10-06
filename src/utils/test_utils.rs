@@ -199,6 +199,7 @@ pub fn create_test_app() -> App {
         session,
         ui,
         picker: PickerController::new(),
+        character_cache: crate::character::cache::CardCache::new(),
     }
 }
 

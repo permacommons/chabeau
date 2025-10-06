@@ -24,8 +24,8 @@ pub use actions::{
 pub use conversation::ConversationController;
 #[allow(unused_imports)]
 pub use picker::{
-    ModelPickerState, PickerController, PickerData, PickerMode, PickerSession, ProviderPickerState,
-    ThemePickerState,
+    CharacterPickerState, ModelPickerState, PickerController, PickerData, PickerMode,
+    PickerSession, ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -60,6 +60,7 @@ pub async fn new_with_auth(
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
+        character_cache: crate::character::cache::CardCache::new(),
     };
 
     app.ui.set_input_text(String::new());
@@ -91,6 +92,7 @@ pub async fn new_uninitialized(
         session,
         ui: UiState::from_config(theme, &config),
         picker,
+        character_cache: crate::character::cache::CardCache::new(),
     };
 
     app.ui.set_input_text(String::new());
@@ -103,6 +105,8 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
+    #[allow(dead_code)] // Will be used in task 15
+    pub character_cache: crate::character::cache::CardCache,
 }
 
 #[derive(Clone)]
@@ -218,6 +222,7 @@ impl App {
             session,
             ui,
             picker: PickerController::new(),
+            character_cache: crate::character::cache::CardCache::new(),
         }
     }
 
@@ -339,6 +344,84 @@ impl App {
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
         self.picker.complete_provider_model_transition();
+    }
+
+    /// Open a character picker modal with available character cards
+    #[allow(dead_code)] // Will be used in task 15
+    pub fn open_character_picker(&mut self) {
+        if let Err(message) = self.picker.open_character_picker(&mut self.character_cache) {
+            self.conversation().set_status(message);
+        }
+    }
+
+    /// Apply the selected character from the picker
+    pub fn apply_selected_character(&mut self, set_as_default: bool) {
+        if let Some(picker) = self.picker.session() {
+            if let Some(character_name) = picker.state.selected_id() {
+                match crate::character::loader::find_card_by_name(character_name) {
+                    Ok((card, _path)) => {
+                        self.session.set_character(card.clone());
+
+                        if set_as_default {
+                            // Set as default for current provider/model
+                            let provider = self.session.provider_name.clone();
+                            let model = self.session.model.clone();
+
+                            match Config::load() {
+                                Ok(mut config) => {
+                                    config.set_default_character(
+                                        provider.clone(),
+                                        model.clone(),
+                                        character_name.to_string(),
+                                    );
+                                    if let Err(e) = config.save() {
+                                        self.conversation().set_status(format!(
+                                            "Character set: {} (failed to save as default: {})",
+                                            card.data.name, e
+                                        ));
+                                    } else {
+                                        self.conversation().set_status(format!(
+                                            "Character set: {} (saved as default for {}:{})",
+                                            card.data.name, provider, model
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    self.conversation().set_status(format!(
+                                        "Character set: {} (failed to load config: {})",
+                                        card.data.name, e
+                                    ));
+                                }
+                            }
+                        } else {
+                            self.conversation().set_status(format!(
+                                "Character set: {}",
+                                card.data.name
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        self.conversation().set_status(format!("Error loading character: {}", e));
+                    }
+                }
+            }
+        }
+        self.close_picker();
+    }
+
+    /// Filter characters based on search term and update picker
+    pub fn filter_characters(&mut self) {
+        self.picker.filter_characters();
+    }
+
+    /// Get character picker state accessor
+    pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
+        self.picker.character_state()
+    }
+
+    /// Get mutable character picker state accessor
+    pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
+        self.picker.character_state_mut()
     }
 }
 

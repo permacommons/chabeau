@@ -362,6 +362,14 @@ fn handle_picker_backspace(app: &mut App) {
                 }
             }
         }
+        Some(PickerMode::Character) => {
+            if let Some(state) = app.character_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_characters();
+                }
+            }
+        }
         None => {}
     }
 }
@@ -388,6 +396,12 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
             if let Some(state) = app.provider_picker_state_mut() {
                 state.search_filter.push(ch);
                 app.filter_providers();
+            }
+        }
+        Some(PickerMode::Character) => {
+            if let Some(state) = app.character_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_characters();
             }
         }
         None => {}
@@ -557,6 +571,9 @@ fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
                 app.close_picker();
             }
         }
+        Some(PickerMode::Character) => {
+            app.close_picker();
+        }
         None => {}
     }
 }
@@ -666,6 +683,10 @@ fn handle_picker_apply_selection(
             }
 
             followup
+        }
+        Some(PickerMode::Character) => {
+            app.apply_selected_character(persistent);
+            None
         }
         None => None,
     }

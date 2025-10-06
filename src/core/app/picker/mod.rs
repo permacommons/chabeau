@@ -13,6 +13,8 @@ pub enum PickerMode {
     Theme,
     Model,
     Provider,
+    #[allow(dead_code)] // Will be used in task 15
+    Character,
 }
 
 #[derive(Debug, Clone)]
@@ -39,11 +41,19 @@ pub struct ProviderPickerState {
 }
 
 #[derive(Debug, Clone)]
+pub struct CharacterPickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PickerData {
     Theme(ThemePickerState),
     Model(ModelPickerState),
     Provider(ProviderPickerState),
+    #[allow(dead_code)] // Will be used in task 15
+    Character(CharacterPickerState),
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +66,9 @@ pub struct PickerSession {
 impl PickerSession {
     fn prefers_alphabetical(&self) -> bool {
         match (&self.mode, &self.data) {
-            (PickerMode::Theme, _) | (PickerMode::Provider, _) => true,
+            (PickerMode::Theme, _) | (PickerMode::Provider, _) | (PickerMode::Character, _) => {
+                true
+            }
             (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
             _ => false,
         }
@@ -82,6 +94,7 @@ impl PickerSession {
             PickerMode::Model => "Pick Model",
             PickerMode::Provider => "Pick Provider",
             PickerMode::Theme => "Pick Theme",
+            PickerMode::Character => "Pick Character",
         }
     }
 
@@ -90,6 +103,7 @@ impl PickerSession {
             PickerData::Model(state) => &state.search_filter,
             PickerData::Theme(state) => &state.search_filter,
             PickerData::Provider(state) => &state.search_filter,
+            PickerData::Character(state) => &state.search_filter,
         }
     }
 
@@ -98,6 +112,7 @@ impl PickerSession {
             PickerData::Model(state) => &state.all_items,
             PickerData::Theme(state) => &state.all_items,
             PickerData::Provider(state) => &state.all_items,
+            PickerData::Character(state) => &state.all_items,
         }
     }
 }
@@ -203,6 +218,28 @@ impl PickerController {
             Some(PickerSession {
                 mode: PickerMode::Provider,
                 data: PickerData::Provider(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn character_state(&self) -> Option<&CharacterPickerState> {
+        match self.session() {
+            Some(PickerSession {
+                mode: PickerMode::Character,
+                data: PickerData::Character(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn character_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
+        match self.session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Character,
+                data: PickerData::Character(state),
                 ..
             }) => Some(state),
             _ => None,
@@ -799,6 +836,88 @@ impl PickerController {
                 session.state.selected = idx;
             }
         }
+
+        Ok(())
+    }
+
+    pub fn filter_characters(&mut self) {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        if let (PickerMode::Character, PickerData::Character(character_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = character_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                character_state.all_items.clone()
+            } else {
+                character_state
+                    .all_items
+                    .iter()
+                    .filter(|item| {
+                        item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                            || item
+                                .metadata
+                                .as_ref()
+                                .map(|m| m.to_lowercase().contains(&search_term))
+                                .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
+            }
+            self.sort_items();
+            self.update_title();
+        }
+    }
+
+    #[allow(dead_code)] // Will be used in task 15
+    pub fn open_character_picker(
+        &mut self,
+        character_cache: &mut crate::character::cache::CardCache,
+    ) -> Result<(), String> {
+        // Load all character metadata (uses cache)
+        let cards = character_cache
+            .get_all_metadata()
+            .map_err(|e| format!("Error loading characters: {}", e))?;
+
+        if cards.is_empty() {
+            return Err(
+                "No character cards found. Use 'chabeau import -c <file>' to import cards."
+                    .to_string(),
+            );
+        }
+
+        let items: Vec<PickerItem> = cards
+            .into_iter()
+            .map(|card| PickerItem {
+                id: card.name.clone(),
+                label: card.name.clone(),
+                metadata: Some(card.description.clone()),
+                sort_key: Some(card.name.clone()),
+            })
+            .collect();
+
+        let selected = 0;
+        let picker_state = PickerState::new("Pick Character", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        };
+
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
+        self.sort_items();
+        self.update_title();
 
         Ok(())
     }

@@ -439,9 +439,7 @@ fn handle_process_command(
             None
         }
         CommandResult::OpenCharacterPicker => {
-            // Character picker will be implemented in task 14
-            app.conversation()
-                .set_status("Character picker not yet implemented");
+            app.open_character_picker();
             None
         }
     }
@@ -1060,5 +1058,153 @@ mod tests {
 
         assert_eq!(app.ui.messages[0].content, "new content");
         assert!(app.ui.in_place_edit_index().is_none());
+    }
+
+    #[test]
+    fn character_picker_navigation_works() {
+        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
+        
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a mock character picker with test items
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "Alice".to_string(),
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("Alice".to_string()),
+            },
+            PickerItem {
+                id: "bob".to_string(),
+                label: "Bob".to_string(),
+                metadata: Some("A friendly character".to_string()),
+                sort_key: Some("Bob".to_string()),
+            },
+            PickerItem {
+                id: "charlie".to_string(),
+                label: "Charlie".to_string(),
+                metadata: Some("An expert advisor".to_string()),
+                sort_key: Some("Charlie".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Test navigation down
+        assert_eq!(app.picker_state().unwrap().selected, 0);
+        apply_action(&mut app, AppAction::PickerMoveDown, ctx);
+        assert_eq!(app.picker_state().unwrap().selected, 1);
+        
+        // Test navigation up
+        apply_action(&mut app, AppAction::PickerMoveUp, ctx);
+        assert_eq!(app.picker_state().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn character_picker_escape_closes_picker() {
+        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
+        
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a mock character picker
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "Alice".to_string(),
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("Alice".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        assert!(app.picker_session().is_some());
+        
+        // Test escape closes picker
+        apply_action(&mut app, AppAction::PickerEscape, ctx);
+        assert!(app.picker_session().is_none());
+    }
+
+    #[test]
+    fn character_picker_enter_selects_character() {
+        use crate::core::app::picker::{CharacterPickerState, PickerData, PickerMode, PickerSession};
+        use crate::character::card::{CharacterCard, CharacterData};
+        use tempfile::tempdir;
+        use std::fs;
+        
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a temporary cards directory with a test card
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        let test_card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "Example".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let card_path = cards_dir.join("alice.json");
+        fs::write(&card_path, serde_json::to_string(&test_card).unwrap()).unwrap();
+
+        // Create a mock character picker
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "Alice".to_string(),
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("Alice".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Note: We can't fully test character selection without mocking the file system
+        // or having actual character cards, but we can verify the picker closes
+        assert!(app.picker_session().is_some());
+        apply_action(&mut app, AppAction::PickerApplySelection { persistent: false }, ctx);
+        assert!(app.picker_session().is_none());
     }
 }

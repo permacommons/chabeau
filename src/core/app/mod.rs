@@ -347,7 +347,6 @@ impl App {
     }
 
     /// Open a character picker modal with available character cards
-    #[allow(dead_code)] // Will be used in task 15
     pub fn open_character_picker(&mut self) {
         if let Err(message) = self.picker.open_character_picker(&mut self.character_cache) {
             self.conversation().set_status(message);

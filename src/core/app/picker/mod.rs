@@ -875,7 +875,6 @@ impl PickerController {
         }
     }
 
-    #[allow(dead_code)] // Will be used in task 15
     pub fn open_character_picker(
         &mut self,
         character_cache: &mut crate::character::cache::CardCache,

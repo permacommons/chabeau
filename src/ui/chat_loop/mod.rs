@@ -1025,6 +1025,19 @@ async fn handle_ctrl_j_shortcut(
     Ok(Some(KeyLoopAction::Continue))
 }
 
+/// Handle key events for all picker modes (theme, model, provider, character)
+/// 
+/// Keybindings:
+/// - Up/Down arrows or j/k: Navigate through items
+/// - Enter: Select item (non-persistent)
+/// - Alt+Enter: Select item and set as default (persistent)
+/// - Ctrl+J: Select item and set as default (persistent)
+/// - Escape: Cancel and close picker
+/// - Home/End: Jump to first/last item
+/// - F6: Cycle sort mode
+/// - Delete: Unset default for selected item
+/// - Backspace: Remove last character from search filter
+/// - Any character: Add to search filter
 async fn handle_picker_key_event(
     dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,

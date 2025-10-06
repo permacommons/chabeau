@@ -865,10 +865,10 @@ mod tests {
             Some(20),
         );
 
-        // With wide terminal (markdown), and narrow (plain), narrow should produce >= lines
+        // With wide terminal (markdown) and narrow (plain), the narrow width should yield
+        // at least as many lines, and wrapping should add extra lines relative to the wide view
         assert!(lines_narrow.len() >= lines_wide.len());
-        // And not fewer lines than wide
-        assert!(lines_narrow.len() >= lines_wide.len());
+        assert!(lines_narrow.len() > lines_wide.len());
     }
 
     #[test]

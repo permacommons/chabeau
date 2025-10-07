@@ -105,8 +105,25 @@ fn load_character_for_session(
 ) -> Result<Option<CharacterCard>, Box<dyn std::error::Error>> {
     // If CLI character is specified, use it (highest priority)
     if let Some(character_name) = cli_character {
-        let (card, _path) = crate::character::loader::find_card_by_name(character_name)?;
-        return Ok(Some(card));
+        // First try to find it by name in the cards directory
+        match crate::character::loader::find_card_by_name(character_name) {
+            Ok((card, _path)) => return Ok(Some(card)),
+            Err(_) => {
+                // If not found in cards directory, check if it's a file path that exists
+                let path = std::path::Path::new(character_name);
+                if path.exists() && path.is_file() {
+                    // Load directly from the file path
+                    let card = crate::character::loader::load_card(path)?;
+                    return Ok(Some(card));
+                }
+                // If neither worked, return the original error
+                return Err(format!(
+                    "Character '{}' not found in cards directory and is not a valid file path",
+                    character_name
+                )
+                .into());
+            }
+        }
     }
 
     // Otherwise, check for default character for this provider/model
@@ -601,6 +618,96 @@ mod tests {
         // This test verifies the function signature and basic behavior
         let result = super::load_character_for_session(None, "openai", "gpt-4", &config);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn load_character_for_session_filepath_fallback() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use std::fs;
+
+        let temp_dir = tempdir().expect("tempdir");
+
+        // Create a character card file outside the cards directory
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "FilePathChar".to_string(),
+                description: "Loaded from file path".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello from file!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let card_path = temp_dir.path().join("external_card.json");
+        let card_json = serde_json::to_string(&card).expect("serialize card");
+        fs::write(&card_path, card_json).expect("write card");
+
+        let config = Config::default();
+
+        // Load character by file path (should work as fallback)
+        let result = super::load_character_for_session(
+            Some(card_path.to_str().unwrap()),
+            "openai",
+            "gpt-4",
+            &config,
+        );
+        assert!(result.is_ok());
+        let loaded_card = result.unwrap();
+        assert!(loaded_card.is_some());
+        assert_eq!(loaded_card.unwrap().data.name, "FilePathChar");
+    }
+
+    #[test]
+    fn load_character_for_session_cards_dir_priority() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use std::fs;
+
+        let temp_dir = tempdir().expect("tempdir");
+
+        // Create a character card file in current directory with name "data"
+        let wrong_card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "WrongChar".to_string(),
+                description: "Should not be loaded".to_string(),
+                personality: "Wrong".to_string(),
+                scenario: "Wrong".to_string(),
+                first_mes: "Wrong!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let wrong_path = temp_dir.path().join("data.json");
+        let wrong_json = serde_json::to_string(&wrong_card).expect("serialize card");
+        fs::write(&wrong_path, wrong_json).expect("write card");
+
+        let config = Config::default();
+
+        // Try to load character named "data" - should fail because it's not in cards dir
+        // and we're not providing the full path
+        let result = super::load_character_for_session(Some("data"), "openai", "gpt-4", &config);
+
+        // Should fail because "data" is not found in cards directory
+        // and "data" as a relative path doesn't exist
+        assert!(result.is_err());
     }
 
     #[test]

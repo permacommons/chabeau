@@ -2,6 +2,7 @@
 //!
 //! This module handles parsing command-line arguments and executing the appropriate commands.
 
+pub mod character_list;
 pub mod model_list;
 pub mod pick_default_model;
 pub mod pick_default_provider;
@@ -15,6 +16,7 @@ use once_cell::sync::Lazy;
 
 // Import specific items we need
 use crate::auth::AuthManager;
+use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
 use crate::cli::pick_default_model::pick_default_model;
 use crate::cli::pick_default_provider::pick_default_provider;
@@ -138,8 +140,8 @@ pub struct Args {
     #[arg(long = "env", global = true, action = clap::ArgAction::SetTrue)]
     pub env_only: bool,
 
-    /// Character card to use (name from cards dir, or file path)
-    #[arg(short = 'c', long, global = true, value_name = "CHARACTER")]
+    /// Character card to use (name from cards dir, or file path), or list available characters if no character specified
+    #[arg(short = 'c', long, global = true, value_name = "CHARACTER", num_args = 0..=1, default_missing_value = "")]
     pub character: Option<String>,
 
     /// Print version information
@@ -365,6 +367,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         None => {
+            // Check if -c was provided without a character name (empty string)
+            if args.character.as_deref() == Some("") {
+                // -c was provided without a value, list available characters
+                return list_characters().await;
+            }
+
             // Check if -p was provided without a provider name (empty string)
             match args.provider.as_deref() {
                 Some("") => {
@@ -379,6 +387,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         args.provider
                     };
 
+                    let character_for_operations = if args.character.as_deref() == Some("") {
+                        None // Don't pass empty string character to other operations
+                    } else {
+                        args.character
+                    };
+
                     match args.model.as_deref() {
                         Some("") => {
                             // -m was provided without a value, list available models
@@ -391,7 +405,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
-                                args.character,
+                                character_for_operations,
                             )
                             .await
                         }
@@ -402,7 +416,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
-                                args.character,
+                                character_for_operations,
                             )
                             .await
                         }

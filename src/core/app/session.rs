@@ -48,7 +48,6 @@ pub struct UninitializedSessionBootstrap {
 
 impl SessionContext {
     /// Set the active character card
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn set_character(&mut self, card: CharacterCard) {
         // Check if this is the same character that's already active
         let is_same_character = self
@@ -66,20 +65,17 @@ impl SessionContext {
     }
 
     /// Clear the active character card
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn clear_character(&mut self) {
         self.active_character = None;
         self.character_greeting_shown = false;
     }
 
     /// Get a reference to the active character card
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn get_character(&self) -> Option<&CharacterCard> {
         self.active_character.as_ref()
     }
 
     /// Check if the character greeting should be shown
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn should_show_greeting(&self) -> bool {
         if let Some(character) = &self.active_character {
             !self.character_greeting_shown && !character.data.first_mes.trim().is_empty()
@@ -89,7 +85,6 @@ impl SessionContext {
     }
 
     /// Mark the character greeting as shown
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn mark_greeting_shown(&mut self) {
         self.character_greeting_shown = true;
     }

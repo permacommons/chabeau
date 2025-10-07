@@ -22,15 +22,15 @@ pub use actions::{
 };
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use conversation::ConversationController;
-#[allow(unused_imports)]
+#[cfg(test)]
+pub use picker::PickerData;
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PickerController, PickerData, PickerMode,
-    PickerSession, ProviderPickerState, ThemePickerState,
+    CharacterPickerState, ModelPickerState, PickerController, PickerMode, PickerSession,
+    ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
-#[allow(unused_imports)]
-pub use ui_state::{ActivityKind, UiMode, UiState};
+pub use ui_state::{ActivityKind, UiState};
 
 pub async fn new_with_auth(
     model: String,
@@ -105,7 +105,6 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
-    #[allow(dead_code)] // Will be used in task 15
     pub character_cache: crate::character::cache::CardCache,
 }
 

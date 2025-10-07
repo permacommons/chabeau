@@ -52,9 +52,7 @@ pub(crate) mod helpers {
     }
 
     /// Create a temporary cards directory with pre-populated test cards
-    pub fn create_temp_cards_dir_with_cards(
-        cards: &[(&str, &str)],
-    ) -> (TempDir, PathBuf) {
+    pub fn create_temp_cards_dir_with_cards(cards: &[(&str, &str)]) -> (TempDir, PathBuf) {
         let (temp_dir, cards_dir) = create_temp_cards_dir();
 
         for (name, greeting) in cards {
@@ -134,10 +132,7 @@ pub(crate) mod helpers {
 
         #[test]
         fn test_create_temp_cards_dir_with_cards() {
-            let cards = vec![
-                ("Alice", "Hello, I'm Alice!"),
-                ("Bob", "Hi, I'm Bob!"),
-            ];
+            let cards = vec![("Alice", "Hello, I'm Alice!"), ("Bob", "Hi, I'm Bob!")];
             let (_temp_dir, cards_dir) = create_temp_cards_dir_with_cards(&cards);
 
             assert!(cards_dir.join("alice.json").exists());
@@ -165,6 +160,5 @@ pub(crate) mod helpers {
             assert_eq!(card.spec, "wrong_spec");
             assert_eq!(card.data.name, "");
         }
-
     }
 }

@@ -58,7 +58,6 @@ pub fn get_cards_dir() -> PathBuf {
 
 /// List all available character cards in the cards directory
 /// Returns a vector of tuples containing (character_name, file_path)
-#[allow(dead_code)] // Will be used in future tasks
 pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
     let cards_dir = get_cards_dir();
 
@@ -111,7 +110,6 @@ pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
 /// 3. Search all cards for a matching character name (case-insensitive)
 ///
 /// Returns the loaded card and its file path
-#[allow(dead_code)] // Will be used in future tasks
 pub fn find_card_by_name(
     name: &str,
 ) -> Result<(CharacterCard, PathBuf), Box<dyn std::error::Error>> {

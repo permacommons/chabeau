@@ -46,8 +46,6 @@ mod integration_tests {
         temp_file
     }
 
-
-
     #[test]
     fn test_import_then_select_via_cli_workflow() {
         // This test simulates: import card → start session with CLI flag → verify character loaded
@@ -218,10 +216,10 @@ mod integration_tests {
         let err_str = err.to_string();
         // The error message should indicate the file wasn't found
         assert!(
-            err_str.contains("File not found") 
-            || err_str.contains("No such file") 
-            || err_str.contains("not found")
-            || err_str.contains("Failed to load"),
+            err_str.contains("File not found")
+                || err_str.contains("No such file")
+                || err_str.contains("not found")
+                || err_str.contains("Failed to load"),
             "Unexpected error message: {}",
             err_str
         );

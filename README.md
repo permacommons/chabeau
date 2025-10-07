@@ -226,6 +226,7 @@ Modular design with focused components:
   - `mod.rs` - CLI argument parsing and command dispatching
   - `model_list.rs` - Model listing functionality
   - `provider_list.rs` - Provider listing functionality
+  - `character_list.rs` - Character card listing functionality
   - `pick_default_model.rs` - Default model configuration
   - `pick_default_provider.rs` - Default provider configuration
 - `core/` - Core application components
@@ -243,6 +244,12 @@ Modular design with focused components:
   - `message.rs` - Message data structures
 - `auth/` - Authentication and provider management
   - `mod.rs` - Authentication manager implementation
+- `character/` - Character card support (v2 format)
+  - `mod.rs` - Module exports and public API
+  - `card.rs` - Character card data structures and v2 spec parsing
+  - `loader.rs` - Card file loading (JSON and PNG with metadata extraction)
+  - `cache.rs` - In-memory caching with invalidation
+  - `import.rs` - Import command and validation logic
 - `api/` - API types and models
   - `mod.rs` - API data structures
   - `models.rs` - Model fetching and sorting functionality

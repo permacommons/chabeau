@@ -1,18 +1,14 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Metadata for a cached character card
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Will be used in future tasks
 pub struct CachedCardMetadata {
     pub name: String,
-    pub path: PathBuf,
     pub description: String,
 }
 
 /// Cache for character card metadata
-#[allow(dead_code)] // Will be used in future tasks
 pub struct CardCache {
     metadata: HashMap<String, CachedCardMetadata>,
     cache_key: Option<String>,
@@ -20,7 +16,6 @@ pub struct CardCache {
 
 impl CardCache {
     /// Create a new empty cache
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn new() -> Self {
         Self {
             metadata: HashMap::new(),
@@ -29,7 +24,6 @@ impl CardCache {
     }
 
     /// Compute a cache key based on directory modification times
-    #[allow(dead_code)] // Will be used in future tasks
     fn compute_cache_key() -> Result<String, Box<dyn std::error::Error>> {
         let cards_dir = crate::character::loader::get_cards_dir();
 
@@ -55,7 +49,6 @@ impl CardCache {
     }
 
     /// Load all card metadata, using cache if valid
-    #[allow(dead_code)] // Will be used in future tasks
     pub fn get_all_metadata(
         &mut self,
     ) -> Result<Vec<CachedCardMetadata>, Box<dyn std::error::Error>> {
@@ -78,7 +71,6 @@ impl CardCache {
             if let Ok(card) = crate::character::loader::load_card(&path) {
                 let metadata = CachedCardMetadata {
                     name: card.data.name.clone(),
-                    path: path.clone(),
                     description: card.data.description.clone(),
                 };
                 self.metadata.insert(name, metadata);
@@ -93,7 +85,8 @@ impl CardCache {
     }
 
     /// Invalidate the cache
-    #[allow(dead_code)] // Will be used in future tasks
+    /// This forces a reload on the next call to get_all_metadata()
+    #[allow(dead_code)] // Public API for future use
     pub fn invalidate(&mut self) {
         self.cache_key = None;
         self.metadata.clear();
@@ -126,7 +119,6 @@ mod tests {
             "test".to_string(),
             CachedCardMetadata {
                 name: "Test".to_string(),
-                path: PathBuf::from("test.json"),
                 description: "Test description".to_string(),
             },
         );
@@ -159,7 +151,6 @@ mod tests {
         // Manually set up cache state
         let metadata = CachedCardMetadata {
             name: "TestChar".to_string(),
-            path: PathBuf::from("test.json"),
             description: "A test character".to_string(),
         };
 
@@ -196,7 +187,6 @@ mod tests {
             "charlie".to_string(),
             CachedCardMetadata {
                 name: "Charlie".to_string(),
-                path: PathBuf::from("charlie.json"),
                 description: "C".to_string(),
             },
         );
@@ -204,7 +194,6 @@ mod tests {
             "alice".to_string(),
             CachedCardMetadata {
                 name: "Alice".to_string(),
-                path: PathBuf::from("alice.json"),
                 description: "A".to_string(),
             },
         );
@@ -212,7 +201,6 @@ mod tests {
             "bob".to_string(),
             CachedCardMetadata {
                 name: "Bob".to_string(),
-                path: PathBuf::from("bob.json"),
                 description: "B".to_string(),
             },
         );
@@ -243,7 +231,6 @@ mod tests {
         // Manually set up cache with a key
         let metadata = CachedCardMetadata {
             name: "TestChar".to_string(),
-            path: PathBuf::from("test.json"),
             description: "Test".to_string(),
         };
         cache.metadata.insert("TestChar".to_string(), metadata);
@@ -266,7 +253,6 @@ mod tests {
             "char1".to_string(),
             CachedCardMetadata {
                 name: "Character 1".to_string(),
-                path: PathBuf::from("char1.json"),
                 description: "First character".to_string(),
             },
         );

@@ -181,7 +181,6 @@ impl Config {
 
     /// Get the default character for a provider/model combination
     /// Returns the character filename (without extension)
-    #[allow(dead_code)]
     pub fn get_default_character(&self, provider: &str, model: &str) -> Option<&String> {
         self.default_characters
             .get(&provider.to_lowercase())
@@ -190,7 +189,6 @@ impl Config {
 
     /// Set the default character for a provider/model combination
     /// character_name should be the filename without extension
-    #[allow(dead_code)]
     pub fn set_default_character(
         &mut self,
         provider: String,
@@ -205,7 +203,6 @@ impl Config {
     }
 
     /// Unset the default character for a provider/model combination
-    #[allow(dead_code)]
     pub fn unset_default_character(&mut self, provider: &str, model: &str) {
         if let Some(models) = self.default_characters.get_mut(&provider.to_lowercase()) {
             models.remove(model);

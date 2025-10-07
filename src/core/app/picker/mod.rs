@@ -35,7 +35,6 @@ pub enum PickerMode {
     Theme,
     Model,
     Provider,
-    #[allow(dead_code)] // Will be used in task 15
     Character,
 }
 
@@ -74,7 +73,6 @@ pub enum PickerData {
     Theme(ThemePickerState),
     Model(ModelPickerState),
     Provider(ProviderPickerState),
-    #[allow(dead_code)] // Will be used in task 15
     Character(CharacterPickerState),
 }
 

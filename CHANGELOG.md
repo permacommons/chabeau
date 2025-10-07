@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- Removed the `pick-default-model` and `pick-default-provider` CLI commands in favor of the TUI pickers and `chabeau set`.
 - Upgraded the Markdown parser to pulldown-cmark 0.13, unlocking GitHub-flavored callouts alongside superscript and subscript inline syntax (`Cargo.toml`, `src/ui/markdown.rs`).
 
 ## 0.4.0

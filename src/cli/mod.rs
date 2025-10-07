@@ -4,8 +4,6 @@
 
 pub mod character_list;
 pub mod model_list;
-pub mod pick_default_model;
-pub mod pick_default_provider;
 pub mod provider_list;
 pub mod theme_list;
 
@@ -18,8 +16,6 @@ use once_cell::sync::Lazy;
 use crate::auth::AuthManager;
 use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
-use crate::cli::pick_default_model::pick_default_model;
-use crate::cli::pick_default_provider::pick_default_provider;
 use crate::cli::provider_list::list_providers;
 use crate::cli::theme_list::list_themes;
 use crate::core::config::Config;
@@ -104,7 +100,7 @@ Character cards:\n\
     - By path: '-c ./alice.json' or '-c /path/to/alice.json'\n\
   • Inside the TUI, type '/character' to select a character.\n\n\
   Tips:\n\
-  • To make a choice the default, select it with [Alt+Enter], or use the CLI commands below.\n\
+  • To make a choice the default, select it with [Alt+Enter], or use 'chabeau set'.\n\
   • Inside the TUI, type '/help' for keys and commands.\n\
   • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n",
         cards_dir = cards_dir
@@ -170,13 +166,6 @@ pub enum Commands {
         /// Value to unset for the key (optional)
         value: Option<String>,
     },
-    /// Interactively select and set a default model
-    PickDefaultModel {
-        /// Provider to list models for (optional)
-        provider: Option<String>,
-    },
-    /// Interactively select and set a default provider
-    PickDefaultProvider,
     /// List available themes (built-in and custom)
     Themes,
     /// Import and validate a character card
@@ -423,14 +412,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-        }
-        Some(Commands::PickDefaultModel { provider }) => {
-            pick_default_model(provider).await?;
-            Ok(())
-        }
-        Some(Commands::PickDefaultProvider) => {
-            pick_default_provider().await?;
-            Ok(())
         }
         Some(Commands::Themes) => {
             list_themes().await?;

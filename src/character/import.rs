@@ -36,34 +36,34 @@ impl std::fmt::Display for ImportError {
 
 impl std::error::Error for ImportError {}
 
-/// Import a character card file to the cards directory
+/// Import a character card file to a specified directory
 ///
-/// This function:
-/// 1. Validates the card file by loading it
-/// 2. Creates the cards directory if it doesn't exist
-/// 3. Checks for existing files and respects the force flag
-/// 4. Copies the file to the cards directory
+/// Validates the card, creates the destination directory if needed, checks for conflicts,
+/// and copies the file. Used by `import_card` for production imports and by tests with
+/// temporary directories.
 ///
 /// # Arguments
 /// * `source_path` - Path to the source card file (JSON or PNG)
+/// * `dest_dir` - Destination directory for the imported card
 /// * `force_overwrite` - If true, overwrite existing files without prompting
 ///
 /// # Returns
 /// * `Ok(String)` - Success message with character name and destination path
 /// * `Err(ImportError)` - Error if validation, file operations, or conflicts occur
-pub fn import_card<P: AsRef<Path>>(
+pub fn import_card_to_dir<P: AsRef<Path>, D: AsRef<Path>>(
     source_path: P,
+    dest_dir: D,
     force_overwrite: bool,
 ) -> Result<String, ImportError> {
     let source_path = source_path.as_ref();
+    let dest_dir = dest_dir.as_ref();
 
     // Validate the card first by loading it
     let card =
         load_card(source_path).map_err(|e| ImportError::ValidationFailed(format!("{}", e)))?;
 
-    // Get destination directory and create it if needed
-    let cards_dir = get_cards_dir();
-    fs::create_dir_all(&cards_dir)
+    // Create destination directory if needed
+    fs::create_dir_all(dest_dir)
         .map_err(|e| ImportError::IoError(format!("Failed to create cards directory: {}", e)))?;
 
     // Get the filename from the source path
@@ -71,7 +71,7 @@ pub fn import_card<P: AsRef<Path>>(
         .file_name()
         .ok_or_else(|| ImportError::IoError("Invalid file path".to_string()))?;
 
-    let dest_path = cards_dir.join(filename);
+    let dest_path = dest_dir.join(filename);
 
     // Check if file already exists
     if dest_path.exists() && !force_overwrite {
@@ -90,6 +90,17 @@ pub fn import_card<P: AsRef<Path>>(
         card.data.name,
         dest_path.display()
     ))
+}
+
+/// Import a character card file to the default cards directory
+///
+/// Wrapper around `import_card_to_dir` that uses the production cards directory.
+pub fn import_card<P: AsRef<Path>>(
+    source_path: P,
+    force_overwrite: bool,
+) -> Result<String, ImportError> {
+    let cards_dir = get_cards_dir();
+    import_card_to_dir(source_path, cards_dir, force_overwrite)
 }
 
 #[cfg(test)]
@@ -142,12 +153,17 @@ mod tests {
 
     #[test]
     fn test_import_invalid_card() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
         // Create an invalid card file
         let mut temp_file = NamedTempFile::new().unwrap();
         temp_file.write_all(b"{ invalid json }").unwrap();
         temp_file.flush().unwrap();
 
-        let result = import_card(temp_file.path(), false);
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, false);
         assert!(result.is_err());
 
         match result.unwrap_err() {
@@ -175,7 +191,12 @@ mod tests {
 
     #[test]
     fn test_import_card_missing_file() {
-        let result = import_card("/nonexistent/path/to/card.json", false);
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
+        let result = import_card_to_dir("/nonexistent/path/to/card.json", &cards_dir, false);
         assert!(result.is_err());
 
         match result.unwrap_err() {
@@ -188,6 +209,11 @@ mod tests {
 
     #[test]
     fn test_import_card_wrong_extension() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
         // Create a file with wrong extension
         let mut temp_file = NamedTempFile::with_suffix(".txt").unwrap();
         temp_file
@@ -195,7 +221,7 @@ mod tests {
             .unwrap();
         temp_file.flush().unwrap();
 
-        let result = import_card(temp_file.path(), false);
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, false);
         assert!(result.is_err());
 
         match result.unwrap_err() {
@@ -208,30 +234,38 @@ mod tests {
 
     #[test]
     fn test_import_card_creates_directory() {
-        // This test verifies that import_card creates the cards directory if it doesn't exist
-        // We can't easily test this without mocking, but we can verify the function
-        // doesn't panic when the directory doesn't exist
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
+        // Verify directory doesn't exist yet
+        assert!(!cards_dir.exists());
 
         let temp_file = create_valid_card_file();
 
         // The import will create the directory if needed
-        // We're testing that it doesn't panic
-        let _ = import_card(temp_file.path(), false);
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, false);
+        assert!(result.is_ok());
 
-        // Verify the cards directory exists after import attempt
-        let cards_dir = get_cards_dir();
-        assert!(cards_dir.exists() || !cards_dir.exists()); // Always true, just checking no panic
+        // Verify the cards directory was created
+        assert!(cards_dir.exists());
     }
 
     #[test]
     fn test_import_card_validation_before_copy() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
         // Verify that validation happens before any file operations
         // Create an invalid card
         let mut temp_file = NamedTempFile::with_suffix(".json").unwrap();
         temp_file.write_all(b"{ invalid json }").unwrap();
         temp_file.flush().unwrap();
 
-        let result = import_card(temp_file.path(), false);
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, false);
         assert!(result.is_err());
 
         // Should fail with validation error, not IO error
@@ -274,101 +308,95 @@ mod tests {
     }
 
     // Integration tests that test actual import scenarios
-    // These tests use the real cards directory, so they should clean up after themselves
+    // These tests use temporary directories to avoid affecting production
 
     #[test]
-    fn test_import_and_verify_in_cards_dir() {
-        // Create a unique filename to avoid conflicts
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let _timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+    fn test_import_and_verify_in_temp_dir() {
+        use tempfile::TempDir;
+
+        // Create a temporary directory for this test
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
 
         // Create a temporary source file
         let temp_file = create_valid_card_file();
 
-        // Import the card
-        let result = import_card(temp_file.path(), false);
+        // Import the card to temp directory
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, false);
 
-        // Clean up: remove the imported file if it exists
-        let cards_dir = get_cards_dir();
+        // Verify the result
+        assert!(result.is_ok());
+        let message = result.unwrap();
+        assert!(message.contains("✅"));
+        assert!(message.contains("Test Import Character"));
+
+        // Verify the file was actually copied
         let imported_path = cards_dir.join(temp_file.path().file_name().unwrap());
-        if imported_path.exists() {
-            let _ = fs::remove_file(&imported_path);
-        }
+        assert!(imported_path.exists());
 
-        // Now check the result
-        if let Ok(message) = result {
-            assert!(message.contains("✅"));
-            assert!(message.contains("Test Import Character"));
-        }
+        // Temp directory will be automatically cleaned up when dropped
     }
 
     #[test]
     fn test_import_overwrite_protection() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        use tempfile::TempDir;
 
-        // Create a card file with a specific name
-        let mut temp_file = NamedTempFile::with_suffix(format!("_{}.json", timestamp)).unwrap();
-        temp_file
-            .write_all(create_valid_card_json().as_bytes())
-            .unwrap();
-        temp_file.flush().unwrap();
+        // Create a temporary directory for this test
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
+        // Create a temporary source file
+        let temp_file = create_valid_card_file();
 
         // First import should succeed
-        let result1 = import_card(temp_file.path(), false);
+        let result1 = import_card_to_dir(temp_file.path(), &cards_dir, false);
+        assert!(result1.is_ok());
 
         // Second import without force should fail
-        let result2 = import_card(temp_file.path(), false);
+        let result2 = import_card_to_dir(temp_file.path(), &cards_dir, false);
+        assert!(result2.is_err());
+        match result2.unwrap_err() {
+            ImportError::AlreadyExists(_) => {
+                // Expected behavior
+            }
+            other => panic!("Expected AlreadyExists error, got {:?}", other),
+        }
 
         // Third import with force should succeed
-        let result3 = import_card(temp_file.path(), true);
+        let result3 = import_card_to_dir(temp_file.path(), &cards_dir, true);
+        assert!(result3.is_ok());
+        assert!(result3.unwrap().contains("✅"));
 
-        // Clean up
-        let cards_dir = get_cards_dir();
-        let imported_path = cards_dir.join(temp_file.path().file_name().unwrap());
-        if imported_path.exists() {
-            let _ = fs::remove_file(&imported_path);
-        }
-
-        // Verify results
-        if result1.is_ok() {
-            if let Err(ImportError::AlreadyExists(_)) = result2 {
-                // Expected behavior
-            } else {
-                panic!("Expected AlreadyExists error, got {:?}", result2);
-            }
-        }
-
-        if let Ok(message) = result3 {
-            assert!(message.contains("✅"));
-        }
+        // Temp directory will be automatically cleaned up when dropped
     }
 
     #[test]
     fn test_import_with_force_flag() {
-        // Test that force flag allows overwriting
+        use tempfile::TempDir;
+
+        // Create a temporary directory for this test
+        let temp_dir = TempDir::new().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+
+        // Create a temporary source file
         let temp_file = create_valid_card_file();
 
         // Import with force should always succeed (even if file exists)
-        let result = import_card(temp_file.path(), true);
+        let result = import_card_to_dir(temp_file.path(), &cards_dir, true);
+        assert!(result.is_ok());
 
-        // Clean up
-        let cards_dir = get_cards_dir();
+        let message = result.unwrap();
+        assert!(message.contains("✅"));
+        assert!(message.contains("Test Import Character"));
+
+        // Verify the file was actually copied
         let imported_path = cards_dir.join(temp_file.path().file_name().unwrap());
-        if imported_path.exists() {
-            let _ = fs::remove_file(&imported_path);
-        }
+        assert!(imported_path.exists());
 
-        // Check result
-        if let Ok(message) = result {
-            assert!(message.contains("✅"));
-            assert!(message.contains("Test Import Character"));
-        }
+        // Import again with force - should still succeed
+        let result2 = import_card_to_dir(temp_file.path(), &cards_dir, true);
+        assert!(result2.is_ok());
+
+        // Temp directory will be automatically cleaned up when dropped
     }
 }

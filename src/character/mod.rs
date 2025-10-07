@@ -3,6 +3,11 @@ pub mod card;
 pub mod import;
 pub mod loader;
 
+#[cfg(test)]
+mod test_helpers;
+#[cfg(test)]
+mod tests_integration;
+
 // Public API exports - will be used by other modules in future tasks
 #[allow(unused_imports)]
 pub use cache::{CachedCardMetadata, CardCache};

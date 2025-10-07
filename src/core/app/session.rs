@@ -97,7 +97,7 @@ impl SessionContext {
 
 /// Load character card for session initialization
 /// Priority: CLI flag > default for provider/model > None
-fn load_character_for_session(
+pub(crate) fn load_character_for_session(
     cli_character: Option<&str>,
     provider: &str,
     model: &str,

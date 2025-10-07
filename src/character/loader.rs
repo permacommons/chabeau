@@ -50,7 +50,12 @@ impl std::error::Error for CardLoadError {}
 
 /// Get the cards directory path
 /// Returns the path to the cards directory in the config directory
+/// unless `CHABEAU_CARDS_DIR` is set to override it.
 pub fn get_cards_dir() -> PathBuf {
+    if let Some(override_dir) = std::env::var_os("CHABEAU_CARDS_DIR") {
+        return PathBuf::from(override_dir);
+    }
+
     let proj_dirs = directories::ProjectDirs::from("org", "permacommons", "chabeau")
         .expect("Failed to determine config directory");
     proj_dirs.config_dir().join("cards")
@@ -255,6 +260,7 @@ pub fn validate_card(card: &CharacterCard) -> Result<(), CardLoadError> {
 mod tests {
     use super::*;
     use crate::character::CharacterData;
+    use crate::utils::test_utils::TestEnvVarGuard;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -890,9 +896,23 @@ mod tests {
 
     #[test]
     fn test_get_cards_dir() {
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.remove_var("CHABEAU_CARDS_DIR");
+
         let cards_dir = get_cards_dir();
         assert!(cards_dir.to_string_lossy().contains("chabeau"));
         assert!(cards_dir.to_string_lossy().contains("cards"));
+    }
+
+    #[test]
+    fn test_get_cards_dir_env_override() {
+        let mut env_guard = TestEnvVarGuard::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        env_guard.set_var("CHABEAU_CARDS_DIR", temp_dir.path().as_os_str());
+
+        let cards_dir = get_cards_dir();
+        assert_eq!(cards_dir, temp_dir.path());
     }
 
     #[test]

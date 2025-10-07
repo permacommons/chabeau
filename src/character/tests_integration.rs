@@ -5,10 +5,11 @@
 mod integration_tests {
     use crate::character::cache::CardCache;
     use crate::character::card::{CharacterCard, CharacterData};
+    use crate::character::import::{import_card, ImportError};
     use crate::core::app::conversation::ConversationController;
     use crate::core::app::session::load_character_for_session;
     use crate::core::config::Config;
-    use crate::utils::test_utils::create_test_app;
+    use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
     use std::fs;
     use std::io::Write;
 
@@ -553,11 +554,19 @@ mod integration_tests {
 
         // Try to import a different card with same filename
         let char2 = create_test_character("OverwriteTest", "Version 2");
-        let _temp_card = create_temp_card_file(&char2);
+        let temp_card_path = temp_dir.path().join("overwrite.json");
+        fs::write(&temp_card_path, serde_json::to_string(&char2).unwrap()).unwrap();
 
-        // Import without force should fail (but we can't test import_card directly
-        // without affecting the real cards directory, so we verify the file exists)
-        assert!(card_path.exists());
+        let result = {
+            let mut env_guard = TestEnvVarGuard::new();
+            env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+
+            // Import without force should fail and keep existing file intact
+            let result = import_card(&temp_card_path, false);
+            drop(env_guard);
+            result
+        };
+        assert!(matches!(result, Err(ImportError::AlreadyExists(_))));
 
         // Verify original content is preserved
         let content = fs::read_to_string(&card_path).unwrap();

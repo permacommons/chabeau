@@ -1058,7 +1058,7 @@ mod tests {
     fn test_turn_off_character_entry_added_when_character_active() {
         use crate::character::cache::CardCache;
         use crate::character::card::{CharacterCard, CharacterData};
-        use crate::utils::test_utils::create_test_app;
+        use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
 
@@ -1104,11 +1104,10 @@ mod tests {
             },
         });
 
-        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
         let result = app.picker.open_character_picker(&mut cache, &app.session);
-
-        std::env::remove_var("CHABEAU_CARDS_DIR");
 
         assert!(result.is_ok());
 
@@ -1121,7 +1120,7 @@ mod tests {
     #[test]
     fn test_turn_off_character_entry_not_added_when_no_character() {
         use crate::character::cache::CardCache;
-        use crate::utils::test_utils::create_test_app;
+        use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
 
@@ -1149,11 +1148,10 @@ mod tests {
 
         assert!(app.session.active_character.is_none());
 
-        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
         let result = app.picker.open_character_picker(&mut cache, &app.session);
-
-        std::env::remove_var("CHABEAU_CARDS_DIR");
 
         assert!(result.is_ok());
 
@@ -1167,7 +1165,7 @@ mod tests {
     fn test_turn_off_character_stays_at_top_after_sort() {
         use crate::character::cache::CardCache;
         use crate::character::card::{CharacterCard, CharacterData};
-        use crate::utils::test_utils::create_test_app;
+        use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
 
@@ -1218,11 +1216,10 @@ mod tests {
             },
         });
 
-        std::env::set_var("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
         let result = app.picker.open_character_picker(&mut cache, &app.session);
-
-        std::env::remove_var("CHABEAU_CARDS_DIR");
 
         assert!(result.is_ok());
 

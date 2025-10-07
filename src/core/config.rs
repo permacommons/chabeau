@@ -415,7 +415,7 @@ mod tests {
 
         let mut config = Config::default();
 
-        // Set a default model using the provider ID (as done in pick_default_model.rs)
+        // Set a default model using the provider ID (matching how defaults are persisted)
         config.set_default_model("openai".to_string(), "gpt-4".to_string());
         config
             .save_to_path(&config_path)

@@ -235,7 +235,8 @@ async fn route_keyboard_event(
         .read(|app| {
             let picker_open = app.model_picker_state().is_some()
                 || app.theme_picker_state().is_some()
-                || app.provider_picker_state().is_some();
+                || app.provider_picker_state().is_some()
+                || app.character_picker_state().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
@@ -408,8 +409,23 @@ pub async fn run_chat(
     log: Option<String>,
     provider: Option<String>,
     env_only: bool,
+    character: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let app = bootstrap_app(model.clone(), log.clone(), provider.clone(), env_only).await?;
+    let app = bootstrap_app(
+        model.clone(),
+        log.clone(),
+        provider.clone(),
+        env_only,
+        character,
+    )
+    .await?;
+
+    // Show character greeting if a character was loaded at startup
+    app.update(|app| {
+        app.conversation().show_character_greeting_if_needed();
+    })
+    .await;
+
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     let action_dispatcher = AppActionDispatcher::new(action_tx);
 
@@ -1017,6 +1033,19 @@ async fn handle_ctrl_j_shortcut(
     Ok(Some(KeyLoopAction::Continue))
 }
 
+/// Handle key events for all picker modes (theme, model, provider, character)
+///
+/// Keybindings:
+/// - Up/Down arrows or j/k: Navigate through items
+/// - Enter: Select item (non-persistent)
+/// - Alt+Enter: Select item and set as default (persistent)
+/// - Ctrl+J: Select item and set as default (persistent)
+/// - Escape: Cancel and close picker
+/// - Home/End: Jump to first/last item
+/// - F6: Cycle sort mode
+/// - Delete: Unset default for selected item
+/// - Backspace: Remove last character from search filter
+/// - Any character: Add to search filter
 async fn handle_picker_key_event(
     dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,

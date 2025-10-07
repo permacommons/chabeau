@@ -15,8 +15,13 @@ Items are removed when completed.
   - Deduplicate/compress repeated status lines — [OPEN]
 - In-TUI default picker — [OPEN]
 - Tab completion for commands — [OPEN]
-- Support common "character cards" — [OPEN]
-- Rapid initialization of "modes" like "Concise command help" or "Act as a reviewer for" — [OPEN]
+- Support common "character cards" — [PARTIAL]
+  - Add "Show full description" feature for character picker — [OPEN]
+    - Consider adding a detail view (e.g., press 'i' for info) to show full multi-line descriptions
+  - Lorebook/world info support from character cards — [OPEN]
+  - Message response presets (useful beyond character cards) [OPEN]
+  - Personas [OPEN]
+  - Prompt substitutions [OPEN]
 - Make assistant messages editable (may require further rethinking of input area) — [OPEN]
 - Basic "push a file into context" support — [OPEN]
 - "Rapid refine" - apply a previously created prompt to an output — [OPEN]
@@ -36,6 +41,10 @@ Items are removed when completed.
   - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
 ### Medium priority
 
+- Character card architecture improvements — [OPEN]
+  - Consider extracting character card logic into a dedicated service/controller — [OPEN]
+  - Add character card validation at import time with detailed error messages — [OPEN]
+  - Consider caching parsed character cards in addition to metadata — [OPEN]
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]
 - Height/scroll DRYing — [PARTIAL]

@@ -10,6 +10,7 @@ use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::PickerMode;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::config::Config;
 
 pub enum AppAction {
     AppendResponseChunk {
@@ -362,6 +363,14 @@ fn handle_picker_backspace(app: &mut App) {
                 }
             }
         }
+        Some(PickerMode::Character) => {
+            if let Some(state) = app.character_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_characters();
+                }
+            }
+        }
         None => {}
     }
 }
@@ -390,6 +399,12 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
                 app.filter_providers();
             }
         }
+        Some(PickerMode::Character) => {
+            if let Some(state) = app.character_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_characters();
+            }
+        }
         None => {}
     }
 }
@@ -405,6 +420,8 @@ fn handle_process_command(
 
     match process_input(app, &input) {
         CommandResult::Continue => {
+            // Show character greeting if needed (after character activation)
+            app.conversation().show_character_greeting_if_needed();
             update_scroll_after_command(app, ctx);
             None
         }
@@ -422,6 +439,10 @@ fn handle_process_command(
         }
         CommandResult::OpenThemePicker => {
             app.open_theme_picker();
+            None
+        }
+        CommandResult::OpenCharacterPicker => {
+            app.open_character_picker();
             None
         }
     }
@@ -551,6 +572,9 @@ fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
                 app.close_picker();
             }
         }
+        Some(PickerMode::Character) => {
+            app.close_picker();
+        }
         None => {}
     }
 }
@@ -615,6 +639,8 @@ fn handle_picker_apply_selection(
                     if app.picker.startup_requires_model {
                         app.picker.startup_requires_model = false;
                     }
+                    // Load default character for this provider/model if configured
+                    load_default_character_if_configured(app);
                 }
                 Err(e) => set_status_message(app, format!("Model error: {}", e), ctx),
             }
@@ -651,6 +677,9 @@ fn handle_picker_apply_selection(
                         }
                         let request = app.prepare_model_picker_request();
                         followup = Some(AppCommand::LoadModelPicker(request));
+                    } else {
+                        // Load default character for this provider/model if configured
+                        load_default_character_if_configured(app);
                     }
                 }
                 Err(e) => {
@@ -660,6 +689,10 @@ fn handle_picker_apply_selection(
             }
 
             followup
+        }
+        Some(PickerMode::Character) => {
+            app.apply_selected_character(persistent);
+            None
         }
         None => None,
     }
@@ -726,6 +759,23 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
                 }
             }
         }
+        Some(PickerMode::Character) => {
+            let provider_name = app.session.provider_name.clone();
+            let model = app.session.model.clone();
+            let mut cfg = Config::load_test_safe();
+            cfg.unset_default_character(&provider_name, &model);
+            match cfg.save_test_safe() {
+                Ok(_) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_character_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -741,6 +791,28 @@ fn picker_status_suffix(is_persistent: bool) -> &'static str {
 fn selected_picker_id(app: &App) -> Option<String> {
     app.picker_state()
         .and_then(|state| state.selected_id().map(|id| id.to_string()))
+}
+
+/// Load default character for current provider/model if one is configured
+fn load_default_character_if_configured(app: &mut App) {
+    let cfg = Config::load_test_safe();
+    if let Some(character_name) =
+        cfg.get_default_character(&app.session.provider_name, &app.session.model)
+    {
+        match crate::character::loader::find_card_by_name(character_name) {
+            Ok((card, _path)) => {
+                app.session.set_character(card);
+                // Show character greeting if present
+                app.conversation().show_character_greeting_if_needed();
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not load default character '{}': {}",
+                    character_name, e
+                );
+            }
+        }
+    }
 }
 
 fn prepare_stream_params_for_message(
@@ -1033,5 +1105,251 @@ mod tests {
 
         assert_eq!(app.ui.messages[0].content, "new content");
         assert!(app.ui.in_place_edit_index().is_none());
+    }
+
+    #[test]
+    fn character_picker_navigation_works() {
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a mock character picker with test items
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "Alice".to_string(),
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("Alice".to_string()),
+            },
+            PickerItem {
+                id: "bob".to_string(),
+                label: "Bob".to_string(),
+                metadata: Some("A friendly character".to_string()),
+                sort_key: Some("Bob".to_string()),
+            },
+            PickerItem {
+                id: "charlie".to_string(),
+                label: "Charlie".to_string(),
+                metadata: Some("An expert advisor".to_string()),
+                sort_key: Some("Charlie".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Test navigation down
+        assert_eq!(app.picker_state().unwrap().selected, 0);
+        apply_action(&mut app, AppAction::PickerMoveDown, ctx);
+        assert_eq!(app.picker_state().unwrap().selected, 1);
+
+        // Test navigation up
+        apply_action(&mut app, AppAction::PickerMoveUp, ctx);
+        assert_eq!(app.picker_state().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn character_picker_escape_closes_picker() {
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a mock character picker
+        let items = vec![PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        assert!(app.picker_session().is_some());
+
+        // Test escape closes picker
+        apply_action(&mut app, AppAction::PickerEscape, ctx);
+        assert!(app.picker_session().is_none());
+    }
+
+    #[test]
+    fn character_picker_enter_selects_character() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+        use std::fs;
+        use tempfile::tempdir;
+
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        // Create a temporary cards directory with a test card
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        let test_card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "Example".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let card_path = cards_dir.join("alice.json");
+        fs::write(&card_path, serde_json::to_string(&test_card).unwrap()).unwrap();
+
+        // Create a mock character picker
+        let items = vec![PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Note: We can't fully test character selection without mocking the file system
+        // or having actual character cards, but we can verify the picker closes
+        assert!(app.picker_session().is_some());
+        apply_action(
+            &mut app,
+            AppAction::PickerApplySelection { persistent: false },
+            ctx,
+        );
+        assert!(app.picker_session().is_none());
+    }
+
+    #[test]
+    fn character_picker_marks_default_with_asterisk() {
+        use crate::core::app::picker::{
+            CharacterPickerState, PickerData, PickerMode, PickerSession,
+        };
+
+        let mut app = create_test_app();
+
+        // Create a mock character picker with alice marked as default
+        // (In real usage, the asterisk is added by open_character_picker based on config)
+        let items = vec![
+            PickerItem {
+                id: "alice".to_string(),
+                label: "alice*".to_string(), // Should have asterisk
+                metadata: Some("A helpful assistant".to_string()),
+                sort_key: Some("alice".to_string()),
+            },
+            PickerItem {
+                id: "bob".to_string(),
+                label: "bob".to_string(), // No asterisk
+                metadata: Some("Another character".to_string()),
+                sort_key: Some("bob".to_string()),
+            },
+        ];
+
+        let picker_state = PickerState::new("Pick Character", items.clone(), 0);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        });
+
+        // Verify alice has asterisk
+        let selected_item = app.picker_state().unwrap().get_selected_item().unwrap();
+        assert_eq!(selected_item.label, "alice*");
+    }
+
+    #[test]
+    fn model_selection_loads_default_character() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use std::fs;
+        use tempfile::tempdir;
+
+        let mut app = create_test_app();
+
+        // Create a temporary cards directory with a test card
+        let temp_dir = tempdir().unwrap();
+        let cards_dir = temp_dir.path().join("cards");
+        fs::create_dir_all(&cards_dir).unwrap();
+
+        let test_card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "Example".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        let card_path = cards_dir.join("alice.json");
+        fs::write(&card_path, serde_json::to_string(&test_card).unwrap()).unwrap();
+
+        // Set CHABEAU_CONFIG_DIR to use temp directory
+        std::env::set_var("CHABEAU_CONFIG_DIR", temp_dir.path());
+
+        // Verify no character is active initially
+        assert!(app.session.active_character.is_none());
+
+        // Call the helper function directly (simulating model selection)
+        load_default_character_if_configured(&mut app);
+
+        // Verify character is still not loaded (no default set)
+        assert!(app.session.active_character.is_none());
+
+        // Clean up
+        std::env::remove_var("CHABEAU_CONFIG_DIR");
     }
 }

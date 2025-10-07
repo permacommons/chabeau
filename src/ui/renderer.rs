@@ -146,6 +146,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             Some(crate::core::app::PickerMode::Theme) => {
                 "Select a theme (Esc=cancel • Ctrl+C=quit)"
             }
+            Some(crate::core::app::PickerMode::Character) => {
+                "Select a character (Esc=cancel • Ctrl+C=quit)"
+            }
             _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
         }
     } else if app.ui.file_prompt().is_some() {
@@ -383,11 +386,20 @@ fn build_main_title(app: &App) -> String {
     } else {
         app.session.provider_display_name.clone()
     };
+
+    // Include character name if active
+    let character_display = if let Some(character) = &app.session.active_character {
+        format!(" • Character: {}", character.data.name)
+    } else {
+        String::new()
+    };
+
     format!(
-        "Chabeau v{} - {} ({}) • Logging: {}",
+        "Chabeau v{} - {} ({}){} • Logging: {}",
         env!("CARGO_PKG_VERSION"),
         provider_display,
         model_display,
+        character_display,
         app.get_logging_status()
     )
 }
@@ -419,6 +431,10 @@ fn generate_picker_help_text(app: &App) -> String {
             .unwrap_or(""),
         Some(crate::core::app::PickerMode::Provider) => app
             .provider_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
+        Some(crate::core::app::PickerMode::Character) => app
+            .character_picker_state()
             .map(|state| state.search_filter.as_str())
             .unwrap_or(""),
         _ => "",
@@ -491,8 +507,8 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 mod tests {
     use super::*;
     use crate::core::app::{
-        App, ModelPickerState, PickerData, PickerMode, PickerSession, ProviderPickerState,
-        ThemePickerState,
+        App, CharacterPickerState, ModelPickerState, PickerData, PickerMode, PickerSession,
+        ProviderPickerState, ThemePickerState,
     };
     use crate::ui::picker::PickerState;
     use crate::ui::theme::Theme;
@@ -554,6 +570,23 @@ mod tests {
                 search_filter: search_filter.to_string(),
                 all_items: items,
                 before_provider: None,
+            }),
+        });
+    }
+
+    fn set_character_picker(
+        app: &mut App,
+        search_filter: &str,
+        items: Vec<crate::ui::picker::PickerItem>,
+        selected: usize,
+    ) {
+        let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
+        app.picker.picker_session = Some(PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: search_filter.to_string(),
+                all_items: items,
             }),
         });
     }
@@ -702,5 +735,105 @@ mod tests {
         // Should still generate basic help text
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_character_picker() {
+        let mut app = create_test_app();
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
+        set_character_picker(&mut app, "", items, 0);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
+        assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
+        assert!(!help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_character_with_filter() {
+        let mut app = create_test_app();
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "alice".to_string(),
+            label: "Alice".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
+        set_character_picker(&mut app, "ali", items, 0);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort"));
+        assert!(!help_text.contains("Type=Filter"));
+    }
+
+    #[test]
+    fn test_generate_picker_help_text_character_with_default_selected() {
+        let mut app = create_test_app();
+        let items = vec![crate::ui::picker::PickerItem {
+            id: "alice".to_string(),
+            label: "Alice*".to_string(),
+            metadata: Some("A helpful assistant".to_string()),
+            sort_key: Some("Alice".to_string()),
+        }];
+        set_character_picker(&mut app, "", items, 0);
+
+        let help_text = generate_picker_help_text(&app);
+
+        assert!(help_text.contains("Del=Remove default"));
+    }
+
+    #[test]
+    fn title_shows_character_name_when_active() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+
+        // Set an active character
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+        app.session.active_character = Some(card);
+
+        let title = build_main_title(&app);
+        assert!(title.contains("Character: Alice"));
+        assert!(title.contains("OpenAI"));
+        assert!(title.contains("gpt-4"));
+    }
+
+    #[test]
+    fn title_does_not_show_character_when_none() {
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+        app.session.active_character = None;
+
+        let title = build_main_title(&app);
+        assert!(!title.contains("Character:"));
+        assert!(title.contains("OpenAI"));
+        assert!(title.contains("gpt-4"));
     }
 }

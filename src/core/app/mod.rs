@@ -22,15 +22,15 @@ pub use actions::{
 };
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use conversation::ConversationController;
-#[allow(unused_imports)]
+#[cfg(test)]
+pub use picker::PickerData;
 pub use picker::{
-    ModelPickerState, PickerController, PickerData, PickerMode, PickerSession, ProviderPickerState,
-    ThemePickerState,
+    CharacterPickerState, ModelPickerState, PickerController, PickerMode, PickerSession,
+    ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
-#[allow(unused_imports)]
-pub use ui_state::{ActivityKind, UiMode, UiState};
+pub use ui_state::{ActivityKind, UiState};
 
 pub async fn new_with_auth(
     model: String,
@@ -39,6 +39,7 @@ pub async fn new_with_auth(
     env_only: bool,
     config: &Config,
     pre_resolved_session: Option<ProviderSession>,
+    character: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
@@ -51,6 +52,7 @@ pub async fn new_with_auth(
         env_only,
         config,
         pre_resolved_session,
+        character,
     )
     .await?;
 
@@ -58,6 +60,7 @@ pub async fn new_with_auth(
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
+        character_cache: crate::character::cache::CardCache::new(),
     };
 
     app.ui.set_input_text(String::new());
@@ -89,6 +92,7 @@ pub async fn new_uninitialized(
         session,
         ui: UiState::from_config(theme, &config),
         picker,
+        character_cache: crate::character::cache::CardCache::new(),
     };
 
     app.ui.set_input_text(String::new());
@@ -101,6 +105,7 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
+    pub character_cache: crate::character::cache::CardCache,
 }
 
 #[derive(Clone)]
@@ -206,6 +211,8 @@ impl App {
             last_retry_time: std::time::Instant::now(),
             retrying_message_index: None,
             startup_env_only: false,
+            active_character: None,
+            character_greeting_shown: false,
         };
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
@@ -214,6 +221,7 @@ impl App {
             session,
             ui,
             picker: PickerController::new(),
+            character_cache: crate::character::cache::CardCache::new(),
         }
     }
 
@@ -335,6 +343,102 @@ impl App {
     /// Clear provider->model transition state when model is successfully selected
     pub fn complete_provider_model_transition(&mut self) {
         self.picker.complete_provider_model_transition();
+    }
+
+    /// Open a character picker modal with available character cards
+    pub fn open_character_picker(&mut self) {
+        if let Err(message) = self
+            .picker
+            .open_character_picker(&mut self.character_cache, &self.session)
+        {
+            self.conversation().set_status(message);
+        }
+    }
+
+    /// Apply the selected character from the picker
+    pub fn apply_selected_character(&mut self, set_as_default: bool) {
+        let character_name = self
+            .picker
+            .session()
+            .and_then(|picker| picker.state.selected_id())
+            .map(|s| s.to_string());
+
+        if let Some(character_name) = character_name {
+            // Check if user selected "turn off character mode"
+            if character_name == picker::TURN_OFF_CHARACTER_ID {
+                self.session.clear_character();
+                self.conversation()
+                    .set_status("Character mode disabled".to_string());
+                self.close_picker();
+                return;
+            }
+
+            match crate::character::loader::find_card_by_name(&character_name) {
+                Ok((card, _path)) => {
+                    let card_name = card.data.name.clone();
+                    self.session.set_character(card);
+
+                    // Show character greeting if present (won't show if already shown)
+                    self.conversation().show_character_greeting_if_needed();
+
+                    if set_as_default {
+                        // Set as default for current provider/model
+                        let provider = self.session.provider_name.clone();
+                        let model = self.session.model.clone();
+
+                        match Config::load() {
+                            Ok(mut config) => {
+                                config.set_default_character(
+                                    provider.clone(),
+                                    model.clone(),
+                                    character_name.to_string(),
+                                );
+                                if let Err(e) = config.save() {
+                                    self.conversation().set_status(format!(
+                                        "Character set: {} (failed to save as default: {})",
+                                        card_name, e
+                                    ));
+                                } else {
+                                    self.conversation().set_status(format!(
+                                        "Character set: {} (saved as default for {}:{})",
+                                        card_name, provider, model
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                self.conversation().set_status(format!(
+                                    "Character set: {} (failed to load config: {})",
+                                    card_name, e
+                                ));
+                            }
+                        }
+                    } else {
+                        self.conversation()
+                            .set_status(format!("Character set: {}", card_name));
+                    }
+                }
+                Err(e) => {
+                    self.conversation()
+                        .set_status(format!("Error loading character: {}", e));
+                }
+            }
+        }
+        self.close_picker();
+    }
+
+    /// Filter characters based on search term and update picker
+    pub fn filter_characters(&mut self) {
+        self.picker.filter_characters();
+    }
+
+    /// Get character picker state accessor
+    pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
+        self.picker.character_state()
+    }
+
+    /// Get mutable character picker state accessor
+    pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
+        self.picker.character_state_mut()
     }
 }
 
@@ -1190,5 +1294,58 @@ Some additional text after the table."#;
         let lines = app.ui.textarea.lines();
         assert_eq!(row, lines.len() - 1);
         assert_eq!(col, lines.last().unwrap().chars().count());
+    }
+
+    #[test]
+    fn test_turn_off_character_mode_from_picker() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestChar".to_string(),
+                description: "Test".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+        assert!(app.session.active_character.is_some());
+
+        app.picker.picker_session = Some(picker::PickerSession {
+            mode: picker::PickerMode::Character,
+            state: PickerState::new(
+                "Pick Character",
+                vec![PickerItem {
+                    id: picker::TURN_OFF_CHARACTER_ID.to_string(),
+                    label: "[Turn off character mode]".to_string(),
+                    metadata: Some("Disable character".to_string()),
+                    sort_key: None,
+                }],
+                0,
+            ),
+            data: picker::PickerData::Character(picker::CharacterPickerState {
+                search_filter: String::new(),
+                all_items: vec![],
+            }),
+        });
+
+        app.apply_selected_character(false);
+
+        assert!(app.session.active_character.is_none());
+        assert_eq!(app.ui.status.as_deref(), Some("Character mode disabled"));
     }
 }

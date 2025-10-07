@@ -189,6 +189,8 @@ pub fn create_test_app() -> App {
         last_retry_time: std::time::Instant::now(),
         retrying_message_index: None,
         startup_env_only: false,
+        active_character: None,
+        character_greeting_shown: false,
     };
 
     let ui = UiState::new_basic(Theme::dark_default(), true, true, None);
@@ -197,6 +199,7 @@ pub fn create_test_app() -> App {
         session,
         ui,
         picker: PickerController::new(),
+        character_cache: crate::character::cache::CardCache::new(),
     }
 }
 

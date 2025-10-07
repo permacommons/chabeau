@@ -2,6 +2,7 @@
 //!
 //! This module handles parsing command-line arguments and executing the appropriate commands.
 
+pub mod character_list;
 pub mod model_list;
 pub mod pick_default_model;
 pub mod pick_default_provider;
@@ -11,9 +12,11 @@ pub mod theme_list;
 use std::error::Error;
 
 use clap::{Parser, Subcommand};
+use once_cell::sync::Lazy;
 
 // Import specific items we need
 use crate::auth::AuthManager;
+use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
 use crate::cli::pick_default_model::pick_default_model;
 use crate::cli::pick_default_provider::pick_default_provider;
@@ -79,7 +82,11 @@ fn print_version_info() {
 }
 
 // Unified help text used for both short and long help
-const HELP_ABOUT: &str = "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
+// Uses Lazy to compute the cards directory path at runtime
+static HELP_ABOUT: Lazy<String> = Lazy::new(|| {
+    let cards_dir = crate::core::config::path_display(crate::character::loader::get_cards_dir());
+    format!(
+        "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
 Authentication:\n\
   Use 'chabeau auth' to set up credentials (OpenAI, OpenRouter, Poe, Anthropic, custom).\n\n\
 For one-off use, you can set environment variables (used only if no providers are configured, or with --env):\n\
@@ -90,16 +97,25 @@ To select providers (e.g., Anthropic, OpenAI) and their models:\n\
   • If only one provider is configured, Chabeau will use it.\n\
   • Otherwise, it will ask you to select the provider.\n\
   • It will then give you a choice of models.\n\n\
+Character cards:\n\
+  • Import character cards with 'chabeau import -c <file.json|file.png>'.\n\
+  • Use '-c [CHARACTER]' to start a chat with a specific character:\n\
+    - By name: '-c alice' (looks in {cards_dir})\n\
+    - By path: '-c ./alice.json' or '-c /path/to/alice.json'\n\
+  • Inside the TUI, type '/character' to select a character.\n\n\
   Tips:\n\
   • To make a choice the default, select it with [Alt+Enter], or use the CLI commands below.\n\
   • Inside the TUI, type '/help' for keys and commands.\n\
-  • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n";
+  • '-p [PROVIDER]' and '-m [MODEL]' select provider/model; '-p' or '-m' alone list them.\n",
+        cards_dir = cards_dir
+    )
+});
 
 #[derive(Parser)]
 #[command(name = "chabeau")]
-#[command(about = HELP_ABOUT)]
+#[command(about = HELP_ABOUT.as_str())]
 #[command(disable_version_flag = true, disable_help_flag = true)]
-#[command(long_about = HELP_ABOUT)]
+#[command(long_about = HELP_ABOUT.as_str())]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -123,6 +139,10 @@ pub struct Args {
     /// Use environment variables for auth (ignore keyring/config)
     #[arg(long = "env", global = true, action = clap::ArgAction::SetTrue)]
     pub env_only: bool,
+
+    /// Character card to use (name from cards dir, or file path), or list available characters if no character specified
+    #[arg(short = 'c', long, global = true, value_name = "CHARACTER", num_args = 0..=1, default_missing_value = "")]
+    pub character: Option<String>,
 
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
@@ -159,6 +179,15 @@ pub enum Commands {
     PickDefaultProvider,
     /// List available themes (built-in and custom)
     Themes,
+    /// Import and validate a character card
+    Import {
+        /// Path to character card file (JSON or PNG)
+        #[arg(short = 'c', long)]
+        card: String,
+        /// Force overwrite if card already exists
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 }
 
 pub fn main() -> Result<(), Box<dyn Error>> {
@@ -239,6 +268,44 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             config.print_all();
                         }
                     }
+                    "default-character" => {
+                        if value.len() >= 3 {
+                            let provider = value[0].to_string();
+                            let model = value[1].to_string();
+                            let character = value[2..].join(" ");
+
+                            // Validate that the character exists
+                            match crate::character::loader::find_card_by_name(&character) {
+                                Ok(_) => {
+                                    config.set_default_character(
+                                        provider.clone(),
+                                        model.clone(),
+                                        character.clone(),
+                                    );
+                                    config.save()?;
+                                    println!(
+                                        "✅ Set default character for '{}:{}' to: {}",
+                                        provider, model, character
+                                    );
+                                }
+                                Err(_) => {
+                                    eprintln!(
+                                        "❌ Character '{}' not found in cards directory",
+                                        character
+                                    );
+                                    eprintln!(
+                                        "   Run 'chabeau import -c <file>' to import a character card first"
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "⚠️  To set a default character, specify provider, model, and character:"
+                            );
+                            eprintln!("Example: chabeau set default-character openai gpt-4 alice");
+                        }
+                    }
                     _ => {
                         eprintln!("❌ Unknown config key: {key}");
                         std::process::exit(1);
@@ -272,6 +339,26 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         eprintln!("Example: chabeau unset default-model openai");
                     }
                 }
+                "default-character" => {
+                    if let Some(val) = value {
+                        let parts: Vec<&str> = val.splitn(2, ' ').collect();
+                        if parts.len() == 2 {
+                            let provider = parts[0];
+                            let model = parts[1];
+                            config.unset_default_character(provider, model);
+                            config.save()?;
+                            println!("✅ Unset default character for '{}:{}'", provider, model);
+                        } else {
+                            eprintln!(
+                                "⚠️  To unset a default character, specify provider and model:"
+                            );
+                            eprintln!("Example: chabeau unset default-character openai gpt-4");
+                        }
+                    } else {
+                        eprintln!("⚠️  To unset a default character, specify provider and model:");
+                        eprintln!("Example: chabeau unset default-character openai gpt-4");
+                    }
+                }
                 _ => {
                     eprintln!("❌ Unknown config key: {key}");
                     std::process::exit(1);
@@ -280,6 +367,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         None => {
+            // Check if -c was provided without a character name (empty string)
+            if args.character.as_deref() == Some("") {
+                // -c was provided without a value, list available characters
+                return list_characters().await;
+            }
+
             // Check if -p was provided without a provider name (empty string)
             match args.provider.as_deref() {
                 Some("") => {
@@ -294,6 +387,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         args.provider
                     };
 
+                    let character_for_operations = if args.character.as_deref() == Some("") {
+                        None // Don't pass empty string character to other operations
+                    } else {
+                        args.character
+                    };
+
                     match args.model.as_deref() {
                         Some("") => {
                             // -m was provided without a value, list available models
@@ -306,6 +405,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
+                                character_for_operations,
                             )
                             .await
                         }
@@ -316,6 +416,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.log,
                                 provider_for_operations,
                                 args.env_only,
+                                character_for_operations,
                             )
                             .await
                         }
@@ -335,5 +436,51 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             list_themes().await?;
             Ok(())
         }
+        Some(Commands::Import { card, force }) => {
+            match crate::character::import::import_card(&card, force) {
+                Ok(message) => {
+                    println!("{}", message);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("❌ Import failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_character_flag_parsing() {
+        // Test short flag
+        let args = Args::try_parse_from(["chabeau", "-c", "alice"]).unwrap();
+        assert_eq!(args.character, Some("alice".to_string()));
+
+        // Test long flag
+        let args = Args::try_parse_from(["chabeau", "--character", "bob"]).unwrap();
+        assert_eq!(args.character, Some("bob".to_string()));
+
+        // Test no character flag
+        let args = Args::try_parse_from(["chabeau"]).unwrap();
+        assert_eq!(args.character, None);
+
+        // Test character flag with path
+        let args = Args::try_parse_from(["chabeau", "-c", "path/to/card.json"]).unwrap();
+        assert_eq!(args.character, Some("path/to/card.json".to_string()));
+    }
+
+    #[test]
+    fn test_character_flag_with_other_flags() {
+        // Test character flag combined with model and provider
+        let args = Args::try_parse_from(["chabeau", "-c", "alice", "-m", "gpt-4", "-p", "openai"])
+            .unwrap();
+        assert_eq!(args.character, Some("alice".to_string()));
+        assert_eq!(args.model, Some("gpt-4".to_string()));
+        assert_eq!(args.provider, Some("openai".to_string()));
     }
 }

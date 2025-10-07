@@ -140,4 +140,20 @@ const COMMANDS: &[Command] = &[
         extra_help: &[],
         handler: super::handle_syntax,
     },
+    Command {
+        name: "character",
+        usages: &[
+            CommandUsage {
+                syntax: "/character",
+                description:
+                    "Pick a character card from available cards with filtering and sorting.",
+            },
+            CommandUsage {
+                syntax: "/character <name>",
+                description: "Load the specified character card for this session.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handle_character,
+    },
 ];

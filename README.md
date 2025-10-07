@@ -19,6 +19,7 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Built-in support for many common providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras)
 - Support for quick custom configuration of new OpenAI-compatible providers
 - Interactive dialogs for selecting models (e.g., Claude vs. GPT-5) and providers
+- Character card support (v2 format)
 - Extensible theming system that degrades gracefully to terminals with limited color support
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly) with compose mode for longer responses
@@ -81,28 +82,22 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
 chabeau --env     # Force using env vars even if providers are configured
 ```
 
-Environment variable values can make their way into shell histories or other places they shouldn't, 
-so using the keyring is generally advisable.
+Environment variable values can make their way into shell histories or other places they shouldn't, so using the keyring is generally advisable.
 
-### Configuration
+### Preferences
 
-Chabeau supports configuring default providers and models for a smoother experience. 
-The easiest way to do so is via the `/model` and `/provider` commands in the TUI,
-which open interactive pickers. Use Alt+Enter or Ctrl+J to persist a choice to the config.
+Chabeau stores its configuration in a `config.toml` file that's designed to be easy to read and edit.
 
-You can also do it on the command line:
+- Linux: `~/.config/chabeau/config.toml`
+- macOS: `~/Library/Applicaton Support/org.permacommons.chabeau/config.toml`
+
+Generally, though, you don't _have_ to edit it: When you use interactive commands like `/model`, `/provider`, `/theme` or `/provider`, you can use Alt+Enter or Ctrl+J to set an option as the default.
+
+You can also set values on the command line:
 
 ```bash
 chabeau set default-provider openai     # Set default provider
 chabeau set default-model openai gpt-4o # Set default model for a provider
-```
-
-There are also simplified interactive selectors:
-
-```bash
-chabeau pick-default-provider            # Interactive provider selection
-chabeau pick-default-model               # Interactive model selection
-chabeau pick-default-model --provider openai  # Select model for specific provider
 ```
 
 View current configuration:
@@ -112,11 +107,9 @@ chabeau set default-provider            # Show current configuration
 
 ### Themes
 
-Chabeau includes built-in themes to customize the TUI appearance.
+Chabeau includes built-in themes to customize the TUI appearance. Use `/theme` in the TUI to pick a theme, and use Alt+Enter or Ctrl+J to persist it to the config.
 
-
-- Use `/theme` in the TUI to pick a theme, and use Alt+Enter or Ctrl+J to persist it to the config.
-- You can also use the commmand line to set a default theme, e.g.:
+You can also use the commmand line to set a default theme, e.g.:
   - Set a theme: `chabeau set theme dark`
   - List themes: `chabeau themes` (shows built-in and custom, marks current)
 - Unset theme (revert to default): `chabeau unset theme`
@@ -127,16 +120,58 @@ Custom themes:
 - You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see [src/builtins/themes.toml](src/builtins/themes.toml) for examples).
 - Once added, set them with `chabeau set theme <your-theme-id>`.
 
-### Preferences
+### Character Cards
 
-You can persist UI preferences in your config file (`~/.config/chabeau/config.toml`).
+Chabeau supports character cards in the v2 format, allowing you to chat with AI personas. Character cards define personality, background, and conversation style.
 
-- `markdown = true|false` — Enable/disable Markdown rendering. Default: `true`.
-- `syntax = true|false` — Enable/disable syntax highlighting for fenced code blocks. Default: `true`.
+**Import a character card:**
+```bash
+chabeau import -c path/to/character.json    # Import JSON card
+chabeau import -c path/to/character.png     # Import PNG with embedded metadata
+chabeau import -c character.json --force    # Overwrite existing card
+```
 
-At runtime, use chat commands to toggle and persist:
+Cards are stored in the Chabeau configuration directory; you can also just copy them there yourself. Use `chabeau -c` to print the directory name and any cards Chabeau discovers.
+
+**Use a character:**
+
+```bash
+chabeau -c hypatia                          # Start with character by name
+chabeau -c hypatia.json                     # Start with character by filename
+```
+
+**In-app commands:**
+- `/character` — Open character picker (↑↓ to navigate, Enter to select, Alt+Enter to set as default)
+- `/character <name>` — Load character by name
+
+**Set default characters per provider/model:**
+In the TUI, use Alt+Enter or Ctrl+J in the character picker to set the selected character as default for your current provider/model combination.
+
+```bash
+chabeau set default-character openai gpt-4 hypatia
+chabeau unset default-character openai gpt-4
+chabeau set    # View all defaults including characters
+```
+
+**Example cards:**
+See `examples/hypatia.json` and `examples/darwin.json` for reference implementations.
+
+**Character card format:**
+Character cards follow the [v2 specification](https://github.com/malfoyslastname/character-card-spec-v2). Both JSON and PNG formats (with embedded metadata) are supported.
+
+**Troubleshooting:**
+- "Character not found": Ensure the card is in `~/.config/chabeau/cards/` or provide the full path
+- "Invalid card format": Verify the JSON structure matches the v2 spec with required fields (name, description, personality, scenario, first_mes, mes_example)
+- "PNG missing metadata": PNG files must contain a 'chara' tEXt chunk with base64-encoded JSON
+- Cards not appearing in picker: Check file permissions and ensure files have `.json` or `.png` extension
+
+### Markdown rendering and syntax highlighting
+
+At runtime, use chat commands to toggle these features:
 - `/markdown on|off|toggle`
 - `/syntax on|off|toggle`
+
+For simplicity, this setting is _always_ persisted to the config.
 
 Syntax colors adapt to the active theme (dark/light) and use the theme’s code block background for consistent contrast.
 
@@ -152,7 +187,7 @@ You can force a mode with `CHABEAU_COLOR=truecolor|256|16` if needed.
 
 ## Interface Controls
 
-See [the built-in help](src/builtins/help.md) for a full list of keyboard controls and commands.
+See [the built-in help](src/builtins/help.md) for a full list of keyboard controls.
 
 Most should be intuitive. A couple of choices may be a bit jarring at first:
 

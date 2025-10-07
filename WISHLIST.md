@@ -16,11 +16,11 @@ Items are removed when completed.
 - In-TUI default picker — [OPEN]
 - Tab completion for commands — [OPEN]
 - Support common "character cards" — [PARTIAL]
-  - Basic character card support implemented (import, load, picker) — [DONE]
   - Add "Show full description" feature for character picker — [OPEN]
-    - Currently descriptions are sanitized to single line to prevent TUI layout issues
     - Consider adding a detail view (e.g., press 'i' for info) to show full multi-line descriptions
-- Rapid initialization of "modes" like "Concise command help" or "Act as a reviewer for" — [OPEN]
+  - Message response presets (useful beyond character cards) [OPEN]
+  - Personas [OPEN]
+  - Prompt substitutions [OPEN]
 - Make assistant messages editable (may require further rethinking of input area) — [OPEN]
 - Basic "push a file into context" support — [OPEN]
 - "Rapid refine" - apply a previously created prompt to an output — [OPEN]

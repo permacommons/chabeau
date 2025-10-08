@@ -94,7 +94,7 @@ To select providers (e.g., Anthropic, OpenAI) and their models:\n\
   • Otherwise, it will ask you to select the provider.\n\
   • It will then give you a choice of models.\n\n\
 Character cards:\n\
-  • Import character cards with 'chabeau import -c <file.json|file.png>'.\n\
+  • Import character cards with 'chabeau import <file.json|file.png>'.\n\
   • Use '-c [CHARACTER]' to start a chat with a specific character:\n\
     - By name: '-c alice' (looks in {cards_dir})\n\
     - By path: '-c ./alice.json' or '-c /path/to/alice.json'\n\
@@ -171,7 +171,7 @@ pub enum Commands {
     /// Import and validate a character card
     Import {
         /// Path to character card file (JSON or PNG)
-        #[arg(short = 'c', long)]
+        #[arg(value_name = "CARD")]
         card: String,
         /// Force overwrite if card already exists
         #[arg(short = 'f', long)]
@@ -283,7 +283,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                         character
                                     );
                                     eprintln!(
-                                        "   Run 'chabeau import -c <file>' to import a character card first"
+                                        "   Run 'chabeau import <file>' to import a character card first"
                                     );
                                     std::process::exit(1);
                                 }

@@ -923,7 +923,7 @@ impl PickerController {
 
         if cards.is_empty() {
             return Err(
-                "No character cards found. Use 'chabeau import -c <file>' to import cards."
+                "No character cards found. Use 'chabeau import <file>' to import cards."
                     .to_string(),
             );
         }

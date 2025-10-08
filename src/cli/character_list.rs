@@ -13,7 +13,7 @@ pub async fn list_characters() -> Result<(), Box<dyn Error>> {
             if cards.is_empty() {
                 println!("  No character cards found.");
                 println!("\n💡 Import character cards with:");
-                println!("   chabeau import -c <file.json|file.png>");
+                println!("   chabeau import <file.json|file.png>");
             } else {
                 for (name, path) in cards {
                     let filename = path

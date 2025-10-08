@@ -195,9 +195,8 @@ impl App {
         self.ui.invalidate_prewrap_cache();
     }
 
-    // Used by Criterion benches in `benches/`.
     #[cfg(any(test, feature = "bench"))]
-    pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
+    pub fn new_test_app(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
         let session = SessionContext {
             client: reqwest::Client::new(),
             model: "bench".into(),
@@ -223,6 +222,12 @@ impl App {
             picker: PickerController::new(),
             character_cache: crate::character::cache::CardCache::new(),
         }
+    }
+
+    // Used by Criterion benches in `benches/`.
+    #[cfg(feature = "bench")]
+    pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
+        Self::new_test_app(theme, markdown_enabled, syntax_enabled)
     }
 
     pub fn get_logging_status(&self) -> String {

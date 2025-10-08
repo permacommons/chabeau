@@ -1117,7 +1117,7 @@ mod tests {
     }
 
     fn setup_app() -> App {
-        App::new_bench(Theme::dark_default(), true, true)
+        App::new_test_app(Theme::dark_default(), true, true)
     }
 
     fn default_context() -> AppActionContext {

@@ -514,7 +514,7 @@ mod tests {
     use crate::ui::theme::Theme;
 
     fn create_test_app() -> App {
-        App::new_bench(Theme::dark_default(), true, false)
+        App::new_test_app(Theme::dark_default(), true, false)
     }
 
     fn set_model_picker(

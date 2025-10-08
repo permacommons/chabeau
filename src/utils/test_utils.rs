@@ -1,13 +1,9 @@
 #[cfg(test)]
-use crate::core::app::ui_state::UiState;
-#[cfg(test)]
-use crate::core::app::{App, PickerController, SessionContext};
+use crate::core::app::App;
 #[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::theme::Theme;
-#[cfg(test)]
-use crate::utils::logging::LoggingState;
 #[cfg(test)]
 use once_cell::sync::Lazy;
 #[cfg(test)]
@@ -176,31 +172,13 @@ impl Default for TestEnvVarGuard {
 
 #[cfg(test)]
 pub fn create_test_app() -> App {
-    let session = SessionContext {
-        client: reqwest::Client::new(),
-        model: "test-model".to_string(),
-        api_key: "test-key".to_string(),
-        base_url: "https://api.test.com".to_string(),
-        provider_name: "test".to_string(),
-        provider_display_name: "Test".to_string(),
-        logging: LoggingState::new(None).unwrap(),
-        stream_cancel_token: None,
-        current_stream_id: 0,
-        last_retry_time: std::time::Instant::now(),
-        retrying_message_index: None,
-        startup_env_only: false,
-        active_character: None,
-        character_greeting_shown: false,
-    };
-
-    let ui = UiState::new_basic(Theme::dark_default(), true, true, None);
-
-    App {
-        session,
-        ui,
-        picker: PickerController::new(),
-        character_cache: crate::character::cache::CardCache::new(),
-    }
+    let mut app = App::new_test_app(Theme::dark_default(), true, true);
+    app.session.model = "test-model".to_string();
+    app.session.api_key = "test-key".to_string();
+    app.session.base_url = "https://api.test.com".to_string();
+    app.session.provider_name = "test".to_string();
+    app.session.provider_display_name = "Test".to_string();
+    app
 }
 
 #[cfg(test)]

@@ -2,24 +2,36 @@
 
 ![Chabeau rendering a complex table](chabeau.png)
 
+Chabeau is a full-screen terminal chat interface that connects to various AI APIs for real-time conversations. Chabeau brings the convenience of modern chat UIs to the terminal with a focus on speed, ergonomics, and sensible defaults. It is not a coding agent.
+
 **See several of Chabeau's features in action in [this short video](https://permacommons.org/videos/chabeau-0.4.0.mp4).**
-
-A full-screen terminal chat interface that connects to various AI APIs for real-time conversations.
-
-Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings the conveniences of web-based chat UIs to the terminal. Its focus is on conversation and speed.
-
-**NOTE:** This is pre-alpha software. It has been tested on Linux and macOS.
 
 ![Our friendly mascot](chabeau-mascot-small.png)
 
-## Features
+## Table of Contents
+- [Overview](#overview)
+- [Feature Highlights](#feature-highlights)
+- [Getting Started](#getting-started)
+  - [Install](#install)
+  - [Authenticate](#authenticate)
+  - [Launch](#launch)
+- [Working with Providers and Models](#working-with-providers-and-models)
+- [Configuration](#configuration)
+- [Character Cards](#character-cards)
+- [Appearance and Rendering](#appearance-and-rendering)
+- [Keyboard and Workflow Tips](#keyboard-and-workflow-tips)
+- [Architecture Overview](#architecture-overview)
+- [Development](#development)
+- [License](#license)
+
+## Feature Highlights
 
 - Full-screen terminal UI with real-time streaming responses
 - Markdown rendering in the chat area (headings, lists, quotes, tables, callouts, superscript/subscript, inline/fenced code) with clickable OSC 8 hyperlinks
 - Built-in support for many common providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras)
 - Support for quick custom configuration of new OpenAI-compatible providers
-- Interactive dialogs for selecting models (e.g., Claude vs. GPT-5) and providers
-- Character card support (v2 format)
+- Interactive dialogs for selecting models and providers
+- Character card support (v2 format) with in-app picker and defaults per provider/model
 - Extensible theming system that degrades gracefully to terminals with limited color support
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly) with compose mode for longer responses
@@ -28,30 +40,29 @@ Chabeau is not a coding agent, nor does it aspire to be one. Instead, it brings 
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
 
-For features under consideration, see [WISHLIST.md](WISHLIST.md)
+For features under consideration, see [WISHLIST.md](WISHLIST.md).
 
-## Quick Start
+## Getting Started
 
-### Installation
+### Install
 ```bash
 cargo install chabeau
 ```
 
-### Setup Authentication
+### Authenticate
 ```bash
 chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, or custom providers
 ```
 
-### Start Chatting
+### Launch
 ```bash
 chabeau         # Uses defaults; opens pickers when needed
 ```
 
 Inside the TUI, use `/provider` and `/model` to switch, and `/help` to see a full breakdown of commands and keyboard shortcuts.
 
-## Usage
+## Working with Providers and Models
 
-### Basic Commands
 ```bash
 chabeau                              # Start chat with defaults (pickers on demand)
 chabeau --provider openai            # Use specific provider
@@ -59,21 +70,22 @@ chabeau --model gpt-5                # Use specific model
 chabeau --log conversation.log       # Enable logging immediately on startup
 ```
 
-### Discovery
+Discover available options:
+
 ```bash
 chabeau -p                           # List providers and auth status
 chabeau -m                           # List available models
 chabeau -p openrouter -m             # List models for specific provider
 ```
 
-### Authentication Management
+Manage authentication from the CLI:
+
 ```bash
 chabeau auth                         # Set up authentication
 chabeau deauth                       # Remove authentication (interactive)
 chabeau deauth --provider openai     # Remove specific provider
 ```
 
-### Environment Variables (--env or fallback)
 Environment variables are used only if no providers are configured, or when you pass `--env`.
 
 ```bash
@@ -84,193 +96,197 @@ chabeau --env     # Force using env vars even if providers are configured
 
 Environment variable values can make their way into shell histories or other places they shouldn't, so using the keyring is generally advisable.
 
-### Preferences
+## Configuration
 
-Chabeau stores its configuration in a `config.toml` file that's designed to be easy to read and edit.
+Chabeau stores its configuration in `config.toml`.
 
 - Linux: `~/.config/chabeau/config.toml`
-- macOS: `~/Library/Applicaton Support/org.permacommons.chabeau/config.toml`
+- macOS: `~/Library/Application Support/org.permacommons.chabeau/config.toml`
 
-Generally, though, you don't _have_ to edit it: When you use interactive commands like `/model`, `/provider`, `/theme` or `/provider`, you can use Alt+Enter or Ctrl+J to set an option as the default.
+Generally, you can rely on the UI: when you use interactive commands like `/model`, `/provider`, `/theme`, or `/character`, press Alt+Enter (or Ctrl+J) to persist the selection.
 
-You can also set values on the command line:
+Command-line helpers mirror those flows:
 
 ```bash
-chabeau set default-provider openai     # Set default provider
-chabeau set default-model openai gpt-4o # Set default model for a provider
+# Set default provider
+chabeau set default-provider openai
+
+# Set default model for a provider
+chabeau set default-model openai gpt-4o
+
+# Persist a theme
+chabeau set theme dark
+
+# Set default character (per provider and model)
+chabeau set default-character openai gpt-4 hypatia
+
+# Print the current configuration
+chabeau set
 ```
 
-View current configuration:
-```bash
-chabeau set default-provider            # Show current configuration
-```
+Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory and adjust it to suit your setup. The sample covers provider defaults, markdown/syntax toggles, custom providers, custom themes, and character assignments.
 
-### Themes
+## Character Cards
 
-Chabeau includes built-in themes to customize the TUI appearance. Use `/theme` in the TUI to pick a theme, and use Alt+Enter or Ctrl+J to persist it to the config.
+Chabeau supports character cards in the v2 format, letting you chat with AI personas that define tone, background, and greeting. Cards can be JSON or PNG files (with embedded metadata).
 
-You can also use the commmand line to set a default theme, e.g.:
-  - Set a theme: `chabeau set theme dark`
-  - List themes: `chabeau themes` (shows built-in and custom, marks current)
-- Unset theme (revert to default): `chabeau unset theme`
-
-Auto-detection: when no theme is set in your config, Chabeau tries to infer a sensible default from the OS preference (e.g., macOS, Windows, GNOME). If no hint is available, it defaults to the dark theme.
-
-Custom themes:
-- You can define custom themes in your config file (`~/.config/chabeau/config.toml`) under `[[custom_themes]]` entries with fields matching the built-ins (see [src/builtins/themes.toml](src/builtins/themes.toml) for examples).
-- Once added, set them with `chabeau set theme <your-theme-id>`.
-
-### Character Cards
-
-Chabeau supports character cards in the v2 format, allowing you to chat with AI personas. Character cards define personality, background, and conversation style.
-
-**Import a character card:**
+### Import and Manage Cards
 ```bash
 chabeau import -c path/to/character.json    # Import JSON card
 chabeau import -c path/to/character.png     # Import PNG with embedded metadata
 chabeau import -c character.json --force    # Overwrite existing card
 ```
 
-Cards are stored in the Chabeau configuration directory; you can also just copy them there yourself. Use `chabeau -c` to print the directory name and any cards Chabeau discovers. To point Chabeau at a different cards directory (for example, when testing or keeping cards in a synced folder), set the `CHABEAU_CARDS_DIR` environment variable before launching the app.
+Cards are stored in the Chabeau configuration directory. Use `chabeau -c` to print the directory name and any cards Chabeau discovers.
 
-**Use a character:**
-
+### Use Characters in Chat
 ```bash
 chabeau -c hypatia                          # Start with character by name
 chabeau -c hypatia.json                     # Start with character by filename
 ```
 
-**In-app commands:**
-- `/character` — Open character picker (↑↓ to navigate, Enter to select, Alt+Enter to set as default)
-- `/character <name>` — Load character by name
+In the TUI, `/character` opens the character picker (↑↓ to navigate, Enter to select, Alt+Enter to set as default). You can also run `/character <name>` for quick switches.
 
-**Set default characters per provider/model:**
-In the TUI, use Alt+Enter or Ctrl+J in the character picker to set the selected character as default for your current provider/model combination.
+### Defaults and Directories
+
+Set defaults for provider/model combinations via Alt+Enter (or Ctrl+J) in the picker, or on the CLI:
 
 ```bash
 chabeau set default-character openai gpt-4 hypatia
 chabeau unset default-character openai gpt-4
-chabeau set    # View all defaults including characters
 ```
 
-**Example cards:**
-See `examples/hypatia.json` and `examples/darwin.json` for reference implementations.
+To use a separate cards directory, set the `CHABEAU_CARDS_DIR` environment variable before launching Chabeau.
 
-**Character card format:**
-Character cards follow the [v2 specification](https://github.com/malfoyslastname/character-card-spec-v2). Both JSON and PNG formats (with embedded metadata) are supported.
+Example cards live in [examples/hypatia.json](examples/hypatia.json) and [examples/darwin.json](examples/darwin.json).
 
-**Troubleshooting:**
-- "Character not found": Ensure the card is in `~/.config/chabeau/cards/` or provide the full path
-- "Invalid card format": Verify the JSON structure matches the v2 spec with required fields (name, description, personality, scenario, first_mes, mes_example)
-- "PNG missing metadata": PNG files must contain a 'chara' tEXt chunk with base64-encoded JSON
-- Cards not appearing in picker: Check file permissions and ensure files have `.json` or `.png` extension
+### Troubleshooting
 
-### Markdown rendering and syntax highlighting
+- "Character not found": ensure the card is in `~/.config/chabeau/cards/` (or its equivalent on macOS or Windows) or provide the full path.
+- "Invalid card format": verify the JSON structure matches the v2 spec with required fields (name, description, personality, scenario, first_mes, mes_example).
+- "PNG missing metadata": PNG files must contain a `chara` tEXt chunk with base64-encoded JSON.
+- Cards not appearing in picker: check file permissions and ensure files have `.json` or `.png` extensions.
 
-At runtime, use chat commands to toggle these features:
+### Format Reference
+
+Character cards follow the [v2 specification](https://github.com/malfoyslastname/character-card-spec-v2).
+
+## Appearance and Rendering
+
+### Themes
+
+Chabeau ships with built-in themes and supports custom ones. Use `/theme` in the TUI to preview and Alt+Enter (or Ctrl+J) to persist the choice. On the CLI, run:
+
+```bash
+chabeau set theme dark   # Set a theme
+chabeau themes           # List themes (built-in and custom)
+chabeau unset theme      # Revert to default detection
+```
+
+When no explicit theme is set, Chabeau tries to infer a sensible default from your OS preference (e.g., macOS, Windows, GNOME). If no hint is available, it defaults to the dark theme.
+
+Custom themes belong in `config.toml` under `[[custom_themes]]`. See [src/builtins/themes.toml](src/builtins/themes.toml) for color references and [examples/config.toml.sample](examples/config.toml.sample) for structure.
+
+### Markdown and Syntax Highlighting
+
+Toggle these features at runtime:
+
 - `/markdown on|off|toggle`
 - `/syntax on|off|toggle`
 
-For simplicity, this setting is _always_ persisted to the config.
-
-Syntax colors adapt to the active theme (dark/light) and use the theme’s code block background for consistent contrast.
+Chabeau persists these preferences to the config file automatically. Syntax colors adapt to the active theme and use the theme’s code block background for consistent contrast.
 
 ### Color Support
 
 Chabeau detects terminal color depth and adapts themes accordingly:
 
-- Truecolor: if `COLORTERM` contains `truecolor`/`24bit`, Chabeau uses 24‑bit RGB.
-- 256 colors: if `TERM` contains `256color`, RGB colors are quantized to the xterm‑256 palette.
-- ANSI 16: otherwise, colors are mapped to the nearest 16 ANSI colors.
+- Truecolor: if `COLORTERM` contains `truecolor` or `24bit`, Chabeau uses 24-bit RGB.
+- 256 colors: if `TERM` contains `256color`, RGB colors are quantized to the xterm-256 palette.
+- ANSI 16: otherwise, colors map to the nearest 16 ANSI colors.
 
-You can force a mode with `CHABEAU_COLOR=truecolor|256|16` if needed.
+Force a mode when needed with `CHABEAU_COLOR=truecolor|256|16`.
 
-## Interface Controls
+## Keyboard and Workflow Tips
 
-See [the built-in help](src/builtins/help.md) for a full list of keyboard controls.
+### Interface Controls
 
-Most should be intuitive. A couple of choices may be a bit jarring at first:
+See [the built-in help](src/builtins/help.md) for a full list of keyboard controls. A few highlights:
 
-- Alt+Enter (or Ctrl+J) to start a new line: We've found this to be most reliable across terminals.
+- Alt+Enter (or Ctrl+J) to start a new line; Enter sends; Shift+arrow moves cursor in the input area.
 - Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
 - Tab autocompletes slash commands so you can discover options quickly.
 
-Feedback and suggestions are always welcome!
+### Mousewheel
 
-## Mousewheel Use
-
-We avoid capturing the mouse so that selection operation (copy/paste) work without issues. Some terminals treat mousewheel events as cursor key input,
-so scrolling the mousewheel will scroll the conversation.
-
-In other terminals, scrolling the mousewheel may reveal the contents of your terminal prior to your launch of Chabeau. In that case, we recommend using the cursor keys or PgUp/PgDn instead.
+Chabeau avoids capturing the mouse so selection operations (copy/paste) work as expected. Some terminals treat mousewheel events as cursor key input, so scrolling moves the conversation. Others reveal terminal history; in that case, use the cursor keys or PgUp/PgDn instead.
 
 ### External Editor
-Set `EDITOR` environment variable:
+
+Set the `EDITOR` environment variable to compose longer responses in your favorite editor:
+
 ```bash
 export EDITOR=nano          # or vim, code, etc.
 export EDITOR="code --wait" # VS Code with wait
 ```
 
-Once the variable is set, you can compose messages using the external editor via Ctrl+T.
+Once set, press Ctrl+T in the TUI to launch the external editor.
 
-## Architecture
+## Architecture Overview
 
-Modular design with focused components:
+Chabeau uses a modular design with focused components:
 
-- `main.rs` - Entry point
-- `builtins/` - Build-time assets embedded into the binary
-  - `models.toml` - Supported provider definitions
-  - `themes.toml` - Built-in UI themes
-  - `help.md` - In-app keyboard shortcut and command reference
-- `cli/` - Command-line interface parsing and handling
-  - `mod.rs` - CLI argument parsing and command dispatching
-  - `model_list.rs` - Model listing functionality
-  - `provider_list.rs` - Provider listing functionality
-  - `character_list.rs` - Character card listing functionality
-  - `pick_default_model.rs` - Default model configuration
-  - `pick_default_provider.rs` - Default provider configuration
-- `core/` - Core application components
-  - `app/` - Application state and controllers
-    - `mod.rs` - App struct and module exports
-    - `actions.rs` - Internal action definitions and dispatcher for chat loop updates, including
-      queued input edits, picker navigation, and command submission
-    - `conversation.rs` - Conversation controller for chat flow, retries, and streaming helpers
-    - `session.rs` - Session bootstrap and provider/model state
-    - `settings.rs` - Theme and provider controllers
-    - `ui_state.rs` - UI state management and text input helpers
-  - `chat_stream.rs` - Shared streaming service that feeds responses to the app, UI, and loggers
-  - `builtin_providers.rs` - Built-in provider configuration (loads from `builtins/models.toml`)
-  - `config.rs` - Configuration management
-  - `message.rs` - Message data structures
-- `auth/` - Authentication and provider management
-  - `mod.rs` - Authentication manager implementation
-- `character/` - Character card support (v2 format)
-  - `mod.rs` - Module exports and public API
-  - `card.rs` - Character card data structures and v2 spec parsing
-  - `loader.rs` - Card file loading (JSON and PNG with metadata extraction)
-  - `cache.rs` - In-memory caching with invalidation
-  - `import.rs` - Import command and validation logic
-- `api/` - API types and models
-  - `mod.rs` - API data structures
-  - `models.rs` - Model fetching and sorting functionality
-- `ui/` - Terminal interface rendering
-  - `mod.rs` - UI module declarations
-  - `chat_loop/` - Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
-  - `layout.rs` - Shared width-aware layout engine for Markdown and plain text
-  - `markdown.rs` / `markdown_wrap.rs` - Markdown renderer and wrapping helpers that emit span metadata
-  - `renderer.rs` - Terminal interface rendering (chat area, input, pickers)
-  - `osc_backend.rs` / `osc_state.rs` / `osc.rs` - Crossterm backend wrapper that emits OSC 8 hyperlinks
-  - `picker.rs` / `appearance.rs` / `theme.rs` - Picker controls and theming utilities
-- `utils/` - Utility functions and helpers
-  - `mod.rs` - Utility module declarations
-  - `color.rs` - Terminal color detection and palette quantization
-  - `editor.rs` - External editor integration
-  - `logging.rs` - Chat logging functionality
-  - `scroll.rs` - Text wrapping and scroll calculations
-  - `clipboard.rs` - Cross-platform clipboard helper
-- `commands/` - Chat command processing and registry-driven dispatch
-  - `mod.rs` - Command handlers and dispatcher
-  - `registry.rs` - Static command metadata registry
+- `main.rs` – Entry point
+- `builtins/` – Build-time assets embedded into the binary
+  - `models.toml` – Supported provider definitions
+  - `themes.toml` – Built-in UI themes
+  - `help.md` – In-app keyboard shortcut and command reference
+- `cli/` – Command-line interface parsing and handling
+  - `mod.rs` – CLI argument parsing and command dispatching
+  - `model_list.rs` – Model listing functionality
+  - `provider_list.rs` – Provider listing functionality
+  - `character_list.rs` – Character card listing functionality
+  - `theme_list.rs` – Theme listing functionality
+- `core/` – Core application components
+  - `app/` – Application state and controllers
+    - `mod.rs` – App struct and module exports
+    - `actions.rs` – Internal action definitions and dispatcher for chat loop updates
+    - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
+    - `session.rs` – Session bootstrap and provider/model state
+    - `settings.rs` – Theme and provider controllers
+    - `ui_state.rs` – UI state management and text input helpers
+  - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
+  - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
+  - `config.rs` – Configuration management
+  - `message.rs` – Message data structures
+- `auth/` – Authentication and provider management
+  - `mod.rs` – Authentication manager implementation
+- `character/` – Character card support (v2 format)
+  - `mod.rs` – Module exports and public API
+  - `card.rs` – Character card data structures and v2 spec parsing
+  - `loader.rs` – Card file loading (JSON and PNG with metadata extraction)
+  - `cache.rs` – In-memory caching with invalidation
+  - `import.rs` – Import command and validation logic
+- `api/` – API types and models
+  - `mod.rs` – API data structures
+  - `models.rs` – Model fetching and sorting functionality
+- `ui/` – Terminal interface rendering
+  - `mod.rs` – UI module declarations
+  - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
+  - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
+  - `markdown.rs` / `markdown_wrap.rs` – Markdown renderer and wrapping helpers that emit span metadata
+  - `renderer.rs` – Terminal interface rendering (chat area, input, pickers)
+  - `osc_backend.rs` / `osc_state.rs` / `osc.rs` – Crossterm backend wrapper that emits OSC 8 hyperlinks
+  - `picker.rs` / `appearance.rs` / `theme.rs` – Picker controls and theming utilities
+- `utils/` – Utility functions and helpers
+  - `mod.rs` – Utility module declarations
+  - `color.rs` – Terminal color detection and palette quantization
+  - `editor.rs` – External editor integration
+  - `logging.rs` – Chat logging functionality
+  - `scroll.rs` – Text wrapping and scroll calculations
+  - `clipboard.rs` – Cross-platform clipboard helper
+- `commands/` – Chat command processing and registry-driven dispatch
+  - `mod.rs` – Command handlers and dispatcher
+  - `registry.rs` – Static command metadata registry
 
 ## Development
 
@@ -289,11 +305,10 @@ Chabeau includes lightweight performance checks in the unit test suite and suppo
   - Short history prewrap (50 iters, ~60 lines): warns at ≥ 90ms; fails at ≥ 200ms.
   - Large history prewrap (20 iters, ~400 lines): warns at ≥ 400ms; fails at ≥ 1000ms.
   - Run with: `cargo test` (warnings print to stderr; tests only fail past the fail thresholds).
-
 - Optional benches (release mode) using Criterion 0.7:
-  - A `render_cache` bench is checked in to validate the cached prewrapped rendering path.
+  - A `render_cache` bench validates the cached prewrapped rendering path.
   - Run: `cargo bench`
-  - Reports: `target/criterion/` (HTML under `report/index.html`).
+  - Reports live in `target/criterion/` (HTML under `report/index.html`).
   - To add new benches, create files under `benches/` (e.g., `benches/my_bench.rs`) and use Criterion’s `criterion_group!/criterion_main!`.
   - Benches import internal modules via `src/lib.rs` (e.g., `use chabeau::...`).
 

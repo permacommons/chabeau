@@ -126,9 +126,9 @@ Chabeau supports character cards in the v2 format, allowing you to chat with AI 
 
 **Import a character card:**
 ```bash
-chabeau import -c path/to/character.json    # Import JSON card
-chabeau import -c path/to/character.png     # Import PNG with embedded metadata
-chabeau import -c character.json --force    # Overwrite existing card
+chabeau import path/to/character.json       # Import JSON card
+chabeau import path/to/character.png        # Import PNG with embedded metadata
+chabeau import character.json --force       # Overwrite existing card
 ```
 
 Cards are stored in the Chabeau configuration directory; you can also just copy them there yourself. Use `chabeau -c` to print the directory name and any cards Chabeau discovers. To point Chabeau at a different cards directory (for example, when testing or keeping cards in a synced folder), set the `CHABEAU_CARDS_DIR` environment variable before launching the app.

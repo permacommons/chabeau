@@ -1,0 +1,53 @@
+# Sample Chabeau configuration file.
+# Copy this to your platform's config directory to customize defaults:
+#   Linux:   ~/.config/chabeau/config.toml
+#   macOS:   ~/Library/Application Support/org.permacommons.chabeau/config.toml
+#   Windows: %APPDATA%/chabeau/config.toml
+
+# Select which provider Chabeau starts with.
+# Use `chabeau set default-provider <provider>` to update this interactively.
+default_provider = "poe"
+
+# Enable or disable rich text rendering features.
+# These options also toggle when you run `/markdown` or `/syntax` in the TUI.
+markdown = true
+syntax = true
+
+# Choose a theme. Built-in options include: dark, light, solarized-dark, solarized-light.
+# Use `/theme` (Alt+Enter to persist) or `chabeau set theme <theme-id>`.
+theme = "dark"
+
+# Persist default models per provider.
+# Set them with: `chabeau set default-model <provider> <model>`
+[default_models]
+poe = "gpt-5-chat"
+anthropic = "claude-sonnet-4-5-20250929"
+
+# Configure default characters by provider and model.
+# Values refer to filenames in your cards directory without extensions
+# (e.g., hypatia for hypatia.json or hypatia.png).
+[default_characters]
+  [default_characters.poe]
+  "gpt-5-chat" = "hypatia"
+
+# Register custom OpenAI-compatible providers, each in its own
+# [[custom_providers]] block.
+#
+# These appear alongside built-ins when you run `/provider` or `chabeau -p`.
+[[custom_providers]]
+id = "myproxy"
+display_name = "My Proxy"
+base_url = "https://api.example.com/v1"
+
+# Add custom themes, each in its own [[custom_themes]] block.
+#
+# Select them with `/theme` in the app.
+[[custom_themes]]
+id = "midnight"
+display_name = "Midnight"
+background = "#050810"
+user_text = "#9cdcfe"
+assistant_text = "#ce9178"
+selection_highlight = "#264f78"
+input_border = "#3a3d41"
+

@@ -2,9 +2,18 @@
 
 ## Unreleased
 
+### Added
+- Introduced character cards across the CLI and TUI, including import commands, picker navigation, API injection, and default assignments per provider/model (`src/character`, `src/cli`, `src/commands`, `src/core/app`).
+- Added a slash command registry with Tab completion to make command discovery faster (`src/commands`, `src/ui/chat_loop`).
+
 ### Changed
 - Removed the `pick-default-model` and `pick-default-provider` CLI commands in favor of the TUI pickers and `chabeau set`.
 - Upgraded the Markdown parser to pulldown-cmark 0.13, unlocking GitHub-flavored callouts alongside superscript and subscript inline syntax (`Cargo.toml`, `src/ui/markdown.rs`).
+- Streamlined chat loop action handling to reduce lock contention and centralize picker, retry, and submission flows (`src/core/app`, `src/ui/chat_loop`).
+
+### Fixed
+- Ensured conversation logging initializes the output file immediately when logging starts (`src/utils/logging.rs`).
+- Reused provider sessions to avoid redundant authentication prompts when switching providers (`src/core/app/session.rs`).
 
 ## 0.4.0
 

@@ -261,8 +261,31 @@ mod tests {
     use super::*;
     use crate::character::CharacterData;
     use crate::utils::test_utils::TestEnvVarGuard;
+    use std::fs;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
+
+    struct CardsDirTestEnv {
+        _env_guard: TestEnvVarGuard,
+        temp_dir: TempDir,
+    }
+
+    impl CardsDirTestEnv {
+        fn new() -> Self {
+            let temp_dir = TempDir::new().expect("failed to create temp cards dir");
+            let mut env_guard = TestEnvVarGuard::new();
+            env_guard.set_var("CHABEAU_CARDS_DIR", temp_dir.path().as_os_str());
+
+            Self {
+                _env_guard: env_guard,
+                temp_dir,
+            }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.temp_dir.path()
+        }
+    }
 
     fn create_valid_card_json() -> String {
         serde_json::json!({
@@ -917,27 +940,47 @@ mod tests {
 
     #[test]
     fn test_list_available_cards_empty_directory() {
-        // When the cards directory doesn't exist, should return empty list
-        // This test assumes the cards directory doesn't exist or is empty
-        // In a real scenario, we'd use a temp directory
-        let result = list_available_cards();
-        assert!(result.is_ok());
-        // We can't assert it's empty because the user might have cards installed
-    }
+        // Ensure the cards directory is isolated per test
+        let _cards_env = CardsDirTestEnv::new();
 
-    #[test]
-    fn test_list_available_cards_with_test_cards() {
-        // If test-cards directory has valid cards, we can test with those
-        // But since list_available_cards() looks in the config directory,
-        // we need to test with actual config directory cards
         let result = list_available_cards();
         assert!(result.is_ok());
 
         let cards = result.unwrap();
-        // Cards should be sorted by name
-        for i in 1..cards.len() {
-            assert!(cards[i - 1].0 <= cards[i].0);
-        }
+        assert!(cards.is_empty());
+    }
+
+    #[test]
+    fn test_list_available_cards_with_test_cards() {
+        let env = CardsDirTestEnv::new();
+        let card_path = env.path().join("sample_card.json");
+
+        let card_json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Temp Tester",
+                "description": "Temporary card for list tests",
+                "personality": "Curious",
+                "scenario": "Running unit tests",
+                "first_mes": "Hello from a temp card!",
+                "mes_example": "{{user}}: Hi\n{{char}}: Hello!"
+            }
+        });
+
+        fs::write(
+            &card_path,
+            serde_json::to_string_pretty(&card_json).unwrap(),
+        )
+        .unwrap();
+
+        let result = list_available_cards();
+        assert!(result.is_ok());
+
+        let cards = result.unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].0, "Temp Tester");
+        assert_eq!(cards[0].1, card_path);
     }
 
     #[test]

@@ -58,6 +58,12 @@ pub struct Config {
     /// Value: character card filename without extension (e.g., "alice" for alice.json or alice.png)
     #[serde(default)]
     pub default_characters: HashMap<String, HashMap<String, String>>,
+    /// Default personas for provider/model combinations
+    /// Outer key: provider (e.g., "openai")
+    /// Inner key: model (e.g., "gpt-4")
+    /// Value: persona ID (e.g., "alice-dev")
+    #[serde(default)]
+    pub default_personas: HashMap<String, HashMap<String, String>>,
     /// User-defined personas for conversation contexts
     #[serde(default)]
     pub personas: Vec<Persona>,
@@ -219,6 +225,39 @@ impl Config {
             // Clean up empty provider entries
             if models.is_empty() {
                 self.default_characters.remove(&provider.to_lowercase());
+            }
+        }
+    }
+
+    /// Get the default persona for a provider/model combination
+    pub fn get_default_persona(&self, provider: &str, model: &str) -> Option<&String> {
+        self.default_personas
+            .get(&provider.to_lowercase())
+            .and_then(|models| models.get(model))
+    }
+
+    /// Set the default persona for a provider/model combination
+    /// persona_id should be the persona ID
+    pub fn set_default_persona(
+        &mut self,
+        provider: String,
+        model: String,
+        persona_id: String,
+    ) {
+        let provider_key = provider.to_lowercase();
+        self.default_personas
+            .entry(provider_key)
+            .or_default()
+            .insert(model, persona_id);
+    }
+
+    /// Unset the default persona for a provider/model combination
+    pub fn unset_default_persona(&mut self, provider: &str, model: &str) {
+        if let Some(models) = self.default_personas.get_mut(&provider.to_lowercase()) {
+            models.remove(model);
+            // Clean up empty provider entries
+            if models.is_empty() {
+                self.default_personas.remove(&provider.to_lowercase());
             }
         }
     }
@@ -1032,5 +1071,123 @@ mod tests {
                 assert!(display.starts_with('~') || display.starts_with('/'));
             }
         }
+    }
+
+    #[test]
+    fn test_set_and_get_default_persona() {
+        let mut config = Config::default();
+
+        // Initially no default persona
+        assert!(config.get_default_persona("openai", "gpt-4").is_none());
+
+        // Set a default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4"),
+            Some(&"alice-dev".to_string())
+        );
+
+        // Case insensitive provider lookup
+        assert_eq!(
+            config.get_default_persona("OpenAI", "gpt-4"),
+            Some(&"alice-dev".to_string())
+        );
+
+        // Different model should return None
+        assert!(config.get_default_persona("openai", "gpt-3.5-turbo").is_none());
+    }
+
+    #[test]
+    fn test_unset_default_persona() {
+        let mut config = Config::default();
+
+        // Set default personas
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "bob-student".to_string(),
+        );
+
+        // Verify they're set
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4"),
+            Some(&"alice-dev".to_string())
+        );
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4o"),
+            Some(&"bob-student".to_string())
+        );
+
+        // Unset one
+        config.unset_default_persona("openai", "gpt-4");
+
+        // Verify it's gone but the other remains
+        assert!(config.get_default_persona("openai", "gpt-4").is_none());
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4o"),
+            Some(&"bob-student".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unset_default_persona_cleans_up_empty_provider() {
+        let mut config = Config::default();
+
+        // Set a single default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4"),
+            Some(&"alice-dev".to_string())
+        );
+
+        // Unset the persona
+        config.unset_default_persona("openai", "gpt-4");
+
+        // Verify the provider entry is cleaned up
+        assert!(config.default_personas.is_empty());
+    }
+
+    #[test]
+    fn test_overwrite_default_persona() {
+        let mut config = Config::default();
+
+        // Set a default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4"),
+            Some(&"alice-dev".to_string())
+        );
+
+        // Overwrite with a different persona
+        config.set_default_persona("openai".to_string(), "gpt-4".to_string(), "bob-student".to_string());
+
+        // Verify it's updated
+        assert_eq!(
+            config.get_default_persona("openai", "gpt-4"),
+            Some(&"bob-student".to_string())
+        );
     }
 }

@@ -61,6 +61,18 @@ pub async fn new_with_auth(
     let mut persona_manager = crate::core::persona::PersonaManager::load_personas(config)?;
     if let Some(persona_id) = persona {
         persona_manager.set_active_persona(&persona_id)?;
+    } else {
+        // Load default persona for current provider/model if no CLI persona specified
+        let provider_model_key = format!("{}_{}", session.provider_name, session.model);
+        if let Some(default_persona_id) = persona_manager.get_default_for_provider_model(&provider_model_key) {
+            let default_persona_id = default_persona_id.to_string(); // Clone to avoid borrow issues
+            if let Err(e) = persona_manager.set_active_persona(&default_persona_id) {
+                eprintln!(
+                    "Warning: Could not load default persona '{}': {}",
+                    default_persona_id, e
+                );
+            }
+        }
     }
 
     let mut app = App {
@@ -389,7 +401,7 @@ impl App {
 
     /// Open a persona picker modal with available personas
     pub fn open_persona_picker(&mut self) {
-        if let Err(message) = self.picker.open_persona_picker(&self.persona_manager) {
+        if let Err(message) = self.picker.open_persona_picker(&self.persona_manager, &self.session) {
             self.conversation().set_status(message);
         }
     }
@@ -471,7 +483,7 @@ impl App {
     }
 
     /// Apply the selected persona from the picker
-    pub fn apply_selected_persona(&mut self, _set_as_default: bool) {
+    pub fn apply_selected_persona(&mut self, set_as_default: bool) {
         let persona_id = self
             .picker
             .session()
@@ -497,8 +509,34 @@ impl App {
                         .map(|p| p.name.clone())
                         .unwrap_or_else(|| "Unknown".to_string());
                     self.ui.update_user_display_name(persona_name.clone());
-                    self.conversation()
-                        .set_status(format!("Persona activated: {}", persona_name));
+
+                    if set_as_default {
+                        // Set as default for current provider/model
+                        let provider = self.session.provider_name.clone();
+                        let model = self.session.model.clone();
+
+                        match self.persona_manager.set_default_for_provider_model_persistent(
+                            &provider,
+                            &model,
+                            &persona_id,
+                        ) {
+                            Ok(()) => {
+                                self.conversation().set_status(format!(
+                                    "Persona activated: {} (saved as default for {}:{})",
+                                    persona_name, provider, model
+                                ));
+                            }
+                            Err(e) => {
+                                self.conversation().set_status(format!(
+                                    "Persona activated: {} (failed to save as default: {})",
+                                    persona_name, e
+                                ));
+                            }
+                        }
+                    } else {
+                        self.conversation()
+                            .set_status(format!("Persona activated: {}", persona_name));
+                    }
                 }
                 Err(e) => {
                     self.conversation()

@@ -1063,6 +1063,7 @@ impl PickerController {
     pub fn open_persona_picker(
         &mut self,
         persona_manager: &crate::core::persona::PersonaManager,
+        session_context: &SessionContext,
     ) -> Result<(), String> {
         let personas = persona_manager.list_personas();
 
@@ -1070,10 +1071,21 @@ impl PickerController {
             return Err("No personas found. Add personas to your config.toml file.".to_string());
         }
 
+        // Get the default persona for the current provider/model
+        let provider_model_key = format!("{}_{}", session_context.provider_name, session_context.model);
+        let default_persona = persona_manager.get_default_for_provider_model(&provider_model_key);
+
         let mut items: Vec<PickerItem> = personas
             .iter()
             .map(|persona| {
-                let display_label = format!("{} ({})", persona.name, persona.id);
+                let is_default = default_persona
+                    .map(|def| def == &persona.id)
+                    .unwrap_or(false);
+                let display_label = if is_default {
+                    format!("{} ({})*", persona.name, persona.id)
+                } else {
+                    format!("{} ({})", persona.name, persona.id)
+                };
                 let metadata = persona.bio.clone().unwrap_or_else(|| "No bio".to_string());
                 PickerItem {
                     id: persona.id.clone(),

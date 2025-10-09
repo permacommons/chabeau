@@ -662,6 +662,8 @@ fn handle_picker_apply_selection(
                     }
                     // Load default character for this provider/model if configured
                     load_default_character_if_configured(app);
+                    // Load default persona for this provider/model if configured
+                    load_default_persona_if_configured(app);
                 }
                 Err(e) => set_status_message(app, format!("Model error: {}", e), ctx),
             }
@@ -701,6 +703,8 @@ fn handle_picker_apply_selection(
                     } else {
                         // Load default character for this provider/model if configured
                         load_default_character_if_configured(app);
+                        // Load default persona for this provider/model if configured
+                        load_default_persona_if_configured(app);
                     }
                 }
                 Err(e) => {
@@ -802,9 +806,22 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
             }
         }
         Some(PickerMode::Persona) => {
-            // Persona defaults are not yet implemented
-            set_status_message(app, "Persona defaults not yet supported".to_string(), ctx);
-            None
+            let provider_name = app.session.provider_name.clone();
+            let model = app.session.model.clone();
+            match app.persona_manager.unset_default_for_provider_model_persistent(
+                &provider_name,
+                &model,
+            ) {
+                Ok(()) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_persona_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
         }
         _ => None,
     }
@@ -839,6 +856,35 @@ fn load_default_character_if_configured(app: &mut App) {
                 eprintln!(
                     "Warning: Could not load default character '{}': {}",
                     character_name, e
+                );
+            }
+        }
+    }
+}
+
+/// Load default persona for current provider/model if one is configured
+fn load_default_persona_if_configured(app: &mut App) {
+    // Don't load default persona if one is already active (e.g., from CLI)
+    if app.persona_manager.get_active_persona().is_some() {
+        return;
+    }
+
+    let provider_model_key = format!("{}_{}", app.session.provider_name, app.session.model);
+    if let Some(persona_id) = app.persona_manager.get_default_for_provider_model(&provider_model_key) {
+        let persona_id = persona_id.to_string(); // Clone to avoid borrow issues
+        match app.persona_manager.set_active_persona(&persona_id) {
+            Ok(()) => {
+                let persona_name = app
+                    .persona_manager
+                    .get_active_persona()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                app.ui.update_user_display_name(persona_name);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not load default persona '{}': {}",
+                    persona_id, e
                 );
             }
         }
@@ -1375,11 +1421,138 @@ mod tests {
 
         // Call the helper function directly (simulating model selection)
         load_default_character_if_configured(&mut app);
+        load_default_persona_if_configured(&mut app);
 
         // Verify character is still not loaded (no default set)
         assert!(app.session.active_character.is_none());
+        // Verify persona is still not loaded (no default set)
+        assert!(app.persona_manager.get_active_persona().is_none());
 
         // Clean up
         std::env::remove_var("CHABEAU_CONFIG_DIR");
+    }
+
+    #[test]
+    fn test_load_default_persona_if_configured() {
+        use crate::core::config::{Config, Persona};
+        
+        // Create a config with test personas
+        let mut config = Config::default();
+        config.personas = vec![
+            Persona {
+                id: "alice-dev".to_string(),
+                name: "Alice".to_string(),
+                bio: Some("A developer persona".to_string()),
+            },
+            Persona {
+                id: "bob-student".to_string(),
+                name: "Bob".to_string(),
+                bio: Some("A student persona".to_string()),
+            },
+        ];
+        
+        // Create app with personas
+        let mut app = create_test_app();
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
+            .expect("Failed to load personas");
+        
+        // Set up a default persona for the current provider/model (test_test-model)
+        app.persona_manager.set_default_for_provider_model("test_test-model", "alice-dev");
+
+        // Initially no persona should be active
+        assert!(app.persona_manager.get_active_persona().is_none());
+
+        // Call the helper function directly (simulating model selection)
+        load_default_persona_if_configured(&mut app);
+
+        // Verify persona is now loaded
+        let active_persona = app.persona_manager.get_active_persona();
+        assert!(active_persona.is_some());
+        assert_eq!(active_persona.unwrap().id, "alice-dev");
+        assert_eq!(app.ui.user_display_name, "Alice");
+    }
+
+    #[test]
+    fn test_load_default_persona_respects_existing_active_persona() {
+        use crate::core::config::{Config, Persona};
+        
+        // Create a config with test personas
+        let mut config = Config::default();
+        config.personas = vec![
+            Persona {
+                id: "alice-dev".to_string(),
+                name: "Alice".to_string(),
+                bio: Some("A developer persona".to_string()),
+            },
+            Persona {
+                id: "bob-student".to_string(),
+                name: "Bob".to_string(),
+                bio: Some("A student persona".to_string()),
+            },
+        ];
+        
+        // Create app with personas
+        let mut app = create_test_app();
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
+            .expect("Failed to load personas");
+        
+        // Set up a default persona for the current provider/model (test_test-model)
+        app.persona_manager.set_default_for_provider_model("test_test-model", "alice-dev");
+
+        // Activate a different persona first (simulating CLI persona)
+        app.persona_manager.set_active_persona("bob-student").unwrap();
+        app.ui.update_user_display_name("Bob".to_string());
+
+        // Call the helper function (simulating model selection)
+        load_default_persona_if_configured(&mut app);
+
+        // Verify the original persona is still active (default not loaded)
+        let active_persona = app.persona_manager.get_active_persona();
+        assert!(active_persona.is_some());
+        assert_eq!(active_persona.unwrap().id, "bob-student");
+        assert_eq!(app.ui.user_display_name, "Bob");
+    }
+
+    #[test]
+    fn test_persona_picker_default_label_format() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::app::picker::PickerMode;
+        
+        // Create a config with test personas
+        let mut config = Config::default();
+        config.personas = vec![
+            Persona {
+                id: "alice-dev".to_string(),
+                name: "Alice".to_string(),
+                bio: Some("A developer persona".to_string()),
+            },
+        ];
+        config.set_default_persona(
+            "test".to_string(),
+            "test-model".to_string(),
+            "alice-dev".to_string(),
+        );
+        
+        // Create app with personas and defaults
+        let mut app = create_test_app();
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
+            .expect("Failed to load personas");
+        
+        // Open persona picker
+        app.open_persona_picker();
+        
+        // Verify picker is open and has the correct mode
+        assert!(matches!(app.current_picker_mode(), Some(PickerMode::Persona)));
+        
+        // Get the picker state and verify the default persona has asterisk at the end
+        let picker_state = app.picker_state().expect("Picker should be open");
+        let items = &picker_state.items;
+        
+        // Find the alice-dev persona item
+        let alice_item = items.iter().find(|item| item.id == "alice-dev").expect("Alice persona should be in picker");
+        
+        // Verify the label ends with asterisk (indicating it's a default)
+        assert!(alice_item.label.ends_with('*'), "Default persona label should end with asterisk, got: {}", alice_item.label);
+        assert_eq!(alice_item.label, "Alice (alice-dev)*");
     }
 }

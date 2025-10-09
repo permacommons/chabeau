@@ -15,10 +15,19 @@ pub struct PersonaManager {
 impl PersonaManager {
     /// Create a new PersonaManager and load personas from configuration
     pub fn load_personas(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
+        // Convert config's default_personas to the internal format
+        let mut defaults = HashMap::new();
+        for (provider, models) in &config.default_personas {
+            for (model, persona_id) in models {
+                let key = format!("{}_{}", provider, model);
+                defaults.insert(key, persona_id.clone());
+            }
+        }
+
         Ok(PersonaManager {
             personas: config.personas.clone(),
             active_persona: None,
-            defaults: HashMap::new(),
+            defaults,
         })
     }
 
@@ -113,6 +122,47 @@ impl PersonaManager {
     /// Get the default persona for a provider/model combination
     pub fn get_default_for_provider_model(&self, provider_model: &str) -> Option<&str> {
         self.defaults.get(provider_model).map(|s| s.as_str())
+    }
+
+    /// Set the default persona for a provider/model combination and persist to config
+    pub fn set_default_for_provider_model_persistent(
+        &mut self,
+        provider: &str,
+        model: &str,
+        persona_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Update internal state
+        let key = format!("{}_{}", provider, model);
+        self.defaults.insert(key, persona_id.to_string());
+
+        // Persist to config
+        let mut config = Config::load()?;
+        config.set_default_persona(
+            provider.to_string(),
+            model.to_string(),
+            persona_id.to_string(),
+        );
+        config.save()?;
+
+        Ok(())
+    }
+
+    /// Unset the default persona for a provider/model combination and persist to config
+    pub fn unset_default_for_provider_model_persistent(
+        &mut self,
+        provider: &str,
+        model: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Update internal state
+        let key = format!("{}_{}", provider, model);
+        self.defaults.remove(&key);
+
+        // Persist to config
+        let mut config = Config::load()?;
+        config.unset_default_persona(provider, model);
+        config.save()?;
+
+        Ok(())
     }
 }
 
@@ -336,6 +386,65 @@ mod tests {
 
         // Should be back to "You"
         assert_eq!(ui.user_display_name, "You");
+    }
+
+    #[test]
+    fn test_default_persona_storage_and_retrieval() {
+        let config = create_test_config();
+        let mut manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+
+        // Initially no defaults
+        assert!(manager.get_default_for_provider_model("openai_gpt-4").is_none());
+
+        // Set a default
+        manager.set_default_for_provider_model("openai_gpt-4", "alice-dev");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai_gpt-4"),
+            Some("alice-dev")
+        );
+
+        // Set another default
+        manager.set_default_for_provider_model("anthropic_claude-3-opus", "bob-student");
+        assert_eq!(
+            manager.get_default_for_provider_model("anthropic_claude-3-opus"),
+            Some("bob-student")
+        );
+
+        // Original default should still be there
+        assert_eq!(
+            manager.get_default_for_provider_model("openai_gpt-4"),
+            Some("alice-dev")
+        );
+    }
+
+    #[test]
+    fn test_default_persona_loading_from_config() {
+        let mut config = create_test_config();
+        
+        // Add some default personas to the config
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+        config.set_default_persona(
+            "anthropic".to_string(),
+            "claude-3-opus".to_string(),
+            "bob-student".to_string(),
+        );
+
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+
+        // Check that defaults were loaded correctly
+        assert_eq!(
+            manager.get_default_for_provider_model("openai_gpt-4"),
+            Some("alice-dev")
+        );
+        assert_eq!(
+            manager.get_default_for_provider_model("anthropic_claude-3-opus"),
+            Some("bob-student")
+        );
+        assert!(manager.get_default_for_provider_model("openai_gpt-3.5-turbo").is_none());
     }
 }
 #[test]

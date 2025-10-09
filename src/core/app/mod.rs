@@ -25,8 +25,8 @@ pub use conversation::ConversationController;
 #[cfg(test)]
 pub use picker::PickerData;
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PickerController, PickerMode, PickerSession,
-    ProviderPickerState, ThemePickerState,
+    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
+    PickerSession, ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -379,6 +379,13 @@ impl App {
         }
     }
 
+    /// Open a persona picker modal with available personas
+    pub fn open_persona_picker(&mut self) {
+        if let Err(message) = self.picker.open_persona_picker(&self.persona_manager) {
+            self.conversation().set_status(message);
+        }
+    }
+
     /// Apply the selected character from the picker
     pub fn apply_selected_character(&mut self, set_as_default: bool) {
         let character_name = self
@@ -455,6 +462,48 @@ impl App {
         self.picker.filter_characters();
     }
 
+    /// Apply the selected persona from the picker
+    pub fn apply_selected_persona(&mut self, _set_as_default: bool) {
+        let persona_id = self
+            .picker
+            .session()
+            .and_then(|picker| picker.state.selected_id())
+            .map(|s| s.to_string());
+
+        if let Some(persona_id) = persona_id {
+            // Check if user selected "turn off persona"
+            if persona_id == "[turn_off_persona]" {
+                self.persona_manager.clear_active_persona();
+                self.conversation()
+                    .set_status("Persona deactivated".to_string());
+                self.close_picker();
+                return;
+            }
+
+            match self.persona_manager.set_active_persona(&persona_id) {
+                Ok(()) => {
+                    let persona_name = self
+                        .persona_manager
+                        .get_active_persona()
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    self.conversation()
+                        .set_status(format!("Persona activated: {}", persona_name));
+                }
+                Err(e) => {
+                    self.conversation()
+                        .set_status(format!("Error activating persona: {}", e));
+                }
+            }
+        }
+        self.close_picker();
+    }
+
+    /// Filter personas based on search term and update picker
+    pub fn filter_personas(&mut self) {
+        self.picker.filter_personas();
+    }
+
     /// Get character picker state accessor
     pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
         self.picker.character_state()
@@ -463,6 +512,16 @@ impl App {
     /// Get mutable character picker state accessor
     pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
         self.picker.character_state_mut()
+    }
+
+    /// Get persona picker state accessor
+    pub fn persona_picker_state(&self) -> Option<&PersonaPickerState> {
+        self.picker.persona_state()
+    }
+
+    /// Get mutable persona picker state accessor
+    pub fn persona_picker_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
+        self.picker.persona_state_mut()
     }
 }
 

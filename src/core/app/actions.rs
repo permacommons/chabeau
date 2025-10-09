@@ -371,6 +371,14 @@ fn handle_picker_backspace(app: &mut App) {
                 }
             }
         }
+        Some(PickerMode::Persona) => {
+            if let Some(state) = app.persona_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_personas();
+                }
+            }
+        }
         None => {}
     }
 }
@@ -403,6 +411,12 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
             if let Some(state) = app.character_picker_state_mut() {
                 state.search_filter.push(ch);
                 app.filter_characters();
+            }
+        }
+        Some(PickerMode::Persona) => {
+            if let Some(state) = app.persona_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_personas();
             }
         }
         None => {}
@@ -443,6 +457,10 @@ fn handle_process_command(
         }
         CommandResult::OpenCharacterPicker => {
             app.open_character_picker();
+            None
+        }
+        CommandResult::OpenPersonaPicker => {
+            app.open_persona_picker();
             None
         }
     }
@@ -575,6 +593,9 @@ fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
         Some(PickerMode::Character) => {
             app.close_picker();
         }
+        Some(PickerMode::Persona) => {
+            app.close_picker();
+        }
         None => {}
     }
 }
@@ -694,6 +715,10 @@ fn handle_picker_apply_selection(
             app.apply_selected_character(persistent);
             None
         }
+        Some(PickerMode::Persona) => {
+            app.apply_selected_persona(persistent);
+            None
+        }
         None => None,
     }
 }
@@ -775,6 +800,11 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
                     None
                 }
             }
+        }
+        Some(PickerMode::Persona) => {
+            // Persona defaults are not yet implemented
+            set_status_message(app, "Persona defaults not yet supported".to_string(), ctx);
+            None
         }
         _ => None,
     }

@@ -156,4 +156,19 @@ const COMMANDS: &[Command] = &[
         extra_help: &[],
         handler: super::handle_character,
     },
+    Command {
+        name: "persona",
+        usages: &[
+            CommandUsage {
+                syntax: "/persona",
+                description: "Pick a persona from available personas with filtering and sorting.",
+            },
+            CommandUsage {
+                syntax: "/persona <id>",
+                description: "Activate the specified persona for this session.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handle_persona,
+    },
 ];

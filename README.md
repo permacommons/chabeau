@@ -18,6 +18,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - [Working with Providers and Models](#working-with-providers-and-models)
 - [Configuration](#configuration)
 - [Character Cards](#character-cards)
+- [Personas](#personas)
 - [Appearance and Rendering](#appearance-and-rendering)
 - [Keyboard and Workflow Tips](#keyboard-and-workflow-tips)
 - [Architecture Overview](#architecture-overview)
@@ -170,6 +171,52 @@ Example cards live in [examples/hypatia.json](examples/hypatia.json) and [exampl
 ### Format Reference
 
 Character cards follow the [v2 specification](https://github.com/malfoyslastname/character-card-spec-v2).
+
+## Personas
+
+Personas allow you to define different user identities for conversations, each with their own name and optional biographical context. Unlike character cards (which define AI personas), personas define who *you* are in the conversation.
+
+### Configure Personas
+
+Add personas to your `config.toml`:
+
+```toml
+[[personas]]
+id = "developer"
+name = "Alex"
+bio = "You are talking to Alex, a senior software developer with expertise in Rust and distributed systems."
+
+[[personas]]
+id = "student"
+name = "Sam"
+bio = "Sam is a computer science student learning about AI and machine learning."
+
+[[personas]]
+id = "casual"
+name = "Jordan"
+# bio is optional - persona will just change the display name
+```
+
+### Use Personas in Chat
+
+```bash
+chabeau --persona developer                 # Start with a specific persona
+```
+
+In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Enter to select). You can also run `/persona <id>` for quick switches, or select "[Turn off persona]" to return to anonymous mode.
+
+When a persona is active:
+- Your messages are labeled with the persona's name instead of "You"
+- The persona's bio (if provided) is prepended to the system prompt
+- Variable substitutions like `{{user}}` in character cards use the persona's name
+
+### Persona vs Character Integration
+
+Personas and character cards work together seamlessly:
+- **Character cards** define the AI's personality, background, and behavior
+- **Personas** define your identity and context in the conversation
+- Both support `{{user}}` and `{{char}}` variable substitutions
+- The persona's bio is added to the system prompt before the character's instructions
 
 ## Appearance and Rendering
 

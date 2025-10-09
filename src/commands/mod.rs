@@ -14,6 +14,7 @@ pub enum CommandResult {
     OpenProviderPicker,
     OpenThemePicker,
     OpenCharacterPicker,
+    OpenPersonaPicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -292,6 +293,37 @@ pub(super) fn handle_character(app: &mut App, invocation: CommandInvocation<'_>)
                 Err(e) => {
                     app.conversation()
                         .set_status(format!("Character error: {}", e));
+                    CommandResult::Continue
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => {
+            // No argument provided - open persona picker
+            CommandResult::OpenPersonaPicker
+        }
+        _ => {
+            // Persona ID provided - activate it directly
+            let persona_id = parts[1];
+            match app.persona_manager.set_active_persona(persona_id) {
+                Ok(()) => {
+                    let persona_name = app
+                        .persona_manager
+                        .get_active_persona()
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    app.conversation()
+                        .set_status(format!("Persona activated: {}", persona_name));
+                    CommandResult::Continue
+                }
+                Err(e) => {
+                    app.conversation()
+                        .set_status(format!("Persona error: {}", e));
                     CommandResult::Continue
                 }
             }
@@ -806,6 +838,27 @@ mod tests {
         assert_eq!(character_cmd.usages.len(), 2);
         assert!(character_cmd.usages[0].syntax.contains("/character"));
         assert!(character_cmd.usages[1].syntax.contains("<name>"));
+    }
+
+    #[test]
+    fn persona_command_opens_picker() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/persona");
+        assert!(matches!(res, CommandResult::OpenPersonaPicker));
+    }
+
+    #[test]
+    fn persona_command_with_invalid_id_shows_error() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/persona nonexistent_persona");
+        assert!(matches!(res, CommandResult::Continue));
+        assert!(app.ui.status.is_some());
+        let status = app.ui.status.as_ref().unwrap();
+        assert!(
+            status.contains("Persona error") || status.contains("not found"),
+            "Expected error message, got: {}",
+            status
+        );
     }
 
     #[test]

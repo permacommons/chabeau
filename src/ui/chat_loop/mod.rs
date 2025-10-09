@@ -236,7 +236,8 @@ async fn route_keyboard_event(
             let picker_open = app.model_picker_state().is_some()
                 || app.theme_picker_state().is_some()
                 || app.provider_picker_state().is_some()
-                || app.character_picker_state().is_some();
+                || app.character_picker_state().is_some()
+                || app.persona_picker_state().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;

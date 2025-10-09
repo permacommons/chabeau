@@ -80,7 +80,7 @@ impl PersonaManager {
     pub fn apply_substitutions(&self, text: &str, char_name: Option<&str>) -> String {
         let char_replacement = char_name.unwrap_or("Assistant");
         let user_replacement = match &self.active_persona {
-            Some(persona) => &persona.name,
+            Some(persona) => &persona.display_name,
             None => "Anon",
         };
 
@@ -92,7 +92,7 @@ impl PersonaManager {
     /// Returns the active persona's name or "You" if no persona is active
     pub fn get_display_name(&self) -> String {
         match &self.active_persona {
-            Some(persona) => persona.name.clone(),
+            Some(persona) => persona.display_name.clone(),
             None => "You".to_string(),
         }
     }
@@ -106,7 +106,7 @@ impl PersonaManager {
                     // Apply substitutions to the persona bio, using the persona's own name for {{user}}
                     let substituted_bio = bio
                         .replace("{{char}}", "Assistant") // Default char name in bio
-                        .replace("{{user}}", &persona.name); // Use persona's own name for {{user}} in bio
+                        .replace("{{user}}", &persona.display_name); // Use persona's own display_name for {{user}} in bio
 
                     format!("{}\n\n{}", substituted_bio, base_prompt)
                 } else {
@@ -183,19 +183,19 @@ mod tests {
             personas: vec![
                 Persona {
                     id: "alice-dev".to_string(),
-                    name: "Alice".to_string(),
+                    display_name: "Alice".to_string(),
                     bio: Some("You are talking to {{user}}, a senior developer.".to_string()),
                 },
                 Persona {
                     id: "bob-student".to_string(),
-                    name: "Bob".to_string(),
+                    display_name: "Bob".to_string(),
                     bio: Some(
                         "{{user}} is a computer science student learning about AI.".to_string(),
                     ),
                 },
                 Persona {
                     id: "charlie-no-bio".to_string(),
-                    name: "Charlie".to_string(),
+                    display_name: "Charlie".to_string(),
                     bio: None,
                 },
             ],
@@ -227,13 +227,13 @@ mod tests {
         assert!(manager.set_active_persona("alice-dev").is_ok());
         let active = manager.get_active_persona().expect("No active persona");
         assert_eq!(active.id, "alice-dev");
-        assert_eq!(active.name, "Alice");
+        assert_eq!(active.display_name, "Alice");
 
         // Switch to another persona
         assert!(manager.set_active_persona("bob-student").is_ok());
         let active = manager.get_active_persona().expect("No active persona");
         assert_eq!(active.id, "bob-student");
-        assert_eq!(active.name, "Bob");
+        assert_eq!(active.display_name, "Bob");
 
         // Deactivate persona
         manager.clear_active_persona();

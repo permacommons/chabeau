@@ -33,7 +33,7 @@ pub struct CustomTheme {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Persona {
     pub id: String,
-    pub name: String,
+    pub display_name: String,
     pub bio: Option<String>,
 }
 
@@ -917,7 +917,7 @@ mod tests {
     fn test_persona_serialization() {
         let persona = Persona {
             id: "test-persona".to_string(),
-            name: "Test User".to_string(),
+            display_name: "Test User".to_string(),
             bio: Some("A test persona for unit testing".to_string()),
         };
 
@@ -927,7 +927,7 @@ mod tests {
             toml::from_str(&serialized).expect("Failed to deserialize persona");
 
         assert_eq!(deserialized.id, "test-persona");
-        assert_eq!(deserialized.name, "Test User");
+        assert_eq!(deserialized.display_name, "Test User");
         assert_eq!(
             deserialized.bio,
             Some("A test persona for unit testing".to_string())
@@ -938,7 +938,7 @@ mod tests {
     fn test_persona_optional_bio() {
         let persona = Persona {
             id: "minimal-persona".to_string(),
-            name: "Minimal User".to_string(),
+            display_name: "Minimal User".to_string(),
             bio: None,
         };
 
@@ -948,7 +948,7 @@ mod tests {
             toml::from_str(&serialized).expect("Failed to deserialize persona");
 
         assert_eq!(deserialized.id, "minimal-persona");
-        assert_eq!(deserialized.name, "Minimal User");
+        assert_eq!(deserialized.display_name, "Minimal User");
         assert_eq!(deserialized.bio, None);
     }
 
@@ -961,12 +961,12 @@ mod tests {
         config.personas = vec![
             Persona {
                 id: "alice-dev".to_string(),
-                name: "Alice".to_string(),
+                display_name: "Alice".to_string(),
                 bio: Some("A senior software developer".to_string()),
             },
             Persona {
                 id: "bob-student".to_string(),
-                name: "Bob".to_string(),
+                display_name: "Bob".to_string(),
                 bio: None,
             },
         ];
@@ -984,12 +984,12 @@ mod tests {
 
         let alice = &loaded_config.personas[0];
         assert_eq!(alice.id, "alice-dev");
-        assert_eq!(alice.name, "Alice");
+        assert_eq!(alice.display_name, "Alice");
         assert_eq!(alice.bio, Some("A senior software developer".to_string()));
 
         let bob = &loaded_config.personas[1];
         assert_eq!(bob.id, "bob-student");
-        assert_eq!(bob.name, "Bob");
+        assert_eq!(bob.display_name, "Bob");
         assert_eq!(bob.bio, None);
     }
 

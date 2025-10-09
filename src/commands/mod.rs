@@ -315,7 +315,7 @@ pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -
                     let persona_name = app
                         .persona_manager
                         .get_active_persona()
-                        .map(|p| p.name.clone())
+                        .map(|p| p.display_name.clone())
                         .unwrap_or_else(|| "Unknown".to_string());
                     app.conversation()
                         .set_status(format!("Persona activated: {}", persona_name));

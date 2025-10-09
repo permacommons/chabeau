@@ -516,7 +516,7 @@ impl App {
                     let persona_name = self
                         .persona_manager
                         .get_active_persona()
-                        .map(|p| p.name.clone())
+                        .map(|p| p.display_name.clone())
                         .unwrap_or_else(|| "Unknown".to_string());
                     self.ui.update_user_display_name(persona_name.clone());
 

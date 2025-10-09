@@ -1085,16 +1085,16 @@ impl PickerController {
                     .map(|def| def == persona.id)
                     .unwrap_or(false);
                 let display_label = if is_default {
-                    format!("{} ({})*", persona.name, persona.id)
+                    format!("{} ({})*", persona.display_name, persona.id)
                 } else {
-                    format!("{} ({})", persona.name, persona.id)
+                    format!("{} ({})", persona.display_name, persona.id)
                 };
                 let metadata = persona.bio.clone().unwrap_or_else(|| "No bio".to_string());
                 PickerItem {
                     id: persona.id.clone(),
                     label: display_label,
                     metadata: Some(metadata),
-                    sort_key: Some(persona.name.clone()),
+                    sort_key: Some(persona.display_name.clone()),
                 }
             })
             .collect();

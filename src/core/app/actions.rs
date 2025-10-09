@@ -880,7 +880,7 @@ fn load_default_persona_if_configured(app: &mut App) {
                 let persona_name = app
                     .persona_manager
                     .get_active_persona()
-                    .map(|p| p.name.clone())
+                    .map(|p| p.display_name.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
                 app.ui.update_user_display_name(persona_name);
             }
@@ -1444,12 +1444,12 @@ mod tests {
         config.personas = vec![
             Persona {
                 id: "alice-dev".to_string(),
-                name: "Alice".to_string(),
+                display_name: "Alice".to_string(),
                 bio: Some("A developer persona".to_string()),
             },
             Persona {
                 id: "bob-student".to_string(),
-                name: "Bob".to_string(),
+                display_name: "Bob".to_string(),
                 bio: Some("A student persona".to_string()),
             },
         ];
@@ -1485,12 +1485,12 @@ mod tests {
         config.personas = vec![
             Persona {
                 id: "alice-dev".to_string(),
-                name: "Alice".to_string(),
+                display_name: "Alice".to_string(),
                 bio: Some("A developer persona".to_string()),
             },
             Persona {
                 id: "bob-student".to_string(),
-                name: "Bob".to_string(),
+                display_name: "Bob".to_string(),
                 bio: Some("A student persona".to_string()),
             },
         ];
@@ -1529,7 +1529,7 @@ mod tests {
         let mut config = Config::default();
         config.personas = vec![Persona {
             id: "alice-dev".to_string(),
-            name: "Alice".to_string(),
+            display_name: "Alice".to_string(),
             bio: Some("A developer persona".to_string()),
         }];
         config.set_default_persona(

@@ -198,7 +198,7 @@ fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Err
         let available_personas: Vec<String> = persona_manager
             .list_personas()
             .iter()
-            .map(|p| format!("{} ({})", p.name, p.id))
+            .map(|p| format!("{} ({})", p.display_name, p.id))
             .collect();
 
         if available_personas.is_empty() {
@@ -548,12 +548,12 @@ mod tests {
             personas: vec![
                 Persona {
                     id: "alice-dev".to_string(),
-                    name: "Alice".to_string(),
+                    display_name: "Alice".to_string(),
                     bio: Some("You are talking to Alice, a senior developer.".to_string()),
                 },
                 Persona {
                     id: "bob-student".to_string(),
-                    name: "Bob".to_string(),
+                    display_name: "Bob".to_string(),
                     bio: None,
                 },
             ],

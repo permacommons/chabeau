@@ -4,5 +4,7 @@ pub mod chat_stream;
 pub mod config;
 pub mod message;
 pub mod persona;
+#[cfg(test)]
+pub mod persona_integration_tests;
 pub mod providers;
 pub mod text_wrapping;

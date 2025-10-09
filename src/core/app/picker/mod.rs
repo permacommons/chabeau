@@ -1072,7 +1072,10 @@ impl PickerController {
         }
 
         // Get the default persona for the current provider/model
-        let provider_model_key = format!("{}_{}", session_context.provider_name, session_context.model);
+        let provider_model_key = format!(
+            "{}_{}",
+            session_context.provider_name, session_context.model
+        );
         let default_persona = persona_manager.get_default_for_provider_model(&provider_model_key);
 
         let mut items: Vec<PickerItem> = personas

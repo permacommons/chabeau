@@ -64,7 +64,9 @@ pub async fn new_with_auth(
     } else {
         // Load default persona for current provider/model if no CLI persona specified
         let provider_model_key = format!("{}_{}", session.provider_name, session.model);
-        if let Some(default_persona_id) = persona_manager.get_default_for_provider_model(&provider_model_key) {
+        if let Some(default_persona_id) =
+            persona_manager.get_default_for_provider_model(&provider_model_key)
+        {
             let default_persona_id = default_persona_id.to_string(); // Clone to avoid borrow issues
             if let Err(e) = persona_manager.set_active_persona(&default_persona_id) {
                 eprintln!(
@@ -205,7 +207,7 @@ impl App {
     }
 
     pub fn conversation(&mut self) -> ConversationController<'_> {
-        ConversationController::new(&mut self.session, &mut self.ui)
+        ConversationController::new(&mut self.session, &mut self.ui, &self.persona_manager)
     }
 
     /// Close any active picker session.
@@ -401,7 +403,10 @@ impl App {
 
     /// Open a persona picker modal with available personas
     pub fn open_persona_picker(&mut self) {
-        if let Err(message) = self.picker.open_persona_picker(&self.persona_manager, &self.session) {
+        if let Err(message) = self
+            .picker
+            .open_persona_picker(&self.persona_manager, &self.session)
+        {
             self.conversation().set_status(message);
         }
     }
@@ -515,11 +520,13 @@ impl App {
                         let provider = self.session.provider_name.clone();
                         let model = self.session.model.clone();
 
-                        match self.persona_manager.set_default_for_provider_model_persistent(
-                            &provider,
-                            &model,
-                            &persona_id,
-                        ) {
+                        match self
+                            .persona_manager
+                            .set_default_for_provider_model_persistent(
+                                &provider,
+                                &model,
+                                &persona_id,
+                            ) {
                             Ok(()) => {
                                 self.conversation().set_status(format!(
                                     "Persona activated: {} (saved as default for {}:{})",

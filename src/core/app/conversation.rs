@@ -1,8 +1,6 @@
 use super::{session::SessionContext, ui_state::UiState};
 use crate::character::card::CharacterCard;
-use crate::core::config::Config;
 use crate::core::message::Message;
-use crate::core::persona::PersonaManager;
 use crate::utils::scroll::ScrollCalculator;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -10,32 +8,26 @@ use tokio_util::sync::CancellationToken;
 pub struct ConversationController<'a> {
     session: &'a mut SessionContext,
     ui: &'a mut UiState,
+    persona_manager: &'a crate::core::persona::PersonaManager,
 }
 
 impl<'a> ConversationController<'a> {
-    pub fn new(session: &'a mut SessionContext, ui: &'a mut UiState) -> Self {
-        Self { session, ui }
-    }
-
-    /// Create a PersonaManager instance from the current configuration
-    /// This is a temporary solution until PersonaManager is integrated into app state
-    fn create_persona_manager() -> Result<PersonaManager, Box<dyn std::error::Error>> {
-        let config = Config::load_test_safe();
-        PersonaManager::load_personas(&config)
+    pub fn new(
+        session: &'a mut SessionContext,
+        ui: &'a mut UiState,
+        persona_manager: &'a crate::core::persona::PersonaManager,
+    ) -> Self {
+        Self {
+            session,
+            ui,
+            persona_manager,
+        }
     }
 
     /// Apply persona modifications to a system prompt
     /// Returns the modified prompt if a persona is active, otherwise returns the original
     fn apply_persona_to_system_prompt(&self, base_prompt: &str) -> String {
-        match Self::create_persona_manager() {
-            Ok(persona_manager) => {
-                // For now, we don't have persona state management integrated
-                // This will be properly implemented when PersonaManager is added to app state
-                // For now, just return the base prompt
-                persona_manager.get_modified_system_prompt(base_prompt)
-            }
-            Err(_) => base_prompt.to_string(),
-        }
+        self.persona_manager.get_modified_system_prompt(base_prompt)
     }
 
     /// Display character greeting if not yet shown
@@ -392,7 +384,8 @@ mod tests {
             .push_back(create_test_message("user", "Hello"));
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message(
                 "This is a system message that should not be sent to API".to_string(),
             );
@@ -403,12 +396,14 @@ mod tests {
             .push_back(create_test_message("assistant", "Hi there!"));
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message("Another system message".to_string());
         }
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("How are you?".to_string())
         };
 
@@ -435,7 +430,8 @@ mod tests {
         });
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation
                 .add_system_message("System message between user and assistant".to_string());
         }
@@ -448,7 +444,8 @@ mod tests {
         app.session.retrying_message_index = Some(2);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -499,7 +496,8 @@ mod tests {
             .push_back(create_test_message("assistant", "Previous response"));
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("New message".to_string())
         };
 
@@ -554,7 +552,8 @@ mod tests {
         app.session.set_character(character);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -574,7 +573,8 @@ mod tests {
         assert!(app.session.get_character().is_none());
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -631,7 +631,8 @@ mod tests {
         app.session.retrying_message_index = Some(3);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -673,7 +674,8 @@ mod tests {
         app.session.retrying_message_index = Some(1);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -719,7 +721,8 @@ mod tests {
 
         // Add transcript system message (should be excluded from API)
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message("Help text displayed in UI".to_string());
         }
 
@@ -729,7 +732,8 @@ mod tests {
             .push_back(create_test_message("assistant", "Hi there!"));
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("How are you?".to_string())
         };
 
@@ -789,7 +793,8 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -804,7 +809,8 @@ mod tests {
 
         // Calling again should not add another greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
         assert_eq!(app.ui.messages.len(), 1);
@@ -841,7 +847,8 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -859,7 +866,8 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -898,7 +906,8 @@ mod tests {
         app.session.set_character(character);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -919,7 +928,8 @@ mod tests {
         assert!(app.session.get_character().is_none());
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -961,13 +971,15 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
         // Add user message
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Hello".to_string())
         };
 

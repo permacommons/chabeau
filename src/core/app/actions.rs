@@ -808,10 +808,10 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
         Some(PickerMode::Persona) => {
             let provider_name = app.session.provider_name.clone();
             let model = app.session.model.clone();
-            match app.persona_manager.unset_default_for_provider_model_persistent(
-                &provider_name,
-                &model,
-            ) {
+            match app
+                .persona_manager
+                .unset_default_for_provider_model_persistent(&provider_name, &model)
+            {
                 Ok(()) => {
                     set_status_message(app, format!("Removed default: {}", selected_id), ctx);
                     app.open_persona_picker();
@@ -870,7 +870,10 @@ fn load_default_persona_if_configured(app: &mut App) {
     }
 
     let provider_model_key = format!("{}_{}", app.session.provider_name, app.session.model);
-    if let Some(persona_id) = app.persona_manager.get_default_for_provider_model(&provider_model_key) {
+    if let Some(persona_id) = app
+        .persona_manager
+        .get_default_for_provider_model(&provider_model_key)
+    {
         let persona_id = persona_id.to_string(); // Clone to avoid borrow issues
         match app.persona_manager.set_active_persona(&persona_id) {
             Ok(()) => {
@@ -1435,7 +1438,7 @@ mod tests {
     #[test]
     fn test_load_default_persona_if_configured() {
         use crate::core::config::{Config, Persona};
-        
+
         // Create a config with test personas
         let mut config = Config::default();
         config.personas = vec![
@@ -1450,14 +1453,15 @@ mod tests {
                 bio: Some("A student persona".to_string()),
             },
         ];
-        
+
         // Create app with personas
         let mut app = create_test_app();
         app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
             .expect("Failed to load personas");
-        
+
         // Set up a default persona for the current provider/model (test_test-model)
-        app.persona_manager.set_default_for_provider_model("test_test-model", "alice-dev");
+        app.persona_manager
+            .set_default_for_provider_model("test_test-model", "alice-dev");
 
         // Initially no persona should be active
         assert!(app.persona_manager.get_active_persona().is_none());
@@ -1475,7 +1479,7 @@ mod tests {
     #[test]
     fn test_load_default_persona_respects_existing_active_persona() {
         use crate::core::config::{Config, Persona};
-        
+
         // Create a config with test personas
         let mut config = Config::default();
         config.personas = vec![
@@ -1490,17 +1494,20 @@ mod tests {
                 bio: Some("A student persona".to_string()),
             },
         ];
-        
+
         // Create app with personas
         let mut app = create_test_app();
         app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
             .expect("Failed to load personas");
-        
+
         // Set up a default persona for the current provider/model (test_test-model)
-        app.persona_manager.set_default_for_provider_model("test_test-model", "alice-dev");
+        app.persona_manager
+            .set_default_for_provider_model("test_test-model", "alice-dev");
 
         // Activate a different persona first (simulating CLI persona)
-        app.persona_manager.set_active_persona("bob-student").unwrap();
+        app.persona_manager
+            .set_active_persona("bob-student")
+            .unwrap();
         app.ui.update_user_display_name("Bob".to_string());
 
         // Call the helper function (simulating model selection)
@@ -1515,44 +1522,52 @@ mod tests {
 
     #[test]
     fn test_persona_picker_default_label_format() {
-        use crate::core::config::{Config, Persona};
         use crate::core::app::picker::PickerMode;
-        
+        use crate::core::config::{Config, Persona};
+
         // Create a config with test personas
         let mut config = Config::default();
-        config.personas = vec![
-            Persona {
-                id: "alice-dev".to_string(),
-                name: "Alice".to_string(),
-                bio: Some("A developer persona".to_string()),
-            },
-        ];
+        config.personas = vec![Persona {
+            id: "alice-dev".to_string(),
+            name: "Alice".to_string(),
+            bio: Some("A developer persona".to_string()),
+        }];
         config.set_default_persona(
             "test".to_string(),
             "test-model".to_string(),
             "alice-dev".to_string(),
         );
-        
+
         // Create app with personas and defaults
         let mut app = create_test_app();
         app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
             .expect("Failed to load personas");
-        
+
         // Open persona picker
         app.open_persona_picker();
-        
+
         // Verify picker is open and has the correct mode
-        assert!(matches!(app.current_picker_mode(), Some(PickerMode::Persona)));
-        
+        assert!(matches!(
+            app.current_picker_mode(),
+            Some(PickerMode::Persona)
+        ));
+
         // Get the picker state and verify the default persona has asterisk at the end
         let picker_state = app.picker_state().expect("Picker should be open");
         let items = &picker_state.items;
-        
+
         // Find the alice-dev persona item
-        let alice_item = items.iter().find(|item| item.id == "alice-dev").expect("Alice persona should be in picker");
-        
+        let alice_item = items
+            .iter()
+            .find(|item| item.id == "alice-dev")
+            .expect("Alice persona should be in picker");
+
         // Verify the label ends with asterisk (indicating it's a default)
-        assert!(alice_item.label.ends_with('*'), "Default persona label should end with asterisk, got: {}", alice_item.label);
+        assert!(
+            alice_item.label.ends_with('*'),
+            "Default persona label should end with asterisk, got: {}",
+            alice_item.label
+        );
         assert_eq!(alice_item.label, "Alice (alice-dev)*");
     }
 }

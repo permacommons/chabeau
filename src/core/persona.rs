@@ -73,6 +73,10 @@ impl PersonaManager {
     /// Apply character and user substitutions to text
     /// {{char}} is replaced with the character name (or "Assistant" if None)
     /// {{user}} is replaced with the active persona name (or "Anon" if no persona)
+    ///
+    /// Note: This method is currently unused but kept for future extensibility
+    /// when persona substitutions might be needed in contexts other than system prompts
+    #[allow(dead_code)]
     pub fn apply_substitutions(&self, text: &str, char_name: Option<&str>) -> String {
         let char_replacement = char_name.unwrap_or("Assistant");
         let user_replacement = match &self.active_persona {
@@ -113,7 +117,11 @@ impl PersonaManager {
         }
     }
 
-    /// Set the default persona for a provider/model combination
+    /// Set the default persona for a provider/model combination (non-persistent)
+    ///
+    /// Note: This method is kept for potential future use but the persistent version
+    /// should be preferred in most cases
+    #[allow(dead_code)]
     pub fn set_default_for_provider_model(&mut self, provider_model: &str, persona_id: &str) {
         self.defaults
             .insert(provider_model.to_string(), persona_id.to_string());
@@ -136,13 +144,13 @@ impl PersonaManager {
         self.defaults.insert(key, persona_id.to_string());
 
         // Persist to config
-        let mut config = Config::load()?;
+        let mut config = Config::load_test_safe();
         config.set_default_persona(
             provider.to_string(),
             model.to_string(),
             persona_id.to_string(),
         );
-        config.save()?;
+        config.save_test_safe()?;
 
         Ok(())
     }
@@ -158,9 +166,9 @@ impl PersonaManager {
         self.defaults.remove(&key);
 
         // Persist to config
-        let mut config = Config::load()?;
+        let mut config = Config::load_test_safe();
         config.unset_default_persona(provider, model);
-        config.save()?;
+        config.save_test_safe()?;
 
         Ok(())
     }
@@ -394,7 +402,9 @@ mod tests {
         let mut manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
 
         // Initially no defaults
-        assert!(manager.get_default_for_provider_model("openai_gpt-4").is_none());
+        assert!(manager
+            .get_default_for_provider_model("openai_gpt-4")
+            .is_none());
 
         // Set a default
         manager.set_default_for_provider_model("openai_gpt-4", "alice-dev");
@@ -420,7 +430,7 @@ mod tests {
     #[test]
     fn test_default_persona_loading_from_config() {
         let mut config = create_test_config();
-        
+
         // Add some default personas to the config
         config.set_default_persona(
             "openai".to_string(),
@@ -444,7 +454,9 @@ mod tests {
             manager.get_default_for_provider_model("anthropic_claude-3-opus"),
             Some("bob-student")
         );
-        assert!(manager.get_default_for_provider_model("openai_gpt-3.5-turbo").is_none());
+        assert!(manager
+            .get_default_for_provider_model("openai_gpt-3.5-turbo")
+            .is_none());
     }
 }
 #[test]

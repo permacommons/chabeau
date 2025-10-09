@@ -172,7 +172,8 @@ mod integration_tests {
 
         // Show greeting for character A
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -190,7 +191,8 @@ mod integration_tests {
 
         // Show greeting for character B
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -331,7 +333,8 @@ mod integration_tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -343,7 +346,8 @@ mod integration_tests {
 
         // User sends first message
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("What's the weather?".to_string())
         };
 
@@ -528,7 +532,8 @@ mod integration_tests {
 
         // Should work without errors
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test".to_string())
         };
 

@@ -45,23 +45,6 @@ impl RenderedMessageDetails {
     }
 }
 
-pub fn render_message_markdown_details_with_policy(
-    msg: &Message,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-    policy: crate::ui::layout::TableOverflowPolicy,
-) -> RenderedMessageDetails {
-    render_message_markdown_details_with_policy_and_user_name(
-        msg,
-        theme,
-        syntax_enabled,
-        terminal_width,
-        policy,
-        None,
-    )
-}
-
 pub fn render_message_markdown_details_with_policy_and_user_name(
     msg: &Message,
     theme: &Theme,
@@ -848,7 +831,7 @@ pub fn compute_codeblock_contents_with_lang(
 mod tests {
     #![allow(unused_imports)]
     use super::{
-        compute_codeblock_ranges, render_message_markdown_details_with_policy,
+        compute_codeblock_ranges, render_message_markdown_details_with_policy_and_user_name,
         render_message_with_config, render_message_with_ranges_with_width_and_policy,
         table::TableRenderer, MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig,
         MessageRenderConfig, RoleKind,
@@ -881,12 +864,13 @@ mod tests {
             content: "Testing metadata with a [link](https://example.com) inside.".into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata = details.span_metadata.as_ref().expect("metadata present");
         assert_eq!(metadata.len(), details.lines.len());
@@ -903,12 +887,13 @@ mod tests {
         assert!(saw_link, "expected link metadata to be captured");
 
         let width = Some(24usize);
-        let details_with_width = render_message_markdown_details_with_policy(
+        let details_with_width = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata_wrapped = details_with_width
             .span_metadata
@@ -972,12 +957,13 @@ mod tests {
             content: "Hello world".into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
 
         let metadata = details.span_metadata.expect("metadata present");
@@ -1000,12 +986,13 @@ mod tests {
             .into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             Some(50),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata = details.span_metadata.expect("metadata present");
 
@@ -1089,12 +1076,13 @@ mod tests {
                     .into(),
         };
 
-        let expected = render_message_markdown_details_with_policy(
+        let expected = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             Some(48),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
 
         let (lines, ranges, metadata) = MarkdownRenderer::new(

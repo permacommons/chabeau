@@ -77,10 +77,13 @@ impl<'a> ConversationController<'a> {
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
             if let Some(post_instructions) = character.get_post_history_instructions() {
-                api_messages.push(crate::api::ChatMessage {
-                    role: "system".to_string(),
-                    content: post_instructions.to_string(),
-                });
+                let trimmed = post_instructions.trim();
+                if !trimmed.is_empty() {
+                    api_messages.push(crate::api::ChatMessage {
+                        role: "system".to_string(),
+                        content: post_instructions.to_string(),
+                    });
+                }
             }
         }
 
@@ -301,10 +304,13 @@ impl<'a> ConversationController<'a> {
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
             if let Some(post_instructions) = character.get_post_history_instructions() {
-                api_messages.push(crate::api::ChatMessage {
-                    role: "system".to_string(),
-                    content: post_instructions.to_string(),
-                });
+                let trimmed = post_instructions.trim();
+                if !trimmed.is_empty() {
+                    api_messages.push(crate::api::ChatMessage {
+                        role: "system".to_string(),
+                        content: post_instructions.to_string(),
+                    });
+                }
             }
         }
 

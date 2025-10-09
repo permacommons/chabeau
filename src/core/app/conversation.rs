@@ -1,4 +1,5 @@
 use super::{session::SessionContext, ui_state::UiState};
+use crate::character::card::CharacterCard;
 use crate::core::message::Message;
 use crate::utils::scroll::ScrollCalculator;
 use std::time::Instant;
@@ -76,14 +77,8 @@ impl<'a> ConversationController<'a> {
 
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
-            if let Some(post_instructions) = character.get_post_history_instructions() {
-                let trimmed = post_instructions.trim();
-                if !trimmed.is_empty() {
-                    api_messages.push(crate::api::ChatMessage {
-                        role: "system".to_string(),
-                        content: post_instructions.to_string(),
-                    });
-                }
+            if let Some(message) = Self::post_history_system_message(character) {
+                api_messages.push(message);
             }
         }
 
@@ -303,18 +298,28 @@ impl<'a> ConversationController<'a> {
 
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
-            if let Some(post_instructions) = character.get_post_history_instructions() {
-                let trimmed = post_instructions.trim();
-                if !trimmed.is_empty() {
-                    api_messages.push(crate::api::ChatMessage {
-                        role: "system".to_string(),
-                        content: post_instructions.to_string(),
-                    });
-                }
+            if let Some(message) = Self::post_history_system_message(character) {
+                api_messages.push(message);
             }
         }
 
         Some(api_messages)
+    }
+
+    fn post_history_system_message(character: &CharacterCard) -> Option<crate::api::ChatMessage> {
+        character
+            .get_post_history_instructions()
+            .and_then(|instructions| {
+                let trimmed = instructions.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(crate::api::ChatMessage {
+                        role: "system".to_string(),
+                        content: instructions.to_string(),
+                    })
+                }
+            })
     }
 
     pub fn can_retry(&self) -> bool {

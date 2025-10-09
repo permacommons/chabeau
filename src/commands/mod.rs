@@ -312,11 +312,21 @@ pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -
             let persona_id = parts[1];
             match app.persona_manager.set_active_persona(persona_id) {
                 Ok(()) => {
-                    let persona_name = app
+                    let active_persona_name = app
                         .persona_manager
                         .get_active_persona()
-                        .map(|p| p.display_name.clone())
+                        .map(|p| p.display_name.clone());
+
+                    let persona_name = active_persona_name
+                        .clone()
                         .unwrap_or_else(|| "Unknown".to_string());
+
+                    if active_persona_name.is_some() {
+                        let display_name = app.persona_manager.get_display_name();
+                        app.ui.update_user_display_name(display_name);
+                    } else {
+                        app.ui.update_user_display_name("You".to_string());
+                    }
                     app.conversation()
                         .set_status(format!("Persona activated: {}", persona_name));
                     CommandResult::Continue
@@ -859,6 +869,24 @@ mod tests {
             "Expected error message, got: {}",
             status
         );
+    }
+
+    #[test]
+    fn persona_command_with_valid_id_updates_user_display_name() {
+        let mut app = create_test_app();
+        let mut config = crate::core::config::Config::default();
+        config.personas.push(crate::core::config::Persona {
+            id: "alice-dev".to_string(),
+            display_name: "Alice".to_string(),
+            bio: Some("A senior software developer".to_string()),
+        });
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config).unwrap();
+        assert_eq!(app.ui.user_display_name, "You");
+
+        let res = process_input(&mut app, "/persona alice-dev");
+
+        assert!(matches!(res, CommandResult::Continue));
+        assert_eq!(app.ui.user_display_name, "Alice");
     }
 
     #[test]

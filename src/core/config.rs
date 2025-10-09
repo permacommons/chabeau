@@ -957,19 +957,21 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let config_path = temp_dir.path().join("test_personas.toml");
 
-        let mut config = Config::default();
-        config.personas = vec![
-            Persona {
-                id: "alice-dev".to_string(),
-                display_name: "Alice".to_string(),
-                bio: Some("A senior software developer".to_string()),
-            },
-            Persona {
-                id: "bob-student".to_string(),
-                display_name: "Bob".to_string(),
-                bio: None,
-            },
-        ];
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alice-dev".to_string(),
+                    display_name: "Alice".to_string(),
+                    bio: Some("A senior software developer".to_string()),
+                },
+                Persona {
+                    id: "bob-student".to_string(),
+                    display_name: "Bob".to_string(),
+                    bio: None,
+                },
+            ],
+            ..Default::default()
+        };
 
         // Save the config
         config

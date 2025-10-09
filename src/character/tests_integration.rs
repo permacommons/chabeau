@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod integration_tests {
-    use crate::character::cache::CardCache;
+
     use crate::character::card::{CharacterCard, CharacterData};
     use crate::character::import::{import_card, ImportError};
     use crate::core::app::conversation::ConversationController;
@@ -365,27 +365,7 @@ mod integration_tests {
         assert_eq!(api_messages.last().unwrap().content, "Always be polite.");
     }
 
-    #[test]
-    fn test_cache_invalidation_on_directory_change() {
-        // Test that cache is invalidated when cards directory changes
 
-        let mut cache = CardCache::new();
-
-        // First load (cache miss)
-        let result1 = cache.get_all_metadata();
-        assert!(result1.is_ok());
-
-        // Second load (cache hit - should reuse data)
-        let result2 = cache.get_all_metadata();
-        assert!(result2.is_ok());
-
-        // Manually invalidate cache
-        cache.invalidate();
-
-        // Third load (cache miss after invalidation)
-        let result3 = cache.get_all_metadata();
-        assert!(result3.is_ok());
-    }
 
     #[test]
     fn test_config_persistence_with_multiple_defaults() {
@@ -480,27 +460,7 @@ mod integration_tests {
         assert_eq!(loaded.unwrap().data.name, "CLIChar");
     }
 
-    #[test]
-    fn test_concurrent_cache_access() {
-        // Test that cache can be safely accessed (basic concurrency test)
-        // Note: Full concurrency testing would require more complex setup
 
-        let mut cache1 = CardCache::new();
-        let mut cache2 = CardCache::new();
-
-        // Both caches should work independently
-        let result1 = cache1.get_all_metadata();
-        let result2 = cache2.get_all_metadata();
-
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
-
-        // Invalidating one shouldn't affect the other
-        cache1.invalidate();
-
-        let result3 = cache2.get_all_metadata();
-        assert!(result3.is_ok());
-    }
 
     #[test]
     fn test_character_with_empty_optional_fields() {

@@ -272,6 +272,7 @@ impl App {
 
     // Used by Criterion benches in `benches/`.
     #[cfg(feature = "bench")]
+    #[allow(dead_code)]
     pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
         Self::new_test_app(theme, markdown_enabled, syntax_enabled)
     }

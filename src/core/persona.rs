@@ -73,10 +73,6 @@ impl PersonaManager {
     /// Apply character and user substitutions to text
     /// {{char}} is replaced with the character name (or "Assistant" if None)
     /// {{user}} is replaced with the active persona name (or "Anon" if no persona)
-    ///
-    /// Note: This method is currently unused but kept for future extensibility
-    /// when persona substitutions might be needed in contexts other than system prompts
-    #[allow(dead_code)]
     pub fn apply_substitutions(&self, text: &str, char_name: Option<&str>) -> String {
         let char_replacement = char_name.unwrap_or("Assistant");
         let user_replacement = match &self.active_persona {
@@ -103,11 +99,7 @@ impl PersonaManager {
         match &self.active_persona {
             Some(persona) => {
                 if let Some(bio) = &persona.bio {
-                    // Apply substitutions to the persona bio, using the persona's own name for {{user}}
-                    let substituted_bio = bio
-                        .replace("{{char}}", "Assistant") // Default char name in bio
-                        .replace("{{user}}", &persona.display_name); // Use persona's own display_name for {{user}} in bio
-
+                    let substituted_bio = self.apply_substitutions(bio, Some("Assistant"));
                     format!("{}\n\n{}", substituted_bio, base_prompt)
                 } else {
                     base_prompt.to_string()
@@ -117,15 +109,7 @@ impl PersonaManager {
         }
     }
 
-    /// Set the default persona for a provider/model combination (non-persistent)
-    ///
-    /// Note: This method is kept for potential future use but the persistent version
-    /// should be preferred in most cases
-    #[allow(dead_code)]
-    pub fn set_default_for_provider_model(&mut self, provider_model: &str, persona_id: &str) {
-        self.defaults
-            .insert(provider_model.to_string(), persona_id.to_string());
-    }
+
 
     /// Get the default persona for a provider/model combination
     pub fn get_default_for_provider_model(&self, provider_model: &str) -> Option<&str> {
@@ -396,36 +380,7 @@ mod tests {
         assert_eq!(ui.user_display_name, "You");
     }
 
-    #[test]
-    fn test_default_persona_storage_and_retrieval() {
-        let config = create_test_config();
-        let mut manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
 
-        // Initially no defaults
-        assert!(manager
-            .get_default_for_provider_model("openai_gpt-4")
-            .is_none());
-
-        // Set a default
-        manager.set_default_for_provider_model("openai_gpt-4", "alice-dev");
-        assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
-            Some("alice-dev")
-        );
-
-        // Set another default
-        manager.set_default_for_provider_model("anthropic_claude-3-opus", "bob-student");
-        assert_eq!(
-            manager.get_default_for_provider_model("anthropic_claude-3-opus"),
-            Some("bob-student")
-        );
-
-        // Original default should still be there
-        assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
-            Some("alice-dev")
-        );
-    }
 
     #[test]
     fn test_default_persona_loading_from_config() {

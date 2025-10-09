@@ -1440,28 +1440,29 @@ mod tests {
         use crate::core::config::{Config, Persona};
 
         // Create a config with test personas
-        let mut config = Config::default();
-        config.personas = vec![
-            Persona {
-                id: "alice-dev".to_string(),
-                display_name: "Alice".to_string(),
-                bio: Some("A developer persona".to_string()),
-            },
-            Persona {
-                id: "bob-student".to_string(),
-                display_name: "Bob".to_string(),
-                bio: Some("A student persona".to_string()),
-            },
-        ];
+        let mut config = Config {
+            personas: vec![
+                Persona {
+                    id: "alice-dev".to_string(),
+                    display_name: "Alice".to_string(),
+                    bio: Some("A developer persona".to_string()),
+                },
+                Persona {
+                    id: "bob-student".to_string(),
+                    display_name: "Bob".to_string(),
+                    bio: Some("A student persona".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Set up a default persona for the current provider/model (test_test-model)
+        config.set_default_persona("test".to_string(), "test-model".to_string(), "alice-dev".to_string());
 
         // Create app with personas
         let mut app = create_test_app();
         app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
             .expect("Failed to load personas");
-
-        // Set up a default persona for the current provider/model (test_test-model)
-        app.persona_manager
-            .set_default_for_provider_model("test_test-model", "alice-dev");
 
         // Initially no persona should be active
         assert!(app.persona_manager.get_active_persona().is_none());
@@ -1481,28 +1482,30 @@ mod tests {
         use crate::core::config::{Config, Persona};
 
         // Create a config with test personas
-        let mut config = Config::default();
-        config.personas = vec![
-            Persona {
-                id: "alice-dev".to_string(),
-                display_name: "Alice".to_string(),
-                bio: Some("A developer persona".to_string()),
-            },
-            Persona {
-                id: "bob-student".to_string(),
-                display_name: "Bob".to_string(),
-                bio: Some("A student persona".to_string()),
-            },
-        ];
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alice-dev".to_string(),
+                    display_name: "Alice".to_string(),
+                    bio: Some("A developer persona".to_string()),
+                },
+                Persona {
+                    id: "bob-student".to_string(),
+                    display_name: "Bob".to_string(),
+                    bio: Some("A student persona".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Set up a default persona for the current provider/model (test_test-model)
+        let mut config = config;
+        config.set_default_persona("test".to_string(), "test-model".to_string(), "alice-dev".to_string());
 
         // Create app with personas
         let mut app = create_test_app();
         app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
             .expect("Failed to load personas");
-
-        // Set up a default persona for the current provider/model (test_test-model)
-        app.persona_manager
-            .set_default_for_provider_model("test_test-model", "alice-dev");
 
         // Activate a different persona first (simulating CLI persona)
         app.persona_manager
@@ -1526,12 +1529,14 @@ mod tests {
         use crate::core::config::{Config, Persona};
 
         // Create a config with test personas
-        let mut config = Config::default();
-        config.personas = vec![Persona {
-            id: "alice-dev".to_string(),
-            display_name: "Alice".to_string(),
-            bio: Some("A developer persona".to_string()),
-        }];
+        let mut config = Config {
+            personas: vec![Persona {
+                id: "alice-dev".to_string(),
+                display_name: "Alice".to_string(),
+                bio: Some("A developer persona".to_string()),
+            }],
+            ..Default::default()
+        };
         config.set_default_persona(
             "test".to_string(),
             "test-model".to_string(),

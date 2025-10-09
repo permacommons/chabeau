@@ -264,48 +264,7 @@ mod integration_tests {
         assert!(substituted_bio.contains("TestBot development"));
     }
 
-    #[test]
-    fn test_provider_specific_default_persona_persistence() {
-        // Test provider-specific default persona persistence and loading
 
-        let config = create_test_config_with_personas();
-        let mut persona_manager =
-            PersonaManager::load_personas(&config).expect("Failed to load personas");
-
-        let provider_model = "openai_gpt-4";
-        let persona_id = "alice-dev";
-
-        // Initially no default
-        assert!(persona_manager
-            .get_default_for_provider_model(provider_model)
-            .is_none());
-
-        // Set default
-        persona_manager.set_default_for_provider_model(provider_model, persona_id);
-
-        // Verify default is set
-        let default = persona_manager.get_default_for_provider_model(provider_model);
-        assert!(default.is_some());
-        assert_eq!(default.unwrap(), persona_id);
-
-        // Test with different provider/model
-        let different_provider = "anthropic_claude-3-opus";
-        persona_manager.set_default_for_provider_model(different_provider, "bob-student");
-
-        // Verify both defaults exist independently
-        assert_eq!(
-            persona_manager
-                .get_default_for_provider_model(provider_model)
-                .unwrap(),
-            "alice-dev"
-        );
-        assert_eq!(
-            persona_manager
-                .get_default_for_provider_model(different_provider)
-                .unwrap(),
-            "bob-student"
-        );
-    }
 
     #[test]
     fn test_default_persona_loading_from_config() {

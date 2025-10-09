@@ -45,6 +45,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
+            Some(app.ui.user_display_name.clone()),
         );
         (layout.lines, layout.span_metadata)
     } else if app.ui.in_block_select_mode() {
@@ -57,6 +58,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
+            Some(app.ui.user_display_name.clone()),
         );
         (layout.lines, layout.span_metadata)
     } else {

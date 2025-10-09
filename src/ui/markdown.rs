@@ -671,6 +671,7 @@ pub fn compute_codeblock_ranges(
                 true, // syntax_enabled
                 None, // terminal_width
                 crate::ui::layout::TableOverflowPolicy::WrapCells,
+                None, // user_display_name
             );
             offset += lines.len();
             continue;
@@ -708,6 +709,7 @@ fn render_message_with_ranges_with_width_and_policy(
     syntax_enabled: bool,
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
+    user_display_name: Option<&str>,
 ) -> RenderedLinesWithMetadata {
     let config = MarkdownRendererConfig {
         collect_span_metadata: true,
@@ -716,7 +718,7 @@ fn render_message_with_ranges_with_width_and_policy(
             terminal_width,
             table_policy,
         }),
-        user_display_name: None,
+        user_display_name: user_display_name.map(|s| s.to_string()),
     };
     MarkdownRenderer::new(role, content, theme, config).render()
 }
@@ -728,6 +730,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
     syntax_enabled: bool,
+    user_display_name: Option<&str>,
 ) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let mut offset = 0usize;
@@ -741,6 +744,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    None,
                 );
                 offset += lines.len();
             }
@@ -752,6 +756,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    user_display_name,
                 );
                 for (start, len, content) in ranges {
                     out.push((offset + start, len, content));
@@ -766,6 +771,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    None,
                 );
                 for (start, len, content) in ranges {
                     out.push((offset + start, len, content));
@@ -1044,6 +1050,7 @@ mod tests {
             false, // syntax_enabled
             None,  // terminal_width
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None, // user_display_name
         );
         let (lines, ranges, metadata) = MarkdownRenderer::new(
             RoleKind::Assistant,
@@ -1141,6 +1148,7 @@ mod tests {
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1);
         let (start, len, content) = &ranges[0];
@@ -1244,6 +1252,7 @@ mod tests {
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1);
         let (start, len, content) = &ranges[0];

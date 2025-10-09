@@ -727,6 +727,7 @@ async fn handle_block_select_mode_event(
             Some(term_width as usize),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             app.ui.syntax_enabled,
+            Some(&app.ui.user_display_name),
         );
 
         match key.code {

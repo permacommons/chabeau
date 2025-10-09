@@ -167,12 +167,12 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_persona_deactivation_workflow() {
-        // Test persona deactivation through picker
+    fn test_persona_picker_turn_off_updates_ui_state() {
+        // Test persona deactivation through the picker flow and ensure UI is updated
 
         let mut app = create_test_app();
 
-        // Set up personas and activate one
+        // Set up personas and activate one so the "turn off" option is present
         let config = create_test_config_with_personas();
         app.persona_manager =
             PersonaManager::load_personas(&config).expect("Failed to load personas");
@@ -180,16 +180,44 @@ mod integration_tests {
             .set_active_persona("alice-dev")
             .expect("Failed to activate persona");
 
-        // Verify persona is active
-        assert!(app.persona_manager.get_active_persona().is_some());
-        assert_eq!(app.persona_manager.get_display_name(), "Alice");
+        // Mirror the active persona in the UI like the command handler does
+        let active_display_name = app.persona_manager.get_display_name();
+        app.ui.update_user_display_name(active_display_name.clone());
+        assert_eq!(app.ui.user_display_name, "Alice");
 
-        // Deactivate persona
-        app.persona_manager.clear_active_persona();
+        // Opening the picker should include the "turn off persona" entry
+        app.open_persona_picker();
 
-        // Verify persona is deactivated
+        {
+            let picker_state = app.picker_state().expect("Persona picker should be opened");
+            assert!(
+                picker_state
+                    .items
+                    .iter()
+                    .any(|item| item.id == "[turn_off_persona]"),
+                "Turn off persona entry should be present in picker"
+            );
+        }
+
+        {
+            let picker_state = app
+                .picker_state_mut()
+                .expect("Persona picker state should be mutable");
+            let turn_off_index = picker_state
+                .items
+                .iter()
+                .position(|item| item.id == "[turn_off_persona]")
+                .expect("Turn off persona entry missing");
+            picker_state.selected = turn_off_index;
+        }
+
+        // Apply the currently selected option to deactivate the persona
+        app.apply_selected_persona(false);
+
         assert!(app.persona_manager.get_active_persona().is_none());
-        assert_eq!(app.persona_manager.get_display_name(), "You");
+        assert_eq!(app.ui.user_display_name, "You");
+        assert_eq!(app.ui.status.as_deref(), Some("Persona deactivated"));
+        assert!(app.picker_state().is_none());
     }
 
     #[test]

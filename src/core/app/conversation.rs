@@ -26,8 +26,9 @@ impl<'a> ConversationController<'a> {
 
     /// Apply persona modifications to a system prompt
     /// Returns the modified prompt if a persona is active, otherwise returns the original
-    fn apply_persona_to_system_prompt(&self, base_prompt: &str) -> String {
-        self.persona_manager.get_modified_system_prompt(base_prompt)
+    fn apply_persona_to_system_prompt(&self, base_prompt: &str, char_name: Option<&str>) -> String {
+        self.persona_manager
+            .get_modified_system_prompt(base_prompt, char_name)
     }
 
     /// Display character greeting if not yet shown
@@ -88,7 +89,8 @@ impl<'a> ConversationController<'a> {
             let char_name = Some(character.data.name.as_str());
             let base_system_prompt =
                 character.build_system_prompt_with_substitutions(user_name, char_name);
-            let modified_system_prompt = self.apply_persona_to_system_prompt(&base_system_prompt);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
                 content: modified_system_prompt,
@@ -96,7 +98,8 @@ impl<'a> ConversationController<'a> {
         } else {
             // No character active, but check if persona should modify an empty system prompt
             let base_system_prompt = "";
-            let modified_system_prompt = self.apply_persona_to_system_prompt(base_system_prompt);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(base_system_prompt, None);
             if !modified_system_prompt.is_empty() {
                 api_messages.push(crate::api::ChatMessage {
                     role: "system".to_string(),
@@ -327,7 +330,8 @@ impl<'a> ConversationController<'a> {
             let char_name = Some(character.data.name.as_str());
             let base_system_prompt =
                 character.build_system_prompt_with_substitutions(user_name, char_name);
-            let modified_system_prompt = self.apply_persona_to_system_prompt(&base_system_prompt);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
                 content: modified_system_prompt,
@@ -335,7 +339,8 @@ impl<'a> ConversationController<'a> {
         } else {
             // No character active, but check if persona should modify an empty system prompt
             let base_system_prompt = "";
-            let modified_system_prompt = self.apply_persona_to_system_prompt(base_system_prompt);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(base_system_prompt, None);
             if !modified_system_prompt.is_empty() {
                 api_messages.push(crate::api::ChatMessage {
                     role: "system".to_string(),
@@ -403,7 +408,9 @@ impl<'a> ConversationController<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{Config, Persona};
     use crate::core::message::Message;
+    use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message};
 
     #[test]
@@ -551,6 +558,63 @@ mod tests {
         // Last message should be post-history instructions
         assert_eq!(api_messages[4].role, "system");
         assert_eq!(api_messages[4].content, "Always be polite.");
+    }
+
+    #[test]
+    fn test_persona_bio_char_placeholder_with_active_character() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "mentor".to_string(),
+                display_name: "Mentor".to_string(),
+                bio: Some("Guide {{char}} with wisdom.".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("mentor")
+            .expect("Failed to activate persona");
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Aria".to_string(),
+                description: "A skilled musician".to_string(),
+                personality: "Creative and calm".to_string(),
+                scenario: "Guiding apprentices".to_string(),
+                first_mes: "Welcome.".to_string(),
+                mes_example: "Example.".to_string(),
+                creator_notes: None,
+                system_prompt: Some("Stay supportive.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        let api_messages = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Hello".to_string())
+        };
+
+        assert!(!api_messages.is_empty());
+        assert_eq!(api_messages[0].role, "system");
+        assert!(
+            api_messages[0].content.contains("Guide Aria with wisdom."),
+            "System prompt should include character name substitution: {}",
+            api_messages[0].content
+        );
     }
 
     #[test]

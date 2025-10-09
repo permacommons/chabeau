@@ -32,34 +32,39 @@ pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstra
 pub use settings::{ProviderController, ThemeController};
 pub use ui_state::{ActivityKind, UiState};
 
+/// Configuration parameters for initializing an App with authentication
+pub struct AppInitConfig {
+    pub model: String,
+    pub log_file: Option<String>,
+    pub provider: Option<String>,
+    pub env_only: bool,
+    pub pre_resolved_session: Option<ProviderSession>,
+    pub character: Option<String>,
+    pub persona: Option<String>,
+}
+
 pub async fn new_with_auth(
-    model: String,
-    log_file: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
+    init_config: AppInitConfig,
     config: &Config,
-    pre_resolved_session: Option<ProviderSession>,
-    character: Option<String>,
-    persona: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
         theme,
         startup_requires_provider,
     } = session::prepare_with_auth(
-        model,
-        log_file,
-        provider,
-        env_only,
+        init_config.model,
+        init_config.log_file,
+        init_config.provider,
+        init_config.env_only,
         config,
-        pre_resolved_session,
-        character,
+        init_config.pre_resolved_session,
+        init_config.character,
     )
     .await?;
 
     // Initialize PersonaManager and apply CLI persona if provided
     let mut persona_manager = crate::core::persona::PersonaManager::load_personas(config)?;
-    if let Some(persona_id) = persona {
+    if let Some(persona_id) = init_config.persona {
         persona_manager.set_active_persona(&persona_id)?;
     } else {
         // Load default persona for current provider/model if no CLI persona specified

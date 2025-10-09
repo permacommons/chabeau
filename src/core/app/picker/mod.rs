@@ -1082,7 +1082,7 @@ impl PickerController {
             .iter()
             .map(|persona| {
                 let is_default = default_persona
-                    .map(|def| def == &persona.id)
+                    .map(|def| def == persona.id)
                     .unwrap_or(false);
                 let display_label = if is_default {
                     format!("{} ({})*", persona.name, persona.id)

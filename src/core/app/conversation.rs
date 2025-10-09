@@ -61,7 +61,12 @@ impl<'a> ConversationController<'a> {
             content: content.clone(),
         };
 
-        if let Err(e) = self.session.logging.log_message(&format!("You: {content}")) {
+        let user_display_name = self.persona_manager.get_display_name();
+        if let Err(e) = self
+            .session
+            .logging
+            .log_message(&format!("{user_display_name}: {content}"))
+        {
             eprintln!("Failed to log message: {e}");
         }
 
@@ -291,10 +296,11 @@ impl<'a> ConversationController<'a> {
                     self.ui.current_response.clear();
                 }
 
+                let user_display_name = self.persona_manager.get_display_name();
                 if let Err(e) = self
                     .session
                     .logging
-                    .rewrite_log_without_last_response(&self.ui.messages)
+                    .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
                 {
                     eprintln!("Failed to rewrite log file: {e}");
                 }
@@ -412,6 +418,8 @@ mod tests {
     use crate::core::message::Message;
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message};
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_system_messages_excluded_from_api() {
@@ -614,6 +622,45 @@ mod tests {
             api_messages[0].content.contains("Guide Aria with wisdom."),
             "System prompt should include character name substitution: {}",
             api_messages[0].content
+        );
+    }
+
+    #[test]
+    fn add_user_message_logs_persona_display_name() {
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "captain".to_string(),
+                display_name: "Captain".to_string(),
+                bio: None,
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("captain")
+            .expect("Failed to activate persona");
+
+        let temp_dir = tempdir().expect("failed to create temp dir for log");
+        let log_path = temp_dir.path().join("conversation.log");
+        let log_path_string = log_path.to_string_lossy().into_owned();
+        app.session
+            .logging
+            .set_log_file(log_path_string)
+            .expect("failed to enable logging");
+
+        {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Hello there".to_string());
+        }
+
+        let contents = fs::read_to_string(&log_path).expect("failed to read log file");
+        assert!(
+            contents.contains("Captain: Hello there"),
+            "Log should include persona display name, contents: {contents}"
         );
     }
 

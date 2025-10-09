@@ -650,10 +650,11 @@ async fn handle_edit_select_mode_event(
                         }
                         app.ui.messages.truncate(idx);
                         app.invalidate_prewrap_cache();
-                        let _ = app
-                            .session
-                            .logging
-                            .rewrite_log_without_last_response(&app.ui.messages);
+                        let user_display_name = app.persona_manager.get_display_name();
+                        let _ = app.session.logging.rewrite_log_without_last_response(
+                            &app.ui.messages,
+                            &user_display_name,
+                        );
                         app.ui.set_input_text(content);
                         app.ui.exit_edit_select_mode();
                         let input_area_height = app.ui.calculate_input_area_height(term_width);
@@ -687,10 +688,11 @@ async fn handle_edit_select_mode_event(
                         }
                         app.ui.messages.truncate(idx);
                         app.invalidate_prewrap_cache();
-                        let _ = app
-                            .session
-                            .logging
-                            .rewrite_log_without_last_response(&app.ui.messages);
+                        let user_display_name = app.persona_manager.get_display_name();
+                        let _ = app.session.logging.rewrite_log_without_last_response(
+                            &app.ui.messages,
+                            &user_display_name,
+                        );
                         app.ui.exit_edit_select_mode();
                         let input_area_height = app.ui.calculate_input_area_height(term_width);
                         {

@@ -370,9 +370,11 @@ pub fn dump_conversation_with_overwrite(
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
 
+    let user_display_name = app.persona_manager.get_display_name();
+
     for msg in conversation_messages {
         match msg.role.as_str() {
-            "user" => writeln!(writer, "You: {}", msg.content)?,
+            "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
             _ => writeln!(writer, "{}", msg.content)?, // For assistant messages
         }
         writeln!(writer)?; // Empty line for spacing
@@ -407,6 +409,8 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{Config, Persona};
+    use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
     use std::fs;
     use std::io::Read;
@@ -485,6 +489,40 @@ mod tests {
         // Clean up
         drop(file);
         fs::remove_file(&dump_file_path).unwrap();
+    }
+
+    #[test]
+    fn dump_conversation_uses_persona_display_name() {
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "captain".to_string(),
+                display_name: "Captain".to_string(),
+                bio: None,
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("captain")
+            .expect("Failed to activate persona");
+
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+
+        let temp_dir = tempdir().unwrap();
+        let dump_file_path = temp_dir.path().join("persona_dump.txt");
+        dump_conversation_with_overwrite(&app, dump_file_path.to_str().unwrap(), true)
+            .expect("failed to dump conversation");
+
+        let contents = fs::read_to_string(&dump_file_path).expect("failed to read dump file");
+        assert!(
+            contents.contains("Captain: Hello"),
+            "Dump should include persona display name, contents: {contents}"
+        );
     }
 
     #[test]

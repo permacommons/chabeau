@@ -1078,6 +1078,10 @@ impl PickerController {
         );
         let default_persona = persona_manager.get_default_for_provider_model(&provider_model_key);
 
+        let active_character_name = session_context
+            .get_character()
+            .map(|character| character.data.name.as_str());
+
         let mut items: Vec<PickerItem> = personas
             .iter()
             .map(|persona| {
@@ -1089,7 +1093,16 @@ impl PickerController {
                 } else {
                     format!("{} ({})", persona.display_name, persona.id)
                 };
-                let metadata = persona.bio.clone().unwrap_or_else(|| "No bio".to_string());
+                let metadata = persona
+                    .bio
+                    .as_ref()
+                    .map(|bio| {
+                        let char_replacement = active_character_name.unwrap_or("Assistant");
+                        let user_replacement = persona.display_name.as_str();
+                        bio.replace("{{char}}", char_replacement)
+                            .replace("{{user}}", user_replacement)
+                    })
+                    .unwrap_or_else(|| "No bio".to_string());
                 PickerItem {
                     id: persona.id.clone(),
                     label: display_label,

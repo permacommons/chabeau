@@ -95,11 +95,11 @@ impl PersonaManager {
 
     /// Get the modified system prompt with persona bio prepended
     /// If a persona is active, prepends the persona's bio (with substitutions applied) to the base prompt
-    pub fn get_modified_system_prompt(&self, base_prompt: &str) -> String {
+    pub fn get_modified_system_prompt(&self, base_prompt: &str, char_name: Option<&str>) -> String {
         match &self.active_persona {
             Some(persona) => {
                 if let Some(bio) = &persona.bio {
-                    let substituted_bio = self.apply_substitutions(bio, Some("Assistant"));
+                    let substituted_bio = self.apply_substitutions(bio, char_name);
                     format!("{}\n\n{}", substituted_bio, base_prompt)
                 } else {
                     base_prompt.to_string()
@@ -297,7 +297,7 @@ mod tests {
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
 
         let base_prompt = "You are a helpful assistant.";
-        let result = manager.get_modified_system_prompt(base_prompt);
+        let result = manager.get_modified_system_prompt(base_prompt, None);
         assert_eq!(result, base_prompt);
     }
 
@@ -311,7 +311,7 @@ mod tests {
             .expect("Failed to activate persona");
 
         let base_prompt = "You are a helpful assistant.";
-        let result = manager.get_modified_system_prompt(base_prompt);
+        let result = manager.get_modified_system_prompt(base_prompt, None);
         let expected =
             "You are talking to Alice, a senior developer.\n\nYou are a helpful assistant.";
         assert_eq!(result, expected);
@@ -327,7 +327,7 @@ mod tests {
             .expect("Failed to activate persona");
 
         let base_prompt = "You are a helpful assistant.";
-        let result = manager.get_modified_system_prompt(base_prompt);
+        let result = manager.get_modified_system_prompt(base_prompt, None);
         assert_eq!(result, base_prompt);
     }
 
@@ -341,7 +341,7 @@ mod tests {
             .expect("Failed to activate persona");
 
         let base_prompt = "You are a helpful assistant.";
-        let result = manager.get_modified_system_prompt(base_prompt);
+        let result = manager.get_modified_system_prompt(base_prompt, None);
         let expected =
             "Bob is a computer science student learning about AI.\n\nYou are a helpful assistant.";
         assert_eq!(result, expected);

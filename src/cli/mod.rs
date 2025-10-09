@@ -19,6 +19,7 @@ use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
 use crate::cli::theme_list::list_themes;
 use crate::core::config::Config;
+use crate::core::persona::PersonaManager;
 use crate::ui::chat_loop::run_chat;
 
 fn print_version_info() {
@@ -140,6 +141,10 @@ pub struct Args {
     #[arg(short = 'c', long, global = true, value_name = "CHARACTER", num_args = 0..=1, default_missing_value = "")]
     pub character: Option<String>,
 
+    /// Persona to use for this session
+    #[arg(long, global = true, value_name = "PERSONA")]
+    pub persona: Option<String>,
+
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
     pub version: bool,
@@ -183,6 +188,35 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(async_main())
+}
+
+/// Validate persona argument against available personas in config
+fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Error>> {
+    let persona_manager = PersonaManager::load_personas(config)?;
+
+    if persona_manager.find_persona_by_id(persona_id).is_none() {
+        let available_personas: Vec<String> = persona_manager
+            .list_personas()
+            .iter()
+            .map(|p| format!("{} ({})", p.name, p.id))
+            .collect();
+
+        if available_personas.is_empty() {
+            eprintln!(
+                "❌ Persona '{}' not found. No personas are configured.",
+                persona_id
+            );
+            eprintln!("   Add personas to your config.toml file in the [[personas]] section.");
+        } else {
+            eprintln!("❌ Persona '{}' not found. Available personas:", persona_id);
+            for persona in available_personas {
+                eprintln!("   {}", persona);
+            }
+        }
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 async fn async_main() -> Result<(), Box<dyn Error>> {
@@ -362,6 +396,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                 return list_characters().await;
             }
 
+            // Validate persona if provided
+            if let Some(persona_id) = &args.persona {
+                let config = Config::load()?;
+                validate_persona(persona_id, &config)?;
+            }
+
             // Check if -p was provided without a provider name (empty string)
             match args.provider.as_deref() {
                 Some("") => {
@@ -395,6 +435,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 provider_for_operations,
                                 args.env_only,
                                 character_for_operations,
+                                args.persona,
                             )
                             .await
                         }
@@ -406,6 +447,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 provider_for_operations,
                                 args.env_only,
                                 character_for_operations,
+                                args.persona,
                             )
                             .await
                         }
@@ -463,5 +505,63 @@ mod tests {
         assert_eq!(args.character, Some("alice".to_string()));
         assert_eq!(args.model, Some("gpt-4".to_string()));
         assert_eq!(args.provider, Some("openai".to_string()));
+    }
+
+    #[test]
+    fn test_persona_flag_parsing() {
+        // Test persona flag
+        let args = Args::try_parse_from(["chabeau", "--persona", "alice-dev"]).unwrap();
+        assert_eq!(args.persona, Some("alice-dev".to_string()));
+
+        // Test no persona flag
+        let args = Args::try_parse_from(["chabeau"]).unwrap();
+        assert_eq!(args.persona, None);
+    }
+
+    #[test]
+    fn test_persona_flag_with_other_flags() {
+        // Test persona flag combined with model, provider, and character
+        let args = Args::try_parse_from([
+            "chabeau",
+            "--persona",
+            "alice-dev",
+            "-m",
+            "gpt-4",
+            "-p",
+            "openai",
+            "-c",
+            "alice",
+        ])
+        .unwrap();
+        assert_eq!(args.persona, Some("alice-dev".to_string()));
+        assert_eq!(args.model, Some("gpt-4".to_string()));
+        assert_eq!(args.provider, Some("openai".to_string()));
+        assert_eq!(args.character, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_persona_validation_with_valid_config() {
+        use crate::core::config::{Config, Persona};
+
+        // Create a config with test personas
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alice-dev".to_string(),
+                    name: "Alice".to_string(),
+                    bio: Some("You are talking to Alice, a senior developer.".to_string()),
+                },
+                Persona {
+                    id: "bob-student".to_string(),
+                    name: "Bob".to_string(),
+                    bio: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Test valid persona validation
+        assert!(validate_persona("alice-dev", &config).is_ok());
+        assert!(validate_persona("bob-student", &config).is_ok());
     }
 }

@@ -40,6 +40,7 @@ pub async fn new_with_auth(
     config: &Config,
     pre_resolved_session: Option<ProviderSession>,
     character: Option<String>,
+    persona: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
@@ -56,11 +57,18 @@ pub async fn new_with_auth(
     )
     .await?;
 
+    // Initialize PersonaManager and apply CLI persona if provided
+    let mut persona_manager = crate::core::persona::PersonaManager::load_personas(config)?;
+    if let Some(persona_id) = persona {
+        persona_manager.set_active_persona(&persona_id)?;
+    }
+
     let mut app = App {
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
         character_cache: crate::character::cache::CardCache::new(),
+        persona_manager,
     };
 
     app.ui.set_input_text(String::new());
@@ -88,11 +96,15 @@ pub async fn new_uninitialized(
         picker.startup_requires_provider = true;
     }
 
+    // Initialize PersonaManager (no CLI persona for uninitialized app)
+    let persona_manager = crate::core::persona::PersonaManager::load_personas(&config)?;
+
     let mut app = App {
         session,
         ui: UiState::from_config(theme, &config),
         picker,
         character_cache: crate::character::cache::CardCache::new(),
+        persona_manager,
     };
 
     app.ui.set_input_text(String::new());
@@ -106,6 +118,7 @@ pub struct App {
     pub ui: UiState,
     pub picker: PickerController,
     pub character_cache: crate::character::cache::CardCache,
+    pub persona_manager: crate::core::persona::PersonaManager,
 }
 
 #[derive(Clone)]
@@ -216,11 +229,17 @@ impl App {
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
 
+        // Create a test PersonaManager with empty config
+        let test_config = crate::core::config::Config::default();
+        let persona_manager = crate::core::persona::PersonaManager::load_personas(&test_config)
+            .expect("Failed to create test PersonaManager");
+
         App {
             session,
             ui,
             picker: PickerController::new(),
             character_cache: crate::character::cache::CardCache::new(),
+            persona_manager,
         }
     }
 

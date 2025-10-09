@@ -410,6 +410,7 @@ pub async fn run_chat(
     provider: Option<String>,
     env_only: bool,
     character: Option<String>,
+    persona: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(
         model.clone(),
@@ -417,6 +418,7 @@ pub async fn run_chat(
         provider.clone(),
         env_only,
         character,
+        persona,
     )
     .await?;
 

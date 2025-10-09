@@ -30,6 +30,13 @@ pub struct CustomTheme {
     pub input_cursor_modifiers: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Persona {
+    pub id: String,
+    pub name: String,
+    pub bio: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub default_provider: Option<String>,
@@ -51,6 +58,9 @@ pub struct Config {
     /// Value: character card filename without extension (e.g., "alice" for alice.json or alice.png)
     #[serde(default)]
     pub default_characters: HashMap<String, HashMap<String, String>>,
+    /// User-defined personas for conversation contexts
+    #[serde(default)]
+    pub personas: Vec<Persona>,
 }
 
 /// Get a user-friendly display string for a path
@@ -874,6 +884,102 @@ mod tests {
 
         // This should not panic and should print the characters
         config.print_default_characters();
+    }
+
+    #[test]
+    fn test_persona_serialization() {
+        let persona = Persona {
+            id: "test-persona".to_string(),
+            name: "Test User".to_string(),
+            bio: Some("A test persona for unit testing".to_string()),
+        };
+
+        // Test that persona can be serialized and deserialized
+        let serialized = toml::to_string(&persona).expect("Failed to serialize persona");
+        let deserialized: Persona =
+            toml::from_str(&serialized).expect("Failed to deserialize persona");
+
+        assert_eq!(deserialized.id, "test-persona");
+        assert_eq!(deserialized.name, "Test User");
+        assert_eq!(
+            deserialized.bio,
+            Some("A test persona for unit testing".to_string())
+        );
+    }
+
+    #[test]
+    fn test_persona_optional_bio() {
+        let persona = Persona {
+            id: "minimal-persona".to_string(),
+            name: "Minimal User".to_string(),
+            bio: None,
+        };
+
+        // Test that persona with no bio can be serialized and deserialized
+        let serialized = toml::to_string(&persona).expect("Failed to serialize persona");
+        let deserialized: Persona =
+            toml::from_str(&serialized).expect("Failed to deserialize persona");
+
+        assert_eq!(deserialized.id, "minimal-persona");
+        assert_eq!(deserialized.name, "Minimal User");
+        assert_eq!(deserialized.bio, None);
+    }
+
+    #[test]
+    fn test_config_with_personas() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_personas.toml");
+
+        let mut config = Config::default();
+        config.personas = vec![
+            Persona {
+                id: "alice-dev".to_string(),
+                name: "Alice".to_string(),
+                bio: Some("A senior software developer".to_string()),
+            },
+            Persona {
+                id: "bob-student".to_string(),
+                name: "Bob".to_string(),
+                bio: None,
+            },
+        ];
+
+        // Save the config
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load it back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify personas were preserved
+        assert_eq!(loaded_config.personas.len(), 2);
+
+        let alice = &loaded_config.personas[0];
+        assert_eq!(alice.id, "alice-dev");
+        assert_eq!(alice.name, "Alice");
+        assert_eq!(alice.bio, Some("A senior software developer".to_string()));
+
+        let bob = &loaded_config.personas[1];
+        assert_eq!(bob.id, "bob-student");
+        assert_eq!(bob.name, "Bob");
+        assert_eq!(bob.bio, None);
+    }
+
+    #[test]
+    fn test_empty_personas_array() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_empty_personas.toml");
+
+        let config = Config::default();
+        assert!(config.personas.is_empty());
+
+        // Save and load to ensure empty array is handled correctly
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+        assert!(loaded_config.personas.is_empty());
     }
 
     #[test]

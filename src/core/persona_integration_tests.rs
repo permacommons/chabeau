@@ -68,7 +68,7 @@ mod integration_tests {
 
         // Verify system prompt modification
         let base_prompt = "You are a helpful assistant.";
-        let modified_prompt = persona_manager.get_modified_system_prompt(base_prompt);
+        let modified_prompt = persona_manager.get_modified_system_prompt(base_prompt, None);
         assert!(modified_prompt.contains("Alice, a senior software developer"));
         assert!(modified_prompt.contains(base_prompt));
     }
@@ -203,7 +203,7 @@ mod integration_tests {
         let base_prompt = "You are a helpful assistant.";
 
         // Test without persona
-        let prompt_no_persona = persona_manager.get_modified_system_prompt(base_prompt);
+        let prompt_no_persona = persona_manager.get_modified_system_prompt(base_prompt, None);
         assert_eq!(
             prompt_no_persona, base_prompt,
             "Prompt should be unchanged without persona"
@@ -213,7 +213,7 @@ mod integration_tests {
         persona_manager
             .set_active_persona("alice-dev")
             .expect("Failed to activate persona");
-        let prompt_with_persona = persona_manager.get_modified_system_prompt(base_prompt);
+        let prompt_with_persona = persona_manager.get_modified_system_prompt(base_prompt, None);
 
         assert!(prompt_with_persona.contains("Alice, a senior software developer"));
         assert!(prompt_with_persona.contains(base_prompt));
@@ -226,7 +226,7 @@ mod integration_tests {
         persona_manager
             .set_active_persona("charlie-no-bio")
             .expect("Failed to activate persona");
-        let prompt_no_bio = persona_manager.get_modified_system_prompt(base_prompt);
+        let prompt_no_bio = persona_manager.get_modified_system_prompt(base_prompt, None);
         assert_eq!(
             prompt_no_bio, base_prompt,
             "Prompt should be unchanged for persona without bio"
@@ -427,7 +427,7 @@ mod integration_tests {
         assert_eq!(app.persona_manager.get_display_name(), "Alice");
         let initial_prompt = app
             .persona_manager
-            .get_modified_system_prompt("You are helpful.");
+            .get_modified_system_prompt("You are helpful.", None);
         assert!(initial_prompt.contains("Alice, a senior software developer"));
 
         // Step 3: Add user message with persona active
@@ -446,7 +446,7 @@ mod integration_tests {
         assert_eq!(app.persona_manager.get_display_name(), "Bob");
         let switched_prompt = app
             .persona_manager
-            .get_modified_system_prompt("You are helpful.");
+            .get_modified_system_prompt("You are helpful.", None);
         assert!(switched_prompt.contains("Bob, a computer science student"));
         assert!(!switched_prompt.contains("Alice"));
 
@@ -464,7 +464,7 @@ mod integration_tests {
         assert_eq!(app.persona_manager.get_display_name(), "You");
         let final_prompt = app
             .persona_manager
-            .get_modified_system_prompt("You are helpful.");
+            .get_modified_system_prompt("You are helpful.", None);
         assert_eq!(final_prompt, "You are helpful.");
     }
 

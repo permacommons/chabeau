@@ -1457,7 +1457,11 @@ mod tests {
         };
 
         // Set up a default persona for the current provider/model (test_test-model)
-        config.set_default_persona("test".to_string(), "test-model".to_string(), "alice-dev".to_string());
+        config.set_default_persona(
+            "test".to_string(),
+            "test-model".to_string(),
+            "alice-dev".to_string(),
+        );
 
         // Create app with personas
         let mut app = create_test_app();
@@ -1500,7 +1504,11 @@ mod tests {
 
         // Set up a default persona for the current provider/model (test_test-model)
         let mut config = config;
-        config.set_default_persona("test".to_string(), "test-model".to_string(), "alice-dev".to_string());
+        config.set_default_persona(
+            "test".to_string(),
+            "test-model".to_string(),
+            "alice-dev".to_string(),
+        );
 
         // Create app with personas
         let mut app = create_test_app();

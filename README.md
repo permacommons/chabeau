@@ -208,7 +208,13 @@ In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Enter to se
 When a persona is active:
 - Your messages are labeled with the persona's name instead of "You"
 - The persona's bio (if provided) is prepended to the system prompt
-- Variable substitutions like `{{user}}` in character cards use the persona's name
+
+### Variable Substitutions
+
+Both personas and character cards support `{{user}}` and `{{char}}` variable substitutions:
+
+- `{{user}}` is replaced with the active persona's display name (or "Anon" if no persona is active)
+- `{{char}}` is replaced with the character's name (or "Assistant" if no character is active)
 
 ### Persona vs Character Integration
 

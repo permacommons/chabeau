@@ -83,8 +83,6 @@ impl CardCache {
         result.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(result)
     }
-
-
 }
 
 impl Default for CardCache {
@@ -103,8 +101,6 @@ mod tests {
         assert!(cache.metadata.is_empty());
         assert!(cache.cache_key.is_none());
     }
-
-
 
     #[test]
     fn test_compute_cache_key_empty_directory() {
@@ -216,6 +212,4 @@ mod tests {
         assert!(cache.cache_key.is_some());
         assert_eq!(cache.metadata.len(), 1);
     }
-
-
 }

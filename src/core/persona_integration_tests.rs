@@ -264,8 +264,6 @@ mod integration_tests {
         assert!(substituted_bio.contains("TestBot development"));
     }
 
-
-
     #[test]
     fn test_default_persona_loading_from_config() {
         // Test automatic default persona loading based on provider/model

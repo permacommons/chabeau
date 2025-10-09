@@ -109,8 +109,6 @@ impl PersonaManager {
         }
     }
 
-
-
     /// Get the default persona for a provider/model combination
     pub fn get_default_for_provider_model(&self, provider_model: &str) -> Option<&str> {
         self.defaults.get(provider_model).map(|s| s.as_str())
@@ -379,8 +377,6 @@ mod tests {
         // Should be back to "You"
         assert_eq!(ui.user_display_name, "You");
     }
-
-
 
     #[test]
     fn test_default_persona_loading_from_config() {

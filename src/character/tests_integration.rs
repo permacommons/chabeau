@@ -365,8 +365,6 @@ mod integration_tests {
         assert_eq!(api_messages.last().unwrap().content, "Always be polite.");
     }
 
-
-
     #[test]
     fn test_config_persistence_with_multiple_defaults() {
         // Test that default characters persist across config save/load
@@ -459,8 +457,6 @@ mod integration_tests {
         // Should load CLI character, not default
         assert_eq!(loaded.unwrap().data.name, "CLIChar");
     }
-
-
 
     #[test]
     fn test_character_with_empty_optional_fields() {

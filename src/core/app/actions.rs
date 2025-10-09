@@ -546,10 +546,11 @@ fn handle_in_place_edit(app: &mut App, index: usize, new_text: String) {
 
     app.ui.messages[actual_index].content = new_text;
     app.invalidate_prewrap_cache();
+    let user_display_name = app.persona_manager.get_display_name();
     let _ = app
         .session
         .logging
-        .rewrite_log_without_last_response(&app.ui.messages);
+        .rewrite_log_without_last_response(&app.ui.messages, &user_display_name);
 }
 
 fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {

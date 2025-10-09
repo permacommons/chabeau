@@ -105,6 +105,7 @@ impl LoggingState {
     pub fn rewrite_log_without_last_response(
         &self,
         messages: &std::collections::VecDeque<Message>,
+        user_display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.is_active || self.file_path.is_none() {
             return Ok(());
@@ -122,8 +123,8 @@ impl LoggingState {
         // Write all messages in the same format as log_message
         for msg in messages {
             if msg.role == "user" {
-                // Write user messages with "You:" prefix
-                for line in format!("You: {}", msg.content).lines() {
+                // Write user messages with the current user display name prefix
+                for line in format!("{}: {}", user_display_name, msg.content).lines() {
                     writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing

@@ -1583,4 +1583,59 @@ mod tests {
         );
         assert_eq!(alice_item.label, "Alice (alice-dev)*");
     }
+
+    #[test]
+    fn test_persona_picker_metadata_includes_character_name() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::core::config::{Config, Persona};
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "mentor".to_string(),
+                display_name: "Mentor".to_string(),
+                bio: Some("Guide {{char}} with wisdom, {{user}}.".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let mut app = create_test_app();
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config)
+            .expect("Failed to load personas");
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Aria".to_string(),
+                description: String::new(),
+                personality: String::new(),
+                scenario: String::new(),
+                first_mes: String::new(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+        app.session.set_character(character);
+
+        app.open_persona_picker();
+
+        let picker_state = app.picker_state().expect("Picker should be open");
+        let mentor_item = picker_state
+            .items
+            .iter()
+            .find(|item| item.id == "mentor")
+            .expect("Mentor persona should be in picker");
+        let metadata = mentor_item
+            .metadata
+            .as_ref()
+            .expect("Mentor persona should have metadata");
+
+        assert!(metadata.contains("Guide Aria with wisdom, Mentor."));
+    }
 }

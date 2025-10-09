@@ -306,4 +306,60 @@ mod tests {
             "Bob is a computer science student learning about AI.\n\nYou are a helpful assistant.";
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_ui_display_name_integration() {
+        use crate::core::app::ui_state::UiState;
+        use crate::ui::theme::Theme;
+
+        let config = create_test_config();
+        let mut manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+
+        // Initially should show "You"
+        assert_eq!(ui.user_display_name, "You");
+
+        // Activate a persona and update UI
+        manager
+            .set_active_persona("alice-dev")
+            .expect("Failed to activate persona");
+        let display_name = manager.get_display_name();
+        ui.update_user_display_name(display_name);
+
+        // Should now show persona name
+        assert_eq!(ui.user_display_name, "Alice");
+
+        // Deactivate persona and update UI
+        manager.clear_active_persona();
+        let display_name = manager.get_display_name();
+        ui.update_user_display_name(display_name);
+
+        // Should be back to "You"
+        assert_eq!(ui.user_display_name, "You");
+    }
+}
+#[test]
+fn test_message_rendering_with_persona_display_name() {
+    use crate::core::message::Message;
+    use crate::ui::markdown::{render_message_with_config, MessageRenderConfig};
+    use crate::ui::theme::Theme;
+
+    let theme = Theme::dark_default();
+    let message = Message {
+        role: "user".to_string(),
+        content: "Hello world".to_string(),
+    };
+
+    // Test with default "You:"
+    let config_default = MessageRenderConfig::plain();
+    let rendered_default = render_message_with_config(&message, &theme, config_default);
+    let first_line_default = rendered_default.lines.first().unwrap().to_string();
+    assert!(first_line_default.starts_with("You: "));
+
+    // Test with persona display name
+    let config_persona =
+        MessageRenderConfig::plain().with_user_display_name(Some("Alice".to_string()));
+    let rendered_persona = render_message_with_config(&message, &theme, config_persona);
+    let first_line_persona = rendered_persona.lines.first().unwrap().to_string();
+    assert!(first_line_persona.starts_with("Alice: "));
 }

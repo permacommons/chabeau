@@ -338,6 +338,7 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         };
         crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg)
     }
@@ -379,6 +380,7 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         };
         let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
 
@@ -456,6 +458,7 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         };
         let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
 
@@ -1024,6 +1027,7 @@ mod tests {
                 markdown_enabled: true,
                 syntax_enabled: true,
                 table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+                user_display_name: None,
             },
         );
         let (prewrapped, _) = ScrollCalculator::prewrap_lines_with_metadata(

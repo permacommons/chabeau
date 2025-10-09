@@ -52,9 +52,28 @@ pub fn render_message_markdown_details_with_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
 ) -> RenderedMessageDetails {
+    render_message_markdown_details_with_policy_and_user_name(
+        msg,
+        theme,
+        syntax_enabled,
+        terminal_width,
+        policy,
+        None,
+    )
+}
+
+pub fn render_message_markdown_details_with_policy_and_user_name(
+    msg: &Message,
+    theme: &Theme,
+    syntax_enabled: bool,
+    terminal_width: Option<usize>,
+    policy: crate::ui::layout::TableOverflowPolicy,
+    user_display_name: Option<&str>,
+) -> RenderedMessageDetails {
     let cfg = MessageRenderConfig::markdown(syntax_enabled)
         .with_span_metadata()
-        .with_terminal_width(terminal_width, policy);
+        .with_terminal_width(terminal_width, policy)
+        .with_user_display_name(user_display_name.map(|s| s.to_string()));
     render_message_with_config(msg, theme, cfg)
 }
 
@@ -82,13 +101,14 @@ fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
 }
 
 /// Configuration for the higher level message renderer abstraction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MessageRenderConfig {
     pub markdown: bool,
     pub collect_span_metadata: bool,
     pub syntax_highlighting: bool,
     pub terminal_width: Option<usize>,
     pub table_policy: crate::ui::layout::TableOverflowPolicy,
+    pub user_display_name: Option<String>,
 }
 
 impl MessageRenderConfig {
@@ -99,6 +119,7 @@ impl MessageRenderConfig {
             syntax_highlighting,
             terminal_width: None,
             table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         }
     }
 
@@ -109,6 +130,7 @@ impl MessageRenderConfig {
             syntax_highlighting: false,
             terminal_width: None,
             table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         }
     }
 
@@ -126,14 +148,20 @@ impl MessageRenderConfig {
         self.table_policy = policy;
         self
     }
+
+    pub fn with_user_display_name(mut self, display_name: Option<String>) -> Self {
+        self.user_display_name = display_name;
+        self
+    }
 }
 
 /// Configuration options for the markdown renderer abstraction.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct MarkdownRendererConfig {
     collect_span_metadata: bool,
     syntax_highlighting: bool,
     width: Option<MarkdownWidthConfig>,
+    user_display_name: Option<String>,
 }
 
 /// Width-aware configuration for optional wrapping and table layout.
@@ -157,10 +185,17 @@ pub fn render_message_with_config(
                 terminal_width: config.terminal_width,
                 table_policy: config.table_policy,
             }),
+            user_display_name: config.user_display_name.clone(),
         };
         MarkdownRenderer::new(role, &msg.content, theme, renderer_config).render()
     } else {
-        render_plain_message(role, &msg.content, theme, config.collect_span_metadata)
+        render_plain_message(
+            role,
+            &msg.content,
+            theme,
+            config.collect_span_metadata,
+            config.user_display_name.as_deref(),
+        )
     };
     RenderedMessageDetails {
         lines,
@@ -219,6 +254,13 @@ impl<'a> MarkdownRenderer<'a> {
         }
     }
 
+    fn get_user_prefix(&self) -> String {
+        match &self.config.user_display_name {
+            Some(name) => format!("{}: ", name),
+            None => "You: ".to_string(),
+        }
+    }
+
     fn render(mut self) -> RenderedLinesWithMetadata {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -237,8 +279,9 @@ impl<'a> MarkdownRenderer<'a> {
                     Tag::Paragraph => {
                         if self.role == RoleKind::User {
                             if !self.did_prefix_user {
+                                let user_prefix = self.get_user_prefix();
                                 self.push_span(
-                                    Span::styled("You: ", self.theme.user_prefix_style),
+                                    Span::styled(user_prefix, self.theme.user_prefix_style),
                                     SpanKind::UserPrefix,
                                 );
                                 self.did_prefix_user = true;
@@ -251,8 +294,9 @@ impl<'a> MarkdownRenderer<'a> {
                         self.flush_current_spans(true);
                         let style = self.theme.md_heading_style(level as u8);
                         if self.role == RoleKind::User && !self.did_prefix_user {
+                            let user_prefix = self.get_user_prefix();
                             self.push_span(
-                                Span::styled("You: ", self.theme.user_prefix_style),
+                                Span::styled(user_prefix, self.theme.user_prefix_style),
                                 SpanKind::UserPrefix,
                             );
                             self.did_prefix_user = true;
@@ -296,8 +340,9 @@ impl<'a> MarkdownRenderer<'a> {
                             }
                         };
                         if self.role == RoleKind::User && !self.did_prefix_user {
+                            let user_prefix = self.get_user_prefix();
                             self.push_span(
-                                Span::styled("You: ", self.theme.user_prefix_style),
+                                Span::styled(user_prefix, self.theme.user_prefix_style),
                                 SpanKind::UserPrefix,
                             );
                             self.did_prefix_user = true;
@@ -660,6 +705,7 @@ pub fn compute_codeblock_ranges(
                 collect_span_metadata: false,
                 syntax_highlighting: false,
                 width: None,
+                user_display_name: None,
             },
         )
         .render();
@@ -687,6 +733,7 @@ fn render_message_with_ranges_with_width_and_policy(
             terminal_width,
             table_policy,
         }),
+        user_display_name: None,
     };
     MarkdownRenderer::new(role, content, theme, config).render()
 }
@@ -1019,6 +1066,7 @@ mod tests {
                 collect_span_metadata: false,
                 syntax_highlighting: false,
                 width: None,
+                user_display_name: None,
             },
         )
         .render();
@@ -1060,6 +1108,7 @@ mod tests {
                     terminal_width: Some(48),
                     table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
                 }),
+                user_display_name: None,
             },
         )
         .render();
@@ -2430,6 +2479,7 @@ fn render_plain_message(
     content: &str,
     theme: &Theme,
     collect_span_metadata: bool,
+    user_display_name: Option<&str>,
 ) -> RenderedLinesWithMetadata {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut metadata: Vec<Vec<SpanKind>> = Vec::new();
@@ -2440,7 +2490,8 @@ fn render_plain_message(
                 let mut spans = Vec::new();
                 let mut kinds = Vec::new();
                 if idx == 0 {
-                    spans.push(Span::styled("You: ", theme.user_prefix_style));
+                    let user_prefix = format!("{}: ", user_display_name.unwrap_or("You"));
+                    spans.push(Span::styled(user_prefix, theme.user_prefix_style));
                     kinds.push(SpanKind::UserPrefix);
                 } else {
                     spans.push(Span::raw(USER_CONTINUATION_INDENT));

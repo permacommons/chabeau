@@ -58,6 +58,7 @@ pub struct UiState {
     pub(crate) prewrap_cache: Option<PrewrapCache>,
     pub status: Option<String>,
     pub status_set_at: Option<Instant>,
+    pub user_display_name: String,
     pub exit_requested: bool,
     pub compose_mode: bool,
 }
@@ -257,6 +258,7 @@ impl UiState {
             prewrap_cache: None,
             status: None,
             status_set_at: None,
+            user_display_name: "You".to_string(),
             exit_requested: false,
             compose_mode: false,
         }
@@ -515,6 +517,7 @@ impl UiState {
             markdown_enabled: markdown,
             syntax_enabled: syntax,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: Some(self.user_display_name.clone()),
         };
 
         if can_reuse {
@@ -570,6 +573,14 @@ impl UiState {
 
     pub fn invalidate_prewrap_cache(&mut self) {
         self.prewrap_cache = None;
+    }
+
+    pub fn update_user_display_name(&mut self, display_name: String) {
+        if self.user_display_name != display_name {
+            self.user_display_name = display_name;
+            // Invalidate cache since user display name affects rendering
+            self.invalidate_prewrap_cache();
+        }
     }
 
     pub(crate) fn set_mode(&mut self, mode: UiMode) {

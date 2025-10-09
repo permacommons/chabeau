@@ -74,6 +74,10 @@ pub async fn new_with_auth(
     app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
 
+    // Update user display name based on active persona
+    let display_name = app.persona_manager.get_display_name();
+    app.ui.update_user_display_name(display_name);
+
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;
     }
@@ -109,6 +113,10 @@ pub async fn new_uninitialized(
 
     app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
+
+    // Update user display name based on active persona
+    let display_name = app.persona_manager.get_display_name();
+    app.ui.update_user_display_name(display_name);
 
     Ok(app)
 }
@@ -474,6 +482,7 @@ impl App {
             // Check if user selected "turn off persona"
             if persona_id == "[turn_off_persona]" {
                 self.persona_manager.clear_active_persona();
+                self.ui.update_user_display_name("You".to_string());
                 self.conversation()
                     .set_status("Persona deactivated".to_string());
                 self.close_picker();
@@ -487,6 +496,7 @@ impl App {
                         .get_active_persona()
                         .map(|p| p.name.clone())
                         .unwrap_or_else(|| "Unknown".to_string());
+                    self.ui.update_user_display_name(persona_name.clone());
                     self.conversation()
                         .set_status(format!("Persona activated: {}", persona_name));
                 }

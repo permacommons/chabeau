@@ -145,6 +145,10 @@ pub struct Args {
     #[arg(long, global = true, value_name = "PERSONA")]
     pub persona: Option<String>,
 
+    /// Preset to use for this session
+    #[arg(long, global = true, value_name = "PRESET")]
+    pub preset: Option<String>,
+
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
     pub version: bool,
@@ -211,6 +215,35 @@ fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Err
             eprintln!("❌ Persona '{}' not found. Available personas:", persona_id);
             for persona in available_personas {
                 eprintln!("   {}", persona);
+            }
+        }
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Validate preset argument against available presets in config
+fn validate_preset(preset_id: &str, config: &Config) -> Result<(), Box<dyn Error>> {
+    let preset_manager = crate::core::preset::PresetManager::load_presets(config)?;
+
+    if preset_manager.find_preset_by_id(preset_id).is_none() {
+        let available_presets: Vec<String> = preset_manager
+            .list_presets()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+
+        if available_presets.is_empty() {
+            eprintln!(
+                "❌ Preset '{}' not found. No presets are configured.",
+                preset_id
+            );
+            eprintln!("   Add presets to your config.toml file in the [[presets]] section.");
+        } else {
+            eprintln!("❌ Preset '{}' not found. Available presets:", preset_id);
+            for preset in available_presets {
+                eprintln!("   {}", preset);
             }
         }
         std::process::exit(1);
@@ -416,10 +449,14 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                 return list_characters().await;
             }
 
-            // Validate persona if provided
-            if let Some(persona_id) = &args.persona {
+            if args.persona.is_some() || args.preset.is_some() {
                 let config = Config::load()?;
-                validate_persona(persona_id, &config)?;
+                if let Some(persona_id) = &args.persona {
+                    validate_persona(persona_id, &config)?;
+                }
+                if let Some(preset_id) = &args.preset {
+                    validate_preset(preset_id, &config)?;
+                }
             }
 
             // Check if -p was provided without a provider name (empty string)
@@ -441,6 +478,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     } else {
                         args.character
                     };
+                    let preset_for_operations = args.preset.clone();
 
                     match args.model.as_deref() {
                         Some("") => {
@@ -456,6 +494,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.env_only,
                                 character_for_operations,
                                 args.persona,
+                                preset_for_operations.clone(),
                             )
                             .await
                         }
@@ -468,6 +507,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 args.env_only,
                                 character_for_operations,
                                 args.persona,
+                                preset_for_operations,
                             )
                             .await
                         }
@@ -557,6 +597,15 @@ mod tests {
         assert_eq!(args.model, Some("gpt-4".to_string()));
         assert_eq!(args.provider, Some("openai".to_string()));
         assert_eq!(args.character, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_preset_flag_parsing() {
+        let args = Args::try_parse_from(["chabeau", "--preset", "focus"]).unwrap();
+        assert_eq!(args.preset, Some("focus".to_string()));
+
+        let args = Args::try_parse_from(["chabeau"]).unwrap();
+        assert_eq!(args.preset, None);
     }
 
     #[test]

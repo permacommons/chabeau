@@ -12,6 +12,8 @@ use crate::ui::theme::Theme;
 pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
 /// Special ID for the "turn off persona" picker entry
 pub(super) const TURN_OFF_PERSONA_ID: &str = "[turn_off_persona]";
+/// Special ID for the "turn off preset" picker entry
+pub(super) const TURN_OFF_PRESET_ID: &str = "[turn_off_preset]";
 
 /// Sanitize metadata text for display in picker
 ///
@@ -39,6 +41,7 @@ pub enum PickerMode {
     Provider,
     Character,
     Persona,
+    Preset,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +80,12 @@ pub struct PersonaPickerState {
 }
 
 #[derive(Debug, Clone)]
+pub struct PresetPickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PickerData {
     Theme(ThemePickerState),
@@ -84,6 +93,7 @@ pub enum PickerData {
     Provider(ProviderPickerState),
     Character(CharacterPickerState),
     Persona(PersonaPickerState),
+    Preset(PresetPickerState),
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +109,8 @@ impl PickerSession {
             (PickerMode::Theme, _)
             | (PickerMode::Provider, _)
             | (PickerMode::Character, _)
-            | (PickerMode::Persona, _) => true,
+            | (PickerMode::Persona, _)
+            | (PickerMode::Preset, _) => true,
             (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
             _ => false,
         }
@@ -127,6 +138,7 @@ impl PickerSession {
             PickerMode::Theme => "Pick Theme",
             PickerMode::Character => "Pick Character",
             PickerMode::Persona => "Pick Persona",
+            PickerMode::Preset => "Pick Preset",
         }
     }
 
@@ -137,6 +149,7 @@ impl PickerSession {
             PickerData::Provider(state) => &state.search_filter,
             PickerData::Character(state) => &state.search_filter,
             PickerData::Persona(state) => &state.search_filter,
+            PickerData::Preset(state) => &state.search_filter,
         }
     }
 
@@ -147,6 +160,7 @@ impl PickerSession {
             PickerData::Provider(state) => &state.all_items,
             PickerData::Character(state) => &state.all_items,
             PickerData::Persona(state) => &state.all_items,
+            PickerData::Preset(state) => &state.all_items,
         }
     }
 }
@@ -296,6 +310,28 @@ impl PickerController {
             Some(PickerSession {
                 mode: PickerMode::Persona,
                 data: PickerData::Persona(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn preset_state(&self) -> Option<&PresetPickerState> {
+        match self.session() {
+            Some(PickerSession {
+                mode: PickerMode::Preset,
+                data: PickerData::Preset(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn preset_state_mut(&mut self) -> Option<&mut PresetPickerState> {
+        match self.session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Preset,
+                data: PickerData::Preset(state),
                 ..
             }) => Some(state),
             _ => None,
@@ -709,7 +745,10 @@ impl PickerController {
             let mut regular_items = Vec::new();
 
             for item in picker.items.drain(..) {
-                if item.id == TURN_OFF_CHARACTER_ID || item.id == TURN_OFF_PERSONA_ID {
+                if item.id == TURN_OFF_CHARACTER_ID
+                    || item.id == TURN_OFF_PERSONA_ID
+                    || item.id == TURN_OFF_PRESET_ID
+                {
                     special_entries.push(item);
                 } else {
                     regular_items.push(item);
@@ -986,6 +1025,42 @@ impl PickerController {
         }
     }
 
+    pub fn filter_presets(&mut self) {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        if let (PickerMode::Preset, PickerData::Preset(preset_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = preset_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                preset_state.all_items.clone()
+            } else {
+                preset_state
+                    .all_items
+                    .iter()
+                    .filter(|item| {
+                        item.id == TURN_OFF_PRESET_ID
+                            || item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                            || item
+                                .metadata
+                                .as_ref()
+                                .map(|m| m.to_lowercase().contains(&search_term))
+                                .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
+            }
+            self.sort_items();
+            self.update_title();
+        }
+    }
+
     pub fn open_character_picker(
         &mut self,
         character_cache: &mut crate::character::cache::CardCache,
@@ -1139,6 +1214,93 @@ impl PickerController {
             mode: PickerMode::Persona,
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        };
+
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
+        self.sort_items();
+        self.update_title();
+
+        Ok(())
+    }
+
+    pub fn open_preset_picker(
+        &mut self,
+        preset_manager: &crate::core::preset::PresetManager,
+        session_context: &SessionContext,
+    ) -> Result<(), String> {
+        let presets = preset_manager.list_presets();
+
+        if presets.is_empty() {
+            return Err("No presets found. Add presets to your config.toml file.".to_string());
+        }
+
+        let default_preset = preset_manager
+            .get_default_for_provider_model(&session_context.provider_name, &session_context.model);
+
+        let mut items: Vec<PickerItem> = presets
+            .iter()
+            .map(|preset| {
+                let is_default = default_preset.map(|def| def == preset.id).unwrap_or(false);
+                let label = if is_default {
+                    format!("{}*", preset.id)
+                } else {
+                    preset.id.clone()
+                };
+
+                let mut parts = Vec::new();
+                let pre_trim = preset.pre.trim();
+                if !pre_trim.is_empty() {
+                    let sanitized = sanitize_picker_metadata(pre_trim);
+                    if !sanitized.is_empty() {
+                        parts.push(format!("Pre: {}", sanitized));
+                    }
+                }
+                let post_trim = preset.post.trim();
+                if !post_trim.is_empty() {
+                    let sanitized = sanitize_picker_metadata(post_trim);
+                    if !sanitized.is_empty() {
+                        parts.push(format!("Post: {}", sanitized));
+                    }
+                }
+
+                let metadata = if parts.is_empty() {
+                    Some("No instructions".to_string())
+                } else {
+                    Some(parts.join(" • "))
+                };
+
+                PickerItem {
+                    id: preset.id.clone(),
+                    label,
+                    metadata,
+                    sort_key: Some(preset.id.clone()),
+                }
+            })
+            .collect();
+
+        if preset_manager.get_active_preset().is_some() {
+            items.insert(
+                0,
+                PickerItem {
+                    id: TURN_OFF_PRESET_ID.to_string(),
+                    label: "[Turn off preset]".to_string(),
+                    metadata: Some("Deactivate current preset".to_string()),
+                    sort_key: None,
+                },
+            );
+        }
+
+        let selected = 0usize;
+        let picker_state = PickerState::new("Pick Preset", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Preset,
+            state: picker_state,
+            data: PickerData::Preset(PresetPickerState {
                 search_filter: String::new(),
                 all_items: items,
             }),

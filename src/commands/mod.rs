@@ -15,6 +15,7 @@ pub enum CommandResult {
     OpenThemePicker,
     OpenCharacterPicker,
     OpenPersonaPicker,
+    OpenPresetPicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -335,6 +336,35 @@ pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -
                     app.conversation()
                         .set_status(format!("Persona error: {}", e));
                     CommandResult::Continue
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn handle_preset(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => CommandResult::OpenPresetPicker,
+        _ => {
+            let preset_id = parts[1];
+            if preset_id.eq_ignore_ascii_case("off") || preset_id == "[turn_off_preset]" {
+                app.preset_manager.clear_active_preset();
+                app.conversation()
+                    .set_status("Preset deactivated".to_string());
+                CommandResult::Continue
+            } else {
+                match app.preset_manager.set_active_preset(preset_id) {
+                    Ok(()) => {
+                        app.conversation()
+                            .set_status(format!("Preset activated: {}", preset_id));
+                        CommandResult::Continue
+                    }
+                    Err(e) => {
+                        app.conversation()
+                            .set_status(format!("Preset error: {}", e));
+                        CommandResult::Continue
+                    }
                 }
             }
         }

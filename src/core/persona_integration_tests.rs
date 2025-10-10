@@ -371,8 +371,12 @@ mod integration_tests {
 
         // Add a user message and verify display name is used
         {
-            let mut conversation =
-                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
             conversation.add_user_message("Hello!".to_string());
         }
 
@@ -460,8 +464,12 @@ mod integration_tests {
 
         // Step 3: Add user message with persona active
         {
-            let mut conversation =
-                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
             conversation.add_user_message("What's your experience?".to_string());
         }
 
@@ -480,8 +488,12 @@ mod integration_tests {
 
         // Step 5: Add another message with new persona
         {
-            let mut conversation =
-                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
             conversation.add_user_message("I'm learning AI.".to_string());
         }
 

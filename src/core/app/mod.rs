@@ -26,7 +26,7 @@ pub use conversation::ConversationController;
 pub use picker::PickerData;
 pub use picker::{
     CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
-    PickerSession, ProviderPickerState, ThemePickerState,
+    PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -41,6 +41,7 @@ pub struct AppInitConfig {
     pub pre_resolved_session: Option<ProviderSession>,
     pub character: Option<String>,
     pub persona: Option<String>,
+    pub preset: Option<String>,
 }
 
 pub async fn new_with_auth(
@@ -81,12 +82,29 @@ pub async fn new_with_auth(
         }
     }
 
+    // Initialize PresetManager and apply CLI preset if provided
+    let mut preset_manager = crate::core::preset::PresetManager::load_presets(config)?;
+    if let Some(preset_id) = init_config.preset {
+        preset_manager.set_active_preset(&preset_id)?;
+    } else if let Some(default_preset_id) =
+        preset_manager.get_default_for_provider_model(&session.provider_name, &session.model)
+    {
+        let default_preset_id = default_preset_id.to_string();
+        if let Err(e) = preset_manager.set_active_preset(&default_preset_id) {
+            eprintln!(
+                "Warning: Could not load default preset '{}': {}",
+                default_preset_id, e
+            );
+        }
+    }
+
     let mut app = App {
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
         character_cache: crate::character::cache::CardCache::new(),
         persona_manager,
+        preset_manager,
     };
 
     app.ui.set_input_text(String::new());
@@ -120,6 +138,7 @@ pub async fn new_uninitialized(
 
     // Initialize PersonaManager (no CLI persona for uninitialized app)
     let persona_manager = crate::core::persona::PersonaManager::load_personas(&config)?;
+    let preset_manager = crate::core::preset::PresetManager::load_presets(&config)?;
 
     let mut app = App {
         session,
@@ -127,6 +146,7 @@ pub async fn new_uninitialized(
         picker,
         character_cache: crate::character::cache::CardCache::new(),
         persona_manager,
+        preset_manager,
     };
 
     app.ui.set_input_text(String::new());
@@ -145,6 +165,7 @@ pub struct App {
     pub picker: PickerController,
     pub character_cache: crate::character::cache::CardCache,
     pub persona_manager: crate::core::persona::PersonaManager,
+    pub preset_manager: crate::core::preset::PresetManager,
 }
 
 #[derive(Clone)]
@@ -211,7 +232,12 @@ impl App {
     }
 
     pub fn conversation(&mut self) -> ConversationController<'_> {
-        ConversationController::new(&mut self.session, &mut self.ui, &self.persona_manager)
+        ConversationController::new(
+            &mut self.session,
+            &mut self.ui,
+            &self.persona_manager,
+            &self.preset_manager,
+        )
     }
 
     /// Close any active picker session.
@@ -260,6 +286,8 @@ impl App {
         let test_config = crate::core::config::Config::default();
         let persona_manager = crate::core::persona::PersonaManager::load_personas(&test_config)
             .expect("Failed to create test PersonaManager");
+        let preset_manager = crate::core::preset::PresetManager::load_presets(&test_config)
+            .expect("Failed to create test PresetManager");
 
         App {
             session,
@@ -267,6 +295,7 @@ impl App {
             picker: PickerController::new(),
             character_cache: crate::character::cache::CardCache::new(),
             persona_manager,
+            preset_manager,
         }
     }
 
@@ -565,6 +594,76 @@ impl App {
         self.picker.filter_personas();
     }
 
+    /// Open a preset picker modal with available presets
+    pub fn open_preset_picker(&mut self) {
+        if let Err(message) = self
+            .picker
+            .open_preset_picker(&self.preset_manager, &self.session)
+        {
+            self.conversation().set_status(message);
+        }
+    }
+
+    /// Apply the selected preset from the picker
+    pub fn apply_selected_preset(&mut self, set_as_default: bool) {
+        let preset_id = self
+            .picker
+            .session()
+            .and_then(|picker| picker.state.selected_id())
+            .map(|s| s.to_string());
+
+        if let Some(preset_id) = preset_id {
+            if preset_id == picker::TURN_OFF_PRESET_ID {
+                self.preset_manager.clear_active_preset();
+                self.conversation()
+                    .set_status("Preset deactivated".to_string());
+                self.close_picker();
+                return;
+            }
+
+            match self.preset_manager.set_active_preset(&preset_id) {
+                Ok(()) => {
+                    if set_as_default {
+                        let provider = self.session.provider_name.clone();
+                        let model = self.session.model.clone();
+                        match self
+                            .preset_manager
+                            .set_default_for_provider_model_persistent(
+                                &provider, &model, &preset_id,
+                            ) {
+                            Ok(()) => {
+                                self.conversation().set_status(format!(
+                                    "Preset activated: {} (saved as default for {}:{})",
+                                    preset_id, provider, model
+                                ));
+                            }
+                            Err(e) => {
+                                self.conversation().set_status(format!(
+                                    "Preset activated: {} (failed to save as default: {})",
+                                    preset_id, e
+                                ));
+                            }
+                        }
+                    } else {
+                        self.conversation()
+                            .set_status(format!("Preset activated: {}", preset_id));
+                    }
+                }
+                Err(e) => {
+                    self.conversation()
+                        .set_status(format!("Preset error: {}", e));
+                }
+            }
+        }
+
+        self.close_picker();
+    }
+
+    /// Filter presets based on search term and update picker
+    pub fn filter_presets(&mut self) {
+        self.picker.filter_presets();
+    }
+
     /// Get character picker state accessor
     pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
         self.picker.character_state()
@@ -583,6 +682,16 @@ impl App {
     /// Get mutable persona picker state accessor
     pub fn persona_picker_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
         self.picker.persona_state_mut()
+    }
+
+    /// Get preset picker state accessor
+    pub fn preset_picker_state(&self) -> Option<&PresetPickerState> {
+        self.picker.preset_state()
+    }
+
+    /// Get mutable preset picker state accessor
+    pub fn preset_picker_state_mut(&mut self) -> Option<&mut PresetPickerState> {
+        self.picker.preset_state_mut()
     }
 }
 

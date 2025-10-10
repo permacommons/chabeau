@@ -237,7 +237,8 @@ async fn route_keyboard_event(
                 || app.theme_picker_state().is_some()
                 || app.provider_picker_state().is_some()
                 || app.character_picker_state().is_some()
-                || app.persona_picker_state().is_some();
+                || app.persona_picker_state().is_some()
+                || app.preset_picker_state().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
@@ -412,6 +413,7 @@ pub async fn run_chat(
     env_only: bool,
     character: Option<String>,
     persona: Option<String>,
+    preset: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(
         model.clone(),
@@ -420,6 +422,7 @@ pub async fn run_chat(
         env_only,
         character,
         persona,
+        preset,
     )
     .await?;
 

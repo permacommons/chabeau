@@ -1101,8 +1101,10 @@ impl PickerController {
                     .map(|bio| {
                         let char_replacement = active_character_name.unwrap_or("Assistant");
                         let user_replacement = persona.display_name.as_str();
-                        bio.replace("{{char}}", char_replacement)
-                            .replace("{{user}}", user_replacement)
+                        let substituted = bio
+                            .replace("{{char}}", char_replacement)
+                            .replace("{{user}}", user_replacement);
+                        sanitize_picker_metadata(&substituted)
                     })
                     .unwrap_or_else(|| "No bio".to_string());
                 PickerItem {
@@ -1406,24 +1408,26 @@ mod tests {
         use crate::core::persona::PersonaManager;
         use crate::utils::test_utils::create_test_app;
 
-        let mut config = Config::default();
-        config.personas = vec![
-            Persona {
-                id: "alpha".to_string(),
-                display_name: "Alpha".to_string(),
-                bio: Some("Alpha bio".to_string()),
-            },
-            Persona {
-                id: "beta".to_string(),
-                display_name: "Beta".to_string(),
-                bio: Some("Beta bio".to_string()),
-            },
-            Persona {
-                id: "gamma".to_string(),
-                display_name: "Gamma".to_string(),
-                bio: Some("Gamma bio".to_string()),
-            },
-        ];
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alpha".to_string(),
+                    display_name: "Alpha".to_string(),
+                    bio: Some("Alpha bio".to_string()),
+                },
+                Persona {
+                    id: "beta".to_string(),
+                    display_name: "Beta".to_string(),
+                    bio: Some("Beta bio".to_string()),
+                },
+                Persona {
+                    id: "gamma".to_string(),
+                    display_name: "Gamma".to_string(),
+                    bio: Some("Gamma bio".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
 
         let mut persona_manager = PersonaManager::load_personas(&config).unwrap();
         persona_manager.set_active_persona("alpha").unwrap();
@@ -1450,5 +1454,41 @@ mod tests {
 
         // Verify we still have all items after sorting
         assert_eq!(picker_items.len(), items_before_sort);
+    }
+
+    #[test]
+    fn test_persona_picker_sanitizes_bio_metadata() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "neat".to_string(),
+                display_name: "Neat".to_string(),
+                bio: Some("First line\nSecond\tline".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        app.picker
+            .open_persona_picker(&app.persona_manager, &app.session)
+            .unwrap();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        let persona_item = picker_items
+            .iter()
+            .find(|item| item.id == "neat")
+            .expect("persona entry present");
+
+        assert_eq!(
+            persona_item.metadata.as_deref(),
+            Some("First line Second line")
+        );
     }
 }

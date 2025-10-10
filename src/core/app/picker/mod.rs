@@ -10,6 +10,8 @@ use crate::ui::theme::Theme;
 
 /// Special ID for the "turn off character mode" picker entry
 pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
+/// Special ID for the "turn off persona" picker entry
+pub(super) const TURN_OFF_PERSONA_ID: &str = "[turn_off_persona]";
 
 /// Sanitize metadata text for display in picker
 ///
@@ -707,7 +709,7 @@ impl PickerController {
             let mut regular_items = Vec::new();
 
             for item in picker.items.drain(..) {
-                if item.id == TURN_OFF_CHARACTER_ID {
+                if item.id == TURN_OFF_CHARACTER_ID || item.id == TURN_OFF_PERSONA_ID {
                     special_entries.push(item);
                 } else {
                     regular_items.push(item);
@@ -963,7 +965,7 @@ impl PickerController {
                     .iter()
                     .filter(|item| {
                         // Always include the special "turn off" entry
-                        item.id == "[turn_off_persona]"
+                        item.id == TURN_OFF_PERSONA_ID
                             || item.id.to_lowercase().contains(&search_term)
                             || item.label.to_lowercase().contains(&search_term)
                             || item
@@ -1117,7 +1119,7 @@ impl PickerController {
             items.insert(
                 0,
                 PickerItem {
-                    id: "[turn_off_persona]".to_string(),
+                    id: TURN_OFF_PERSONA_ID.to_string(),
                     label: "[Turn off persona]".to_string(),
                     metadata: Some(
                         "Deactivate current persona and return to normal mode".to_string(),
@@ -1393,6 +1395,58 @@ mod tests {
         // First item should always be the turn off entry, regardless of sort
         assert_eq!(picker_items[0].id, TURN_OFF_CHARACTER_ID);
         assert_eq!(picker_items[0].label, "[Turn off character mode]");
+
+        // Verify we still have all items after sorting
+        assert_eq!(picker_items.len(), items_before_sort);
+    }
+
+    #[test]
+    fn test_turn_off_persona_stays_at_top_after_sort() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let mut config = Config::default();
+        config.personas = vec![
+            Persona {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                bio: Some("Alpha bio".to_string()),
+            },
+            Persona {
+                id: "beta".to_string(),
+                display_name: "Beta".to_string(),
+                bio: Some("Beta bio".to_string()),
+            },
+            Persona {
+                id: "gamma".to_string(),
+                display_name: "Gamma".to_string(),
+                bio: Some("Gamma bio".to_string()),
+            },
+        ];
+
+        let mut persona_manager = PersonaManager::load_personas(&config).unwrap();
+        persona_manager.set_active_persona("alpha").unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        let result = app
+            .picker
+            .open_persona_picker(&app.persona_manager, &app.session);
+
+        assert!(result.is_ok());
+
+        let items_before_sort = app.picker.session().unwrap().state.items.len();
+        assert!(items_before_sort >= 2);
+
+        app.picker.sort_items();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+
+        // First item should always be the turn off persona entry, regardless of sort
+        assert_eq!(picker_items[0].id, TURN_OFF_PERSONA_ID);
+        assert_eq!(picker_items[0].label, "[Turn off persona]");
 
         // Verify we still have all items after sorting
         assert_eq!(picker_items.len(), items_before_sort);

@@ -30,6 +30,18 @@ anthropic = "claude-sonnet-4-5-20250929"
   [default_characters.poe]
   "gpt-5-chat" = "hypatia"
 
+# Configure default personas by provider and model.
+# Values refer to persona IDs defined in the [[personas]] section below.
+[default_personas]
+  [default_personas.poe]
+  "gpt-5-chat" = "developer"
+
+# Configure default presets by provider and model.
+# Values refer to preset IDs defined in the [[presets]] section below.
+[default_presets]
+  [default_presets.poe]
+  "gpt-5-chat" = "focus"
+
 # Register custom OpenAI-compatible providers, each in its own
 # [[custom_providers]] block.
 #
@@ -50,4 +62,48 @@ user_text = "#9cdcfe"
 assistant_text = "#ce9178"
 selection_highlight = "#264f78"
 input_border = "#3a3d41"
+
+# Define personas to represent different user identities in conversations.
+# Use `/persona` in the TUI or `--persona <id>` on the CLI to activate.
+[[personas]]
+id = "developer"
+display_name = "Alex"
+bio = "You are talking to Alex, a senior software developer with expertise in Rust and distributed systems."
+
+[[personas]]
+id = "student"
+display_name = "Sam"
+bio = "Sam is a computer science student learning about AI and machine learning."
+
+[[personas]]
+id = "casual"
+display_name = "Jordan"
+# bio is optional - persona will just change the display name
+
+# Define presets for reusable system instructions.
+# Use `/preset` in the TUI or `--preset <id>` on the CLI to activate.
+[[presets]]
+id = "focus"
+pre = """
+You are collaborating with {{user}}. Keep responses focused and direct.
+"""
+post = """
+Before finishing, list any follow-up actions for {{char}}.
+"""
+
+[[presets]]
+id = "explain"
+pre = """
+Explain concepts clearly for a curious learner.
+"""
+post = """
+End with a reflective question for {{user}}.
+"""
+
+[[presets]]
+id = "concise"
+pre = """
+Be concise and to the point. Avoid unnecessary elaboration.
+"""
+# post is optional
 

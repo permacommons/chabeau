@@ -278,30 +278,29 @@ impl Config {
         guard.take();
     }
 
-    pub fn save_to_path(&self, config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = config_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+    /// Serialize the config and atomically persist it next to `config_path`.
+    /// Tests point the orchestrator at temporary locations, so this helper keeps
+    /// the same safe write behavior without touching real user files.
+    fn save_to_path(&self, config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let parent = config_path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty());
+
+        if let Some(dir) = parent {
+            fs::create_dir_all(dir)?;
         }
+
         let contents = toml::to_string_pretty(self)?;
-        let mut temp_file = if let Some(parent) = config_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                NamedTempFile::new_in(parent)?
-            } else {
-                NamedTempFile::new()?
-            }
-        } else {
-            NamedTempFile::new()?
+        let mut temp_file = match parent {
+            Some(dir) => NamedTempFile::new_in(dir)?,
+            None => NamedTempFile::new()?,
         };
-        {
-            let file = temp_file.as_file_mut();
-            file.write_all(contents.as_bytes())?;
-            file.sync_all()?;
-        }
+
+        temp_file.write_all(contents.as_bytes())?;
+        temp_file.as_file_mut().sync_all()?;
         temp_file
             .persist(config_path)
-            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+            .map_err(|err| -> Box<dyn std::error::Error> { Box::new(err) })?;
         Ok(())
     }
 

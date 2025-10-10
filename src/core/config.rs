@@ -99,12 +99,17 @@ pub fn path_display<P: AsRef<Path>>(path: P) -> String {
     path.display().to_string()
 }
 
+/// Snapshot of the last config we observed on disk.
+/// Keeps the parsed value and timestamp so we can avoid redundant reloads.
 #[derive(Default)]
 struct ConfigCacheState {
     config: Option<Config>,
     modified: Option<SystemTime>,
 }
 
+/// Coordinates shared config access across CLI/TUI code paths.
+/// The orchestrator caches parsed config files, performs atomic writes, and lets
+/// tests swap in isolated config locations without touching user state.
 struct ConfigOrchestrator {
     path: PathBuf,
     state: Mutex<ConfigCacheState>,
@@ -124,6 +129,8 @@ impl ConfigOrchestrator {
         }
     }
 
+    /// Load the config from disk if needed, otherwise return the cached copy.
+    /// The cache is invalidated when the file's last-modified timestamp changes.
     fn load_with_cache(&self) -> Result<Config, Box<dyn std::error::Error>> {
         let mut state = self.state.lock().unwrap();
         let disk_modified = Self::modified_time(&self.path);
@@ -135,6 +142,7 @@ impl ConfigOrchestrator {
         Ok(state.config.clone().unwrap_or_default())
     }
 
+    /// Persist the provided config and refresh the cache snapshot on success.
     fn persist(&self, config: Config) -> Result<(), Box<dyn std::error::Error>> {
         self.write_config(&config)?;
         let mut state = self.state.lock().unwrap();
@@ -143,6 +151,9 @@ impl ConfigOrchestrator {
         Ok(())
     }
 
+    /// Apply a mutation closure against the latest config and write the result.
+    /// Callers receive the closure's return value, while the orchestrator
+    /// ensures a fresh snapshot is loaded and stored atomically.
     fn mutate<F, T>(&self, mutator: F) -> Result<T, Box<dyn std::error::Error>>
     where
         F: FnOnce(&mut Config) -> Result<T, Box<dyn std::error::Error>>,
@@ -164,6 +175,7 @@ impl ConfigOrchestrator {
         Ok(result)
     }
 
+    /// Write the config using atomic temp-file persistence to avoid corruption.
     fn write_config(&self, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         config.save_to_path(&self.path)
     }
@@ -174,6 +186,8 @@ impl ConfigOrchestrator {
 }
 
 impl Config {
+    /// Load the user's config through the shared orchestrator.
+    /// Tests that provide an override orchestrator get isolated state.
     pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
         #[cfg(test)]
         {
@@ -216,6 +230,8 @@ impl Config {
         CONFIG_ORCHESTRATOR.persist(self.clone())
     }
 
+    /// Mutate the config and persist the result atomically.
+    /// In normal builds this touches the real config file.
     #[cfg(not(test))]
     pub fn mutate<F, T>(mutator: F) -> Result<T, Box<dyn std::error::Error>>
     where
@@ -224,6 +240,9 @@ impl Config {
         CONFIG_ORCHESTRATOR.mutate(mutator)
     }
 
+    /// Mutate the config in tests.
+    /// When a test sets a temporary config path we mutate that file, otherwise
+    /// we operate on an in-memory default to avoid polluting user state.
     #[cfg(test)]
     pub fn mutate<F, T>(mutator: F) -> Result<T, Box<dyn std::error::Error>>
     where
@@ -244,11 +263,15 @@ impl Config {
     }
 
     #[cfg(test)]
+    /// Point the orchestrator at a test-specific path so integration tests can
+    /// exercise real persistence without affecting production config files.
     pub(crate) fn set_test_config_path(path: PathBuf) {
         let mut guard = TEST_ORCHESTRATOR.lock().unwrap();
         *guard = Some(ConfigOrchestrator::new(path));
     }
 
+    /// Remove any test override so subsequent tests fall back to in-memory
+    /// defaults, ensuring isolation between suites.
     #[cfg(test)]
     pub(crate) fn clear_test_config_override() {
         let mut guard = TEST_ORCHESTRATOR.lock().unwrap();

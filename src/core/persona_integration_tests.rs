@@ -41,53 +41,53 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_cli_persona_activation_workflow() {
-        // Test CLI argument processing with persona activation
-        // This simulates: start app with --persona flag → verify persona is active
+    fn test_cli_persona_command_updates_ui_and_status() {
+        // Test that the persona command wiring updates UI state and status messages
 
+        let mut app = create_test_app();
+
+        // Add test personas to the app's persona manager
         let config = create_test_config_with_personas();
-        let mut persona_manager =
+        app.persona_manager =
             PersonaManager::load_personas(&config).expect("Failed to load personas");
 
-        // Simulate CLI persona selection
-        let cli_persona_id = "alice-dev";
-        let result = persona_manager.set_active_persona(cli_persona_id);
-        assert!(result.is_ok(), "Failed to set CLI persona");
+        // Initial UI state should reflect no active persona
+        assert_eq!(app.ui.user_display_name, "You");
+        assert!(app.ui.status.is_none());
 
-        // Verify persona is active
-        let active_persona = persona_manager.get_active_persona();
-        assert!(
-            active_persona.is_some(),
-            "No persona is active after CLI selection"
+        // Activate persona via CLI-style command
+        let result = process_input(&mut app, "/persona alice-dev");
+        assert!(matches!(result, CommandResult::Continue));
+
+        // Verify UI and persona manager are updated together
+        assert_eq!(app.ui.user_display_name, "Alice");
+        assert_eq!(app.ui.status.as_deref(), Some("Persona activated: Alice"));
+        assert_eq!(
+            app.persona_manager
+                .get_active_persona()
+                .expect("Persona should be active")
+                .id,
+            "alice-dev"
         );
-        assert_eq!(active_persona.unwrap().id, cli_persona_id);
-        assert_eq!(active_persona.unwrap().display_name, "Alice");
 
-        // Verify display name is updated
-        assert_eq!(persona_manager.get_display_name(), "Alice");
+        // Invalid persona should keep existing state but surface an error status
+        let result = process_input(&mut app, "/persona nonexistent-persona");
+        assert!(matches!(result, CommandResult::Continue));
 
-        // Verify system prompt modification
-        let base_prompt = "You are a helpful assistant.";
-        let modified_prompt = persona_manager.get_modified_system_prompt(base_prompt, None);
-        assert!(modified_prompt.contains("Alice, a senior software developer"));
-        assert!(modified_prompt.contains(base_prompt));
-    }
-
-    #[test]
-    fn test_cli_invalid_persona_error_handling() {
-        // Test CLI error handling for invalid persona IDs
-
-        let config = create_test_config_with_personas();
-        let mut persona_manager =
-            PersonaManager::load_personas(&config).expect("Failed to load personas");
-
-        // Try to set invalid persona
-        let result = persona_manager.set_active_persona("nonexistent-persona");
-        assert!(result.is_err(), "Should fail for invalid persona ID");
-
-        // Verify no persona is active
-        assert!(persona_manager.get_active_persona().is_none());
-        assert_eq!(persona_manager.get_display_name(), "You");
+        assert_eq!(app.ui.user_display_name, "Alice");
+        assert_eq!(
+            app.persona_manager
+                .get_active_persona()
+                .expect("Persona should remain active")
+                .id,
+            "alice-dev"
+        );
+        assert!(app
+            .ui
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Persona error: Persona 'nonexistent-persona' not found"));
     }
 
     #[test]

@@ -1201,4 +1201,45 @@ mod tests {
         assert_eq!(api_messages[2].role, "user");
         assert_eq!(api_messages[2].content, "Hello");
     }
+
+    #[test]
+    fn test_persona_with_blank_bio_does_not_add_system_message() {
+        let cases = [
+            ("empty", "Empty", ""),
+            ("whitespace", "Whitespace", "   \n\t"),
+        ];
+
+        for (persona_id, display_name, bio) in cases {
+            let config = Config {
+                personas: vec![Persona {
+                    id: persona_id.to_string(),
+                    display_name: display_name.to_string(),
+                    bio: Some(bio.to_string()),
+                }],
+                ..Default::default()
+            };
+
+            let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+            let mut app = create_test_app();
+            app.persona_manager = persona_manager;
+            app.persona_manager
+                .set_active_persona(persona_id)
+                .expect("persona activation");
+
+            let api_messages = {
+                let mut conversation = ConversationController::new(
+                    &mut app.session,
+                    &mut app.ui,
+                    &app.persona_manager,
+                );
+                conversation.add_user_message("Hello".to_string())
+            };
+
+            assert!(
+                api_messages.iter().all(|msg| msg.role != "system"),
+                "system message injected for persona {persona_id}"
+            );
+        }
+    }
 }

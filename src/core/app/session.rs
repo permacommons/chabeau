@@ -31,6 +31,7 @@ pub struct SessionContext {
     pub startup_env_only: bool,
     pub active_character: Option<CharacterCard>,
     pub character_greeting_shown: bool,
+    pub has_received_assistant_message: bool,
 }
 
 pub struct SessionBootstrap {
@@ -236,6 +237,7 @@ pub(crate) async fn prepare_with_auth(
         startup_env_only: false,
         active_character,
         character_greeting_shown: false,
+        has_received_assistant_message: false,
     };
 
     Ok(SessionBootstrap {
@@ -268,6 +270,7 @@ pub(crate) async fn prepare_uninitialized(
         startup_env_only: false,
         active_character: None,
         character_greeting_shown: false,
+        has_received_assistant_message: false,
     };
 
     Ok(UninitializedSessionBootstrap {
@@ -390,6 +393,7 @@ mod tests {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         let card = CharacterCard {
@@ -455,6 +459,7 @@ mod tests {
                 },
             }),
             character_greeting_shown: true,
+            has_received_assistant_message: false,
         };
 
         session.clear_character();
@@ -499,6 +504,7 @@ mod tests {
                 },
             }),
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         // Should show greeting when character is active and greeting not shown
@@ -546,6 +552,7 @@ mod tests {
                 },
             }),
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         // Should not show empty/whitespace greeting
@@ -722,6 +729,7 @@ mod tests {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         assert!(session.get_character().is_none());
@@ -747,6 +755,7 @@ mod tests {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         // Initially no greeting
@@ -810,6 +819,7 @@ mod tests {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         let card = CharacterCard {
@@ -865,6 +875,7 @@ mod tests {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         let card1 = CharacterCard {

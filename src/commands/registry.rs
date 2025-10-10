@@ -171,4 +171,19 @@ const COMMANDS: &[Command] = &[
         extra_help: &[],
         handler: super::handle_persona,
     },
+    Command {
+        name: "preset",
+        usages: &[
+            CommandUsage {
+                syntax: "/preset",
+                description: "Pick a preset from available presets with filtering and sorting.",
+            },
+            CommandUsage {
+                syntax: "/preset <id>",
+                description: "Activate the specified preset for this session.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handle_preset,
+    },
 ];

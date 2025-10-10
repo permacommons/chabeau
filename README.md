@@ -226,6 +226,49 @@ Personas and character cards work together seamlessly:
 - Both support `{{user}}` and `{{char}}` variable substitutions
 - The persona's bio is added to the system prompt before the character's instructions
 
+## Presets
+
+Presets let you inject reusable system instructions into the first and last system messages that Chabeau sends to the model. They are ideal for lightweight tone or formatting tweaks that you want to toggle quickly.
+
+### Configure Presets
+
+Add presets to your `config.toml`:
+
+```toml
+[[presets]]
+id = "focus"
+pre = """
+You are collaborating with {{user}}. Keep responses focused and direct.
+"""
+post = """
+Before finishing, list any follow-up actions for {{char}}.
+"""
+
+[[presets]]
+id = "explain"
+pre = """
+Explain concepts for a curious student.
+"""
+post = """
+End with a reflective question for {{user}}.
+"""
+```
+
+- `pre` text is wrapped in blank lines and prepended to the very first system message.
+- `post` text is wrapped in blank lines and appended to the final system message. If no system message exists at either position, Chabeau creates one automatically.
+- Presets support the same `{{user}}` and `{{char}}` substitutions as personas and character cards.
+
+Assign defaults per provider/model with `default-presets`:
+
+```toml
+[default-presets.openai]
+"gpt-4o" = "focus"
+```
+
+### Use Presets in Chat
+
+Launch with `--preset focus`, or pick interactively with `/preset`. The picker includes a sticky "Turn off preset" option to clear the active preset.
+
 ## Appearance and Rendering
 
 ### Themes

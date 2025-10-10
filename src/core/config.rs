@@ -42,6 +42,15 @@ pub struct Persona {
     pub bio: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Preset {
+    pub id: String,
+    #[serde(default)]
+    pub pre: String,
+    #[serde(default)]
+    pub post: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     pub default_provider: Option<String>,
@@ -69,9 +78,18 @@ pub struct Config {
     /// Value: persona ID (e.g., "alice-dev")
     #[serde(default)]
     pub default_personas: HashMap<String, HashMap<String, String>>,
+    /// Default presets for provider/model combinations
+    /// Outer key: provider (e.g., "openai")
+    /// Inner key: model (e.g., "gpt-4")
+    /// Value: preset ID (e.g., "concise")
+    #[serde(default)]
+    pub default_presets: HashMap<String, HashMap<String, String>>,
     /// User-defined personas for conversation contexts
     #[serde(default)]
     pub personas: Vec<Persona>,
+    /// User-defined presets for conversation contexts
+    #[serde(default)]
+    pub presets: Vec<Preset>,
 }
 
 /// Get a user-friendly display string for a path
@@ -406,6 +424,25 @@ impl Config {
         }
     }
 
+    /// Set the default preset for a provider/model combination
+    pub fn set_default_preset(&mut self, provider: String, model: String, preset_id: String) {
+        let provider_key = provider.to_lowercase();
+        self.default_presets
+            .entry(provider_key)
+            .or_default()
+            .insert(model, preset_id);
+    }
+
+    /// Unset the default preset for a provider/model combination
+    pub fn unset_default_preset(&mut self, provider: &str, model: &str) {
+        if let Some(models) = self.default_presets.get_mut(&provider.to_lowercase()) {
+            models.remove(model);
+            if models.is_empty() {
+                self.default_presets.remove(&provider.to_lowercase());
+            }
+        }
+    }
+
     /// Print all default characters
     pub fn print_default_characters(&self) {
         if self.default_characters.is_empty() {
@@ -506,8 +543,10 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(1100));
 
-        let mut external = Config::default();
-        external.default_provider = Some("second".to_string());
+        let external = Config {
+            default_provider: Some("second".to_string()),
+            ..Default::default()
+        };
         external
             .save_to_path(&config_path)
             .expect("external save failed");

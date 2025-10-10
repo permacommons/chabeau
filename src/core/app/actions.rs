@@ -379,6 +379,14 @@ fn handle_picker_backspace(app: &mut App) {
                 }
             }
         }
+        Some(PickerMode::Preset) => {
+            if let Some(state) = app.preset_picker_state_mut() {
+                if !state.search_filter.is_empty() {
+                    state.search_filter.pop();
+                    app.filter_presets();
+                }
+            }
+        }
         None => {}
     }
 }
@@ -417,6 +425,12 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
             if let Some(state) = app.persona_picker_state_mut() {
                 state.search_filter.push(ch);
                 app.filter_personas();
+            }
+        }
+        Some(PickerMode::Preset) => {
+            if let Some(state) = app.preset_picker_state_mut() {
+                state.search_filter.push(ch);
+                app.filter_presets();
             }
         }
         None => {}
@@ -461,6 +475,10 @@ fn handle_process_command(
         }
         CommandResult::OpenPersonaPicker => {
             app.open_persona_picker();
+            None
+        }
+        CommandResult::OpenPresetPicker => {
+            app.open_preset_picker();
             None
         }
     }
@@ -597,6 +615,9 @@ fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
         Some(PickerMode::Persona) => {
             app.close_picker();
         }
+        Some(PickerMode::Preset) => {
+            app.close_picker();
+        }
         None => {}
     }
 }
@@ -665,6 +686,8 @@ fn handle_picker_apply_selection(
                     load_default_character_if_configured(app);
                     // Load default persona for this provider/model if configured
                     load_default_persona_if_configured(app);
+                    // Load default preset for this provider/model if configured
+                    load_default_preset_if_configured(app);
                 }
                 Err(e) => set_status_message(app, format!("Model error: {}", e), ctx),
             }
@@ -706,6 +729,8 @@ fn handle_picker_apply_selection(
                         load_default_character_if_configured(app);
                         // Load default persona for this provider/model if configured
                         load_default_persona_if_configured(app);
+                        // Load default preset for this provider/model if configured
+                        load_default_preset_if_configured(app);
                     }
                 }
                 Err(e) => {
@@ -722,6 +747,10 @@ fn handle_picker_apply_selection(
         }
         Some(PickerMode::Persona) => {
             app.apply_selected_persona(persistent);
+            None
+        }
+        Some(PickerMode::Preset) => {
+            app.apply_selected_preset(persistent);
             None
         }
         None => None,
@@ -825,6 +854,24 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
                 }
             }
         }
+        Some(PickerMode::Preset) => {
+            let provider_name = app.session.provider_name.clone();
+            let model = app.session.model.clone();
+            match app
+                .preset_manager
+                .unset_default_for_provider_model_persistent(&provider_name, &model)
+            {
+                Ok(()) => {
+                    set_status_message(app, format!("Removed default: {}", selected_id), ctx);
+                    app.open_preset_picker();
+                    None
+                }
+                Err(e) => {
+                    set_status_message(app, format!("Error removing default: {}", e), ctx);
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -891,6 +938,26 @@ fn load_default_persona_if_configured(app: &mut App) {
                     persona_id, e
                 );
             }
+        }
+    }
+}
+
+/// Load default preset for current provider/model if one is configured
+fn load_default_preset_if_configured(app: &mut App) {
+    if app.preset_manager.get_active_preset().is_some() {
+        return;
+    }
+
+    if let Some(preset_id) = app
+        .preset_manager
+        .get_default_for_provider_model(&app.session.provider_name, &app.session.model)
+    {
+        let preset_id = preset_id.to_string();
+        if let Err(e) = app.preset_manager.set_active_preset(&preset_id) {
+            eprintln!(
+                "Warning: Could not load default preset '{}': {}",
+                preset_id, e
+            );
         }
     }
 }
@@ -1638,5 +1705,88 @@ mod tests {
             .expect("Mentor persona should have metadata");
 
         assert!(metadata.contains("Guide Aria with wisdom, Mentor."));
+    }
+
+    #[test]
+    fn test_load_default_preset_if_configured() {
+        use crate::core::config::{Config, Preset};
+
+        let mut config = Config {
+            presets: vec![
+                Preset {
+                    id: "focus".to_string(),
+                    pre: "Focus on details.".to_string(),
+                    post: String::new(),
+                },
+                Preset {
+                    id: "summary".to_string(),
+                    pre: String::new(),
+                    post: "Summarize at the end.".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        config.set_default_preset(
+            "test".to_string(),
+            "test-model".to_string(),
+            "focus".to_string(),
+        );
+
+        let mut app = create_test_app();
+        app.preset_manager = crate::core::preset::PresetManager::load_presets(&config)
+            .expect("Failed to load presets");
+
+        assert!(app.preset_manager.get_active_preset().is_none());
+
+        load_default_preset_if_configured(&mut app);
+
+        let active = app
+            .preset_manager
+            .get_active_preset()
+            .expect("preset active");
+        assert_eq!(active.id, "focus");
+    }
+
+    #[test]
+    fn test_load_default_preset_respects_existing_active_preset() {
+        use crate::core::config::{Config, Preset};
+
+        let mut config = Config {
+            presets: vec![
+                Preset {
+                    id: "focus".to_string(),
+                    pre: "Focus on details.".to_string(),
+                    post: String::new(),
+                },
+                Preset {
+                    id: "summary".to_string(),
+                    pre: String::new(),
+                    post: "Summarize at the end.".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        config.set_default_preset(
+            "test".to_string(),
+            "test-model".to_string(),
+            "focus".to_string(),
+        );
+
+        let mut app = create_test_app();
+        app.preset_manager = crate::core::preset::PresetManager::load_presets(&config)
+            .expect("Failed to load presets");
+        app.preset_manager
+            .set_active_preset("summary")
+            .expect("activate preset");
+
+        load_default_preset_if_configured(&mut app);
+
+        let active = app
+            .preset_manager
+            .get_active_preset()
+            .expect("preset active");
+        assert_eq!(active.id, "summary");
     }
 }

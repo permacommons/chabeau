@@ -30,13 +30,17 @@ impl<'a> ThemeController<'a> {
     }
 
     pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
+        let config = Config::load_test_safe();
         let theme = Self::resolve_theme(id, &config)?;
         self.apply_theme(theme);
         self.ui.current_theme_id = Some(id.to_string());
 
-        config.theme = Some(id.to_string());
-        config.save_test_safe().map_err(|e| e.to_string())?;
+        let theme_id = id.to_string();
+        Config::mutate(move |config| {
+            config.theme = Some(theme_id);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
 
         if let Some(state) = self.picker.theme_state_mut() {
             state.before_theme = None;
@@ -87,9 +91,11 @@ impl<'a> ThemeController<'a> {
     }
 
     pub fn unset_default_theme(&mut self) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.theme = None;
-        config.save_test_safe().map_err(|e| e.to_string())
+        Config::mutate(|config| {
+            config.theme = None;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -116,9 +122,13 @@ impl<'a> ProviderController<'a> {
 
     pub fn apply_model_by_id_persistent(&mut self, model_id: &str) -> Result<(), String> {
         self.apply_model_by_id(model_id);
-        let mut config = Config::load_test_safe();
-        config.set_default_model(self.session.provider_name.clone(), model_id.to_string());
-        config.save_test_safe().map_err(|e| e.to_string())
+        let provider = self.session.provider_name.clone();
+        let model = model_id.to_string();
+        Config::mutate(move |config| {
+            config.set_default_model(provider, model);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
     }
 
     pub fn apply_provider_by_id(&mut self, provider_id: &str) -> (Result<(), String>, bool) {
@@ -186,24 +196,31 @@ impl<'a> ProviderController<'a> {
             return (Err(e), false);
         }
 
-        let mut config = Config::load_test_safe();
-        config.default_provider = Some(provider_id.to_string());
-        match config.save_test_safe() {
+        let provider_value = provider_id.to_string();
+        match Config::mutate(move |config| {
+            config.default_provider = Some(provider_value);
+            Ok(())
+        }) {
             Ok(_) => (Ok(()), should_open_model_picker),
             Err(e) => (Err(e.to_string()), false),
         }
     }
 
     pub fn unset_default_model(&mut self, provider: &str) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.unset_default_model(provider);
-        config.save_test_safe().map_err(|e| e.to_string())
+        let provider = provider.to_string();
+        Config::mutate(move |config| {
+            config.unset_default_model(&provider);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
     }
 
     pub fn unset_default_provider(&mut self) -> Result<(), String> {
-        let mut config = Config::load_test_safe();
-        config.default_provider = None;
-        config.save_test_safe().map_err(|e| e.to_string())
+        Config::mutate(|config| {
+            config.default_provider = None;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
     }
 }
 

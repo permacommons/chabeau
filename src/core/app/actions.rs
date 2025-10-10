@@ -792,9 +792,10 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
         Some(PickerMode::Character) => {
             let provider_name = app.session.provider_name.clone();
             let model = app.session.model.clone();
-            let mut cfg = Config::load_test_safe();
-            cfg.unset_default_character(&provider_name, &model);
-            match cfg.save_test_safe() {
+            match Config::mutate(move |config| {
+                config.unset_default_character(&provider_name, &model);
+                Ok(())
+            }) {
                 Ok(_) => {
                     set_status_message(app, format!("Removed default: {}", selected_id), ctx);
                     app.open_character_picker();

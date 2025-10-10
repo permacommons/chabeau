@@ -870,10 +870,9 @@ fn load_default_persona_if_configured(app: &mut App) {
         return;
     }
 
-    let provider_model_key = format!("{}_{}", app.session.provider_name, app.session.model);
     if let Some(persona_id) = app
         .persona_manager
-        .get_default_for_provider_model(&provider_model_key)
+        .get_default_for_provider_model(&app.session.provider_name, &app.session.model)
     {
         let persona_id = persona_id.to_string(); // Clone to avoid borrow issues
         match app.persona_manager.set_active_persona(&persona_id) {

@@ -7,9 +7,8 @@ pub struct PersonaManager {
     personas: Vec<Persona>,
     /// Currently active persona
     active_persona: Option<Persona>,
-    /// Provider-specific default persona storage
-    /// Key format: "provider_model" -> persona_id
-    defaults: HashMap<String, String>,
+    /// Provider-specific default persona storage keyed by (provider, model)
+    defaults: HashMap<(String, String), String>,
 }
 
 impl PersonaManager {
@@ -19,8 +18,8 @@ impl PersonaManager {
         let mut defaults = HashMap::new();
         for (provider, models) in &config.default_personas {
             for (model, persona_id) in models {
-                let key = format!("{}_{}", provider, model);
-                defaults.insert(key, persona_id.clone());
+                let provider_key = provider.to_lowercase();
+                defaults.insert((provider_key, model.clone()), persona_id.clone());
             }
         }
 
@@ -115,8 +114,9 @@ impl PersonaManager {
     }
 
     /// Get the default persona for a provider/model combination
-    pub fn get_default_for_provider_model(&self, provider_model: &str) -> Option<&str> {
-        self.defaults.get(provider_model).map(|s| s.as_str())
+    pub fn get_default_for_provider_model(&self, provider: &str, model: &str) -> Option<&str> {
+        let key = (provider.to_lowercase(), model.to_string());
+        self.defaults.get(&key).map(|s| s.as_str())
     }
 
     /// Set the default persona for a provider/model combination and persist to config
@@ -127,7 +127,7 @@ impl PersonaManager {
         persona_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Update internal state
-        let key = format!("{}_{}", provider, model);
+        let key = (provider.to_lowercase(), model.to_string());
         self.defaults.insert(key, persona_id.to_string());
 
         // Persist to config
@@ -149,7 +149,7 @@ impl PersonaManager {
         model: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Update internal state
-        let key = format!("{}_{}", provider, model);
+        let key = (provider.to_lowercase(), model.to_string());
         self.defaults.remove(&key);
 
         // Persist to config
@@ -437,16 +437,61 @@ mod tests {
 
         // Check that defaults were loaded correctly
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("alice-dev")
         );
         assert_eq!(
-            manager.get_default_for_provider_model("anthropic_claude-3-opus"),
+            manager.get_default_for_provider_model("anthropic", "claude-3-opus"),
             Some("bob-student")
         );
         assert!(manager
-            .get_default_for_provider_model("openai_gpt-3.5-turbo")
+            .get_default_for_provider_model("openai", "gpt-3.5-turbo")
             .is_none());
+    }
+
+    #[test]
+    fn test_default_persona_lookup_case_and_underscores() {
+        let mut config = create_test_config();
+
+        config.set_default_persona(
+            "OpenAI".to_string(),
+            "gpt_4o_mini".to_string(),
+            "alice-dev".to_string(),
+        );
+        config.set_default_persona(
+            "openai_lab".to_string(),
+            "research_model".to_string(),
+            "bob-student".to_string(),
+        );
+        config.set_default_persona(
+            "foo_bar".to_string(),
+            "baz".to_string(),
+            "charlie-no-bio".to_string(),
+        );
+        config.set_default_persona(
+            "foo".to_string(),
+            "bar_baz".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+
+        assert_eq!(
+            manager.get_default_for_provider_model("OPENAI", "gpt_4o_mini"),
+            Some("alice-dev")
+        );
+        assert_eq!(
+            manager.get_default_for_provider_model("OpenAI_Lab", "research_model"),
+            Some("bob-student")
+        );
+        assert_eq!(
+            manager.get_default_for_provider_model("foo_bar", "baz"),
+            Some("charlie-no-bio")
+        );
+        assert_eq!(
+            manager.get_default_for_provider_model("foo", "bar_baz"),
+            Some("alice-dev")
+        );
     }
 }
 #[test]

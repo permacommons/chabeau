@@ -68,9 +68,8 @@ pub async fn new_with_auth(
         persona_manager.set_active_persona(&persona_id)?;
     } else {
         // Load default persona for current provider/model if no CLI persona specified
-        let provider_model_key = format!("{}_{}", session.provider_name, session.model);
         if let Some(default_persona_id) =
-            persona_manager.get_default_for_provider_model(&provider_model_key)
+            persona_manager.get_default_for_provider_model(&session.provider_name, &session.model)
         {
             let default_persona_id = default_persona_id.to_string(); // Clone to avoid borrow issues
             if let Err(e) = persona_manager.set_active_persona(&default_persona_id) {

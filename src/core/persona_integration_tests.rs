@@ -309,7 +309,7 @@ mod integration_tests {
             PersonaManager::load_personas(&config).expect("Failed to load personas");
 
         // Verify default is loaded
-        let default = persona_manager.get_default_for_provider_model("openai_gpt-4");
+        let default = persona_manager.get_default_for_provider_model("openai", "gpt-4");
         assert!(default.is_some());
         assert_eq!(default.unwrap(), "alice-dev");
     }
@@ -331,7 +331,7 @@ mod integration_tests {
         // Verify default is set
         assert_eq!(
             persona_manager
-                .get_default_for_provider_model("openai_gpt-4")
+                .get_default_for_provider_model("openai", "gpt-4")
                 .unwrap(),
             "bob-student"
         );
@@ -422,13 +422,13 @@ mod integration_tests {
             PersonaManager::load_personas(&loaded_config).expect("Failed to load personas");
         assert_eq!(
             persona_manager
-                .get_default_for_provider_model("openai_gpt-4")
+                .get_default_for_provider_model("openai", "gpt-4")
                 .unwrap(),
             "alice-dev"
         );
         assert_eq!(
             persona_manager
-                .get_default_for_provider_model("anthropic_claude-3-opus")
+                .get_default_for_provider_model("anthropic", "claude-3-opus")
                 .unwrap(),
             "bob-student"
         );

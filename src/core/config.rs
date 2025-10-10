@@ -1072,7 +1072,7 @@ mod tests {
         // Initially no default persona - test through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert!(manager
-            .get_default_for_provider_model("openai_gpt-4")
+            .get_default_for_provider_model("openai", "gpt-4")
             .is_none());
 
         // Set a default persona
@@ -1085,20 +1085,20 @@ mod tests {
         // Verify it's set through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("alice-dev")
         );
 
         // Case insensitive provider lookup - test through PersonaManager
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("OPENAI", "gpt-4"),
             Some("alice-dev")
         );
 
         // Different model should return None
         assert!(manager
-            .get_default_for_provider_model("openai_gpt-3.5-turbo")
+            .get_default_for_provider_model("openai", "gpt-3.5-turbo")
             .is_none());
     }
 
@@ -1123,11 +1123,11 @@ mod tests {
         // Verify they're set through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("alice-dev")
         );
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4o"),
+            manager.get_default_for_provider_model("openai", "gpt-4o"),
             Some("bob-student")
         );
 
@@ -1137,10 +1137,10 @@ mod tests {
         // Verify it's gone but the other remains through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert!(manager
-            .get_default_for_provider_model("openai_gpt-4")
+            .get_default_for_provider_model("openai", "gpt-4")
             .is_none());
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4o"),
+            manager.get_default_for_provider_model("openai", "gpt-4o"),
             Some("bob-student")
         );
     }
@@ -1161,7 +1161,7 @@ mod tests {
         // Verify it's set through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("alice-dev")
         );
 
@@ -1174,7 +1174,7 @@ mod tests {
         // Also verify through PersonaManager that no defaults exist
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert!(manager
-            .get_default_for_provider_model("openai_gpt-4")
+            .get_default_for_provider_model("openai", "gpt-4")
             .is_none());
     }
 
@@ -1194,7 +1194,7 @@ mod tests {
         // Verify it's set through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("alice-dev")
         );
 
@@ -1208,7 +1208,7 @@ mod tests {
         // Verify it's updated through PersonaManager (production path)
         let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
         assert_eq!(
-            manager.get_default_for_provider_model("openai_gpt-4"),
+            manager.get_default_for_provider_model("openai", "gpt-4"),
             Some("bob-student")
         );
     }

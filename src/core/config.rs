@@ -1,8 +1,13 @@
 use directories::ProjectDirs;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
+use tempfile::NamedTempFile;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomProvider {
@@ -37,7 +42,7 @@ pub struct Persona {
     pub bio: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     pub default_provider: Option<String>,
     #[serde(default)]
@@ -94,10 +99,89 @@ pub fn path_display<P: AsRef<Path>>(path: P) -> String {
     path.display().to_string()
 }
 
+#[derive(Default)]
+struct ConfigCacheState {
+    config: Option<Config>,
+    modified: Option<SystemTime>,
+}
+
+struct ConfigOrchestrator {
+    path: PathBuf,
+    state: Mutex<ConfigCacheState>,
+}
+
+static CONFIG_ORCHESTRATOR: Lazy<ConfigOrchestrator> =
+    Lazy::new(|| ConfigOrchestrator::new(Config::get_config_path()));
+
+#[cfg(test)]
+static TEST_ORCHESTRATOR: Lazy<Mutex<Option<ConfigOrchestrator>>> = Lazy::new(|| Mutex::new(None));
+
+impl ConfigOrchestrator {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            state: Mutex::new(ConfigCacheState::default()),
+        }
+    }
+
+    fn load_with_cache(&self) -> Result<Config, Box<dyn std::error::Error>> {
+        let mut state = self.state.lock().unwrap();
+        let disk_modified = Self::modified_time(&self.path);
+        if state.config.is_none() || state.modified != disk_modified {
+            let config = Config::load_from_path(&self.path)?;
+            state.modified = disk_modified;
+            state.config = Some(config);
+        }
+        Ok(state.config.clone().unwrap_or_default())
+    }
+
+    fn persist(&self, config: Config) -> Result<(), Box<dyn std::error::Error>> {
+        self.write_config(&config)?;
+        let mut state = self.state.lock().unwrap();
+        state.modified = Self::modified_time(&self.path);
+        state.config = Some(config);
+        Ok(())
+    }
+
+    fn mutate<F, T>(&self, mutator: F) -> Result<T, Box<dyn std::error::Error>>
+    where
+        F: FnOnce(&mut Config) -> Result<T, Box<dyn std::error::Error>>,
+    {
+        let snapshot = {
+            let mut state = self.state.lock().unwrap();
+            let disk_modified = Self::modified_time(&self.path);
+            if state.config.is_none() || state.modified != disk_modified {
+                let config = Config::load_from_path(&self.path)?;
+                state.modified = disk_modified;
+                state.config = Some(config);
+            }
+            state.config.clone().unwrap_or_default()
+        };
+
+        let mut working = snapshot;
+        let result = mutator(&mut working)?;
+        self.persist(working)?;
+        Ok(result)
+    }
+
+    fn write_config(&self, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+        config.save_to_path(&self.path)
+    }
+
+    fn modified_time(path: &PathBuf) -> Option<SystemTime> {
+        fs::metadata(path).ok()?.modified().ok()
+    }
+}
+
 impl Config {
     pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
-        let config_path = Self::get_config_path();
-        Self::load_from_path(&config_path)
+        #[cfg(test)]
+        {
+            if let Some(orchestrator) = TEST_ORCHESTRATOR.lock().unwrap().as_ref() {
+                return orchestrator.load_with_cache();
+            }
+        }
+        CONFIG_ORCHESTRATOR.load_with_cache()
     }
 
     /// Load config, but return default config when in test mode to avoid side effects
@@ -123,28 +207,78 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = Self::get_config_path();
-        self.save_to_path(&config_path)
+        #[cfg(test)]
+        {
+            if let Some(orchestrator) = TEST_ORCHESTRATOR.lock().unwrap().as_ref() {
+                return orchestrator.persist(self.clone());
+            }
+        }
+        CONFIG_ORCHESTRATOR.persist(self.clone())
     }
 
-    /// Save config, but do nothing when in test mode to avoid side effects
-    #[cfg(test)]
-    pub fn save_test_safe(&self) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(()) // No-op in tests
-    }
-
-    /// Save config normally when not in test mode
     #[cfg(not(test))]
-    pub fn save_test_safe(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.save()
+    pub fn mutate<F, T>(mutator: F) -> Result<T, Box<dyn std::error::Error>>
+    where
+        F: FnOnce(&mut Config) -> Result<T, Box<dyn std::error::Error>>,
+    {
+        CONFIG_ORCHESTRATOR.mutate(mutator)
+    }
+
+    #[cfg(test)]
+    pub fn mutate<F, T>(mutator: F) -> Result<T, Box<dyn std::error::Error>>
+    where
+        F: FnOnce(&mut Config) -> Result<T, Box<dyn std::error::Error>>,
+    {
+        if let Some(orchestrator) = TEST_ORCHESTRATOR.lock().unwrap().as_ref() {
+            orchestrator.mutate(mutator)
+        } else {
+            let mut config = Config::default();
+            let result = mutator(&mut config)?;
+            Ok(result)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_config_path() -> PathBuf {
+        Self::get_config_path()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_config_path(path: PathBuf) {
+        let mut guard = TEST_ORCHESTRATOR.lock().unwrap();
+        *guard = Some(ConfigOrchestrator::new(path));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_test_config_override() {
+        let mut guard = TEST_ORCHESTRATOR.lock().unwrap();
+        guard.take();
     }
 
     pub fn save_to_path(&self, config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)?;
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
         }
         let contents = toml::to_string_pretty(self)?;
-        fs::write(config_path, contents)?;
+        let mut temp_file = if let Some(parent) = config_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                NamedTempFile::new_in(parent)?
+            } else {
+                NamedTempFile::new()?
+            }
+        } else {
+            NamedTempFile::new()?
+        };
+        {
+            let file = temp_file.as_file_mut();
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+        }
+        temp_file
+            .persist(config_path)
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
         Ok(())
     }
 
@@ -326,7 +460,39 @@ pub fn suggest_provider_id(display_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::TempDir;
+
+    #[test]
+    fn config_orchestrator_detects_external_updates() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("config.toml");
+        let orchestrator = ConfigOrchestrator::new(config_path.clone());
+
+        orchestrator
+            .mutate(|config| {
+                config.default_provider = Some("first".to_string());
+                Ok(())
+            })
+            .expect("mutate failed");
+
+        let persisted = Config::load_from_path(&config_path).expect("load failed");
+        assert_eq!(persisted.default_provider.as_deref(), Some("first"));
+
+        let cached = orchestrator.load_with_cache().expect("cached load failed");
+        assert_eq!(cached.default_provider.as_deref(), Some("first"));
+
+        std::thread::sleep(Duration::from_millis(1100));
+
+        let mut external = Config::default();
+        external.default_provider = Some("second".to_string());
+        external
+            .save_to_path(&config_path)
+            .expect("external save failed");
+
+        let reloaded = orchestrator.load_with_cache().expect("reload failed");
+        assert_eq!(reloaded.default_provider.as_deref(), Some("second"));
+    }
 
     #[test]
     fn test_load_nonexistent_config() {

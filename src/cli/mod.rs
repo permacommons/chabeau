@@ -246,26 +246,32 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some(Commands::Set { key, value }) => {
-            let mut config = Config::load()?;
             if let Some(key) = key {
                 match key.as_str() {
                     "default-provider" => {
                         if !value.is_empty() {
-                            config.default_provider = Some(value.join(" "));
-                            config.save()?;
-                            println!("✅ Set default-provider to: {}", value.join(" "));
+                            let provider = value.join(" ");
+                            let persist_value = provider.clone();
+                            Config::mutate(move |config| {
+                                config.default_provider = Some(persist_value);
+                                Ok(())
+                            })?;
+                            println!("✅ Set default-provider to: {}", provider);
                         } else {
-                            config.print_all();
+                            Config::load()?.print_all();
                         }
                     }
                     "theme" => {
                         if !value.is_empty() {
                             let theme_name = value.join(" ");
-                            config.theme = Some(theme_name.clone());
-                            config.save()?;
+                            let persist_value = theme_name.clone();
+                            Config::mutate(move |config| {
+                                config.theme = Some(persist_value);
+                                Ok(())
+                            })?;
                             println!("✅ Set theme to: {}", theme_name);
                         } else {
-                            config.print_all();
+                            Config::load()?.print_all();
                         }
                     }
                     "default-model" => {
@@ -275,11 +281,15 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             if parts.len() == 2 {
                                 let provider = parts[0].to_string();
                                 let model = parts[1].to_string();
-                                config.set_default_model(provider.clone(), model.clone());
-                                config.save()?;
+                                let provider_msg = provider.clone();
+                                let model_msg = model.clone();
+                                Config::mutate(move |config| {
+                                    config.set_default_model(provider, model);
+                                    Ok(())
+                                })?;
                                 println!(
                                     "✅ Set default-model for provider '{}' to: {}",
-                                    provider, model
+                                    provider_msg, model_msg
                                 );
                             } else {
                                 eprintln!(
@@ -288,7 +298,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 eprintln!("Example: chabeau set default-model openai gpt-4o");
                             }
                         } else {
-                            config.print_all();
+                            Config::load()?.print_all();
                         }
                     }
                     "default-character" => {
@@ -297,18 +307,18 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             let model = value[1].to_string();
                             let character = value[2..].join(" ");
 
-                            // Validate that the character exists
                             match crate::character::loader::find_card_by_name(&character) {
                                 Ok(_) => {
-                                    config.set_default_character(
-                                        provider.clone(),
-                                        model.clone(),
-                                        character.clone(),
-                                    );
-                                    config.save()?;
+                                    let provider_msg = provider.clone();
+                                    let model_msg = model.clone();
+                                    let character_msg = character.clone();
+                                    Config::mutate(move |config| {
+                                        config.set_default_character(provider, model, character);
+                                        Ok(())
+                                    })?;
                                     println!(
                                         "✅ Set default character for '{}:{}' to: {}",
-                                        provider, model, character
+                                        provider_msg, model_msg, character_msg
                                     );
                                 }
                                 Err(_) => {
@@ -335,28 +345,34 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             } else {
-                config.print_all();
+                Config::load()?.print_all();
             }
             Ok(())
         }
         Some(Commands::Unset { key, value }) => {
-            let mut config = Config::load()?;
             match key.as_str() {
                 "default-provider" => {
-                    config.default_provider = None;
-                    config.save()?;
+                    Config::mutate(|config| {
+                        config.default_provider = None;
+                        Ok(())
+                    })?;
                     println!("✅ Unset default-provider");
                 }
                 "theme" => {
-                    config.theme = None;
-                    config.save()?;
+                    Config::mutate(|config| {
+                        config.theme = None;
+                        Ok(())
+                    })?;
                     println!("✅ Unset theme");
                 }
                 "default-model" => {
                     if let Some(provider) = value {
-                        config.unset_default_model(&provider);
-                        config.save()?;
-                        println!("✅ Unset default-model for provider: {provider}");
+                        let provider_msg = provider.clone();
+                        Config::mutate(|config| {
+                            config.unset_default_model(&provider);
+                            Ok(())
+                        })?;
+                        println!("✅ Unset default-model for provider: {provider_msg}");
                     } else {
                         eprintln!("⚠️  To unset a default model, specify the provider:");
                         eprintln!("Example: chabeau unset default-model openai");
@@ -368,8 +384,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                         if parts.len() == 2 {
                             let provider = parts[0];
                             let model = parts[1];
-                            config.unset_default_character(provider, model);
-                            config.save()?;
+                            let provider_owned = provider.to_string();
+                            let model_owned = model.to_string();
+                            Config::mutate(move |config| {
+                                config.unset_default_character(&provider_owned, &model_owned);
+                                Ok(())
+                            })?;
                             println!("✅ Unset default character for '{}:{}'", provider, model);
                         } else {
                             eprintln!(

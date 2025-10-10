@@ -125,6 +125,8 @@ chabeau set default-character openai gpt-4 hypatia
 chabeau set
 ```
 
+Both the CLI and TUI run these mutations through the same configuration orchestrator. Chabeau caches the parsed file based on its last-modified timestamp, skipping redundant reloads when nothing has changed, and persists updates atomically so a failed write never clobbers your existing `config.toml`.
+
 Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory and adjust it to suit your setup. The sample covers provider defaults, markdown/syntax toggles, custom providers, custom themes, and character assignments.
 
 ## Character Cards

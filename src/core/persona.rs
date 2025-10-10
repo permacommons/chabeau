@@ -131,13 +131,13 @@ impl PersonaManager {
         self.defaults.insert(key, persona_id.to_string());
 
         // Persist to config
-        let mut config = Config::load_test_safe();
-        config.set_default_persona(
-            provider.to_string(),
-            model.to_string(),
-            persona_id.to_string(),
-        );
-        config.save_test_safe()?;
+        let provider = provider.to_string();
+        let model = model.to_string();
+        let persona_id = persona_id.to_string();
+        Config::mutate(move |config| {
+            config.set_default_persona(provider, model, persona_id);
+            Ok(())
+        })?;
 
         Ok(())
     }
@@ -153,9 +153,12 @@ impl PersonaManager {
         self.defaults.remove(&key);
 
         // Persist to config
-        let mut config = Config::load_test_safe();
-        config.unset_default_persona(provider, model);
-        config.save_test_safe()?;
+        let provider = provider.to_string();
+        let model = model.to_string();
+        Config::mutate(move |config| {
+            config.unset_default_persona(&provider, &model);
+            Ok(())
+        })?;
 
         Ok(())
     }

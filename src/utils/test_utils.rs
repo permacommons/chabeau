@@ -1,6 +1,8 @@
 #[cfg(test)]
 use crate::core::app::App;
 #[cfg(test)]
+use crate::core::config::Config;
+#[cfg(test)]
 use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::theme::Theme;
@@ -58,6 +60,8 @@ impl TestConfigEnv {
             guard.capture_and_set("HOME");
         }
 
+        Config::set_test_config_path(Config::test_config_path());
+
         guard
     }
 
@@ -75,6 +79,7 @@ impl TestConfigEnv {
 #[cfg(test)]
 impl Drop for TestConfigEnv {
     fn drop(&mut self) {
+        Config::clear_test_config_override();
         for (key, value) in self.previous_vars.drain(..).rev() {
             if let Some(val) = value {
                 env::set_var(&key, val);

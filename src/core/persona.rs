@@ -100,7 +100,12 @@ impl PersonaManager {
             Some(persona) => {
                 if let Some(bio) = &persona.bio {
                     let substituted_bio = self.apply_substitutions(bio, char_name);
-                    format!("{}\n\n{}", substituted_bio, base_prompt)
+                    let trimmed_bio = substituted_bio.trim();
+                    if trimmed_bio.is_empty() {
+                        base_prompt.to_string()
+                    } else {
+                        format!("{}\n\n{}", trimmed_bio, base_prompt)
+                    }
                 } else {
                     base_prompt.to_string()
                 }
@@ -329,6 +334,40 @@ mod tests {
         let base_prompt = "You are a helpful assistant.";
         let result = manager.get_modified_system_prompt(base_prompt, None);
         assert_eq!(result, base_prompt);
+    }
+
+    #[test]
+    fn test_system_prompt_modification_ignores_empty_or_whitespace_bio() {
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "dana-empty".to_string(),
+                    display_name: "Dana".to_string(),
+                    bio: Some(String::new()),
+                },
+                Persona {
+                    id: "erin-whitespace".to_string(),
+                    display_name: "Erin".to_string(),
+                    bio: Some("   \n\t".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        let base_prompt = "You are a helpful assistant.";
+
+        manager
+            .set_active_persona("dana-empty")
+            .expect("Failed to activate persona");
+        let result_empty = manager.get_modified_system_prompt(base_prompt, None);
+        assert_eq!(result_empty, base_prompt);
+
+        manager
+            .set_active_persona("erin-whitespace")
+            .expect("Failed to activate persona");
+        let result_whitespace = manager.get_modified_system_prompt(base_prompt, None);
+        assert_eq!(result_whitespace, base_prompt);
     }
 
     #[test]

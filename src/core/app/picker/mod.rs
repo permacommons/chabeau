@@ -1098,13 +1098,18 @@ impl PickerController {
                 let metadata = persona
                     .bio
                     .as_ref()
-                    .map(|bio| {
+                    .and_then(|bio| {
                         let char_replacement = active_character_name.unwrap_or("Assistant");
                         let user_replacement = persona.display_name.as_str();
                         let substituted = bio
                             .replace("{{char}}", char_replacement)
                             .replace("{{user}}", user_replacement);
-                        sanitize_picker_metadata(&substituted)
+                        let sanitized = sanitize_picker_metadata(&substituted);
+                        if sanitized.is_empty() {
+                            None
+                        } else {
+                            Some(sanitized)
+                        }
                     })
                     .unwrap_or_else(|| "No bio".to_string());
                 PickerItem {
@@ -1490,5 +1495,38 @@ mod tests {
             persona_item.metadata.as_deref(),
             Some("First line Second line")
         );
+    }
+
+    #[test]
+    fn test_persona_picker_metadata_defaults_to_no_bio_when_empty() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "blank".to_string(),
+                display_name: "Blank".to_string(),
+                bio: Some("   \n\t".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        app.picker
+            .open_persona_picker(&app.persona_manager, &app.session)
+            .unwrap();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        let persona_item = picker_items
+            .iter()
+            .find(|item| item.id == "blank")
+            .expect("persona entry present");
+
+        assert_eq!(persona_item.metadata.as_deref(), Some("No bio"));
     }
 }

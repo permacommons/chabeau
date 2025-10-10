@@ -251,6 +251,7 @@ impl App {
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
+            has_received_assistant_message: false,
         };
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);

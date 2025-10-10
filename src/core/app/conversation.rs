@@ -31,18 +31,26 @@ impl<'a> ConversationController<'a> {
             .get_modified_system_prompt(base_prompt, char_name)
     }
 
+    fn character_greeting_text(&self) -> Option<String> {
+        let character = self.session.get_character()?;
+        let user_name = self
+            .persona_manager
+            .get_active_persona()
+            .map(|p| p.display_name.as_str());
+        let char_name = Some(character.data.name.as_str());
+        let greeting = character.get_greeting_with_substitutions(user_name, char_name);
+
+        if greeting.trim().is_empty() {
+            None
+        } else {
+            Some(greeting)
+        }
+    }
+
     /// Display character greeting if not yet shown
     pub fn show_character_greeting_if_needed(&mut self) {
         if self.session.should_show_greeting() {
-            if let Some(character) = self.session.get_character() {
-                // Apply persona substitutions to the greeting
-                let user_name = self
-                    .persona_manager
-                    .get_active_persona()
-                    .map(|p| p.display_name.as_str());
-                let char_name = Some(character.data.name.as_str());
-                let greeting = character.get_greeting_with_substitutions(user_name, char_name);
-
+            if let Some(greeting) = self.character_greeting_text() {
                 let greeting_message = Message {
                     role: "assistant".to_string(),
                     content: greeting,
@@ -160,6 +168,10 @@ impl<'a> ConversationController<'a> {
     ) {
         self.ui.current_response.push_str(content);
 
+        if !content.is_empty() {
+            self.session.has_received_assistant_message = true;
+        }
+
         if let Some(retry_index) = self.session.retrying_message_index {
             if let Some(msg) = self.ui.messages.get_mut(retry_index) {
                 if msg.role == "assistant" {
@@ -271,6 +283,19 @@ impl<'a> ConversationController<'a> {
 
         if let Some(retry_index) = self.session.retrying_message_index {
             if retry_index < self.ui.messages.len() {
+                if !self.session.has_received_assistant_message {
+                    if let Some(greeting) = self.character_greeting_text() {
+                        if let Some(msg) = self.ui.messages.get_mut(retry_index) {
+                            if msg.role == "assistant" {
+                                msg.content = greeting;
+                                self.ui.current_response.clear();
+                                self.session.retrying_message_index = None;
+                                return None;
+                            }
+                        }
+                    }
+                }
+
                 if let Some(msg) = self.ui.messages.get_mut(retry_index) {
                     if msg.role == "assistant" {
                         msg.content.clear();
@@ -289,6 +314,19 @@ impl<'a> ConversationController<'a> {
             }
 
             if let Some(index) = target_index {
+                if !self.session.has_received_assistant_message {
+                    if let Some(greeting) = self.character_greeting_text() {
+                        if let Some(msg) = self.ui.messages.get_mut(index) {
+                            if msg.role == "assistant" {
+                                msg.content = greeting;
+                                self.ui.current_response.clear();
+                                self.session.retrying_message_index = None;
+                                return None;
+                            }
+                        }
+                    }
+                }
+
                 self.session.retrying_message_index = Some(index);
 
                 if let Some(msg) = self.ui.messages.get_mut(index) {
@@ -488,6 +526,7 @@ mod tests {
         });
 
         app.session.retrying_message_index = Some(2);
+        app.session.has_received_assistant_message = true;
 
         let api_messages = {
             let mut conversation =
@@ -771,6 +810,7 @@ mod tests {
 
         // Set retry index to the last assistant message
         app.session.retrying_message_index = Some(3);
+        app.session.has_received_assistant_message = true;
 
         let api_messages = {
             let mut conversation =
@@ -814,6 +854,7 @@ mod tests {
             .push_back(create_test_message("assistant", "Response to retry"));
 
         app.session.retrying_message_index = Some(1);
+        app.session.has_received_assistant_message = true;
 
         let api_messages = {
             let mut conversation =
@@ -825,6 +866,136 @@ mod tests {
         assert_eq!(api_messages.len(), 1);
         assert_eq!(api_messages[0].role, "user");
         assert_eq!(api_messages[0].content, "Question");
+    }
+
+    #[test]
+    fn test_retry_character_greeting_reinserts_locally() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello! I'm TestBot.".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        assert_eq!(app.ui.messages.len(), 1);
+        assert_eq!(app.ui.messages[0].role, "assistant");
+        assert!(!app.session.has_received_assistant_message);
+
+        app.session.retrying_message_index = Some(0);
+
+        let result = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.prepare_retry(10, 80)
+        };
+
+        assert!(result.is_none());
+        assert_eq!(app.ui.messages[0].content, "Hello! I'm TestBot.");
+        assert!(app.session.retrying_message_index.is_none());
+        assert!(!app.session.has_received_assistant_message);
+    }
+
+    #[test]
+    fn test_retry_character_greeting_updates_after_persona_change() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "first".to_string(),
+                    display_name: "First".to_string(),
+                    bio: None,
+                },
+                Persona {
+                    id: "second".to_string(),
+                    display_name: "Second".to_string(),
+                    bio: None,
+                },
+            ],
+            ..Default::default()
+        };
+        app.persona_manager =
+            PersonaManager::load_personas(&config).expect("Failed to load personas");
+        app.persona_manager
+            .set_active_persona("first")
+            .expect("Failed to activate persona");
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hi {{user}}! I'm {{char}}.".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        assert_eq!(app.ui.messages.len(), 1);
+        assert_eq!(app.ui.messages[0].role, "assistant");
+        assert_eq!(app.ui.messages[0].content, "Hi First! I'm TestBot.");
+        assert!(!app.session.has_received_assistant_message);
+
+        app.persona_manager
+            .set_active_persona("second")
+            .expect("Failed to activate second persona");
+
+        let result = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.prepare_retry(10, 80)
+        };
+
+        assert!(result.is_none());
+        assert_eq!(app.ui.messages[0].content, "Hi Second! I'm TestBot.");
+        assert!(app.session.retrying_message_index.is_none());
+        assert!(!app.session.has_received_assistant_message);
     }
 
     #[test]

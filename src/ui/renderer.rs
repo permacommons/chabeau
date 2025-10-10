@@ -45,6 +45,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
+            Some(app.ui.user_display_name.clone()),
         );
         (layout.lines, layout.span_metadata)
     } else if app.ui.in_block_select_mode() {
@@ -57,6 +58,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
             Some(chunks[0].width as usize),
+            Some(app.ui.user_display_name.clone()),
         );
         (layout.lines, layout.span_metadata)
     } else {
@@ -148,6 +150,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             Some(crate::core::app::PickerMode::Character) => {
                 "Select a character (Esc=cancel • Ctrl+C=quit)"
+            }
+            Some(crate::core::app::PickerMode::Persona) => {
+                "Select a persona (Esc=cancel • Ctrl+C=quit)"
             }
             _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
         }
@@ -435,6 +440,10 @@ fn generate_picker_help_text(app: &App) -> String {
             .unwrap_or(""),
         Some(crate::core::app::PickerMode::Character) => app
             .character_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
+        Some(crate::core::app::PickerMode::Persona) => app
+            .persona_picker_state()
             .map(|state| state.search_filter.as_str())
             .unwrap_or(""),
         _ => "",

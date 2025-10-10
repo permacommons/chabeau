@@ -338,12 +338,14 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         };
         crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg)
     }
 
     /// Build display lines with selection highlighting and terminal width for table balancing
     #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_arguments)]
     pub fn build_display_lines_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,
@@ -352,6 +354,7 @@ impl ScrollCalculator {
         markdown_enabled: bool,
         syntax_enabled: bool,
         terminal_width: Option<usize>,
+        user_display_name: Option<String>,
     ) -> Vec<Line<'static>> {
         Self::build_layout_with_theme_and_selection_and_flags_and_width(
             messages,
@@ -361,10 +364,12 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             terminal_width,
+            user_display_name,
         )
         .lines
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build_layout_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,
@@ -373,12 +378,14 @@ impl ScrollCalculator {
         markdown_enabled: bool,
         syntax_enabled: bool,
         terminal_width: Option<usize>,
+        user_display_name: Option<String>,
     ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name,
         };
         let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
 
@@ -421,6 +428,7 @@ impl ScrollCalculator {
 
     /// Build display lines with codeblock highlighting and terminal width for table balancing
     #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_arguments)]
     pub fn build_display_lines_with_codeblock_highlight_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &crate::ui::theme::Theme,
@@ -429,6 +437,7 @@ impl ScrollCalculator {
         markdown_enabled: bool,
         syntax_enabled: bool,
         terminal_width: Option<usize>,
+        user_display_name: Option<String>,
     ) -> Vec<Line<'static>> {
         Self::build_layout_with_codeblock_highlight_and_flags_and_width(
             messages,
@@ -438,10 +447,12 @@ impl ScrollCalculator {
             markdown_enabled,
             syntax_enabled,
             terminal_width,
+            user_display_name,
         )
         .lines
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build_layout_with_codeblock_highlight_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &crate::ui::theme::Theme,
@@ -450,12 +461,14 @@ impl ScrollCalculator {
         markdown_enabled: bool,
         syntax_enabled: bool,
         terminal_width: Option<usize>,
+        user_display_name: Option<String>,
     ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
             syntax_enabled,
             table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name,
         };
         let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
 
@@ -1024,6 +1037,7 @@ mod tests {
                 markdown_enabled: true,
                 syntax_enabled: true,
                 table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+                user_display_name: None,
             },
         );
         let (prewrapped, _) = ScrollCalculator::prewrap_lines_with_metadata(
@@ -1280,6 +1294,7 @@ mod tests {
                 true,
                 true,
                 None,
+                None,
             );
 
         assert_eq!(normal.len(), highlighted.len());
@@ -1433,6 +1448,7 @@ mod tests {
                 true,     // markdown enabled
                 false,    // syntax disabled for deterministic line counts
                 Some(20), // small width to force wrapping
+                None,     // user_display_name
             );
 
         let expected_style = theme
@@ -1446,6 +1462,7 @@ mod tests {
             Some(20usize),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();
@@ -1495,6 +1512,7 @@ mod tests {
                 true,  // markdown enabled
                 false, // syntax disabled for determinism
                 Some(60),
+                None, // user_display_name
             );
 
         // Sanity: parser should find one code block
@@ -1512,6 +1530,7 @@ mod tests {
             Some(60usize),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1, "Should have one code block");
         let (start, len, _content) = ranges[0].clone();

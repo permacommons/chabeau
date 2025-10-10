@@ -20,6 +20,7 @@ pub struct LayoutConfig {
     pub markdown_enabled: bool,
     pub syntax_enabled: bool,
     pub table_overflow_policy: TableOverflowPolicy,
+    pub user_display_name: Option<String>,
 }
 
 impl Default for LayoutConfig {
@@ -29,6 +30,7 @@ impl Default for LayoutConfig {
             markdown_enabled: true,
             syntax_enabled: true,
             table_overflow_policy: TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         }
     }
 }
@@ -67,6 +69,7 @@ impl LayoutEngine {
             markdown_enabled: false,
             syntax_enabled,
             table_overflow_policy: TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         };
         Self::layout_messages(messages, theme, &cfg)
     }
@@ -87,13 +90,15 @@ impl LayoutEngine {
             let mut codeblock_ranges = Vec::new();
             for msg in messages {
                 let start = lines.len();
-                let rendered = crate::ui::markdown::render_message_markdown_details_with_policy(
-                    msg,
-                    theme,
-                    cfg.syntax_enabled,
-                    cfg.width,
-                    cfg.table_overflow_policy,
-                );
+                let rendered =
+                    crate::ui::markdown::render_message_markdown_details_with_policy_and_user_name(
+                        msg,
+                        theme,
+                        cfg.syntax_enabled,
+                        cfg.width,
+                        cfg.table_overflow_policy,
+                        cfg.user_display_name.as_deref(),
+                    );
                 let crate::ui::markdown::RenderedMessageDetails {
                     lines: mut msg_lines,
                     codeblock_ranges: msg_ranges,

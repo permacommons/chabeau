@@ -236,7 +236,8 @@ async fn route_keyboard_event(
             let picker_open = app.model_picker_state().is_some()
                 || app.theme_picker_state().is_some()
                 || app.provider_picker_state().is_some()
-                || app.character_picker_state().is_some();
+                || app.character_picker_state().is_some()
+                || app.persona_picker_state().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
@@ -410,6 +411,7 @@ pub async fn run_chat(
     provider: Option<String>,
     env_only: bool,
     character: Option<String>,
+    persona: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(
         model.clone(),
@@ -417,6 +419,7 @@ pub async fn run_chat(
         provider.clone(),
         env_only,
         character,
+        persona,
     )
     .await?;
 
@@ -647,10 +650,11 @@ async fn handle_edit_select_mode_event(
                         }
                         app.ui.messages.truncate(idx);
                         app.invalidate_prewrap_cache();
-                        let _ = app
-                            .session
-                            .logging
-                            .rewrite_log_without_last_response(&app.ui.messages);
+                        let user_display_name = app.persona_manager.get_display_name();
+                        let _ = app.session.logging.rewrite_log_without_last_response(
+                            &app.ui.messages,
+                            &user_display_name,
+                        );
                         app.ui.set_input_text(content);
                         app.ui.exit_edit_select_mode();
                         let input_area_height = app.ui.calculate_input_area_height(term_width);
@@ -684,10 +688,11 @@ async fn handle_edit_select_mode_event(
                         }
                         app.ui.messages.truncate(idx);
                         app.invalidate_prewrap_cache();
-                        let _ = app
-                            .session
-                            .logging
-                            .rewrite_log_without_last_response(&app.ui.messages);
+                        let user_display_name = app.persona_manager.get_display_name();
+                        let _ = app.session.logging.rewrite_log_without_last_response(
+                            &app.ui.messages,
+                            &user_display_name,
+                        );
                         app.ui.exit_edit_select_mode();
                         let input_area_height = app.ui.calculate_input_area_height(term_width);
                         {
@@ -724,6 +729,7 @@ async fn handle_block_select_mode_event(
             Some(term_width as usize),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             app.ui.syntax_enabled,
+            Some(&app.ui.user_display_name),
         );
 
         match key.code {

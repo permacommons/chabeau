@@ -83,14 +83,6 @@ impl CardCache {
         result.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(result)
     }
-
-    /// Invalidate the cache
-    /// This forces a reload on the next call to get_all_metadata()
-    #[allow(dead_code)] // Public API for future use
-    pub fn invalidate(&mut self) {
-        self.cache_key = None;
-        self.metadata.clear();
-    }
 }
 
 impl Default for CardCache {
@@ -106,29 +98,6 @@ mod tests {
     #[test]
     fn test_new_cache_is_empty() {
         let cache = CardCache::new();
-        assert!(cache.metadata.is_empty());
-        assert!(cache.cache_key.is_none());
-    }
-
-    #[test]
-    fn test_invalidate_clears_cache() {
-        let mut cache = CardCache::new();
-
-        // Manually populate cache
-        cache.metadata.insert(
-            "test".to_string(),
-            CachedCardMetadata {
-                name: "Test".to_string(),
-                description: "Test description".to_string(),
-            },
-        );
-        cache.cache_key = Some("test_key".to_string());
-
-        assert!(!cache.metadata.is_empty());
-        assert!(cache.cache_key.is_some());
-
-        cache.invalidate();
-
         assert!(cache.metadata.is_empty());
         assert!(cache.cache_key.is_none());
     }
@@ -242,30 +211,5 @@ mod tests {
         // The cache should maintain its state
         assert!(cache.cache_key.is_some());
         assert_eq!(cache.metadata.len(), 1);
-    }
-
-    #[test]
-    fn test_cache_invalidation_workflow() {
-        let mut cache = CardCache::new();
-
-        // Set up initial cache state
-        cache.metadata.insert(
-            "char1".to_string(),
-            CachedCardMetadata {
-                name: "Character 1".to_string(),
-                description: "First character".to_string(),
-            },
-        );
-        cache.cache_key = Some("initial_key".to_string());
-
-        assert_eq!(cache.metadata.len(), 1);
-        assert!(cache.cache_key.is_some());
-
-        // Invalidate the cache
-        cache.invalidate();
-
-        // Verify cache is cleared
-        assert_eq!(cache.metadata.len(), 0);
-        assert!(cache.cache_key.is_none());
     }
 }

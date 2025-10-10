@@ -45,16 +45,18 @@ impl RenderedMessageDetails {
     }
 }
 
-pub fn render_message_markdown_details_with_policy(
+pub fn render_message_markdown_details_with_policy_and_user_name(
     msg: &Message,
     theme: &Theme,
     syntax_enabled: bool,
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
+    user_display_name: Option<&str>,
 ) -> RenderedMessageDetails {
     let cfg = MessageRenderConfig::markdown(syntax_enabled)
         .with_span_metadata()
-        .with_terminal_width(terminal_width, policy);
+        .with_terminal_width(terminal_width, policy)
+        .with_user_display_name(user_display_name.map(|s| s.to_string()));
     render_message_with_config(msg, theme, cfg)
 }
 
@@ -82,13 +84,14 @@ fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
 }
 
 /// Configuration for the higher level message renderer abstraction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MessageRenderConfig {
     pub markdown: bool,
     pub collect_span_metadata: bool,
     pub syntax_highlighting: bool,
     pub terminal_width: Option<usize>,
     pub table_policy: crate::ui::layout::TableOverflowPolicy,
+    pub user_display_name: Option<String>,
 }
 
 impl MessageRenderConfig {
@@ -99,6 +102,7 @@ impl MessageRenderConfig {
             syntax_highlighting,
             terminal_width: None,
             table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         }
     }
 
@@ -109,6 +113,7 @@ impl MessageRenderConfig {
             syntax_highlighting: false,
             terminal_width: None,
             table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
         }
     }
 
@@ -126,14 +131,20 @@ impl MessageRenderConfig {
         self.table_policy = policy;
         self
     }
+
+    pub fn with_user_display_name(mut self, display_name: Option<String>) -> Self {
+        self.user_display_name = display_name;
+        self
+    }
 }
 
 /// Configuration options for the markdown renderer abstraction.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct MarkdownRendererConfig {
     collect_span_metadata: bool,
     syntax_highlighting: bool,
     width: Option<MarkdownWidthConfig>,
+    user_display_name: Option<String>,
 }
 
 /// Width-aware configuration for optional wrapping and table layout.
@@ -157,10 +168,17 @@ pub fn render_message_with_config(
                 terminal_width: config.terminal_width,
                 table_policy: config.table_policy,
             }),
+            user_display_name: config.user_display_name.clone(),
         };
         MarkdownRenderer::new(role, &msg.content, theme, renderer_config).render()
     } else {
-        render_plain_message(role, &msg.content, theme, config.collect_span_metadata)
+        render_plain_message(
+            role,
+            &msg.content,
+            theme,
+            config.collect_span_metadata,
+            config.user_display_name.as_deref(),
+        )
     };
     RenderedMessageDetails {
         lines,
@@ -219,6 +237,13 @@ impl<'a> MarkdownRenderer<'a> {
         }
     }
 
+    fn get_user_prefix(&self) -> String {
+        match &self.config.user_display_name {
+            Some(name) => format!("{}: ", name),
+            None => "You: ".to_string(),
+        }
+    }
+
     fn render(mut self) -> RenderedLinesWithMetadata {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -237,8 +262,9 @@ impl<'a> MarkdownRenderer<'a> {
                     Tag::Paragraph => {
                         if self.role == RoleKind::User {
                             if !self.did_prefix_user {
+                                let user_prefix = self.get_user_prefix();
                                 self.push_span(
-                                    Span::styled("You: ", self.theme.user_prefix_style),
+                                    Span::styled(user_prefix, self.theme.user_prefix_style),
                                     SpanKind::UserPrefix,
                                 );
                                 self.did_prefix_user = true;
@@ -251,8 +277,9 @@ impl<'a> MarkdownRenderer<'a> {
                         self.flush_current_spans(true);
                         let style = self.theme.md_heading_style(level as u8);
                         if self.role == RoleKind::User && !self.did_prefix_user {
+                            let user_prefix = self.get_user_prefix();
                             self.push_span(
-                                Span::styled("You: ", self.theme.user_prefix_style),
+                                Span::styled(user_prefix, self.theme.user_prefix_style),
                                 SpanKind::UserPrefix,
                             );
                             self.did_prefix_user = true;
@@ -296,8 +323,9 @@ impl<'a> MarkdownRenderer<'a> {
                             }
                         };
                         if self.role == RoleKind::User && !self.did_prefix_user {
+                            let user_prefix = self.get_user_prefix();
                             self.push_span(
-                                Span::styled("You: ", self.theme.user_prefix_style),
+                                Span::styled(user_prefix, self.theme.user_prefix_style),
                                 SpanKind::UserPrefix,
                             );
                             self.did_prefix_user = true;
@@ -643,6 +671,7 @@ pub fn compute_codeblock_ranges(
                 true, // syntax_enabled
                 None, // terminal_width
                 crate::ui::layout::TableOverflowPolicy::WrapCells,
+                None, // user_display_name
             );
             offset += lines.len();
             continue;
@@ -660,6 +689,7 @@ pub fn compute_codeblock_ranges(
                 collect_span_metadata: false,
                 syntax_highlighting: false,
                 width: None,
+                user_display_name: None,
             },
         )
         .render();
@@ -679,6 +709,7 @@ fn render_message_with_ranges_with_width_and_policy(
     syntax_enabled: bool,
     terminal_width: Option<usize>,
     table_policy: crate::ui::layout::TableOverflowPolicy,
+    user_display_name: Option<&str>,
 ) -> RenderedLinesWithMetadata {
     let config = MarkdownRendererConfig {
         collect_span_metadata: true,
@@ -687,6 +718,7 @@ fn render_message_with_ranges_with_width_and_policy(
             terminal_width,
             table_policy,
         }),
+        user_display_name: user_display_name.map(|s| s.to_string()),
     };
     MarkdownRenderer::new(role, content, theme, config).render()
 }
@@ -698,6 +730,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     terminal_width: Option<usize>,
     policy: crate::ui::layout::TableOverflowPolicy,
     syntax_enabled: bool,
+    user_display_name: Option<&str>,
 ) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let mut offset = 0usize;
@@ -711,6 +744,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    None,
                 );
                 offset += lines.len();
             }
@@ -722,6 +756,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    user_display_name,
                 );
                 for (start, len, content) in ranges {
                     out.push((offset + start, len, content));
@@ -736,6 +771,7 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
                     syntax_enabled,
                     terminal_width,
                     policy,
+                    None,
                 );
                 for (start, len, content) in ranges {
                     out.push((offset + start, len, content));
@@ -801,7 +837,7 @@ pub fn compute_codeblock_contents_with_lang(
 mod tests {
     #![allow(unused_imports)]
     use super::{
-        compute_codeblock_ranges, render_message_markdown_details_with_policy,
+        compute_codeblock_ranges, render_message_markdown_details_with_policy_and_user_name,
         render_message_with_config, render_message_with_ranges_with_width_and_policy,
         table::TableRenderer, MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig,
         MessageRenderConfig, RoleKind,
@@ -834,12 +870,13 @@ mod tests {
             content: "Testing metadata with a [link](https://example.com) inside.".into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata = details.span_metadata.as_ref().expect("metadata present");
         assert_eq!(metadata.len(), details.lines.len());
@@ -856,12 +893,13 @@ mod tests {
         assert!(saw_link, "expected link metadata to be captured");
 
         let width = Some(24usize);
-        let details_with_width = render_message_markdown_details_with_policy(
+        let details_with_width = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata_wrapped = details_with_width
             .span_metadata
@@ -925,12 +963,13 @@ mod tests {
             content: "Hello world".into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             None,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
 
         let metadata = details.span_metadata.expect("metadata present");
@@ -953,12 +992,13 @@ mod tests {
             .into(),
         };
 
-        let details = render_message_markdown_details_with_policy(
+        let details = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             Some(50),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
         let metadata = details.span_metadata.expect("metadata present");
 
@@ -1010,6 +1050,7 @@ mod tests {
             false, // syntax_enabled
             None,  // terminal_width
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None, // user_display_name
         );
         let (lines, ranges, metadata) = MarkdownRenderer::new(
             RoleKind::Assistant,
@@ -1019,6 +1060,7 @@ mod tests {
                 collect_span_metadata: false,
                 syntax_highlighting: false,
                 width: None,
+                user_display_name: None,
             },
         )
         .render();
@@ -1041,12 +1083,13 @@ mod tests {
                     .into(),
         };
 
-        let expected = render_message_markdown_details_with_policy(
+        let expected = render_message_markdown_details_with_policy_and_user_name(
             &message,
             &theme,
             true,
             Some(48),
             crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
         );
 
         let (lines, ranges, metadata) = MarkdownRenderer::new(
@@ -1060,6 +1103,7 @@ mod tests {
                     terminal_width: Some(48),
                     table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
                 }),
+                user_display_name: None,
             },
         )
         .render();
@@ -1104,6 +1148,7 @@ mod tests {
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1);
         let (start, len, content) = &ranges[0];
@@ -1207,6 +1252,7 @@ mod tests {
             width,
             crate::ui::layout::TableOverflowPolicy::WrapCells,
             false,
+            None,
         );
         assert_eq!(ranges.len(), 1);
         let (start, len, content) = &ranges[0];
@@ -2430,6 +2476,7 @@ fn render_plain_message(
     content: &str,
     theme: &Theme,
     collect_span_metadata: bool,
+    user_display_name: Option<&str>,
 ) -> RenderedLinesWithMetadata {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut metadata: Vec<Vec<SpanKind>> = Vec::new();
@@ -2440,7 +2487,8 @@ fn render_plain_message(
                 let mut spans = Vec::new();
                 let mut kinds = Vec::new();
                 if idx == 0 {
-                    spans.push(Span::styled("You: ", theme.user_prefix_style));
+                    let user_prefix = format!("{}: ", user_display_name.unwrap_or("You"));
+                    spans.push(Span::styled(user_prefix, theme.user_prefix_style));
                     kinds.push(SpanKind::UserPrefix);
                 } else {
                     spans.push(Span::raw(USER_CONTINUATION_INDENT));

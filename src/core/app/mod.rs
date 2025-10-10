@@ -25,46 +25,76 @@ pub use conversation::ConversationController;
 #[cfg(test)]
 pub use picker::PickerData;
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PickerController, PickerMode, PickerSession,
-    ProviderPickerState, ThemePickerState,
+    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
+    PickerSession, ProviderPickerState, ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
 pub use ui_state::{ActivityKind, UiState};
 
+/// Configuration parameters for initializing an App with authentication
+pub struct AppInitConfig {
+    pub model: String,
+    pub log_file: Option<String>,
+    pub provider: Option<String>,
+    pub env_only: bool,
+    pub pre_resolved_session: Option<ProviderSession>,
+    pub character: Option<String>,
+    pub persona: Option<String>,
+}
+
 pub async fn new_with_auth(
-    model: String,
-    log_file: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
+    init_config: AppInitConfig,
     config: &Config,
-    pre_resolved_session: Option<ProviderSession>,
-    character: Option<String>,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
         theme,
         startup_requires_provider,
     } = session::prepare_with_auth(
-        model,
-        log_file,
-        provider,
-        env_only,
+        init_config.model,
+        init_config.log_file,
+        init_config.provider,
+        init_config.env_only,
         config,
-        pre_resolved_session,
-        character,
+        init_config.pre_resolved_session,
+        init_config.character,
     )
     .await?;
+
+    // Initialize PersonaManager and apply CLI persona if provided
+    let mut persona_manager = crate::core::persona::PersonaManager::load_personas(config)?;
+    if let Some(persona_id) = init_config.persona {
+        persona_manager.set_active_persona(&persona_id)?;
+    } else {
+        // Load default persona for current provider/model if no CLI persona specified
+        if let Some(default_persona_id) =
+            persona_manager.get_default_for_provider_model(&session.provider_name, &session.model)
+        {
+            let default_persona_id = default_persona_id.to_string(); // Clone to avoid borrow issues
+            if let Err(e) = persona_manager.set_active_persona(&default_persona_id) {
+                eprintln!(
+                    "Warning: Could not load default persona '{}': {}",
+                    default_persona_id, e
+                );
+            }
+        }
+    }
 
     let mut app = App {
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
         character_cache: crate::character::cache::CardCache::new(),
+        persona_manager,
     };
 
     app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
+
+    // Update user display name based on active persona
+    let display_name = app.persona_manager.get_display_name();
+    app.ui.update_user_display_name(display_name);
 
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;
@@ -88,15 +118,23 @@ pub async fn new_uninitialized(
         picker.startup_requires_provider = true;
     }
 
+    // Initialize PersonaManager (no CLI persona for uninitialized app)
+    let persona_manager = crate::core::persona::PersonaManager::load_personas(&config)?;
+
     let mut app = App {
         session,
         ui: UiState::from_config(theme, &config),
         picker,
         character_cache: crate::character::cache::CardCache::new(),
+        persona_manager,
     };
 
     app.ui.set_input_text(String::new());
     app.configure_textarea_appearance();
+
+    // Update user display name based on active persona
+    let display_name = app.persona_manager.get_display_name();
+    app.ui.update_user_display_name(display_name);
 
     Ok(app)
 }
@@ -106,6 +144,7 @@ pub struct App {
     pub ui: UiState,
     pub picker: PickerController,
     pub character_cache: crate::character::cache::CardCache,
+    pub persona_manager: crate::core::persona::PersonaManager,
 }
 
 #[derive(Clone)]
@@ -172,7 +211,7 @@ impl App {
     }
 
     pub fn conversation(&mut self) -> ConversationController<'_> {
-        ConversationController::new(&mut self.session, &mut self.ui)
+        ConversationController::new(&mut self.session, &mut self.ui, &self.persona_manager)
     }
 
     /// Close any active picker session.
@@ -216,16 +255,23 @@ impl App {
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
 
+        // Create a test PersonaManager with empty config
+        let test_config = crate::core::config::Config::default();
+        let persona_manager = crate::core::persona::PersonaManager::load_personas(&test_config)
+            .expect("Failed to create test PersonaManager");
+
         App {
             session,
             ui,
             picker: PickerController::new(),
             character_cache: crate::character::cache::CardCache::new(),
+            persona_manager,
         }
     }
 
     // Used by Criterion benches in `benches/`.
     #[cfg(feature = "bench")]
+    #[allow(dead_code)]
     pub fn new_bench(theme: Theme, markdown_enabled: bool, syntax_enabled: bool) -> Self {
         Self::new_test_app(theme, markdown_enabled, syntax_enabled)
     }
@@ -360,6 +406,16 @@ impl App {
         }
     }
 
+    /// Open a persona picker modal with available personas
+    pub fn open_persona_picker(&mut self) {
+        if let Err(message) = self
+            .picker
+            .open_persona_picker(&self.persona_manager, &self.session)
+        {
+            self.conversation().set_status(message);
+        }
+    }
+
     /// Apply the selected character from the picker
     pub fn apply_selected_character(&mut self, set_as_default: bool) {
         let character_name = self
@@ -436,6 +492,78 @@ impl App {
         self.picker.filter_characters();
     }
 
+    /// Apply the selected persona from the picker
+    pub fn apply_selected_persona(&mut self, set_as_default: bool) {
+        let persona_id = self
+            .picker
+            .session()
+            .and_then(|picker| picker.state.selected_id())
+            .map(|s| s.to_string());
+
+        if let Some(persona_id) = persona_id {
+            // Check if user selected "turn off persona"
+            if persona_id == "[turn_off_persona]" {
+                self.persona_manager.clear_active_persona();
+                self.ui.update_user_display_name("You".to_string());
+                self.conversation()
+                    .set_status("Persona deactivated".to_string());
+                self.close_picker();
+                return;
+            }
+
+            match self.persona_manager.set_active_persona(&persona_id) {
+                Ok(()) => {
+                    let persona_name = self
+                        .persona_manager
+                        .get_active_persona()
+                        .map(|p| p.display_name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    self.ui.update_user_display_name(persona_name.clone());
+
+                    if set_as_default {
+                        // Set as default for current provider/model
+                        let provider = self.session.provider_name.clone();
+                        let model = self.session.model.clone();
+
+                        match self
+                            .persona_manager
+                            .set_default_for_provider_model_persistent(
+                                &provider,
+                                &model,
+                                &persona_id,
+                            ) {
+                            Ok(()) => {
+                                self.conversation().set_status(format!(
+                                    "Persona activated: {} (saved as default for {}:{})",
+                                    persona_name, provider, model
+                                ));
+                            }
+                            Err(e) => {
+                                self.conversation().set_status(format!(
+                                    "Persona activated: {} (failed to save as default: {})",
+                                    persona_name, e
+                                ));
+                            }
+                        }
+                    } else {
+                        self.conversation()
+                            .set_status(format!("Persona activated: {}", persona_name));
+                    }
+                }
+                Err(e) => {
+                    self.conversation()
+                        .set_status(format!("Error activating persona: {}", e));
+                }
+            }
+        }
+        self.close_picker();
+    }
+
+    /// Filter personas based on search term and update picker
+    pub fn filter_personas(&mut self) {
+        self.picker.filter_personas();
+    }
+
     /// Get character picker state accessor
     pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
         self.picker.character_state()
@@ -444,6 +572,16 @@ impl App {
     /// Get mutable character picker state accessor
     pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
         self.picker.character_state_mut()
+    }
+
+    /// Get persona picker state accessor
+    pub fn persona_picker_state(&self) -> Option<&PersonaPickerState> {
+        self.picker.persona_state()
+    }
+
+    /// Get mutable persona picker state accessor
+    pub fn persona_picker_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
+        self.picker.persona_state_mut()
     }
 }
 

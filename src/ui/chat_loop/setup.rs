@@ -24,6 +24,7 @@ pub async fn bootstrap_app(
     provider: Option<String>,
     env_only: bool,
     character: Option<String>,
+    _persona: Option<String>,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let auth_manager = AuthManager::new();
@@ -111,13 +112,16 @@ pub async fn bootstrap_app(
         };
 
         let mut app = match app::new_with_auth(
-            model.clone(),
-            log.clone(),
-            provider_override,
-            env_only,
+            app::AppInitConfig {
+                model: model.clone(),
+                log_file: log.clone(),
+                provider: provider_override,
+                env_only,
+                pre_resolved_session,
+                character: character.clone(),
+                persona: _persona,
+            },
             &config,
-            pre_resolved_session,
-            character.clone(),
         )
         .await
         {

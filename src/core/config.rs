@@ -30,6 +30,13 @@ pub struct CustomTheme {
     pub input_cursor_modifiers: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Persona {
+    pub id: String,
+    pub display_name: String,
+    pub bio: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub default_provider: Option<String>,
@@ -51,6 +58,15 @@ pub struct Config {
     /// Value: character card filename without extension (e.g., "alice" for alice.json or alice.png)
     #[serde(default)]
     pub default_characters: HashMap<String, HashMap<String, String>>,
+    /// Default personas for provider/model combinations
+    /// Outer key: provider (e.g., "openai")
+    /// Inner key: model (e.g., "gpt-4")
+    /// Value: persona ID (e.g., "alice-dev")
+    #[serde(default)]
+    pub default_personas: HashMap<String, HashMap<String, String>>,
+    /// User-defined personas for conversation contexts
+    #[serde(default)]
+    pub personas: Vec<Persona>,
 }
 
 /// Get a user-friendly display string for a path
@@ -209,6 +225,27 @@ impl Config {
             // Clean up empty provider entries
             if models.is_empty() {
                 self.default_characters.remove(&provider.to_lowercase());
+            }
+        }
+    }
+
+    /// Set the default persona for a provider/model combination
+    /// persona_id should be the persona ID
+    pub fn set_default_persona(&mut self, provider: String, model: String, persona_id: String) {
+        let provider_key = provider.to_lowercase();
+        self.default_personas
+            .entry(provider_key)
+            .or_default()
+            .insert(model, persona_id);
+    }
+
+    /// Unset the default persona for a provider/model combination
+    pub fn unset_default_persona(&mut self, provider: &str, model: &str) {
+        if let Some(models) = self.default_personas.get_mut(&provider.to_lowercase()) {
+            models.remove(model);
+            // Clean up empty provider entries
+            if models.is_empty() {
+                self.default_personas.remove(&provider.to_lowercase());
             }
         }
     }
@@ -877,6 +914,104 @@ mod tests {
     }
 
     #[test]
+    fn test_persona_serialization() {
+        let persona = Persona {
+            id: "test-persona".to_string(),
+            display_name: "Test User".to_string(),
+            bio: Some("A test persona for unit testing".to_string()),
+        };
+
+        // Test that persona can be serialized and deserialized
+        let serialized = toml::to_string(&persona).expect("Failed to serialize persona");
+        let deserialized: Persona =
+            toml::from_str(&serialized).expect("Failed to deserialize persona");
+
+        assert_eq!(deserialized.id, "test-persona");
+        assert_eq!(deserialized.display_name, "Test User");
+        assert_eq!(
+            deserialized.bio,
+            Some("A test persona for unit testing".to_string())
+        );
+    }
+
+    #[test]
+    fn test_persona_optional_bio() {
+        let persona = Persona {
+            id: "minimal-persona".to_string(),
+            display_name: "Minimal User".to_string(),
+            bio: None,
+        };
+
+        // Test that persona with no bio can be serialized and deserialized
+        let serialized = toml::to_string(&persona).expect("Failed to serialize persona");
+        let deserialized: Persona =
+            toml::from_str(&serialized).expect("Failed to deserialize persona");
+
+        assert_eq!(deserialized.id, "minimal-persona");
+        assert_eq!(deserialized.display_name, "Minimal User");
+        assert_eq!(deserialized.bio, None);
+    }
+
+    #[test]
+    fn test_config_with_personas() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_personas.toml");
+
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alice-dev".to_string(),
+                    display_name: "Alice".to_string(),
+                    bio: Some("A senior software developer".to_string()),
+                },
+                Persona {
+                    id: "bob-student".to_string(),
+                    display_name: "Bob".to_string(),
+                    bio: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Save the config
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+
+        // Load it back
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+
+        // Verify personas were preserved
+        assert_eq!(loaded_config.personas.len(), 2);
+
+        let alice = &loaded_config.personas[0];
+        assert_eq!(alice.id, "alice-dev");
+        assert_eq!(alice.display_name, "Alice");
+        assert_eq!(alice.bio, Some("A senior software developer".to_string()));
+
+        let bob = &loaded_config.personas[1];
+        assert_eq!(bob.id, "bob-student");
+        assert_eq!(bob.display_name, "Bob");
+        assert_eq!(bob.bio, None);
+    }
+
+    #[test]
+    fn test_empty_personas_array() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let config_path = temp_dir.path().join("test_empty_personas.toml");
+
+        let config = Config::default();
+        assert!(config.personas.is_empty());
+
+        // Save and load to ensure empty array is handled correctly
+        config
+            .save_to_path(&config_path)
+            .expect("Failed to save config");
+        let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+        assert!(loaded_config.personas.is_empty());
+    }
+
+    #[test]
     fn test_path_display() {
         // Test with a simple path
         let path = PathBuf::from("/some/absolute/path");
@@ -926,5 +1061,155 @@ mod tests {
                 assert!(display.starts_with('~') || display.starts_with('/'));
             }
         }
+    }
+
+    #[test]
+    fn test_set_and_get_default_persona() {
+        use crate::core::persona::PersonaManager;
+
+        let mut config = Config::default();
+
+        // Initially no default persona - test through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert!(manager
+            .get_default_for_provider_model("openai", "gpt-4")
+            .is_none());
+
+        // Set a default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4"),
+            Some("alice-dev")
+        );
+
+        // Case insensitive provider lookup - test through PersonaManager
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("OPENAI", "gpt-4"),
+            Some("alice-dev")
+        );
+
+        // Different model should return None
+        assert!(manager
+            .get_default_for_provider_model("openai", "gpt-3.5-turbo")
+            .is_none());
+    }
+
+    #[test]
+    fn test_unset_default_persona() {
+        use crate::core::persona::PersonaManager;
+
+        let mut config = Config::default();
+
+        // Set default personas
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "bob-student".to_string(),
+        );
+
+        // Verify they're set through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4"),
+            Some("alice-dev")
+        );
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4o"),
+            Some("bob-student")
+        );
+
+        // Unset one
+        config.unset_default_persona("openai", "gpt-4");
+
+        // Verify it's gone but the other remains through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert!(manager
+            .get_default_for_provider_model("openai", "gpt-4")
+            .is_none());
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4o"),
+            Some("bob-student")
+        );
+    }
+
+    #[test]
+    fn test_unset_default_persona_cleans_up_empty_provider() {
+        use crate::core::persona::PersonaManager;
+
+        let mut config = Config::default();
+
+        // Set a single default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4"),
+            Some("alice-dev")
+        );
+
+        // Unset the persona
+        config.unset_default_persona("openai", "gpt-4");
+
+        // Verify the provider entry is cleaned up
+        assert!(config.default_personas.is_empty());
+
+        // Also verify through PersonaManager that no defaults exist
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert!(manager
+            .get_default_for_provider_model("openai", "gpt-4")
+            .is_none());
+    }
+
+    #[test]
+    fn test_overwrite_default_persona() {
+        use crate::core::persona::PersonaManager;
+
+        let mut config = Config::default();
+
+        // Set a default persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "alice-dev".to_string(),
+        );
+
+        // Verify it's set through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4"),
+            Some("alice-dev")
+        );
+
+        // Overwrite with a different persona
+        config.set_default_persona(
+            "openai".to_string(),
+            "gpt-4".to_string(),
+            "bob-student".to_string(),
+        );
+
+        // Verify it's updated through PersonaManager (production path)
+        let manager = PersonaManager::load_personas(&config).expect("Failed to load personas");
+        assert_eq!(
+            manager.get_default_for_provider_model("openai", "gpt-4"),
+            Some("bob-student")
+        );
     }
 }

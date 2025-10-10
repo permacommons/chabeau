@@ -10,6 +10,8 @@ use crate::ui::theme::Theme;
 
 /// Special ID for the "turn off character mode" picker entry
 pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
+/// Special ID for the "turn off persona" picker entry
+pub(super) const TURN_OFF_PERSONA_ID: &str = "[turn_off_persona]";
 
 /// Sanitize metadata text for display in picker
 ///
@@ -36,6 +38,7 @@ pub enum PickerMode {
     Model,
     Provider,
     Character,
+    Persona,
 }
 
 #[derive(Debug, Clone)]
@@ -68,12 +71,19 @@ pub struct CharacterPickerState {
 }
 
 #[derive(Debug, Clone)]
+pub struct PersonaPickerState {
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PickerData {
     Theme(ThemePickerState),
     Model(ModelPickerState),
     Provider(ProviderPickerState),
     Character(CharacterPickerState),
+    Persona(PersonaPickerState),
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +96,10 @@ pub struct PickerSession {
 impl PickerSession {
     fn prefers_alphabetical(&self) -> bool {
         match (&self.mode, &self.data) {
-            (PickerMode::Theme, _) | (PickerMode::Provider, _) | (PickerMode::Character, _) => true,
+            (PickerMode::Theme, _)
+            | (PickerMode::Provider, _)
+            | (PickerMode::Character, _)
+            | (PickerMode::Persona, _) => true,
             (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
             _ => false,
         }
@@ -113,6 +126,7 @@ impl PickerSession {
             PickerMode::Provider => "Pick Provider",
             PickerMode::Theme => "Pick Theme",
             PickerMode::Character => "Pick Character",
+            PickerMode::Persona => "Pick Persona",
         }
     }
 
@@ -122,6 +136,7 @@ impl PickerSession {
             PickerData::Theme(state) => &state.search_filter,
             PickerData::Provider(state) => &state.search_filter,
             PickerData::Character(state) => &state.search_filter,
+            PickerData::Persona(state) => &state.search_filter,
         }
     }
 
@@ -131,6 +146,7 @@ impl PickerSession {
             PickerData::Theme(state) => &state.all_items,
             PickerData::Provider(state) => &state.all_items,
             PickerData::Character(state) => &state.all_items,
+            PickerData::Persona(state) => &state.all_items,
         }
     }
 }
@@ -258,6 +274,28 @@ impl PickerController {
             Some(PickerSession {
                 mode: PickerMode::Character,
                 data: PickerData::Character(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn persona_state(&self) -> Option<&PersonaPickerState> {
+        match self.session() {
+            Some(PickerSession {
+                mode: PickerMode::Persona,
+                data: PickerData::Persona(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn persona_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
+        match self.session_mut() {
+            Some(PickerSession {
+                mode: PickerMode::Persona,
+                data: PickerData::Persona(state),
                 ..
             }) => Some(state),
             _ => None,
@@ -671,7 +709,7 @@ impl PickerController {
             let mut regular_items = Vec::new();
 
             for item in picker.items.drain(..) {
-                if item.id == TURN_OFF_CHARACTER_ID {
+                if item.id == TURN_OFF_CHARACTER_ID || item.id == TURN_OFF_PERSONA_ID {
                     special_entries.push(item);
                 } else {
                     regular_items.push(item);
@@ -911,6 +949,43 @@ impl PickerController {
         }
     }
 
+    pub fn filter_personas(&mut self) {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        if let (PickerMode::Persona, PickerData::Persona(persona_state)) =
+            (session.mode, &mut session.data)
+        {
+            let search_term = persona_state.search_filter.to_lowercase();
+            let filtered: Vec<PickerItem> = if search_term.is_empty() {
+                persona_state.all_items.clone()
+            } else {
+                persona_state
+                    .all_items
+                    .iter()
+                    .filter(|item| {
+                        // Always include the special "turn off" entry
+                        item.id == TURN_OFF_PERSONA_ID
+                            || item.id.to_lowercase().contains(&search_term)
+                            || item.label.to_lowercase().contains(&search_term)
+                            || item
+                                .metadata
+                                .as_ref()
+                                .map(|m| m.to_lowercase().contains(&search_term))
+                                .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            session.state.items = filtered;
+            if session.state.selected >= session.state.items.len() {
+                session.state.selected = 0;
+            }
+            self.sort_items();
+            self.update_title();
+        }
+    }
+
     pub fn open_character_picker(
         &mut self,
         character_cache: &mut crate::character::cache::CardCache,
@@ -973,6 +1048,97 @@ impl PickerController {
             mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        };
+
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
+        self.sort_items();
+        self.update_title();
+
+        Ok(())
+    }
+
+    pub fn open_persona_picker(
+        &mut self,
+        persona_manager: &crate::core::persona::PersonaManager,
+        session_context: &SessionContext,
+    ) -> Result<(), String> {
+        let personas = persona_manager.list_personas();
+
+        if personas.is_empty() {
+            return Err("No personas found. Add personas to your config.toml file.".to_string());
+        }
+
+        // Get the default persona for the current provider/model
+        let default_persona = persona_manager
+            .get_default_for_provider_model(&session_context.provider_name, &session_context.model);
+
+        let active_character_name = session_context
+            .get_character()
+            .map(|character| character.data.name.as_str());
+
+        let mut items: Vec<PickerItem> = personas
+            .iter()
+            .map(|persona| {
+                let is_default = default_persona
+                    .map(|def| def == persona.id)
+                    .unwrap_or(false);
+                let display_label = if is_default {
+                    format!("{} ({})*", persona.display_name, persona.id)
+                } else {
+                    format!("{} ({})", persona.display_name, persona.id)
+                };
+                let metadata = persona
+                    .bio
+                    .as_ref()
+                    .and_then(|bio| {
+                        let char_replacement = active_character_name.unwrap_or("Assistant");
+                        let user_replacement = persona.display_name.as_str();
+                        let substituted = bio
+                            .replace("{{char}}", char_replacement)
+                            .replace("{{user}}", user_replacement);
+                        let sanitized = sanitize_picker_metadata(&substituted);
+                        if sanitized.is_empty() {
+                            None
+                        } else {
+                            Some(sanitized)
+                        }
+                    })
+                    .unwrap_or_else(|| "No bio".to_string());
+                PickerItem {
+                    id: persona.id.clone(),
+                    label: display_label,
+                    metadata: Some(metadata),
+                    sort_key: Some(persona.display_name.clone()),
+                }
+            })
+            .collect();
+
+        // Add "turn off persona" entry at the beginning if a persona is active
+        if persona_manager.get_active_persona().is_some() {
+            items.insert(
+                0,
+                PickerItem {
+                    id: TURN_OFF_PERSONA_ID.to_string(),
+                    label: "[Turn off persona]".to_string(),
+                    metadata: Some(
+                        "Deactivate current persona and return to normal mode".to_string(),
+                    ),
+                    sort_key: None,
+                },
+            );
+        }
+
+        let selected = 0;
+        let picker_state = PickerState::new("Pick Persona", items.clone(), selected);
+        let mut session = PickerSession {
+            mode: PickerMode::Persona,
+            state: picker_state,
+            data: PickerData::Persona(PersonaPickerState {
                 search_filter: String::new(),
                 all_items: items,
             }),
@@ -1236,5 +1402,128 @@ mod tests {
 
         // Verify we still have all items after sorting
         assert_eq!(picker_items.len(), items_before_sort);
+    }
+
+    #[test]
+    fn test_turn_off_persona_stays_at_top_after_sort() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alpha".to_string(),
+                    display_name: "Alpha".to_string(),
+                    bio: Some("Alpha bio".to_string()),
+                },
+                Persona {
+                    id: "beta".to_string(),
+                    display_name: "Beta".to_string(),
+                    bio: Some("Beta bio".to_string()),
+                },
+                Persona {
+                    id: "gamma".to_string(),
+                    display_name: "Gamma".to_string(),
+                    bio: Some("Gamma bio".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut persona_manager = PersonaManager::load_personas(&config).unwrap();
+        persona_manager.set_active_persona("alpha").unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        let result = app
+            .picker
+            .open_persona_picker(&app.persona_manager, &app.session);
+
+        assert!(result.is_ok());
+
+        let items_before_sort = app.picker.session().unwrap().state.items.len();
+        assert!(items_before_sort >= 2);
+
+        app.picker.sort_items();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+
+        // First item should always be the turn off persona entry, regardless of sort
+        assert_eq!(picker_items[0].id, TURN_OFF_PERSONA_ID);
+        assert_eq!(picker_items[0].label, "[Turn off persona]");
+
+        // Verify we still have all items after sorting
+        assert_eq!(picker_items.len(), items_before_sort);
+    }
+
+    #[test]
+    fn test_persona_picker_sanitizes_bio_metadata() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "neat".to_string(),
+                display_name: "Neat".to_string(),
+                bio: Some("First line\nSecond\tline".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        app.picker
+            .open_persona_picker(&app.persona_manager, &app.session)
+            .unwrap();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        let persona_item = picker_items
+            .iter()
+            .find(|item| item.id == "neat")
+            .expect("persona entry present");
+
+        assert_eq!(
+            persona_item.metadata.as_deref(),
+            Some("First line Second line")
+        );
+    }
+
+    #[test]
+    fn test_persona_picker_metadata_defaults_to_no_bio_when_empty() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "blank".to_string(),
+                display_name: "Blank".to_string(),
+                bio: Some("   \n\t".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+
+        app.picker
+            .open_persona_picker(&app.persona_manager, &app.session)
+            .unwrap();
+
+        let picker_items = &app.picker.session().unwrap().state.items;
+        let persona_item = picker_items
+            .iter()
+            .find(|item| item.id == "blank")
+            .expect("persona entry present");
+
+        assert_eq!(persona_item.metadata.as_deref(), Some("No bio"));
     }
 }

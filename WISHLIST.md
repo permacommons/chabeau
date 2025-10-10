@@ -39,6 +39,7 @@ Items are removed when completed.
   - Add integration-style tests for event handling if feasible (simulate key events) — [OPEN]
   - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
   - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
+
 ### Medium priority
 
 - Character card architecture improvements — [OPEN]

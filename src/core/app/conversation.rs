@@ -8,18 +8,41 @@ use tokio_util::sync::CancellationToken;
 pub struct ConversationController<'a> {
     session: &'a mut SessionContext,
     ui: &'a mut UiState,
+    persona_manager: &'a crate::core::persona::PersonaManager,
 }
 
 impl<'a> ConversationController<'a> {
-    pub fn new(session: &'a mut SessionContext, ui: &'a mut UiState) -> Self {
-        Self { session, ui }
+    pub fn new(
+        session: &'a mut SessionContext,
+        ui: &'a mut UiState,
+        persona_manager: &'a crate::core::persona::PersonaManager,
+    ) -> Self {
+        Self {
+            session,
+            ui,
+            persona_manager,
+        }
+    }
+
+    /// Apply persona modifications to a system prompt
+    /// Returns the modified prompt if a persona is active, otherwise returns the original
+    fn apply_persona_to_system_prompt(&self, base_prompt: &str, char_name: Option<&str>) -> String {
+        self.persona_manager
+            .get_modified_system_prompt(base_prompt, char_name)
     }
 
     /// Display character greeting if not yet shown
     pub fn show_character_greeting_if_needed(&mut self) {
         if self.session.should_show_greeting() {
             if let Some(character) = self.session.get_character() {
-                let greeting = character.get_greeting().to_string();
+                // Apply persona substitutions to the greeting
+                let user_name = self
+                    .persona_manager
+                    .get_active_persona()
+                    .map(|p| p.display_name.as_str());
+                let char_name = Some(character.data.name.as_str());
+                let greeting = character.get_greeting_with_substitutions(user_name, char_name);
+
                 let greeting_message = Message {
                     role: "assistant".to_string(),
                     content: greeting,
@@ -38,7 +61,12 @@ impl<'a> ConversationController<'a> {
             content: content.clone(),
         };
 
-        if let Err(e) = self.session.logging.log_message(&format!("You: {content}")) {
+        let user_display_name = self.persona_manager.get_display_name();
+        if let Err(e) = self
+            .session
+            .logging
+            .log_message(&format!("{user_display_name}: {content}"))
+        {
             eprintln!("Failed to log message: {e}");
         }
 
@@ -58,10 +86,31 @@ impl<'a> ConversationController<'a> {
         // Inject character instructions as API system message if active
         // Note: This is role="system" for the API, not a transcript system message
         if let Some(character) = self.session.get_character() {
+            // Apply persona substitutions to character system prompt
+            let user_name = self
+                .persona_manager
+                .get_active_persona()
+                .map(|p| p.display_name.as_str());
+            let char_name = Some(character.data.name.as_str());
+            let base_system_prompt =
+                character.build_system_prompt_with_substitutions(user_name, char_name);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
-                content: character.build_system_prompt(),
+                content: modified_system_prompt,
             });
+        } else {
+            // No character active, but check if persona should modify an empty system prompt
+            let base_system_prompt = "";
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(base_system_prompt, None);
+            if !modified_system_prompt.is_empty() {
+                api_messages.push(crate::api::ChatMessage {
+                    role: "system".to_string(),
+                    content: modified_system_prompt,
+                });
+            }
         }
 
         // Add conversation history (including greeting if present)
@@ -77,7 +126,7 @@ impl<'a> ConversationController<'a> {
 
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
-            if let Some(message) = Self::post_history_system_message(character) {
+            if let Some(message) = self.post_history_system_message(character) {
                 api_messages.push(message);
             }
         }
@@ -247,10 +296,11 @@ impl<'a> ConversationController<'a> {
                     self.ui.current_response.clear();
                 }
 
+                let user_display_name = self.persona_manager.get_display_name();
                 if let Err(e) = self
                     .session
                     .logging
-                    .rewrite_log_without_last_response(&self.ui.messages)
+                    .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
                 {
                     eprintln!("Failed to rewrite log file: {e}");
                 }
@@ -278,10 +328,31 @@ impl<'a> ConversationController<'a> {
 
         // Inject character instructions as API system message if active
         if let Some(character) = self.session.get_character() {
+            // Apply persona substitutions to character system prompt
+            let user_name = self
+                .persona_manager
+                .get_active_persona()
+                .map(|p| p.display_name.as_str());
+            let char_name = Some(character.data.name.as_str());
+            let base_system_prompt =
+                character.build_system_prompt_with_substitutions(user_name, char_name);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
-                content: character.build_system_prompt(),
+                content: modified_system_prompt,
             });
+        } else {
+            // No character active, but check if persona should modify an empty system prompt
+            let base_system_prompt = "";
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(base_system_prompt, None);
+            if !modified_system_prompt.is_empty() {
+                api_messages.push(crate::api::ChatMessage {
+                    role: "system".to_string(),
+                    content: modified_system_prompt,
+                });
+            }
         }
 
         // Add conversation history up to retry point
@@ -298,7 +369,7 @@ impl<'a> ConversationController<'a> {
 
         // Add post-history instructions as API system message if present
         if let Some(character) = self.session.get_character() {
-            if let Some(message) = Self::post_history_system_message(character) {
+            if let Some(message) = self.post_history_system_message(character) {
                 api_messages.push(message);
             }
         }
@@ -306,9 +377,19 @@ impl<'a> ConversationController<'a> {
         Some(api_messages)
     }
 
-    fn post_history_system_message(character: &CharacterCard) -> Option<crate::api::ChatMessage> {
+    fn post_history_system_message(
+        &self,
+        character: &CharacterCard,
+    ) -> Option<crate::api::ChatMessage> {
+        // Apply persona substitutions to post-history instructions
+        let user_name = self
+            .persona_manager
+            .get_active_persona()
+            .map(|p| p.display_name.as_str());
+        let char_name = Some(character.data.name.as_str());
+
         character
-            .get_post_history_instructions()
+            .get_post_history_instructions_with_substitutions(user_name, char_name)
             .and_then(|instructions| {
                 let trimmed = instructions.trim();
                 if trimmed.is_empty() {
@@ -316,7 +397,7 @@ impl<'a> ConversationController<'a> {
                 } else {
                     Some(crate::api::ChatMessage {
                         role: "system".to_string(),
-                        content: instructions.to_string(),
+                        content: instructions,
                     })
                 }
             })
@@ -333,8 +414,12 @@ impl<'a> ConversationController<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{Config, Persona};
     use crate::core::message::Message;
+    use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message};
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_system_messages_excluded_from_api() {
@@ -345,7 +430,8 @@ mod tests {
             .push_back(create_test_message("user", "Hello"));
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message(
                 "This is a system message that should not be sent to API".to_string(),
             );
@@ -356,12 +442,14 @@ mod tests {
             .push_back(create_test_message("assistant", "Hi there!"));
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message("Another system message".to_string());
         }
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("How are you?".to_string())
         };
 
@@ -388,7 +476,8 @@ mod tests {
         });
 
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation
                 .add_system_message("System message between user and assistant".to_string());
         }
@@ -401,7 +490,8 @@ mod tests {
         app.session.retrying_message_index = Some(2);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -452,7 +542,8 @@ mod tests {
             .push_back(create_test_message("assistant", "Previous response"));
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("New message".to_string())
         };
 
@@ -475,6 +566,102 @@ mod tests {
         // Last message should be post-history instructions
         assert_eq!(api_messages[4].role, "system");
         assert_eq!(api_messages[4].content, "Always be polite.");
+    }
+
+    #[test]
+    fn test_persona_bio_char_placeholder_with_active_character() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "mentor".to_string(),
+                display_name: "Mentor".to_string(),
+                bio: Some("Guide {{char}} with wisdom.".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("mentor")
+            .expect("Failed to activate persona");
+
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Aria".to_string(),
+                description: "A skilled musician".to_string(),
+                personality: "Creative and calm".to_string(),
+                scenario: "Guiding apprentices".to_string(),
+                first_mes: "Welcome.".to_string(),
+                mes_example: "Example.".to_string(),
+                creator_notes: None,
+                system_prompt: Some("Stay supportive.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        let api_messages = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Hello".to_string())
+        };
+
+        assert!(!api_messages.is_empty());
+        assert_eq!(api_messages[0].role, "system");
+        assert!(
+            api_messages[0].content.contains("Guide Aria with wisdom."),
+            "System prompt should include character name substitution: {}",
+            api_messages[0].content
+        );
+    }
+
+    #[test]
+    fn add_user_message_logs_persona_display_name() {
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "captain".to_string(),
+                display_name: "Captain".to_string(),
+                bio: None,
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("captain")
+            .expect("Failed to activate persona");
+
+        let temp_dir = tempdir().expect("failed to create temp dir for log");
+        let log_path = temp_dir.path().join("conversation.log");
+        let log_path_string = log_path.to_string_lossy().into_owned();
+        app.session
+            .logging
+            .set_log_file(log_path_string)
+            .expect("failed to enable logging");
+
+        {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Hello there".to_string());
+        }
+
+        let contents = fs::read_to_string(&log_path).expect("failed to read log file");
+        assert!(
+            contents.contains("Captain: Hello there"),
+            "Log should include persona display name, contents: {contents}"
+        );
     }
 
     #[test]
@@ -507,7 +694,8 @@ mod tests {
         app.session.set_character(character);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -527,7 +715,8 @@ mod tests {
         assert!(app.session.get_character().is_none());
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Test message".to_string())
         };
 
@@ -584,7 +773,8 @@ mod tests {
         app.session.retrying_message_index = Some(3);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -626,7 +816,8 @@ mod tests {
         app.session.retrying_message_index = Some(1);
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.prepare_retry(10, 80).unwrap()
         };
 
@@ -672,7 +863,8 @@ mod tests {
 
         // Add transcript system message (should be excluded from API)
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_system_message("Help text displayed in UI".to_string());
         }
 
@@ -682,7 +874,8 @@ mod tests {
             .push_back(create_test_message("assistant", "Hi there!"));
 
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("How are you?".to_string())
         };
 
@@ -742,7 +935,8 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -757,7 +951,8 @@ mod tests {
 
         // Calling again should not add another greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
         assert_eq!(app.ui.messages.len(), 1);
@@ -794,7 +989,8 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
@@ -812,13 +1008,142 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
         // Should not have added any messages
         assert_eq!(app.ui.messages.len(), 0);
         assert!(!app.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn test_character_greeting_with_persona_substitutions() {
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+
+        let mut app = create_test_app();
+
+        // Set up persona
+        let config = Config {
+            personas: vec![Persona {
+                id: "alice-dev".to_string(),
+                display_name: "Alice".to_string(),
+                bio: Some("You are talking to {{user}}, a senior developer.".to_string()),
+            }],
+            ..Default::default()
+        };
+        app.persona_manager =
+            PersonaManager::load_personas(&config).expect("Failed to load personas");
+        app.persona_manager
+            .set_active_persona("alice-dev")
+            .expect("Failed to activate persona");
+
+        // Set up character with substitution placeholders in greeting
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello {{user}}! I'm {{char}}, ready to help!".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        // Show greeting
+        {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.show_character_greeting_if_needed();
+        }
+
+        // Verify greeting was added with substitutions applied
+        assert_eq!(app.ui.messages.len(), 1);
+        let greeting_msg = &app.ui.messages[0];
+        assert_eq!(greeting_msg.role, "assistant");
+        assert_eq!(
+            greeting_msg.content,
+            "Hello Alice! I'm TestBot, ready to help!"
+        );
+        assert!(app.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn test_persona_system_prompt_integration_with_character() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+
+        // Set up a character with a system prompt
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: "A test character".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: "".to_string(),
+                creator_notes: None,
+                system_prompt: Some("You are TestBot.".to_string()),
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+
+        let api_messages = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Test message".to_string())
+        };
+
+        // Should have character system prompt (potentially modified by persona)
+        assert_eq!(api_messages.len(), 2);
+        assert_eq!(api_messages[0].role, "system");
+        // The content should contain the character system prompt
+        assert!(api_messages[0].content.contains("You are TestBot."));
+        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].content, "Test message");
+    }
+
+    #[test]
+    fn test_persona_system_prompt_integration_without_character() {
+        let mut app = create_test_app();
+
+        // No character set
+        assert!(app.session.get_character().is_none());
+
+        let api_messages = {
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
+            conversation.add_user_message("Test message".to_string())
+        };
+
+        // Should only have the user message since no persona is active
+        // (PersonaManager is created fresh each time with no active persona)
+        assert_eq!(api_messages.len(), 1);
+        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].content, "Test message");
     }
 
     #[test]
@@ -852,13 +1177,15 @@ mod tests {
 
         // Show greeting
         {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.show_character_greeting_if_needed();
         }
 
         // Add user message
         let api_messages = {
-            let mut conversation = ConversationController::new(&mut app.session, &mut app.ui);
+            let mut conversation =
+                ConversationController::new(&mut app.session, &mut app.ui, &app.persona_manager);
             conversation.add_user_message("Hello".to_string())
         };
 
@@ -873,5 +1200,46 @@ mod tests {
 
         assert_eq!(api_messages[2].role, "user");
         assert_eq!(api_messages[2].content, "Hello");
+    }
+
+    #[test]
+    fn test_persona_with_blank_bio_does_not_add_system_message() {
+        let cases = [
+            ("empty", "Empty", ""),
+            ("whitespace", "Whitespace", "   \n\t"),
+        ];
+
+        for (persona_id, display_name, bio) in cases {
+            let config = Config {
+                personas: vec![Persona {
+                    id: persona_id.to_string(),
+                    display_name: display_name.to_string(),
+                    bio: Some(bio.to_string()),
+                }],
+                ..Default::default()
+            };
+
+            let persona_manager = PersonaManager::load_personas(&config).unwrap();
+
+            let mut app = create_test_app();
+            app.persona_manager = persona_manager;
+            app.persona_manager
+                .set_active_persona(persona_id)
+                .expect("persona activation");
+
+            let api_messages = {
+                let mut conversation = ConversationController::new(
+                    &mut app.session,
+                    &mut app.ui,
+                    &app.persona_manager,
+                );
+                conversation.add_user_message("Hello".to_string())
+            };
+
+            assert!(
+                api_messages.iter().all(|msg| msg.role != "system"),
+                "system message injected for persona {persona_id}"
+            );
+        }
     }
 }

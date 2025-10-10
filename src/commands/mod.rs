@@ -14,6 +14,7 @@ pub enum CommandResult {
     OpenProviderPicker,
     OpenThemePicker,
     OpenCharacterPicker,
+    OpenPersonaPicker,
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
@@ -299,6 +300,47 @@ pub(super) fn handle_character(app: &mut App, invocation: CommandInvocation<'_>)
     }
 }
 
+pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
+    match parts.len() {
+        1 => {
+            // No argument provided - open persona picker
+            CommandResult::OpenPersonaPicker
+        }
+        _ => {
+            // Persona ID provided - activate it directly
+            let persona_id = parts[1];
+            match app.persona_manager.set_active_persona(persona_id) {
+                Ok(()) => {
+                    let active_persona_name = app
+                        .persona_manager
+                        .get_active_persona()
+                        .map(|p| p.display_name.clone());
+
+                    let persona_name = active_persona_name
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    if active_persona_name.is_some() {
+                        let display_name = app.persona_manager.get_display_name();
+                        app.ui.update_user_display_name(display_name);
+                    } else {
+                        app.ui.update_user_display_name("You".to_string());
+                    }
+                    app.conversation()
+                        .set_status(format!("Persona activated: {}", persona_name));
+                    CommandResult::Continue
+                }
+                Err(e) => {
+                    app.conversation()
+                        .set_status(format!("Persona error: {}", e));
+                    CommandResult::Continue
+                }
+            }
+        }
+    }
+}
+
 pub fn dump_conversation_with_overwrite(
     app: &App,
     filename: &str,
@@ -328,9 +370,11 @@ pub fn dump_conversation_with_overwrite(
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
 
+    let user_display_name = app.persona_manager.get_display_name();
+
     for msg in conversation_messages {
         match msg.role.as_str() {
-            "user" => writeln!(writer, "You: {}", msg.content)?,
+            "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
             _ => writeln!(writer, "{}", msg.content)?, // For assistant messages
         }
         writeln!(writer)?; // Empty line for spacing
@@ -365,6 +409,8 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{Config, Persona};
+    use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
     use std::fs;
     use std::io::Read;
@@ -443,6 +489,40 @@ mod tests {
         // Clean up
         drop(file);
         fs::remove_file(&dump_file_path).unwrap();
+    }
+
+    #[test]
+    fn dump_conversation_uses_persona_display_name() {
+        let mut app = create_test_app();
+
+        let config = Config {
+            personas: vec![Persona {
+                id: "captain".to_string(),
+                display_name: "Captain".to_string(),
+                bio: None,
+            }],
+            ..Default::default()
+        };
+
+        app.persona_manager = PersonaManager::load_personas(&config).unwrap();
+        app.persona_manager
+            .set_active_persona("captain")
+            .expect("Failed to activate persona");
+
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+
+        let temp_dir = tempdir().unwrap();
+        let dump_file_path = temp_dir.path().join("persona_dump.txt");
+        dump_conversation_with_overwrite(&app, dump_file_path.to_str().unwrap(), true)
+            .expect("failed to dump conversation");
+
+        let contents = fs::read_to_string(&dump_file_path).expect("failed to read dump file");
+        assert!(
+            contents.contains("Captain: Hello"),
+            "Dump should include persona display name, contents: {contents}"
+        );
     }
 
     #[test]
@@ -806,6 +886,45 @@ mod tests {
         assert_eq!(character_cmd.usages.len(), 2);
         assert!(character_cmd.usages[0].syntax.contains("/character"));
         assert!(character_cmd.usages[1].syntax.contains("<name>"));
+    }
+
+    #[test]
+    fn persona_command_opens_picker() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/persona");
+        assert!(matches!(res, CommandResult::OpenPersonaPicker));
+    }
+
+    #[test]
+    fn persona_command_with_invalid_id_shows_error() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/persona nonexistent_persona");
+        assert!(matches!(res, CommandResult::Continue));
+        assert!(app.ui.status.is_some());
+        let status = app.ui.status.as_ref().unwrap();
+        assert!(
+            status.contains("Persona error") || status.contains("not found"),
+            "Expected error message, got: {}",
+            status
+        );
+    }
+
+    #[test]
+    fn persona_command_with_valid_id_updates_user_display_name() {
+        let mut app = create_test_app();
+        let mut config = crate::core::config::Config::default();
+        config.personas.push(crate::core::config::Persona {
+            id: "alice-dev".to_string(),
+            display_name: "Alice".to_string(),
+            bio: Some("A senior software developer".to_string()),
+        });
+        app.persona_manager = crate::core::persona::PersonaManager::load_personas(&config).unwrap();
+        assert_eq!(app.ui.user_display_name, "You");
+
+        let res = process_input(&mut app, "/persona alice-dev");
+
+        assert!(matches!(res, CommandResult::Continue));
+        assert_eq!(app.ui.user_display_name, "Alice");
     }
 
     #[test]

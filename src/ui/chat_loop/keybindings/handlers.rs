@@ -674,6 +674,7 @@ impl KeyHandler for CtrlBHandler {
                 Some(term_width as usize),
                 crate::ui::layout::TableOverflowPolicy::WrapCells,
                 app.ui.syntax_enabled,
+                Some(&app.ui.user_display_name),
             );
 
             if app.ui.in_block_select_mode() {

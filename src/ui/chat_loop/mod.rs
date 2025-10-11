@@ -335,6 +335,7 @@ fn process_stream_updates(
     let mut received_any = false;
     let mut coalesced_chunks = String::new();
     let mut followup_actions = Vec::new();
+    let mut chunk_stream_id = None;
 
     while let Ok((message, msg_stream_id)) = rx.try_recv() {
         if msg_stream_id != current_stream_id {
@@ -344,11 +345,17 @@ fn process_stream_updates(
         match message {
             StreamMessage::Chunk(content) => {
                 coalesced_chunks.push_str(&content);
+                chunk_stream_id = Some(msg_stream_id);
             }
             StreamMessage::Error(err) => {
-                followup_actions.push(AppAction::StreamErrored { message: err });
+                followup_actions.push(AppAction::StreamErrored {
+                    message: err,
+                    stream_id: msg_stream_id,
+                });
             }
-            StreamMessage::End => followup_actions.push(AppAction::StreamCompleted),
+            StreamMessage::End => followup_actions.push(AppAction::StreamCompleted {
+                stream_id: msg_stream_id,
+            }),
         }
 
         received_any = true;
@@ -366,7 +373,12 @@ fn process_stream_updates(
     let mut actions = Vec::with_capacity(1 + followup_actions.len());
     let chunk = std::mem::take(&mut coalesced_chunks);
     if !chunk.is_empty() {
-        actions.push(AppAction::AppendResponseChunk { content: chunk });
+        if let Some(stream_id) = chunk_stream_id {
+            actions.push(AppAction::AppendResponseChunk {
+                content: chunk,
+                stream_id,
+            });
+        }
     }
     actions.extend(followup_actions);
 
@@ -1313,18 +1325,57 @@ mod tests {
             role: "assistant".to_string(),
             content: String::new(),
         });
+        app.session.current_stream_id = 1;
 
         let ctx = default_context();
         apply_action(
             &mut app,
             AppAction::AppendResponseChunk {
                 content: "Hello".into(),
+                stream_id: 1,
             },
             ctx,
         );
 
         assert_eq!(app.ui.current_response, "Hello");
         assert_eq!(app.ui.messages.back().unwrap().content, "Hello");
+    }
+
+    #[test]
+    fn stale_stream_actions_are_ignored() {
+        let mut app = setup_app();
+        app.ui.messages.push_back(Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+        });
+        app.session.current_stream_id = 2;
+
+        let ctx = default_context();
+        apply_action(
+            &mut app,
+            AppAction::AppendResponseChunk {
+                content: "old".into(),
+                stream_id: 1,
+            },
+            ctx,
+        );
+
+        assert!(app.ui.current_response.is_empty());
+        assert!(app
+            .ui
+            .messages
+            .back()
+            .expect("assistant message available")
+            .content
+            .is_empty());
+
+        app.ui.is_streaming = true;
+        app.session.retrying_message_index = Some(0);
+
+        apply_action(&mut app, AppAction::StreamCompleted { stream_id: 1 }, ctx);
+
+        assert!(app.ui.is_streaming);
+        assert_eq!(app.session.retrying_message_index, Some(0));
     }
 
     #[test]
@@ -1352,6 +1403,7 @@ mod tests {
             role: "assistant".to_string(),
             content: String::new(),
         });
+        coalesced_app.session.current_stream_id = 1;
 
         let aggregated = chunks.concat();
         let ctx = default_context();
@@ -1359,6 +1411,7 @@ mod tests {
             &mut coalesced_app,
             AppAction::AppendResponseChunk {
                 content: aggregated,
+                stream_id: 1,
             },
             ctx,
         );
@@ -1377,12 +1430,14 @@ mod tests {
     fn error_messages_add_system_entries_and_stop_streaming() {
         let mut app = setup_app();
         app.ui.is_streaming = true;
+        app.session.current_stream_id = 42;
 
         let ctx = default_context();
         apply_action(
             &mut app,
             AppAction::StreamErrored {
                 message: " api failure \n".into(),
+                stream_id: 42,
             },
             ctx,
         );
@@ -1398,10 +1453,11 @@ mod tests {
         let mut app = setup_app();
         app.ui.is_streaming = true;
         app.session.retrying_message_index = Some(0);
+        app.session.current_stream_id = 7;
         app.ui.current_response = "partial".into();
 
         let ctx = default_context();
-        apply_action(&mut app, AppAction::StreamCompleted, ctx);
+        apply_action(&mut app, AppAction::StreamCompleted { stream_id: 7 }, ctx);
 
         assert!(!app.ui.is_streaming);
         assert!(app.session.retrying_message_index.is_none());

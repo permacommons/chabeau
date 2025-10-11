@@ -365,34 +365,52 @@ impl AuthManager {
         provider: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(provider_name) = provider {
-            // Provider specified via --provider flag - validate it exists first
-            let has_auth = self.get_token(&provider_name)?.is_some();
-            let is_custom = self.get_custom_provider(&provider_name).is_some();
+            let provider_msg = provider_name.clone();
+            let (resolved_provider, is_custom) = self.resolve_deauth_target(&provider_msg)?;
 
-            if !has_auth && !is_custom {
-                return Err(format!("Provider '{provider_name}' is not configured. Use 'chabeau providers' to see configured providers.").into());
-            }
-
-            if !has_auth {
+            if self.get_token(&resolved_provider)?.is_none() {
                 return Err(format!(
-                    "Provider '{provider_name}' exists but has no authentication configured."
+                    "Provider '{provider_msg}' exists but has no authentication configured."
                 )
                 .into());
             }
 
-            self.remove_provider_auth(&provider_name)?;
+            self.remove_provider_auth(&resolved_provider)?;
 
             // Check if it's a custom provider and remove it completely
             if is_custom {
-                self.remove_custom_provider(&provider_name)?;
+                self.remove_custom_provider(&resolved_provider)?;
             }
 
-            println!("✅ Authentication removed for {provider_name}");
+            println!("✅ Authentication removed for {provider_msg}");
         } else {
             // Interactive mode - show menu of configured providers
             self.interactive_deauth_menu()?;
         }
         Ok(())
+    }
+
+    fn resolve_deauth_target(
+        &self,
+        provider_name: &str,
+    ) -> Result<(String, bool), Box<dyn std::error::Error>> {
+        if let Some(custom) = self.get_custom_provider(provider_name) {
+            return Ok((custom.id.clone(), true));
+        }
+
+        let normalized = provider_name.to_lowercase();
+        if let Some(custom) = self.get_custom_provider(&normalized) {
+            return Ok((custom.id.clone(), true));
+        }
+
+        if let Some(provider) = self.find_provider_by_name(provider_name) {
+            return Ok((provider.name.clone(), false));
+        }
+
+        Err(format!(
+            "Provider '{provider_name}' is not configured. Use 'chabeau providers' to see configured providers."
+        )
+        .into())
     }
 
     fn interactive_deauth_menu(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -848,6 +866,41 @@ mod tests {
             assert_eq!(display, "OpenAI-compatible");
             env_guard.remove_var("OPENAI_API_KEY");
             env_guard.remove_var("OPENAI_BASE_URL");
+        });
+    }
+
+    #[test]
+    fn resolve_deauth_target_normalizes_builtin_provider() {
+        with_test_config_env(|_| {
+            let manager = AuthManager::new_with_keyring(false);
+            let (resolved, is_custom) = manager
+                .resolve_deauth_target("OpenAI")
+                .expect("provider should resolve");
+            assert_eq!(resolved, "openai");
+            assert!(!is_custom);
+        });
+    }
+
+    #[test]
+    fn resolve_deauth_target_normalizes_custom_provider() {
+        with_test_config_env(|_| {
+            Config::mutate(|config| {
+                config.add_custom_provider(CustomProvider::new(
+                    "mycustom".to_string(),
+                    "My Custom".to_string(),
+                    "https://example.com".to_string(),
+                    None,
+                ));
+                Ok(())
+            })
+            .expect("custom provider persisted");
+
+            let manager = AuthManager::new_with_keyring(false);
+            let (resolved, is_custom) = manager
+                .resolve_deauth_target("MyCustom")
+                .expect("provider should resolve");
+            assert_eq!(resolved, "mycustom");
+            assert!(is_custom);
         });
     }
 

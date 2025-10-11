@@ -254,7 +254,10 @@ fn validate_preset(preset_id: &str, config: &Config) -> Result<(), Box<dyn Error
 
 async fn async_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    handle_args(args).await
+}
 
+async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
     // Handle version flag
     if args.version {
         print_version_info();
@@ -537,6 +540,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test_utils::with_test_config_env;
 
     #[test]
     fn test_character_flag_parsing() {
@@ -632,5 +636,29 @@ mod tests {
         // Test valid persona validation
         assert!(validate_persona("alice-dev", &config).is_ok());
         assert!(validate_persona("bob-student", &config).is_ok());
+    }
+
+    #[test]
+    fn test_cli_set_default_model_with_mixed_case_provider() {
+        with_test_config_env(|_| {
+            let args =
+                Args::try_parse_from(["chabeau", "set", "default-model", "OpenAI", "gpt-4o"])
+                    .unwrap();
+
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(handle_args(args))
+                .expect("CLI command should succeed");
+
+            let config = Config::load().expect("config should load");
+            assert_eq!(
+                config.get_default_model("openai"),
+                Some(&"gpt-4o".to_string())
+            );
+            assert_eq!(
+                config.get_default_model("OpenAI"),
+                Some(&"gpt-4o".to_string())
+            );
+        });
     }
 }

@@ -358,15 +358,26 @@ impl Config {
     }
 
     pub fn get_default_model(&self, provider: &str) -> Option<&String> {
-        self.default_models.get(provider)
+        let normalized = provider.to_lowercase();
+        self.default_models
+            .get(&normalized)
+            .or_else(|| self.default_models.get(provider))
     }
 
     pub fn set_default_model(&mut self, provider: String, model: String) {
-        self.default_models.insert(provider, model);
+        let normalized = provider.to_lowercase();
+        self.default_models.insert(normalized.clone(), model);
+        if normalized != provider {
+            self.default_models.remove(&provider);
+        }
     }
 
     pub fn unset_default_model(&mut self, provider: &str) {
-        self.default_models.remove(provider);
+        let normalized = provider.to_lowercase();
+        self.default_models.remove(&normalized);
+        if normalized != provider {
+            self.default_models.remove(provider);
+        }
     }
 
     /// Get the default character for a provider/model combination
@@ -688,14 +699,17 @@ mod tests {
         // Load the config back
         let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
 
-        // Verify we can look up the model using the provider ID (not display name)
+        // Verify we can look up the model using the provider ID
         assert_eq!(
             loaded_config.get_default_model("openai"),
             Some(&"gpt-4".to_string())
         );
 
-        // This should return None because "OpenAI" is the display name, not the ID
-        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
+        // Case-insensitive lookups should also succeed
+        assert_eq!(
+            loaded_config.get_default_model("OpenAI"),
+            Some(&"gpt-4".to_string())
+        );
     }
 
     #[test]
@@ -734,9 +748,15 @@ mod tests {
             Some(&"custom-model".to_string())
         );
 
-        // Verify display names don't work (this was the bug)
-        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
-        assert_eq!(loaded_config.get_default_model("Anthropic"), None);
+        // Case-insensitive lookups should also succeed
+        assert_eq!(
+            loaded_config.get_default_model("OpenAI"),
+            Some(&"gpt-4".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("Anthropic"),
+            Some(&"claude-3-opus-20240229".to_string())
+        );
     }
 
     #[test]
@@ -747,9 +767,9 @@ mod tests {
         let mut config = Config::default();
 
         // Set default models using mixed case provider names (as would happen from CLI)
-        config.set_default_model("OpenAI".to_lowercase(), "gpt-4".to_string());
-        config.set_default_model("POE".to_lowercase(), "claude-instant".to_string());
-        config.set_default_model("AnThRoPiC".to_lowercase(), "claude-3-opus".to_string());
+        config.set_default_model("OpenAI".to_string(), "gpt-4".to_string());
+        config.set_default_model("POE".to_string(), "claude-instant".to_string());
+        config.set_default_model("AnThRoPiC".to_string(), "claude-3-opus".to_string());
 
         config
             .save_to_path(&config_path)
@@ -772,10 +792,23 @@ mod tests {
             Some(&"claude-3-opus".to_string())
         );
 
-        // Verify mixed case lookups don't work (consistent behavior)
-        assert_eq!(loaded_config.get_default_model("OpenAI"), None);
-        assert_eq!(loaded_config.get_default_model("POE"), None);
-        assert_eq!(loaded_config.get_default_model("AnThRoPiC"), None);
+        // Verify mixed case lookups also work
+        assert_eq!(
+            loaded_config.get_default_model("OpenAI"),
+            Some(&"gpt-4".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("POE"),
+            Some(&"claude-instant".to_string())
+        );
+        assert_eq!(
+            loaded_config.get_default_model("AnThRoPiC"),
+            Some(&"claude-3-opus".to_string())
+        );
+
+        // The stored keys are normalized to lowercase
+        assert!(loaded_config.default_models.contains_key("openai"));
+        assert!(!loaded_config.default_models.contains_key("OpenAI"));
     }
 
     #[test]

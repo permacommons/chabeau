@@ -477,11 +477,14 @@ impl Config {
     }
 
     pub fn remove_custom_provider(&mut self, id: &str) {
-        self.custom_providers.retain(|p| p.id != id);
+        self.custom_providers
+            .retain(|p| !p.id.eq_ignore_ascii_case(id));
     }
 
     pub fn get_custom_provider(&self, id: &str) -> Option<&CustomProvider> {
-        self.custom_providers.iter().find(|p| p.id == id)
+        self.custom_providers
+            .iter()
+            .find(|p| p.id.eq_ignore_ascii_case(id))
     }
 
     pub fn list_custom_providers(&self) -> Vec<&CustomProvider> {
@@ -844,6 +847,11 @@ mod tests {
         assert_eq!(provider.base_url, "https://api.example.com/v1");
         assert_eq!(provider.mode, Some("anthropic".to_string()));
 
+        // Case-insensitive lookup works
+        let uppercase_lookup = loaded_config.get_custom_provider("MYAPI");
+        assert!(uppercase_lookup.is_some());
+        assert_eq!(uppercase_lookup.unwrap().id, "myapi");
+
         // Test listing custom providers
         let providers = loaded_config.list_custom_providers();
         assert_eq!(providers.len(), 1);
@@ -851,8 +859,9 @@ mod tests {
 
         // Test removing custom provider
         let mut config = loaded_config;
-        config.remove_custom_provider("myapi");
+        config.remove_custom_provider("MYAPI");
         assert!(config.get_custom_provider("myapi").is_none());
+        assert!(config.get_custom_provider("MYAPI").is_none());
         assert_eq!(config.list_custom_providers().len(), 0);
     }
 

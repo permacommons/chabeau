@@ -15,11 +15,15 @@ use crate::core::config::Config;
 pub enum AppAction {
     AppendResponseChunk {
         content: String,
+        stream_id: u64,
     },
     StreamErrored {
         message: String,
+        stream_id: u64,
     },
-    StreamCompleted,
+    StreamCompleted {
+        stream_id: u64,
+    },
     ClearStatus,
     ToggleComposeMode,
     CancelFilePrompt,
@@ -129,11 +133,17 @@ pub fn apply_actions(
 
 pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> Option<AppCommand> {
     match action {
-        AppAction::AppendResponseChunk { content } => {
+        AppAction::AppendResponseChunk { content, stream_id } => {
+            if stream_id != app.session.current_stream_id {
+                return None;
+            }
             append_response_chunk(app, &content, ctx);
             None
         }
-        AppAction::StreamErrored { message } => {
+        AppAction::StreamErrored { message, stream_id } => {
+            if stream_id != app.session.current_stream_id {
+                return None;
+            }
             let error_message = format!("Error: {}", message.trim());
             let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
             {
@@ -146,7 +156,10 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             app.ui.end_streaming();
             None
         }
-        AppAction::StreamCompleted => {
+        AppAction::StreamCompleted { stream_id } => {
+            if stream_id != app.session.current_stream_id {
+                return None;
+            }
             {
                 let mut conversation = app.conversation();
                 conversation.finalize_response();

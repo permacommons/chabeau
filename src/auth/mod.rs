@@ -895,12 +895,18 @@ mod tests {
             })
             .expect("custom provider persisted");
 
-            let manager = AuthManager::new_with_keyring(false);
+            let mut manager = AuthManager::new_with_keyring(false);
             let (resolved, is_custom) = manager
-                .resolve_deauth_target("MyCustom")
+                .resolve_deauth_target("MYCUSTOM")
                 .expect("provider should resolve");
             assert_eq!(resolved, "mycustom");
             assert!(is_custom);
+
+            manager
+                .remove_custom_provider("MYCUSTOM")
+                .expect("custom provider removed");
+            assert!(manager.get_custom_provider("mycustom").is_none());
+            assert!(manager.get_custom_provider("MYCUSTOM").is_none());
         });
     }
 

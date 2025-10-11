@@ -241,16 +241,16 @@ pre = """
 You are collaborating with {{user}}. Keep responses focused and direct.
 """
 post = """
-Before finishing, list any follow-up actions for {{char}}.
+Before finishing, list any follow-up actions.
 """
 
 [[presets]]
-id = "explain"
+id = "roleplay"
 pre = """
-Explain concepts for a curious student.
-"""
-post = """
-End with a reflective question for {{user}}.
+- Engage in roleplay with the user.
+- Two paragraphs per turn max.
+- Don't be shy to perform actions. Format these in italics, like this: *{{char}} frowns at {{user}}.*
+- Be creative! Feel free to take the roleplay into new directions.
 """
 ```
 
@@ -267,7 +267,7 @@ Assign defaults per provider/model with `default-presets`:
 
 ### Use Presets in Chat
 
-Launch with `--preset focus`, or pick interactively with `/preset`. The picker includes a sticky "Turn off preset" option to clear the active preset.
+Launch with an ID like `--preset focus`, or pick interactively with `/preset`. The picker includes a "Turn off preset" option to clear the active preset.
 
 ## Appearance and Rendering
 

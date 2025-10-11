@@ -7,6 +7,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
+use unicode_width::UnicodeWidthStr;
 #[path = "markdown_wrap.rs"]
 mod wrap;
 use wrap::wrap_spans_to_width_generic_shared;
@@ -204,6 +205,8 @@ struct MarkdownRenderer<'a> {
     style_stack: Vec<Style>,
     kind_stack: Vec<SpanKind>,
     list_stack: Vec<ListKind>,
+    list_indent_stack: Vec<usize>,
+    pending_list_indent: Option<usize>,
     in_code_block: Option<String>,
     code_block_lines: Vec<String>,
     table_renderer: Option<TableRenderer>,
@@ -230,6 +233,8 @@ impl<'a> MarkdownRenderer<'a> {
             style_stack: vec![base_text_style(role, theme)],
             kind_stack: vec![SpanKind::Text],
             list_stack: Vec::new(),
+            list_indent_stack: Vec::new(),
+            pending_list_indent: None,
             in_code_block: None,
             code_block_lines: Vec::new(),
             table_renderer: None,
@@ -300,6 +305,8 @@ impl<'a> MarkdownRenderer<'a> {
                             Some(n) => ListKind::Ordered(n),
                             None => ListKind::Unordered,
                         });
+                        self.list_indent_stack.push(0);
+                        self.pending_list_indent = None;
                     }
                     Tag::Item => {
                         self.flush_current_spans(true);
@@ -322,6 +329,9 @@ impl<'a> MarkdownRenderer<'a> {
                                 }
                             }
                         };
+                        if let Some(indent) = self.list_indent_stack.last_mut() {
+                            *indent = marker.width();
+                        }
                         if self.role == RoleKind::User && !self.did_prefix_user {
                             let user_prefix = self.get_user_prefix();
                             self.push_span(
@@ -330,12 +340,14 @@ impl<'a> MarkdownRenderer<'a> {
                             );
                             self.did_prefix_user = true;
                         }
+                        self.pending_list_indent = None;
                         self.push_span(
                             Span::styled(marker, self.theme.md_list_marker_style()),
                             SpanKind::Text,
                         );
                     }
                     Tag::CodeBlock(kind) => {
+                        self.flush_current_spans(true);
                         self.in_code_block = Some(language_hint_from_codeblock_kind(kind));
                         self.code_block_lines.clear();
                     }
@@ -430,11 +442,15 @@ impl<'a> MarkdownRenderer<'a> {
                         self.flush_current_spans(true);
                         self.push_empty_line();
                         self.list_stack.pop();
+                        self.list_indent_stack.pop();
+                        self.pending_list_indent = None;
                     }
                     TagEnd::Item => {
                         self.flush_current_spans(true);
+                        self.pending_list_indent = None;
                     }
                     TagEnd::CodeBlock => {
+                        let list_indent = self.current_list_indent_width();
                         if self.config.collect_span_metadata {
                             flush_code_block_buffer(
                                 &mut self.code_block_lines,
@@ -444,6 +460,7 @@ impl<'a> MarkdownRenderer<'a> {
                                 &mut self.lines,
                                 Some(&mut self.span_metadata),
                                 &mut self.ranges,
+                                list_indent,
                             );
                         } else {
                             flush_code_block_buffer(
@@ -454,10 +471,12 @@ impl<'a> MarkdownRenderer<'a> {
                                 &mut self.lines,
                                 None,
                                 &mut self.ranges,
+                                list_indent,
                             );
                         }
                         self.push_empty_line();
                         self.in_code_block = None;
+                        self.pending_list_indent = (list_indent > 0).then_some(list_indent);
                     }
                     TagEnd::Emphasis
                     | TagEnd::Strong
@@ -589,6 +608,14 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     fn push_span(&mut self, span: Span<'static>, kind: SpanKind) {
+        if self.current_spans.is_empty() {
+            if let Some(indent) = self.pending_list_indent.take() {
+                if indent > 0 {
+                    self.current_spans.push(Span::raw(" ".repeat(indent)));
+                    self.current_span_kinds.push(SpanKind::Text);
+                }
+            }
+        }
         self.current_spans.push(span);
         self.current_span_kinds.push(kind);
     }
@@ -648,6 +675,10 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn push_empty_line(&mut self) {
         self.push_line(Vec::new(), Vec::new());
+    }
+
+    fn current_list_indent_width(&self) -> usize {
+        self.list_indent_stack.iter().sum()
     }
 }
 /// Test-only helper: compute code block ranges across messages using
@@ -1129,6 +1160,117 @@ mod tests {
         let (_start, len, content) = &ranges[0];
         assert_eq!(*len, 2);
         assert_eq!(content, "line1\nline2");
+    }
+
+    #[test]
+    fn ordered_list_item_code_block_is_indented_under_marker() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "1. Intro text\n\n   ```\n   fn greet() {}\n   ```\n\n   Follow up text"
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let bullet_line = rendered
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("Intro text"))
+            .expect("bullet line present");
+        let bullet_marker_width = bullet_line
+            .spans
+            .first()
+            .map(|span| span.content.as_ref().width())
+            .expect("marker span present");
+
+        let code_line = rendered
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("fn greet() {}"))
+            .expect("code block line present");
+        let indent_span = code_line.spans.first().expect("indent span present");
+
+        assert!(indent_span.content.as_ref().chars().all(|ch| ch == ' '));
+        assert_eq!(indent_span.content.as_ref().width(), bullet_marker_width);
+
+        let follow_up_line = rendered
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("Follow up text"))
+            .expect("follow up text present");
+        let follow_up_indent = follow_up_line
+            .spans
+            .first()
+            .expect("indent span present")
+            .content
+            .as_ref();
+        assert!(follow_up_indent.chars().all(|ch| ch == ' '));
+        assert_eq!(follow_up_indent.width(), bullet_marker_width);
+    }
+
+    #[test]
+    fn multi_item_ordered_list_keeps_code_block_with_correct_item() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "1. **Open a new terminal** on your local machine (keeping your SSH session open) and run `scp` as above.\n2. **Use `scp` in reverse** from the remote side *to* your local machine (if remote can reach your local machine and SSH is accessible), e.g.:\n   ```bash\n   scp /path/to/file you@your_local_IP:/path/to/local/destination/\n   ```\n   But this only works if your local machine is running an SSH server and is network-reachable — rarely the case.\n3. **Use `rsync` over SSH** similarly to `scp`."
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let bullet_two_index = rendered
+            .lines
+            .iter()
+            .position(|line| line.to_string().starts_with("2. "))
+            .expect("bullet two present");
+
+        let bullet_two_indent = rendered.lines[bullet_two_index]
+            .spans
+            .first()
+            .map(|span| span.content.as_ref().width())
+            .expect("bullet two span");
+
+        let code_block_index = rendered
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(idx, line)| {
+                if line.to_string().contains("scp /path/to/file") {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .expect("code block line present");
+
+        assert!(bullet_two_index < code_block_index);
+
+        let code_line = &rendered.lines[code_block_index];
+        let code_indent_span = code_line.spans.first().expect("indent span present");
+        assert!(code_indent_span
+            .content
+            .as_ref()
+            .chars()
+            .all(|ch| ch == ' '));
+        assert_eq!(code_indent_span.content.as_ref().width(), bullet_two_indent);
+
+        let follow_up_index = rendered
+            .lines
+            .iter()
+            .position(|line| line.to_string().contains("But this only works"))
+            .expect("follow up text present");
+        assert!(code_block_index < follow_up_index);
+
+        let follow_up_indent = rendered.lines[follow_up_index]
+            .spans
+            .first()
+            .expect("follow up indent span present");
+        assert!(follow_up_indent
+            .content
+            .as_ref()
+            .chars()
+            .all(|ch| ch == ' '));
+        assert_eq!(follow_up_indent.content.as_ref().width(), bullet_two_indent);
     }
 
     #[test]
@@ -2427,6 +2569,7 @@ fn plain_codeblock_lines(code_block_lines: &[String], theme: &Theme) -> Vec<Line
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush_code_block_buffer(
     code_block_lines: &mut Vec<String>,
     syntax_enabled: bool,
@@ -2435,6 +2578,7 @@ fn flush_code_block_buffer(
     lines: &mut Vec<Line<'static>>,
     span_metadata: Option<&mut Vec<Vec<SpanKind>>>,
     ranges: &mut Vec<(usize, usize, String)>,
+    list_indent: usize,
 ) {
     if code_block_lines.is_empty() {
         return;
@@ -2449,13 +2593,27 @@ fn flush_code_block_buffer(
         plain_codeblock_lines(code_block_lines, theme)
     };
 
+    let indent = if list_indent > 0 {
+        Some(" ".repeat(list_indent))
+    } else {
+        None
+    };
+
     if let Some(metadata) = span_metadata {
-        for line in produced_lines {
+        for mut line in produced_lines {
+            if let Some(indent) = indent.as_ref() {
+                line.spans.insert(0, Span::raw(indent.clone()));
+            }
             metadata.push(vec![SpanKind::Text; line.spans.len()]);
             lines.push(line);
         }
     } else {
-        lines.extend(produced_lines);
+        for mut line in produced_lines {
+            if let Some(indent) = indent.as_ref() {
+                line.spans.insert(0, Span::raw(indent.clone()));
+            }
+            lines.push(line);
+        }
     }
 
     let end = lines.len();

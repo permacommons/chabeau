@@ -3,9 +3,9 @@
 ## Unreleased
 
 ### Added
+- Introduced character cards across the CLI and TUI, including import commands, picker navigation, API injection, and default assignments per provider/model (`src/character`, `src/cli`, `src/commands`, `src/core/app`).
 - Introduced persona management so you can define user identities, switch them via `/persona` or `--persona`, persist provider-specific defaults, and have display names/bio substitutions reflected throughout the UI and transcripts (`src/core/preset.rs`, `src/core/persona`, `src/ui/chat_loop`).
 - Added reusable preset instructions with picker and CLI support (`/preset`, `--preset`), variable substitution, and provider/model default assignments for faster context switching (`src/core/preset.rs`, `src/core/app/picker`, `src/commands`).
-- Introduced character cards across the CLI and TUI, including import commands, picker navigation, API injection, and default assignments per provider/model (`src/character`, `src/cli`, `src/commands`, `src/core/app`).
 - Added a slash command registry with Tab completion to make command discovery faster (`src/commands`, `src/ui/chat_loop`).
 
 ### Changed
@@ -17,7 +17,6 @@
 ### Fixed
 - Ensured Markdown code blocks nested inside lists render correctly when streaming responses (`src/ui/markdown.rs`).
 - Normalized provider identifiers across configuration, auth, and CLI commands so mixed-case provider names resolve reliably (`src/core/config.rs`, `src/auth`, `src/cli`).
-- Restored `chabeau import` flag behavior so `-c/--character` listing shortcuts no longer collide with import arguments (`src/cli`).
 - Ensured conversation logging initializes the output file immediately when logging starts (`src/utils/logging.rs`).
 - Reused provider sessions to avoid redundant authentication prompts when switching providers (`src/core/app/session.rs`).
 

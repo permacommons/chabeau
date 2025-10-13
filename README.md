@@ -19,6 +19,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - [Configuration](#configuration)
 - [Character Cards](#character-cards)
 - [Personas](#personas)
+- [Presets](#presets)
 - [Appearance and Rendering](#appearance-and-rendering)
 - [Keyboard and Workflow Tips](#keyboard-and-workflow-tips)
 - [Architecture Overview](#architecture-overview)
@@ -33,10 +34,13 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - Support for quick custom configuration of new OpenAI-compatible providers
 - Interactive dialogs for selecting models and providers
 - Character card support (v2 format) with in-app picker and defaults per provider/model
+- Persona system for defining reusable user identities with variable substitution support
+- Reusable preset instructions with picker and CLI toggles for quick context switching
 - Extensible theming system that degrades gracefully to terminals with limited color support
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly) with compose mode for longer responses
 - Message retry and message editing
+- Slash command registry with Tab completion for faster command discovery
 - Conversation logging with pause/resume; quick `/dump` of contents to a file
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks

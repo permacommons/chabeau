@@ -116,7 +116,9 @@ pub struct TestEnvVarGuard {
 #[cfg(test)]
 impl TestEnvVarGuard {
     pub fn new() -> Self {
-        let lock = TEST_ENV_GUARD.lock().expect("environment mutex poisoned");
+        let lock = TEST_ENV_GUARD
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         Self {
             _lock: lock,
             previous_vars: Vec::new(),

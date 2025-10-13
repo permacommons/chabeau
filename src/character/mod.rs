@@ -2,6 +2,7 @@ pub mod cache;
 pub mod card;
 pub mod import;
 pub mod loader;
+pub mod service;
 
 #[cfg(test)]
 mod test_helpers;
@@ -12,3 +13,4 @@ mod tests_integration;
 pub use card::CharacterCard;
 #[cfg(test)]
 pub use card::CharacterData;
+pub use service::CharacterService;

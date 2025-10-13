@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Metadata for a cached character card
@@ -12,6 +13,7 @@ pub struct CachedCardMetadata {
 pub struct CardCache {
     metadata: HashMap<String, CachedCardMetadata>,
     cache_key: Option<String>,
+    paths: HashMap<String, PathBuf>,
 }
 
 impl CardCache {
@@ -20,6 +22,7 @@ impl CardCache {
         Self {
             metadata: HashMap::new(),
             cache_key: None,
+            paths: HashMap::new(),
         }
     }
 
@@ -35,11 +38,17 @@ impl CardCache {
 
         for entry in std::fs::read_dir(cards_dir)? {
             let entry = entry?;
-            let metadata = entry.metadata()?;
+            let path = entry.path();
 
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                    mod_times.push(duration.as_secs());
+            if !path.is_file() {
+                continue;
+            }
+
+            if let Ok(metadata) = entry.metadata() {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                        mod_times.push(duration.as_secs());
+                    }
                 }
             }
         }
@@ -63,6 +72,7 @@ impl CardCache {
 
         // Cache is invalid, reload
         self.metadata.clear();
+        self.paths.clear();
 
         let cards = crate::character::loader::list_available_cards()?;
 
@@ -73,6 +83,7 @@ impl CardCache {
                     name: card.data.name.clone(),
                     description: card.data.description.clone(),
                 };
+                self.paths.insert(card.data.name.clone(), path.clone());
                 self.metadata.insert(name, metadata);
             }
         }
@@ -82,6 +93,21 @@ impl CardCache {
         let mut result: Vec<_> = self.metadata.values().cloned().collect();
         result.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(result)
+    }
+
+    /// Get the cached path for a card with the specified name
+    pub fn path_for(&self, name: &str) -> Option<&PathBuf> {
+        self.paths.get(name)
+    }
+
+    /// Iterate over all cached card paths
+    pub fn iter_paths(&self) -> impl Iterator<Item = (&String, &PathBuf)> {
+        self.paths.iter()
+    }
+
+    /// Current cache key derived from filesystem state
+    pub fn cache_key(&self) -> Option<&str> {
+        self.cache_key.as_deref()
     }
 }
 

@@ -16,6 +16,7 @@ use self::setup::bootstrap_app;
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 
 use crate::api::models::fetch_models;
+use crate::character::CharacterService;
 use crate::core::app::ui_state::FilePromptKind;
 use crate::core::app::{
     apply_actions, App, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
@@ -418,6 +419,7 @@ async fn drain_action_queue(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_chat(
     model: String,
     log: Option<String>,
@@ -426,6 +428,7 @@ pub async fn run_chat(
     character: Option<String>,
     persona: Option<String>,
     preset: Option<String>,
+    character_service: CharacterService,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(
         model.clone(),
@@ -435,6 +438,7 @@ pub async fn run_chat(
         character,
         persona,
         preset,
+        character_service,
     )
     .await?;
 

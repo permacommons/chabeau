@@ -14,6 +14,7 @@ use once_cell::sync::Lazy;
 
 // Import specific items we need
 use crate::auth::AuthManager;
+use crate::character::CharacterService;
 use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
@@ -264,6 +265,8 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let mut character_service = CharacterService::new();
+
     match args.command {
         Some(Commands::Auth) => {
             let mut auth_manager = AuthManager::new();
@@ -343,7 +346,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                             let model = value[1].to_string();
                             let character = value[2..].join(" ");
 
-                            match crate::character::loader::find_card_by_name(&character) {
+                            match character_service.resolve_by_name(&character) {
                                 Ok(_) => {
                                     let provider_msg = provider.clone();
                                     let model_msg = model.clone();
@@ -357,11 +360,8 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                         provider_msg, model_msg, character_msg
                                     );
                                 }
-                                Err(_) => {
-                                    eprintln!(
-                                        "❌ Character '{}' not found in cards directory",
-                                        character
-                                    );
+                                Err(err) => {
+                                    eprintln!("❌ {}", err);
                                     eprintln!(
                                         "   Run 'chabeau import <file>' to import a character card first"
                                     );
@@ -449,7 +449,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
             // Check if -c was provided without a character name (empty string)
             if args.character.as_deref() == Some("") {
                 // -c was provided without a value, list available characters
-                return list_characters().await;
+                return list_characters(&mut character_service).await;
             }
 
             if args.persona.is_some() || args.preset.is_some() {
@@ -483,10 +483,14 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                     };
                     let preset_for_operations = args.preset.clone();
 
+                    let mut service_for_run = Some(character_service);
+
                     match args.model.as_deref() {
                         Some("") => {
                             // -m was provided without a value, list available models
-                            list_models(provider_for_operations).await
+                            let result = list_models(provider_for_operations).await;
+                            drop(service_for_run.take());
+                            result
                         }
                         Some(model) => {
                             // -m was provided with a value, use it for chat
@@ -498,6 +502,9 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_for_operations,
                                 args.persona,
                                 preset_for_operations.clone(),
+                                service_for_run
+                                    .take()
+                                    .expect("character service available for run_chat"),
                             )
                             .await
                         }
@@ -511,6 +518,9 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_for_operations,
                                 args.persona,
                                 preset_for_operations,
+                                service_for_run
+                                    .take()
+                                    .expect("character service available for run_chat"),
                             )
                             .await
                         }
@@ -540,7 +550,9 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::test_utils::with_test_config_env;
+    use crate::utils::test_utils::{with_test_config_env, TestEnvVarGuard};
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_character_flag_parsing() {
@@ -658,6 +670,56 @@ mod tests {
             assert_eq!(
                 config.get_default_model("OpenAI"),
                 Some(&"gpt-4o".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_cli_set_default_character_with_cached_service() {
+        with_test_config_env(|_| {
+            let temp_dir = TempDir::new().unwrap();
+            let cards_dir = temp_dir.path().join("cards");
+            fs::create_dir_all(&cards_dir).unwrap();
+
+            let card_json = serde_json::json!({
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": "Alice",
+                    "description": "Test character",
+                    "personality": "Friendly",
+                    "scenario": "Testing",
+                    "first_mes": "Hello from cache!",
+                    "mes_example": ""
+                }
+            });
+
+            fs::write(cards_dir.join("alice.json"), card_json.to_string()).unwrap();
+
+            let mut env_guard = TestEnvVarGuard::new();
+            env_guard.set_var("CHABEAU_CARDS_DIR", &cards_dir);
+
+            let args = Args::try_parse_from([
+                "chabeau",
+                "set",
+                "default-character",
+                "openai",
+                "gpt-4",
+                "Alice",
+            ])
+            .unwrap();
+
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(handle_args(args))
+                .expect("CLI command should succeed");
+
+            drop(env_guard);
+
+            let config = Config::load().expect("config should load");
+            assert_eq!(
+                config.get_default_character("openai", "gpt-4"),
+                Some(&"Alice".to_string())
             );
         });
     }

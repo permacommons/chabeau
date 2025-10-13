@@ -6,6 +6,7 @@ use super::AppHandle;
 
 use crate::{
     auth::AuthManager,
+    character::CharacterService,
     core::{
         app,
         builtin_providers::load_builtin_providers,
@@ -18,6 +19,7 @@ use crate::{
 ///
 /// This logic was historically embedded inside `run_chat`; extracting it keeps the event loop
 /// focused on UI concerns while centralising provider/model setup policy.
+#[allow(clippy::too_many_arguments)]
 pub async fn bootstrap_app(
     model: String,
     log: Option<String>,
@@ -26,6 +28,7 @@ pub async fn bootstrap_app(
     character: Option<String>,
     persona: Option<String>,
     preset: Option<String>,
+    character_service: CharacterService,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let auth_manager = AuthManager::new();
@@ -80,8 +83,15 @@ pub async fn bootstrap_app(
         }
     }
 
+    let mut character_service = Some(character_service);
+
     let app = if open_provider_picker {
-        let mut app = app::new_uninitialized(log.clone()).await.expect("init app");
+        let service = character_service
+            .take()
+            .expect("character service should be available");
+        let mut app = app::new_uninitialized(log.clone(), service)
+            .await
+            .expect("init app");
         app.picker.startup_requires_provider = true;
         app.picker.startup_multiple_providers_available = multiple_providers_available;
         app.open_provider_picker();
@@ -112,6 +122,10 @@ pub async fn bootstrap_app(
             }
         };
 
+        let service = character_service
+            .take()
+            .expect("character service should be available");
+
         let mut app = match app::new_with_auth(
             app::AppInitConfig {
                 model: model.clone(),
@@ -124,6 +138,7 @@ pub async fn bootstrap_app(
                 preset,
             },
             &config,
+            service,
         )
         .await
         {

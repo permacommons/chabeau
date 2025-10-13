@@ -65,11 +65,13 @@ mod integration_tests {
 
         // Step 3: Load character by name (simulating CLI flag)
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(dest_path.to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_ok());
@@ -107,11 +109,13 @@ mod integration_tests {
 
         // Step 3: Load a specific card by name (simulating picker selection)
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(cards_dir.join("picker1.json").to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_ok());
@@ -149,12 +153,14 @@ mod integration_tests {
         );
 
         // Step 3: Start session without CLI flag (should load default)
-        let result = load_character_for_session(None, "openai", "gpt-4", &config);
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("CHABEAU_CARDS_DIR", &cards_dir);
+        let mut service = crate::character::CharacterService::new();
+        let result = load_character_for_session(None, "openai", "gpt-4", &config, &mut service);
 
-        // This will fail because the card is not in the real cards directory
-        // In a real scenario, the card would be found via find_card_by_name
-        // For this test, we verify the config logic works
-        assert!(result.is_ok());
+        let loaded_card = result.expect("default load result");
+        assert!(loaded_card.is_some());
+        assert_eq!(loaded_card.unwrap().data.name, "DefaultChar");
     }
 
     #[test]
@@ -215,11 +221,13 @@ mod integration_tests {
         // Test loading a non-existent card file
 
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some("/nonexistent/path/to/card.json"),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_err());
@@ -245,11 +253,13 @@ mod integration_tests {
         temp_file.flush().unwrap();
 
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(temp_file.path().to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_err());
@@ -281,11 +291,13 @@ mod integration_tests {
         temp_file.flush().unwrap();
 
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(temp_file.path().to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_err());
@@ -317,11 +329,13 @@ mod integration_tests {
         temp_file.flush().unwrap();
 
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(temp_file.path().to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_err());
@@ -459,11 +473,13 @@ mod integration_tests {
         );
 
         // Load with CLI override
+        let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(
             Some(cli_path.to_str().unwrap()),
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
 
         assert!(result.is_ok());

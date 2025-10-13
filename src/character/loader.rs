@@ -107,40 +107,6 @@ pub fn list_available_cards() -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
     Ok(cards)
 }
 
-/// Find a character card by name with fallback logic
-///
-/// Search order:
-/// 1. Check for {name}.json in cards directory
-/// 2. Check for {name}.png in cards directory
-/// 3. Search all cards for a matching character name (case-insensitive)
-///
-/// Returns the loaded card and its file path
-pub fn find_card_by_name(
-    name: &str,
-) -> Result<(CharacterCard, PathBuf), Box<dyn std::error::Error>> {
-    let cards_dir = get_cards_dir();
-
-    // Try as direct filename (without extension)
-    for ext in &["json", "png"] {
-        let path = cards_dir.join(format!("{}.{}", name, ext));
-        if path.exists() {
-            let card = load_card(&path)?;
-            return Ok((card, path));
-        }
-    }
-
-    // Try as character name (search all cards)
-    let cards = list_available_cards()?;
-    for (card_name, path) in cards {
-        if card_name.eq_ignore_ascii_case(name) {
-            let card = load_card(&path)?;
-            return Ok((card, path));
-        }
-    }
-
-    Err(format!("Character '{}' not found in cards directory", name).into())
-}
-
 /// Load a character card from a file (JSON or PNG)
 /// Automatically detects the file type based on extension
 pub fn load_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
@@ -1014,15 +980,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_card_by_name_not_found() {
-        let result = find_card_by_name("nonexistent_character_that_does_not_exist");
-        assert!(result.is_err());
-
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not found"));
-    }
-
-    #[test]
     fn test_load_card_json() {
         let card_json = create_simple_test_card_json();
         let temp_file = write_json_to_tempfile(&card_json);
@@ -1130,78 +1087,6 @@ mod tests {
         assert_eq!(cards.len(), 2);
         assert_eq!(cards[0].0, "Bob");
         assert_eq!(cards[1].0, "Test Character");
-    }
-
-    #[test]
-    fn test_find_card_by_filename_without_extension() {
-        // Create a temporary directory with a test card
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path();
-
-        // Create a card file
-        let card_path = temp_path.join("testchar.json");
-        fs::write(&card_path, create_valid_card_json()).unwrap();
-
-        // Test the logic of finding by filename (without actually using find_card_by_name
-        // since it uses the config directory)
-
-        // Check that the file exists with .json extension
-        let json_path = temp_path.join("testchar.json");
-        assert!(json_path.exists());
-
-        // Check that we can load it
-        let result = load_card(&json_path);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_find_card_by_character_name_case_insensitive() {
-        // Test that character name matching is case-insensitive
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path();
-
-        // Create a card with a specific character name
-        let card_json = serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Captain Picard",
-                "description": "Test",
-                "personality": "Test",
-                "scenario": "Test",
-                "first_mes": "Test",
-                "mes_example": "Test"
-            }
-        })
-        .to_string();
-        let card_path = temp_path.join("picard_card.json");
-        fs::write(&card_path, card_json).unwrap();
-
-        // Simulate the search logic
-        let cards = [("Captain Picard".to_string(), card_path.clone())];
-
-        // Test case-insensitive matching
-        let search_name = "captain picard";
-        let found = cards
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
-        assert!(found.is_some());
-
-        let search_name = "CAPTAIN PICARD";
-        let found = cards
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
-        assert!(found.is_some());
-
-        let search_name = "CaPtAiN pIcArD";
-        let found = cards
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(search_name));
-        assert!(found.is_some());
     }
 
     #[test]

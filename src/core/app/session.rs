@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::AuthManager;
 use crate::character::card::CharacterCard;
+use crate::character::service::CharacterService;
 use crate::core::config::Config;
 use crate::core::providers::{
     resolve_env_session, resolve_session, ProviderSession, ResolveSessionError,
@@ -98,39 +99,30 @@ pub(crate) fn load_character_for_session(
     provider: &str,
     model: &str,
     config: &Config,
+    character_service: &mut CharacterService,
 ) -> Result<Option<CharacterCard>, Box<dyn std::error::Error>> {
     // If CLI character is specified, use it (highest priority)
     if let Some(character_name) = cli_character {
-        // First try to find it by name in the cards directory
-        match crate::character::loader::find_card_by_name(character_name) {
-            Ok((card, _path)) => return Ok(Some(card)),
-            Err(_) => {
-                // If not found in cards directory, check if it's a file path that exists
-                let path = std::path::Path::new(character_name);
-                if path.exists() && path.is_file() {
-                    // Load directly from the file path
-                    let card = crate::character::loader::load_card(path)?;
-                    return Ok(Some(card));
-                }
-                // If neither worked, return the original error
-                return Err(format!(
-                    "Character '{}' not found in cards directory and is not a valid file path",
-                    character_name
-                )
-                .into());
-            }
-        }
+        let card = character_service
+            .resolve(character_name)
+            .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
+        return Ok(Some(card));
     }
 
     // Otherwise, check for default character for this provider/model
-    if let Some(default_character) = config.get_default_character(provider, model) {
-        match crate::character::loader::find_card_by_name(default_character) {
-            Ok((card, _path)) => return Ok(Some(card)),
-            Err(e) => {
-                // Log warning but don't fail - just continue without character
+    match character_service.load_default_for_session(provider, model, config) {
+        Ok(Some((_name, card))) => return Ok(Some(card)),
+        Ok(None) => {}
+        Err(err) => {
+            if let Some(default_character) = config.get_default_character(provider, model) {
                 eprintln!(
                     "Warning: Failed to load default character '{}' for {}:{}: {}",
-                    default_character, provider, model, e
+                    default_character, provider, model, err
+                );
+            } else {
+                eprintln!(
+                    "Warning: Failed to load default character for {}:{}: {}",
+                    provider, model, err
                 );
             }
         }
@@ -181,6 +173,7 @@ pub(crate) fn resolve_theme(config: &Config) -> Theme {
     quantize_theme_for_current_terminal(resolved_theme)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_with_auth(
     model: String,
     log_file: Option<String>,
@@ -189,6 +182,7 @@ pub(crate) async fn prepare_with_auth(
     config: &Config,
     pre_resolved_session: Option<ProviderSession>,
     character: Option<String>,
+    character_service: &mut CharacterService,
 ) -> Result<SessionBootstrap, Box<dyn std::error::Error>> {
     let session = if let Some(session) = pre_resolved_session {
         session
@@ -219,8 +213,13 @@ pub(crate) async fn prepare_with_auth(
     let resolved_theme = resolve_theme(config);
 
     // Load character card if specified via CLI or config
-    let active_character =
-        load_character_for_session(character.as_deref(), &provider_name, &final_model, config)?;
+    let active_character = load_character_for_session(
+        character.as_deref(),
+        &provider_name,
+        &final_model,
+        config,
+        character_service,
+    )?;
 
     let session = SessionContext {
         client: Client::new(),
@@ -249,6 +248,7 @@ pub(crate) async fn prepare_with_auth(
 
 pub(crate) async fn prepare_uninitialized(
     log_file: Option<String>,
+    _character_service: &mut CharacterService,
 ) -> Result<UninitializedSessionBootstrap, Box<dyn std::error::Error>> {
     let config = Config::load()?;
 
@@ -329,6 +329,7 @@ mod tests {
 
         let config = Config::default();
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let mut service = crate::character::CharacterService::new();
 
         let bootstrap = runtime
             .block_on(super::prepare_with_auth(
@@ -339,6 +340,7 @@ mod tests {
                 &config,
                 Some(provider_session.clone()),
                 None,
+                &mut service,
             ))
             .expect("prepare_with_auth");
 
@@ -562,8 +564,10 @@ mod tests {
     #[test]
     fn load_character_for_session_no_character() {
         let config = Config::default();
-        let result = super::load_character_for_session(None, "openai", "gpt-4", &config)
-            .expect("load_character_for_session");
+        let mut service = crate::character::CharacterService::new();
+        let result =
+            super::load_character_for_session(None, "openai", "gpt-4", &config, &mut service)
+                .expect("load_character_for_session");
 
         assert!(result.is_none());
     }
@@ -618,7 +622,9 @@ mod tests {
         // setting up the full cards directory structure, so we'll just verify
         // the logic exists in the function)
         // This test verifies the function signature and basic behavior
-        let result = super::load_character_for_session(None, "openai", "gpt-4", &config);
+        let mut service = crate::character::CharacterService::new();
+        let result =
+            super::load_character_for_session(None, "openai", "gpt-4", &config, &mut service);
         assert!(result.is_ok());
     }
 
@@ -655,6 +661,7 @@ mod tests {
         fs::write(&card_path, card_json).expect("write card");
 
         let config = Config::default();
+        let mut service = crate::character::CharacterService::new();
 
         // Load character by file path (should work as fallback)
         let result = super::load_character_for_session(
@@ -662,6 +669,7 @@ mod tests {
             "openai",
             "gpt-4",
             &config,
+            &mut service,
         );
         assert!(result.is_ok());
         let loaded_card = result.unwrap();
@@ -705,7 +713,14 @@ mod tests {
 
         // Try to load character named "data" - should fail because it's not in cards dir
         // and we're not providing the full path
-        let result = super::load_character_for_session(Some("data"), "openai", "gpt-4", &config);
+        let mut service = crate::character::CharacterService::new();
+        let result = super::load_character_for_session(
+            Some("data"),
+            "openai",
+            "gpt-4",
+            &config,
+            &mut service,
+        );
 
         // Should fail because "data" is not found in cards directory
         // and "data" as a relative path doesn't exist

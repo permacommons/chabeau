@@ -1063,14 +1063,9 @@ impl PickerController {
 
     pub fn open_character_picker(
         &mut self,
-        character_cache: &mut crate::character::cache::CardCache,
+        cards: Vec<crate::character::cache::CachedCardMetadata>,
         session_context: &SessionContext,
     ) -> Result<(), String> {
-        // Load all character metadata (uses cache)
-        let cards = character_cache
-            .get_all_metadata()
-            .map_err(|e| format!("Error loading characters: {}", e))?;
-
         if cards.is_empty() {
             return Err(
                 "No character cards found. Use 'chabeau import <file>' to import cards."
@@ -1384,8 +1379,8 @@ mod tests {
 
     #[test]
     fn test_turn_off_character_entry_added_when_character_active() {
-        use crate::character::cache::CardCache;
         use crate::character::card::{CharacterCard, CharacterData};
+        use crate::character::service::CharacterService;
         use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
@@ -1410,7 +1405,7 @@ mod tests {
         fs::write(cards_dir.join("test.json"), card_json.to_string()).unwrap();
 
         let mut app = create_test_app();
-        let mut cache = CardCache::new();
+        let mut service = CharacterService::new();
 
         app.session.set_character(CharacterCard {
             spec: "chara_card_v2".to_string(),
@@ -1435,7 +1430,8 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let result = app.picker.open_character_picker(&mut cache, &app.session);
+        let cards = service.list_metadata().expect("metadata");
+        let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
 
@@ -1447,7 +1443,7 @@ mod tests {
 
     #[test]
     fn test_turn_off_character_entry_not_added_when_no_character() {
-        use crate::character::cache::CardCache;
+        use crate::character::service::CharacterService;
         use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
@@ -1472,14 +1468,15 @@ mod tests {
         fs::write(cards_dir.join("test.json"), card_json.to_string()).unwrap();
 
         let mut app = create_test_app();
-        let mut cache = CardCache::new();
+        let mut service = CharacterService::new();
 
         assert!(app.session.active_character.is_none());
 
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let result = app.picker.open_character_picker(&mut cache, &app.session);
+        let cards = service.list_metadata().expect("metadata");
+        let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
 
@@ -1491,8 +1488,8 @@ mod tests {
 
     #[test]
     fn test_turn_off_character_stays_at_top_after_sort() {
-        use crate::character::cache::CardCache;
         use crate::character::card::{CharacterCard, CharacterData};
+        use crate::character::service::CharacterService;
         use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
         use std::fs;
         use tempfile::tempdir;
@@ -1522,7 +1519,7 @@ mod tests {
         }
 
         let mut app = create_test_app();
-        let mut cache = CardCache::new();
+        let mut service = CharacterService::new();
 
         app.session.set_character(CharacterCard {
             spec: "chara_card_v2".to_string(),
@@ -1547,7 +1544,8 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let result = app.picker.open_character_picker(&mut cache, &app.session);
+        let cards = service.list_metadata().expect("metadata");
+        let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
 

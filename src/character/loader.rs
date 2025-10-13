@@ -263,7 +263,7 @@ mod tests {
     use crate::utils::test_utils::TestEnvVarGuard;
     use std::fs;
     use std::io::Write;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::{Builder, NamedTempFile, TempDir};
 
     struct CardsDirTestEnv {
         _env_guard: TestEnvVarGuard,
@@ -301,6 +301,48 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    fn create_simple_test_card_json() -> String {
+        serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Simple Test Character",
+                "description": "A simple test character for validation",
+                "personality": "Friendly and helpful",
+                "scenario": "Testing the character card loader",
+                "first_mes": "Hello! I'm a test character.",
+                "mes_example": "{{user}}: Hi\n{{char}}: Hello there!"
+            }
+        })
+        .to_string()
+    }
+
+    fn create_invalid_test_card_json() -> String {
+        serde_json::json!({
+            "spec": "wrong_spec",
+            "spec_version": "2.0",
+            "data": {
+                "name": "",
+                "description": "Invalid card",
+                "personality": "Test",
+                "scenario": "Test",
+                "first_mes": "Test",
+                "mes_example": "Test"
+            }
+        })
+        .to_string()
+    }
+
+    fn write_json_to_tempfile(contents: &str) -> NamedTempFile {
+        let mut temp_file = Builder::new()
+            .suffix(".json")
+            .tempfile()
+            .expect("failed to create temp json file");
+        temp_file.write_all(contents.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+        temp_file
     }
 
     #[test]
@@ -593,68 +635,60 @@ mod tests {
     }
 
     #[test]
-    fn test_load_picard_json() {
-        // Test with the actual picard.json file if it exists
-        let picard_path = "test-cards/picard.json";
-        if std::path::Path::new(picard_path).exists() {
-            let result = load_json_card(picard_path);
+    fn test_load_hypatia_json() {
+        let hypatia_path = "examples/hypatia.json";
+        if std::path::Path::new(hypatia_path).exists() {
+            let result = load_json_card(hypatia_path);
             assert!(
                 result.is_ok(),
-                "Failed to load picard.json: {:?}",
+                "Failed to load hypatia.json: {:?}",
                 result.err()
             );
 
             let card = result.unwrap();
             assert_eq!(card.spec, "chara_card_v2");
-            assert_eq!(card.data.name, "Jean Luc Picard");
+            assert_eq!(card.data.name, "Hypatia of Alexandria");
             assert!(!card.data.description.is_empty());
             assert!(!card.data.first_mes.is_empty());
-            assert_eq!(card.data.creator, Some("thekrautissour".to_string()));
+            assert_eq!(card.data.creator, Some("Chabeau Examples".to_string()));
             assert!(card.data.tags.is_some());
         }
     }
 
     #[test]
     fn test_load_simple_test_card() {
-        // Test with the simple test card
-        let test_path = "test-cards/test_simple.json";
-        if std::path::Path::new(test_path).exists() {
-            let result = load_json_card(test_path);
-            assert!(
-                result.is_ok(),
-                "Failed to load test_simple.json: {:?}",
-                result.err()
-            );
+        let card_json = create_simple_test_card_json();
+        let temp_file = write_json_to_tempfile(&card_json);
 
-            let card = result.unwrap();
-            assert_eq!(card.spec, "chara_card_v2");
-            assert_eq!(card.data.name, "Simple Test Character");
-            assert_eq!(
-                card.data.description,
-                "A simple test character for validation"
-            );
-            assert_eq!(card.data.personality, "Friendly and helpful");
-        }
+        let result = load_json_card(temp_file.path());
+        assert!(result.is_ok(), "Failed to load simple test card");
+
+        let card = result.unwrap();
+        assert_eq!(card.spec, "chara_card_v2");
+        assert_eq!(card.data.name, "Simple Test Character");
+        assert_eq!(
+            card.data.description,
+            "A simple test character for validation"
+        );
+        assert_eq!(card.data.personality, "Friendly and helpful");
     }
 
     #[test]
     fn test_load_invalid_test_card() {
-        // Test with an invalid test card
-        let test_path = "test-cards/test_invalid.json";
-        if std::path::Path::new(test_path).exists() {
-            let result = load_json_card(test_path);
-            assert!(result.is_err(), "Expected error loading test_invalid.json");
+        let card_json = create_invalid_test_card_json();
+        let temp_file = write_json_to_tempfile(&card_json);
 
-            match result.unwrap_err() {
-                CardLoadError::ValidationFailed(errors) => {
-                    // Should have errors for wrong spec and empty name
-                    assert!(!errors.is_empty());
-                    assert!(errors
-                        .iter()
-                        .any(|e| e.contains("spec") || e.contains("name")));
-                }
-                _ => panic!("Expected ValidationFailed error"),
+        let result = load_json_card(temp_file.path());
+        assert!(result.is_err(), "Expected error loading invalid test card");
+
+        match result.unwrap_err() {
+            CardLoadError::ValidationFailed(errors) => {
+                assert!(!errors.is_empty());
+                assert!(errors
+                    .iter()
+                    .any(|e| e.contains("spec") || e.contains("name")));
             }
+            _ => panic!("Expected ValidationFailed error"),
         }
     }
 
@@ -835,20 +869,20 @@ mod tests {
     }
 
     #[test]
-    fn test_load_picard_png() {
-        // Test with the actual picard.png file if it exists
-        let picard_path = "test-cards/picard.png";
-        if std::path::Path::new(picard_path).exists() {
-            let result = load_png_card(picard_path);
+    fn test_load_hypatia_png() {
+        // Test with PNG file if it exists
+        let hypatia_path = "examples/hypatia.png";
+        if std::path::Path::new(hypatia_path).exists() {
+            let result = load_png_card(hypatia_path);
             assert!(
                 result.is_ok(),
-                "Failed to load picard.png: {:?}",
+                "Failed to load hypatia.png: {:?}",
                 result.err()
             );
 
             let card = result.unwrap();
             assert_eq!(card.spec, "chara_card_v2");
-            assert_eq!(card.data.name, "Jean Luc Picard");
+            assert_eq!(card.data.name, "Hypatia of Alexandria");
             assert!(!card.data.description.is_empty());
             assert!(!card.data.first_mes.is_empty());
         }
@@ -856,12 +890,8 @@ mod tests {
 
     #[test]
     fn test_load_spec_v2_png_cards() {
-        // Test with the spec v2 PNG files if they exist
-        let test_cards = [
-            "test-cards/main_data-soong_spec_v2.png",
-            "test-cards/main_moon-b1677cd10d61_spec_v2.png",
-            "test-cards/main_seven-of-nine-8b4cd2352ade_spec_v2.png",
-        ];
+        // Test with the spec v2 PNG files if it exists
+        let test_cards = ["examples/hypatia.png"];
 
         for card_path in &test_cards {
             if std::path::Path::new(card_path).exists() {
@@ -883,9 +913,9 @@ mod tests {
 
     #[test]
     fn test_png_and_json_equivalence() {
-        // If both picard.json and picard.png exist, they should have the same data
-        let json_path = "test-cards/picard.json";
-        let png_path = "test-cards/picard.png";
+        // If both exist, they should have the same data
+        let json_path = "examples/hypatia.json";
+        let png_path = "examples/hypatia.png";
 
         if std::path::Path::new(json_path).exists() && std::path::Path::new(png_path).exists() {
             let json_card = load_json_card(json_path).unwrap();
@@ -994,27 +1024,26 @@ mod tests {
 
     #[test]
     fn test_load_card_json() {
-        // Test loading a JSON card through the load_card function
-        let test_path = "test-cards/test_simple.json";
-        if std::path::Path::new(test_path).exists() {
-            let result = load_card(test_path);
-            assert!(result.is_ok());
+        let card_json = create_simple_test_card_json();
+        let temp_file = write_json_to_tempfile(&card_json);
 
-            let card = result.unwrap();
-            assert_eq!(card.data.name, "Simple Test Character");
-        }
+        let result = load_card(temp_file.path());
+        assert!(result.is_ok());
+
+        let card = result.unwrap();
+        assert_eq!(card.data.name, "Simple Test Character");
     }
 
     #[test]
     fn test_load_card_png() {
         // Test loading a PNG card through the load_card function
-        let test_path = "test-cards/picard.png";
+        let test_path = "examples/hypatia.png";
         if std::path::Path::new(test_path).exists() {
             let result = load_card(test_path);
             assert!(result.is_ok());
 
             let card = result.unwrap();
-            assert_eq!(card.data.name, "Jean Luc Picard");
+            assert_eq!(card.data.name, "Hypatia of Alexandria");
         }
     }
 

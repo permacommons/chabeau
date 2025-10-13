@@ -283,8 +283,8 @@ pub(super) fn handle_character(app: &mut App, invocation: CommandInvocation<'_>)
         _ => {
             // Character name provided - load it directly
             let character_name = parts[1..].join(" ");
-            match crate::character::loader::find_card_by_name(&character_name) {
-                Ok((card, _path)) => {
+            match app.character_service.resolve(&character_name) {
+                Ok(card) => {
                     let name = card.data.name.clone();
                     app.session.set_character(card);
                     app.conversation()

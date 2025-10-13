@@ -367,6 +367,7 @@ Chabeau uses a modular design with focused components:
   - `card.rs` – Character card data structures and v2 spec parsing
   - `loader.rs` – Card file loading (JSON and PNG with metadata extraction)
   - `cache.rs` – In-memory caching with invalidation
+  - `service.rs` – Shared character cache and resolution helpers for the TUI and CLI
   - `import.rs` – Import command and validation logic
 - `api/` – API types and models
   - `mod.rs` – API data structures

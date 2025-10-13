@@ -905,19 +905,24 @@ fn selected_picker_id(app: &App) -> Option<String> {
 /// Load default character for current provider/model if one is configured
 fn load_default_character_if_configured(app: &mut App) {
     let cfg = Config::load_test_safe();
-    if let Some(character_name) =
+    if let Some(default_name) =
         cfg.get_default_character(&app.session.provider_name, &app.session.model)
     {
-        match crate::character::loader::find_card_by_name(character_name) {
-            Ok((card, _path)) => {
+        match app.character_service.load_default_for_session(
+            &app.session.provider_name,
+            &app.session.model,
+            &cfg,
+        ) {
+            Ok(Some((_name, card))) => {
                 app.session.set_character(card);
                 // Show character greeting if present
                 app.conversation().show_character_greeting_if_needed();
             }
+            Ok(None) => {}
             Err(e) => {
                 eprintln!(
                     "Warning: Could not load default character '{}': {}",
-                    character_name, e
+                    default_name, e
                 );
             }
         }

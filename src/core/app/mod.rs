@@ -1,5 +1,6 @@
 use crate::api::models::fetch_models;
 use crate::api::ModelsResponse;
+use crate::character::service::CharacterService;
 use crate::core::config::Config;
 #[cfg(test)]
 use crate::core::message::Message;
@@ -47,6 +48,7 @@ pub struct AppInitConfig {
 pub async fn new_with_auth(
     init_config: AppInitConfig,
     config: &Config,
+    mut character_service: CharacterService,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
         session,
@@ -60,6 +62,7 @@ pub async fn new_with_auth(
         config,
         init_config.pre_resolved_session,
         init_config.character,
+        &mut character_service,
     )
     .await?;
 
@@ -102,7 +105,7 @@ pub async fn new_with_auth(
         session,
         ui: UiState::from_config(theme, config),
         picker: PickerController::new(),
-        character_cache: crate::character::cache::CardCache::new(),
+        character_service,
         persona_manager,
         preset_manager,
     };
@@ -123,13 +126,14 @@ pub async fn new_with_auth(
 
 pub async fn new_uninitialized(
     log_file: Option<String>,
+    mut character_service: CharacterService,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let UninitializedSessionBootstrap {
         session,
         theme,
         config,
         startup_requires_provider,
-    } = session::prepare_uninitialized(log_file).await?;
+    } = session::prepare_uninitialized(log_file, &mut character_service).await?;
 
     let mut picker = PickerController::new();
     if startup_requires_provider {
@@ -144,7 +148,7 @@ pub async fn new_uninitialized(
         session,
         ui: UiState::from_config(theme, &config),
         picker,
-        character_cache: crate::character::cache::CardCache::new(),
+        character_service,
         persona_manager,
         preset_manager,
     };
@@ -163,7 +167,7 @@ pub struct App {
     pub session: SessionContext,
     pub ui: UiState,
     pub picker: PickerController,
-    pub character_cache: crate::character::cache::CardCache,
+    pub character_service: CharacterService,
     pub persona_manager: crate::core::persona::PersonaManager,
     pub preset_manager: crate::core::preset::PresetManager,
 }
@@ -293,7 +297,7 @@ impl App {
             session,
             ui,
             picker: PickerController::new(),
-            character_cache: crate::character::cache::CardCache::new(),
+            character_service: CharacterService::new(),
             persona_manager,
             preset_manager,
         }
@@ -428,11 +432,16 @@ impl App {
 
     /// Open a character picker modal with available character cards
     pub fn open_character_picker(&mut self) {
-        if let Err(message) = self
-            .picker
-            .open_character_picker(&mut self.character_cache, &self.session)
-        {
-            self.conversation().set_status(message);
+        match self.character_service.list_metadata() {
+            Ok(cards) => {
+                if let Err(message) = self.picker.open_character_picker(cards, &self.session) {
+                    self.conversation().set_status(message);
+                }
+            }
+            Err(err) => {
+                self.conversation()
+                    .set_status(format!("Error loading characters: {}", err));
+            }
         }
     }
 
@@ -464,8 +473,8 @@ impl App {
                 return;
             }
 
-            match crate::character::loader::find_card_by_name(&character_name) {
-                Ok((card, _path)) => {
+            match self.character_service.resolve_by_name(&character_name) {
+                Ok(card) => {
                     let card_name = card.data.name.clone();
                     self.session.set_character(card);
 

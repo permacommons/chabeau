@@ -4,6 +4,7 @@ pub use registry::{all_commands, matching_commands, CommandInvocation};
 
 use crate::core::app::App;
 use chrono::Utc;
+use registry::DispatchOutcome;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -19,27 +20,14 @@ pub enum CommandResult {
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
-    let trimmed = input.trim();
-
-    if !trimmed.starts_with('/') {
-        return CommandResult::ProcessAsMessage(input.to_string());
-    }
-
-    let mut parts = trimmed[1..].splitn(2, ' ');
-    let command_name = match parts.next() {
-        Some(name) if !name.is_empty() => name,
-        _ => return CommandResult::ProcessAsMessage(input.to_string()),
-    };
-    let args = parts.next().unwrap_or("").trim();
-
-    if let Some(command) = registry::find_command(command_name) {
-        let invocation = CommandInvocation {
-            input: trimmed,
-            args,
-        };
-        (command.handler)(app, invocation)
-    } else {
-        CommandResult::ProcessAsMessage(input.to_string())
+    match registry::registry().dispatch(input) {
+        DispatchOutcome::NotACommand | DispatchOutcome::UnknownCommand => {
+            CommandResult::ProcessAsMessage(input.to_string())
+        }
+        DispatchOutcome::Invocation(invocation) => {
+            let handler = invocation.command.handler;
+            handler(app, invocation)
+        }
     }
 }
 
@@ -60,10 +48,8 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
 }
 
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-
-    match parts.len() {
-        1 => match app.session.logging.toggle_logging() {
+    match invocation.args_len() {
+        0 => match app.session.logging.toggle_logging() {
             Ok(message) => {
                 app.conversation().set_status(message);
                 CommandResult::Continue
@@ -73,8 +59,8 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
                 CommandResult::Continue
             }
         },
-        2 => {
-            let filename = parts[1];
+        1 => {
+            let filename = invocation.arg(0).unwrap();
             match app.session.logging.set_log_file(filename.to_string()) {
                 Ok(message) => {
                     app.conversation().set_status(message);
@@ -95,10 +81,8 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
 }
 
 pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-
-    match parts.len() {
-        1 => {
+    match invocation.args_len() {
+        0 => {
             let timestamp = Utc::now().format("%Y-%m-%d").to_string();
             let filename = format!("chabeau-log-{}.txt", timestamp);
             match dump_conversation(app, &filename) {
@@ -115,8 +99,8 @@ pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> C
                 }
             }
         }
-        2 => {
-            let filename = parts[1];
+        1 => {
+            let filename = invocation.arg(0).unwrap();
             handle_dump_result(app, dump_conversation(app, filename), filename)
         }
         _ => {
@@ -127,214 +111,179 @@ pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> C
 }
 
 pub(super) fn handle_theme(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => CommandResult::OpenThemePicker,
-        _ => {
-            let id = parts[1];
-            let res = {
-                let mut controller = app.theme_controller();
-                controller.apply_theme_by_id(id)
-            };
-            match res {
-                Ok(_) => {
-                    app.conversation().set_status(format!("Theme set: {}", id));
-                    CommandResult::Continue
-                }
-                Err(_e) => {
-                    app.conversation().set_status("Theme error");
-                    CommandResult::Continue
-                }
+    if invocation.args_len() == 0 {
+        CommandResult::OpenThemePicker
+    } else {
+        let id = invocation.arg(0).unwrap();
+        let res = {
+            let mut controller = app.theme_controller();
+            controller.apply_theme_by_id(id)
+        };
+        match res {
+            Ok(_) => {
+                app.conversation().set_status(format!("Theme set: {}", id));
+                CommandResult::Continue
+            }
+            Err(_e) => {
+                app.conversation().set_status("Theme error");
+                CommandResult::Continue
             }
         }
     }
 }
 
 pub(super) fn handle_model(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => CommandResult::OpenModelPicker,
-        _ => {
-            let model_id = parts[1];
-            {
-                let mut controller = app.provider_controller();
-                controller.apply_model_by_id(model_id);
-            }
-            app.conversation()
-                .set_status(format!("Model set: {}", model_id));
-            CommandResult::Continue
+    if invocation.args_len() == 0 {
+        CommandResult::OpenModelPicker
+    } else {
+        let model_id = invocation.arg(0).unwrap();
+        {
+            let mut controller = app.provider_controller();
+            controller.apply_model_by_id(model_id);
         }
+        app.conversation()
+            .set_status(format!("Model set: {}", model_id));
+        CommandResult::Continue
     }
 }
 
 pub(super) fn handle_provider(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => CommandResult::OpenProviderPicker,
-        _ => {
-            let provider_id = parts[1];
-            let (result, should_open_model_picker) = {
-                let mut controller = app.provider_controller();
-                controller.apply_provider_by_id(provider_id)
-            };
-            match result {
-                Ok(_) => {
-                    app.conversation()
-                        .set_status(format!("Provider set: {}", provider_id));
-                    if should_open_model_picker {
-                        CommandResult::OpenModelPicker
-                    } else {
-                        CommandResult::Continue
-                    }
-                }
-                Err(e) => {
-                    app.conversation()
-                        .set_status(format!("Provider error: {}", e));
+    if invocation.args_len() == 0 {
+        CommandResult::OpenProviderPicker
+    } else {
+        let provider_id = invocation.arg(0).unwrap();
+        let (result, should_open_model_picker) = {
+            let mut controller = app.provider_controller();
+            controller.apply_provider_by_id(provider_id)
+        };
+        match result {
+            Ok(_) => {
+                app.conversation()
+                    .set_status(format!("Provider set: {}", provider_id));
+                if should_open_model_picker {
+                    CommandResult::OpenModelPicker
+                } else {
                     CommandResult::Continue
                 }
+            }
+            Err(e) => {
+                app.conversation()
+                    .set_status(format!("Provider error: {}", e));
+                CommandResult::Continue
             }
         }
     }
 }
 
 pub(super) fn handle_markdown(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let action = invocation.args.split_whitespace().next().unwrap_or("");
-    let mut new_state = app.ui.markdown_enabled;
-    match action.to_ascii_lowercase().as_str() {
-        "on" => new_state = true,
-        "off" => new_state = false,
-        "toggle" | "" => new_state = !new_state,
-        _ => {
-            app.conversation()
-                .set_status("Usage: /markdown [on|off|toggle]");
-            return CommandResult::Continue;
-        }
-    }
-    app.ui.markdown_enabled = new_state;
-    match crate::core::config::Config::load() {
-        Ok(mut cfg) => {
-            cfg.markdown = Some(new_state);
-            if let Err(e) = cfg.save() {
-                let _ = e;
-                app.conversation().set_status(format!(
-                    "Markdown {} (unsaved)",
-                    if new_state { "enabled" } else { "disabled" }
-                ));
-            } else {
-                app.conversation().set_status(format!(
-                    "Markdown {}",
-                    if new_state { "enabled" } else { "disabled" }
-                ));
-            }
-        }
-        Err(_e) => {
-            app.conversation().set_status(format!(
-                "Markdown {}",
-                if new_state { "enabled" } else { "disabled" }
-            ));
-        }
-    }
-    CommandResult::Continue
+    handle_toggle_command(
+        app,
+        invocation,
+        app.ui.markdown_enabled,
+        ToggleText {
+            usage: "Usage: /markdown [on|off|toggle]",
+            feature: "Markdown",
+            on_word: "enabled",
+            off_word: "disabled",
+        },
+        |app, new_state| app.ui.markdown_enabled = new_state,
+        |cfg, new_state| cfg.markdown = Some(new_state),
+    )
 }
 
 pub(super) fn handle_syntax(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let action = invocation.args.split_whitespace().next().unwrap_or("");
-    let mut new_state = app.ui.syntax_enabled;
-    match action.to_ascii_lowercase().as_str() {
-        "on" => new_state = true,
-        "off" => new_state = false,
-        "toggle" | "" => new_state = !new_state,
-        _ => {
-            app.conversation()
-                .set_status("Usage: /syntax [on|off|toggle]");
-            return CommandResult::Continue;
-        }
-    }
-    app.ui.syntax_enabled = new_state;
-    match crate::core::config::Config::load() {
-        Ok(mut cfg) => {
-            cfg.syntax = Some(new_state);
-            if let Err(e) = cfg.save() {
-                let _ = e;
-                app.conversation().set_status(format!(
-                    "Syntax {} (unsaved)",
-                    if new_state { "on" } else { "off" }
-                ));
-            } else {
-                app.conversation()
-                    .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
-            }
-        }
-        Err(_e) => {
-            app.conversation()
-                .set_status(format!("Syntax {}", if new_state { "on" } else { "off" }));
-        }
-    }
-    CommandResult::Continue
+    handle_toggle_command(
+        app,
+        invocation,
+        app.ui.syntax_enabled,
+        ToggleText {
+            usage: "Usage: /syntax [on|off|toggle]",
+            feature: "Syntax",
+            on_word: "on",
+            off_word: "off",
+        },
+        |app, new_state| app.ui.syntax_enabled = new_state,
+        |cfg, new_state| cfg.syntax = Some(new_state),
+    )
 }
 
 pub(super) fn handle_character(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => {
-            // No argument provided - open character picker
-            CommandResult::OpenCharacterPicker
-        }
-        _ => {
-            // Character name provided - load it directly
-            let character_name = parts[1..].join(" ");
-            match app.character_service.resolve(&character_name) {
-                Ok(card) => {
-                    let name = card.data.name.clone();
-                    app.session.set_character(card);
-                    app.conversation()
-                        .set_status(format!("Character set: {}", name));
-                    CommandResult::Continue
-                }
-                Err(e) => {
-                    app.conversation()
-                        .set_status(format!("Character error: {}", e));
-                    CommandResult::Continue
-                }
+    if invocation.args_text().is_empty() {
+        CommandResult::OpenCharacterPicker
+    } else {
+        let character_name = invocation.args_text();
+        match app.character_service.resolve(character_name) {
+            Ok(card) => {
+                let name = card.data.name.clone();
+                app.session.set_character(card);
+                app.conversation()
+                    .set_status(format!("Character set: {}", name));
+                CommandResult::Continue
+            }
+            Err(e) => {
+                app.conversation()
+                    .set_status(format!("Character error: {}", e));
+                CommandResult::Continue
             }
         }
     }
 }
 
 pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => {
-            // No argument provided - open persona picker
-            CommandResult::OpenPersonaPicker
+    if invocation.args_len() == 0 {
+        CommandResult::OpenPersonaPicker
+    } else {
+        let persona_id = invocation.arg(0).unwrap();
+        match app.persona_manager.set_active_persona(persona_id) {
+            Ok(()) => {
+                let active_persona_name = app
+                    .persona_manager
+                    .get_active_persona()
+                    .map(|p| p.display_name.clone());
+
+                let persona_name = active_persona_name
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                if active_persona_name.is_some() {
+                    let display_name = app.persona_manager.get_display_name();
+                    app.ui.update_user_display_name(display_name);
+                } else {
+                    app.ui.update_user_display_name("You".to_string());
+                }
+                app.conversation()
+                    .set_status(format!("Persona activated: {}", persona_name));
+                CommandResult::Continue
+            }
+            Err(e) => {
+                app.conversation()
+                    .set_status(format!("Persona error: {}", e));
+                CommandResult::Continue
+            }
         }
-        _ => {
-            // Persona ID provided - activate it directly
-            let persona_id = parts[1];
-            match app.persona_manager.set_active_persona(persona_id) {
+    }
+}
+
+pub(super) fn handle_preset(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    if invocation.args_len() == 0 {
+        CommandResult::OpenPresetPicker
+    } else {
+        let preset_id = invocation.arg(0).unwrap();
+        if preset_id.eq_ignore_ascii_case("off") || preset_id == "[turn_off_preset]" {
+            app.preset_manager.clear_active_preset();
+            app.conversation()
+                .set_status("Preset deactivated".to_string());
+            CommandResult::Continue
+        } else {
+            match app.preset_manager.set_active_preset(preset_id) {
                 Ok(()) => {
-                    let active_persona_name = app
-                        .persona_manager
-                        .get_active_persona()
-                        .map(|p| p.display_name.clone());
-
-                    let persona_name = active_persona_name
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string());
-
-                    if active_persona_name.is_some() {
-                        let display_name = app.persona_manager.get_display_name();
-                        app.ui.update_user_display_name(display_name);
-                    } else {
-                        app.ui.update_user_display_name("You".to_string());
-                    }
                     app.conversation()
-                        .set_status(format!("Persona activated: {}", persona_name));
+                        .set_status(format!("Preset activated: {}", preset_id));
                     CommandResult::Continue
                 }
                 Err(e) => {
                     app.conversation()
-                        .set_status(format!("Persona error: {}", e));
+                        .set_status(format!("Preset error: {}", e));
                     CommandResult::Continue
                 }
             }
@@ -342,33 +291,76 @@ pub(super) fn handle_persona(app: &mut App, invocation: CommandInvocation<'_>) -
     }
 }
 
-pub(super) fn handle_preset(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let parts: Vec<&str> = invocation.input.split_whitespace().collect();
-    match parts.len() {
-        1 => CommandResult::OpenPresetPicker,
-        _ => {
-            let preset_id = parts[1];
-            if preset_id.eq_ignore_ascii_case("off") || preset_id == "[turn_off_preset]" {
-                app.preset_manager.clear_active_preset();
-                app.conversation()
-                    .set_status("Preset deactivated".to_string());
-                CommandResult::Continue
+struct ToggleText {
+    usage: &'static str,
+    feature: &'static str,
+    on_word: &'static str,
+    off_word: &'static str,
+}
+
+fn handle_toggle_command<F, G>(
+    app: &mut App,
+    invocation: CommandInvocation<'_>,
+    current_state: bool,
+    text: ToggleText,
+    mut apply_ui: F,
+    mut persist_config: G,
+) -> CommandResult
+where
+    F: FnMut(&mut App, bool),
+    G: FnMut(&mut crate::core::config::Config, bool),
+{
+    let action = match invocation.toggle_action() {
+        Ok(action) => action,
+        Err(_) => {
+            app.conversation().set_status(text.usage);
+            return CommandResult::Continue;
+        }
+    };
+
+    let new_state = action.apply(current_state);
+    apply_ui(app, new_state);
+
+    match crate::core::config::Config::load() {
+        Ok(mut cfg) => {
+            persist_config(&mut cfg, new_state);
+            if let Err(e) = cfg.save() {
+                let _ = e;
+                app.conversation().set_status(format!(
+                    "{} {} (unsaved)",
+                    text.feature,
+                    if new_state {
+                        text.on_word
+                    } else {
+                        text.off_word
+                    }
+                ));
             } else {
-                match app.preset_manager.set_active_preset(preset_id) {
-                    Ok(()) => {
-                        app.conversation()
-                            .set_status(format!("Preset activated: {}", preset_id));
-                        CommandResult::Continue
+                app.conversation().set_status(format!(
+                    "{} {}",
+                    text.feature,
+                    if new_state {
+                        text.on_word
+                    } else {
+                        text.off_word
                     }
-                    Err(e) => {
-                        app.conversation()
-                            .set_status(format!("Preset error: {}", e));
-                        CommandResult::Continue
-                    }
-                }
+                ));
             }
         }
+        Err(_e) => {
+            app.conversation().set_status(format!(
+                "{} {}",
+                text.feature,
+                if new_state {
+                    text.on_word
+                } else {
+                    text.off_word
+                }
+            ));
+        }
     }
+
+    CommandResult::Continue
 }
 
 pub fn dump_conversation_with_overwrite(
@@ -458,6 +450,7 @@ mod tests {
         let commands = super::all_commands();
         assert!(commands.iter().any(|cmd| cmd.name == "help"));
         assert!(commands.iter().any(|cmd| cmd.name == "markdown"));
+        assert!(super::registry::find_command("help").is_some());
     }
 
     #[test]
@@ -479,6 +472,48 @@ mod tests {
             let result = process_input(&mut app, "/MarkDown On");
             assert!(matches!(result, CommandResult::Continue));
             assert!(app.ui.markdown_enabled);
+        });
+    }
+
+    #[test]
+    fn dispatch_provides_multi_word_arguments() {
+        use super::registry::DispatchOutcome;
+
+        let registry = super::registry::registry();
+        match registry.dispatch("/character Jean Luc Picard") {
+            DispatchOutcome::Invocation(invocation) => {
+                assert_eq!(invocation.command.name, "character");
+                assert_eq!(invocation.command_name(), "character");
+                assert_eq!(invocation.args_text(), "Jean Luc Picard");
+                let args: Vec<_> = invocation.args_iter().collect();
+                assert_eq!(args, vec!["Jean", "Luc", "Picard"]);
+                assert_eq!(invocation.arg(1), Some("Luc"));
+            }
+            other => panic!("unexpected dispatch outcome: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dispatch_reports_unknown_commands() {
+        use super::registry::DispatchOutcome;
+
+        let registry = super::registry::registry();
+        assert!(matches!(
+            registry.dispatch("/does-not-exist"),
+            DispatchOutcome::UnknownCommand
+        ));
+    }
+
+    #[test]
+    fn markdown_command_rejects_invalid_argument() {
+        with_test_config_env(|_| {
+            let mut app = create_test_app();
+            let result = process_input(&mut app, "/markdown banana");
+            assert!(matches!(result, CommandResult::Continue));
+            assert_eq!(
+                app.ui.status.as_deref(),
+                Some("Usage: /markdown [on|off|toggle]")
+            );
         });
     }
 

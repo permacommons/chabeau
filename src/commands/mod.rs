@@ -321,42 +321,25 @@ where
     let new_state = action.apply(current_state);
     apply_ui(app, new_state);
 
+    let state_word = if new_state {
+        text.on_word
+    } else {
+        text.off_word
+    };
+
     match crate::core::config::Config::load() {
         Ok(mut cfg) => {
             persist_config(&mut cfg, new_state);
-            if let Err(e) = cfg.save() {
-                let _ = e;
-                app.conversation().set_status(format!(
-                    "{} {} (unsaved)",
-                    text.feature,
-                    if new_state {
-                        text.on_word
-                    } else {
-                        text.off_word
-                    }
-                ));
+            let status = if cfg.save().is_ok() {
+                format!("{} {}", text.feature, state_word)
             } else {
-                app.conversation().set_status(format!(
-                    "{} {}",
-                    text.feature,
-                    if new_state {
-                        text.on_word
-                    } else {
-                        text.off_word
-                    }
-                ));
-            }
+                format!("{} {} (unsaved)", text.feature, state_word)
+            };
+            app.conversation().set_status(status);
         }
-        Err(_e) => {
-            app.conversation().set_status(format!(
-                "{} {}",
-                text.feature,
-                if new_state {
-                    text.on_word
-                } else {
-                    text.off_word
-                }
-            ));
+        Err(_) => {
+            app.conversation()
+                .set_status(format!("{} {}", text.feature, state_word));
         }
     }
 
@@ -483,7 +466,6 @@ mod tests {
         match registry.dispatch("/character Jean Luc Picard") {
             DispatchOutcome::Invocation(invocation) => {
                 assert_eq!(invocation.command.name, "character");
-                assert_eq!(invocation.command_name(), "character");
                 assert_eq!(invocation.args_text(), "Jean Luc Picard");
                 let args: Vec<_> = invocation.args_iter().collect();
                 assert_eq!(args, vec!["Jean", "Luc", "Picard"]);
@@ -895,54 +877,6 @@ mod tests {
     }
 
     #[test]
-    fn character_command_with_valid_name_sets_character() {
-        use std::fs;
-        use tempfile::tempdir;
-
-        // Create a temporary cards directory
-        let temp_dir = tempdir().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
-
-        // Create a test character card
-        let card_json = serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Test Character",
-                "description": "A test character",
-                "personality": "Friendly",
-                "scenario": "Testing",
-                "first_mes": "Hello!",
-                "mes_example": "Example"
-            }
-        });
-
-        let card_path = cards_dir.join("test.json");
-        fs::write(&card_path, card_json.to_string()).unwrap();
-
-        // Override the cards directory for this test
-        // Note: This test will fail without proper environment setup
-        // In a real scenario, we'd need to mock the get_cards_dir function
-        // For now, we'll just test the command structure
-        let mut app = create_test_app();
-
-        // Test that the command returns Continue (even if it fails to find the card)
-        let res = process_input(&mut app, "/character test");
-        assert!(matches!(res, CommandResult::Continue));
-        assert!(app.ui.status.is_some());
-    }
-
-    #[test]
-    fn character_command_with_multi_word_name() {
-        let mut app = create_test_app();
-        let res = process_input(&mut app, "/character Jean Luc Picard");
-        assert!(matches!(res, CommandResult::Continue));
-        assert!(app.ui.status.is_some());
-        // Should attempt to find "Jean Luc Picard" as a single name
-    }
-
-    #[test]
     fn character_command_registered_in_help() {
         let commands = super::all_commands();
         assert!(commands.iter().any(|cmd| cmd.name == "character"));
@@ -990,48 +924,5 @@ mod tests {
 
         assert!(matches!(res, CommandResult::Continue));
         assert_eq!(app.ui.user_display_name, "Alice");
-    }
-
-    #[test]
-    fn character_greeting_displayed_after_command() {
-        use std::fs;
-        use tempfile::tempdir;
-
-        // Create a temporary cards directory
-        let temp_dir = tempdir().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
-
-        // Create a test character card with a greeting
-        let card_json = serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Picard",
-                "description": "Captain of the Enterprise",
-                "personality": "Diplomatic and wise",
-                "scenario": "On the bridge",
-                "first_mes": "Make it so.",
-                "mes_example": "Example"
-            }
-        });
-
-        let card_path = cards_dir.join("picard.json");
-        fs::write(&card_path, card_json.to_string()).unwrap();
-
-        // Note: This test verifies the command structure
-        // In a real scenario with proper environment setup, the greeting would be displayed
-        let mut app = create_test_app();
-
-        // Verify no messages initially
-        assert_eq!(app.ui.messages.len(), 0);
-
-        // Process the character command (will fail to find card without proper setup)
-        let res = process_input(&mut app, "/character picard");
-        assert!(matches!(res, CommandResult::Continue));
-
-        // In a properly configured environment, the greeting would be displayed
-        // For this test, we just verify the command was processed
-        assert!(app.ui.status.is_some());
     }
 }

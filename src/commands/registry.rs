@@ -21,7 +21,6 @@ pub struct Command {
 pub struct CommandInvocation<'a> {
     pub command: &'static Command,
     pub input: &'a str,
-    command_name: &'a str,
     args: &'a str,
     tokens: Vec<&'a str>,
 }
@@ -31,7 +30,6 @@ impl<'a> fmt::Debug for CommandInvocation<'a> {
         f.debug_struct("CommandInvocation")
             .field("command", &self.command.name)
             .field("input", &self.input)
-            .field("command_name", &self.command_name)
             .field("args", &self.args)
             .field("tokens", &self.tokens)
             .finish()
@@ -39,11 +37,6 @@ impl<'a> fmt::Debug for CommandInvocation<'a> {
 }
 
 impl<'a> CommandInvocation<'a> {
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn command_name(&self) -> &'a str {
-        self.command_name
-    }
-
     pub fn args_text(&self) -> &'a str {
         self.args
     }
@@ -173,7 +166,6 @@ impl CommandRegistry {
         DispatchOutcome::Invocation(CommandInvocation {
             command,
             input: trimmed,
-            command_name: name,
             args,
             tokens,
         })

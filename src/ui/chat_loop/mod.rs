@@ -1441,7 +1441,7 @@ mod tests {
         apply_action(
             &mut app,
             AppAction::StreamErrored {
-                message: " api failure \n".into(),
+                message: "API Error:\n```\napi failure\n```\n".into(),
                 stream_id: 42,
             },
             ctx,
@@ -1450,7 +1450,7 @@ mod tests {
         assert!(!app.ui.is_streaming);
         let last_message = app.ui.messages.back().expect("app message added");
         assert_eq!(last_message.role, ROLE_APP_ERROR);
-        assert_eq!(last_message.content, "Error: api failure");
+        assert_eq!(last_message.content, "API Error:\n```\napi failure\n```");
     }
 
     #[test]

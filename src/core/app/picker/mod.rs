@@ -582,94 +582,55 @@ impl PickerController {
         Ok(())
     }
 
-    pub fn filter_models(&mut self) {
+    fn filter_session_items(&mut self, expected_mode: PickerMode, special_ids: &[&str]) {
         let Some(session) = self.session_mut() else {
             return;
         };
-        if let (PickerMode::Model, PickerData::Model(model_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = model_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                model_state.all_items.clone()
-            } else {
-                model_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
+
+        if session.mode != expected_mode {
+            return;
         }
+
+        let search_term = session.search_filter().to_lowercase();
+        let all_items = session.all_items();
+        session.state.items = if search_term.is_empty() {
+            all_items.clone()
+        } else {
+            all_items
+                .iter()
+                .filter(|item| {
+                    let matches_text = item.id.to_lowercase().contains(&search_term)
+                        || item.label.to_lowercase().contains(&search_term)
+                        || item
+                            .metadata
+                            .as_ref()
+                            .map(|metadata| metadata.to_lowercase().contains(&search_term))
+                            .unwrap_or(false);
+
+                    matches_text || special_ids.iter().any(|special_id| item.id == *special_id)
+                })
+                .cloned()
+                .collect()
+        };
+
+        if session.state.selected >= session.state.items.len() {
+            session.state.selected = 0;
+        }
+
+        self.sort_items();
+        self.update_title();
+    }
+
+    pub fn filter_models(&mut self) {
+        self.filter_session_items(PickerMode::Model, &[]);
     }
 
     pub fn filter_themes(&mut self) {
-        let Some(session) = self.session_mut() else {
-            return;
-        };
-        if let (PickerMode::Theme, PickerData::Theme(theme_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = theme_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                theme_state.all_items.clone()
-            } else {
-                theme_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
-        }
+        self.filter_session_items(PickerMode::Theme, &[]);
     }
 
     pub fn filter_providers(&mut self) {
-        let Some(session) = self.session_mut() else {
-            return;
-        };
-        if let (PickerMode::Provider, PickerData::Provider(provider_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = provider_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                provider_state.all_items.clone()
-            } else {
-                provider_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
-        }
+        self.filter_session_items(PickerMode::Provider, &[]);
     }
 
     pub fn revert_model_preview(&mut self, session: &mut SessionContext) {
@@ -952,113 +913,15 @@ impl PickerController {
     }
 
     pub fn filter_characters(&mut self) {
-        let Some(session) = self.session_mut() else {
-            return;
-        };
-        if let (PickerMode::Character, PickerData::Character(character_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = character_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                character_state.all_items.clone()
-            } else {
-                character_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        // Always include the special "turn off" entry
-                        item.id == TURN_OFF_CHARACTER_ID
-                            || item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                            || item
-                                .metadata
-                                .as_ref()
-                                .map(|m| m.to_lowercase().contains(&search_term))
-                                .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
-        }
+        self.filter_session_items(PickerMode::Character, &[TURN_OFF_CHARACTER_ID]);
     }
 
     pub fn filter_personas(&mut self) {
-        let Some(session) = self.session_mut() else {
-            return;
-        };
-        if let (PickerMode::Persona, PickerData::Persona(persona_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = persona_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                persona_state.all_items.clone()
-            } else {
-                persona_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        // Always include the special "turn off" entry
-                        item.id == TURN_OFF_PERSONA_ID
-                            || item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                            || item
-                                .metadata
-                                .as_ref()
-                                .map(|m| m.to_lowercase().contains(&search_term))
-                                .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
-        }
+        self.filter_session_items(PickerMode::Persona, &[TURN_OFF_PERSONA_ID]);
     }
 
     pub fn filter_presets(&mut self) {
-        let Some(session) = self.session_mut() else {
-            return;
-        };
-        if let (PickerMode::Preset, PickerData::Preset(preset_state)) =
-            (session.mode, &mut session.data)
-        {
-            let search_term = preset_state.search_filter.to_lowercase();
-            let filtered: Vec<PickerItem> = if search_term.is_empty() {
-                preset_state.all_items.clone()
-            } else {
-                preset_state
-                    .all_items
-                    .iter()
-                    .filter(|item| {
-                        item.id == TURN_OFF_PRESET_ID
-                            || item.id.to_lowercase().contains(&search_term)
-                            || item.label.to_lowercase().contains(&search_term)
-                            || item
-                                .metadata
-                                .as_ref()
-                                .map(|m| m.to_lowercase().contains(&search_term))
-                                .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect()
-            };
-            session.state.items = filtered;
-            if session.state.selected >= session.state.items.len() {
-                session.state.selected = 0;
-            }
-            self.sort_items();
-            self.update_title();
-        }
+        self.filter_session_items(PickerMode::Preset, &[TURN_OFF_PRESET_ID]);
     }
 
     pub fn open_character_picker(
@@ -1320,6 +1183,163 @@ impl PickerController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn picker_item(id: &str, label: &str, metadata: Option<&str>) -> PickerItem {
+        PickerItem {
+            id: id.to_string(),
+            label: label.to_string(),
+            metadata: metadata.map(|value| value.to_string()),
+            sort_key: None,
+        }
+    }
+
+    #[test]
+    fn test_filter_models_resets_selection_and_matches_case_insensitively() {
+        let mut controller = PickerController::new();
+        let items = vec![
+            picker_item("gpt-4", "GPT-4", None),
+            picker_item("gpt-3.5", "GPT-3.5", None),
+            picker_item("claude-3", "Claude 3", None),
+        ];
+
+        let mut picker_state = PickerState::new("Pick Model", items.clone(), 2);
+        picker_state.sort_mode = SortMode::Name;
+
+        let mut session = PickerSession {
+            mode: PickerMode::Model,
+            state: picker_state,
+            data: PickerData::Model(ModelPickerState {
+                search_filter: "GPT".to_string(),
+                all_items: items,
+                before_model: None,
+                has_dates: false,
+            }),
+        };
+        session.state.sort_mode = session.default_sort_mode();
+
+        controller.picker_session = Some(session);
+        controller.filter_models();
+
+        let session = controller.session().expect("model picker session");
+        assert_eq!(session.state.selected, 0);
+        assert_eq!(session.state.items.len(), 2);
+        let ids: Vec<&str> = session
+            .state
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        assert!(ids.contains(&"gpt-4"));
+        assert!(ids.contains(&"gpt-3.5"));
+    }
+
+    #[test]
+    fn test_filter_characters_preserves_special_entry_and_selection_bounds() {
+        let mut controller = PickerController::new();
+        let items = vec![
+            picker_item(
+                TURN_OFF_CHARACTER_ID,
+                "[Turn off character mode]",
+                Some("Disable character"),
+            ),
+            picker_item("alice", "Alice", Some("Friendly adventurer")),
+            picker_item("gamma", "Gamma", Some("Galactic explorer")),
+        ];
+
+        let mut picker_state = PickerState::new("Pick Character", items.clone(), 2);
+        picker_state.sort_mode = SortMode::Name;
+
+        let mut session = PickerSession {
+            mode: PickerMode::Character,
+            state: picker_state,
+            data: PickerData::Character(CharacterPickerState {
+                search_filter: "GAMMA".to_string(),
+                all_items: items,
+            }),
+        };
+        session.state.sort_mode = session.default_sort_mode();
+
+        controller.picker_session = Some(session);
+        controller.filter_characters();
+
+        let session = controller.session().expect("character picker session");
+        assert_eq!(session.state.selected, 0);
+        assert_eq!(session.state.items.len(), 2);
+        assert_eq!(session.state.items[0].id, TURN_OFF_CHARACTER_ID);
+        assert!(session.state.items.iter().any(|item| item.id == "gamma"));
+    }
+
+    #[test]
+    fn test_filter_personas_preserves_special_entry_and_selection_bounds() {
+        let mut controller = PickerController::new();
+        let items = vec![
+            picker_item(
+                TURN_OFF_PERSONA_ID,
+                "[Turn off persona]",
+                Some("Deactivate persona"),
+            ),
+            picker_item("mentor", "Mentor", Some("Helpful adviser")),
+            picker_item("artist", "Artist", Some("Creative mind")),
+        ];
+
+        let mut picker_state = PickerState::new("Pick Persona", items.clone(), 2);
+        picker_state.sort_mode = SortMode::Name;
+
+        let mut session = PickerSession {
+            mode: PickerMode::Persona,
+            state: picker_state,
+            data: PickerData::Persona(PersonaPickerState {
+                search_filter: "ADVISER".to_string(),
+                all_items: items,
+            }),
+        };
+        session.state.sort_mode = session.default_sort_mode();
+
+        controller.picker_session = Some(session);
+        controller.filter_personas();
+
+        let session = controller.session().expect("persona picker session");
+        assert_eq!(session.state.selected, 0);
+        assert_eq!(session.state.items.len(), 2);
+        assert_eq!(session.state.items[0].id, TURN_OFF_PERSONA_ID);
+        assert!(session.state.items.iter().any(|item| item.id == "mentor"));
+    }
+
+    #[test]
+    fn test_filter_presets_preserves_special_entry_and_selection_bounds() {
+        let mut controller = PickerController::new();
+        let items = vec![
+            picker_item(
+                TURN_OFF_PRESET_ID,
+                "[Turn off preset]",
+                Some("Deactivate preset"),
+            ),
+            picker_item("focus", "Focus Mode", Some("Deep work profile")),
+            picker_item("chatty", "Chatty", Some("Casual conversation")),
+        ];
+
+        let mut picker_state = PickerState::new("Pick Preset", items.clone(), 2);
+        picker_state.sort_mode = SortMode::Name;
+
+        let mut session = PickerSession {
+            mode: PickerMode::Preset,
+            state: picker_state,
+            data: PickerData::Preset(PresetPickerState {
+                search_filter: "FOCUS".to_string(),
+                all_items: items,
+            }),
+        };
+        session.state.sort_mode = session.default_sort_mode();
+
+        controller.picker_session = Some(session);
+        controller.filter_presets();
+
+        let session = controller.session().expect("preset picker session");
+        assert_eq!(session.state.selected, 0);
+        assert_eq!(session.state.items.len(), 2);
+        assert_eq!(session.state.items[0].id, TURN_OFF_PRESET_ID);
+        assert!(session.state.items.iter().any(|item| item.id == "focus"));
+    }
 
     #[test]
     fn test_sanitize_picker_metadata_removes_newlines() {

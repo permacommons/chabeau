@@ -22,6 +22,7 @@ use crate::core::app::{
     apply_actions, App, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
     ModelPickerRequest,
 };
+use crate::core::message::ROLE_USER;
 use crate::ui::osc_backend::OscBackend;
 use crate::ui::renderer::ui;
 use crate::utils::editor::{launch_external_editor, ExternalEditorOutcome};
@@ -661,7 +662,7 @@ async fn handle_edit_select_mode_event(
             }
             KeyCode::Enter => {
                 if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
                         let content = app.ui.messages[idx].content.clone();
                         {
                             let mut conversation = app.conversation();
@@ -689,7 +690,7 @@ async fn handle_edit_select_mode_event(
             }
             KeyCode::Char('E') | KeyCode::Char('e') => {
                 if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
                         let content = app.ui.messages[idx].content.clone();
                         app.ui.set_input_text(content);
                         app.ui.start_in_place_edit(idx);
@@ -700,7 +701,7 @@ async fn handle_edit_select_mode_event(
             }
             KeyCode::Delete => {
                 if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == "user" {
+                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
                         {
                             let mut conversation = app.conversation();
                             conversation.cancel_current_stream();
@@ -1123,7 +1124,7 @@ mod tests {
         apply_action, apply_actions, AppAction, AppActionContext, AppActionDispatcher,
         AppActionEnvelope, AppCommand,
     };
-    use crate::core::message::Message;
+    use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT};
     use crate::ui::theme::Theme;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
@@ -1447,8 +1448,8 @@ mod tests {
         );
 
         assert!(!app.ui.is_streaming);
-        let last_message = app.ui.messages.back().expect("system message added");
-        assert_eq!(last_message.role, "system");
+        let last_message = app.ui.messages.back().expect("app message added");
+        assert_eq!(last_message.role, ROLE_APP_ERROR);
         assert_eq!(last_message.content, "Error: api failure");
     }
 
@@ -1519,7 +1520,7 @@ mod tests {
         let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
         app.session.current_stream_id = 42;
         app.ui.messages.push_back(Message {
-            role: "assistant".to_string(),
+            role: ROLE_ASSISTANT.to_string(),
             content: String::new(),
         });
         app.ui.is_streaming = true;
@@ -1545,7 +1546,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|msg| msg.role == "system");
+            .find(|msg| message::is_app_message_role(&msg.role));
         assert!(last_message.is_none(), "non-matching error message ignored");
     }
 }

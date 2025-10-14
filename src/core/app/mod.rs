@@ -1524,14 +1524,15 @@ Some additional text after the table."#;
     #[test]
     fn test_prev_next_user_message_index_navigation() {
         let mut app = create_test_app();
-        // indices: 0 user, 1 assistant, 2 system, 3 user
+        // indices: 0 user, 1 assistant, 2 app, 3 user
         app.ui.messages.push_back(create_test_message("user", "u1"));
         app.ui
             .messages
             .push_back(create_test_message("assistant", "a1"));
-        app.ui
-            .messages
-            .push_back(create_test_message("system", "s1"));
+        app.ui.messages.push_back(create_test_message(
+            crate::core::message::ROLE_APP_INFO,
+            "s1",
+        ));
         app.ui.messages.push_back(create_test_message("user", "u2"));
 
         // From index 3 (user) prev should be 0 (skipping non-user)

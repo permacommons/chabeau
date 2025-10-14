@@ -11,6 +11,7 @@ use crate::core::app::picker::PickerMode;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
 use crate::core::config::Config;
+use crate::core::message::AppMessageKind;
 
 pub enum AppAction {
     AppendResponseChunk {
@@ -148,7 +149,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
             {
                 let mut conversation = app.conversation();
-                conversation.add_system_message(error_message);
+                conversation.add_app_message(AppMessageKind::Error, error_message);
                 let available_height =
                     conversation.calculate_available_height(ctx.term_height, input_area_height);
                 conversation.update_scroll_position(available_height, ctx.term_width);

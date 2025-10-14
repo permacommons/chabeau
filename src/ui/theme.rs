@@ -1,5 +1,50 @@
+use crate::core::message::AppMessageKind;
 use crate::ui::builtin_themes::ThemeSpec;
 use ratatui::style::{Color, Modifier, Style};
+
+#[derive(Debug, Clone)]
+pub struct AppMessageStyle {
+    pub prefix: String,
+    pub prefix_style: Style,
+    pub text_style: Style,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppMessageStyles {
+    pub info: AppMessageStyle,
+    pub warning: AppMessageStyle,
+    pub error: AppMessageStyle,
+}
+
+impl AppMessageStyles {
+    pub fn fallback() -> Self {
+        AppMessageStyles {
+            info: AppMessageStyle {
+                prefix: "ℹ️  ".to_string(),
+                prefix_style: Style::default().fg(Color::Rgb(125, 211, 252)),
+                text_style: Style::default().fg(Color::Rgb(191, 219, 254)),
+            },
+            warning: AppMessageStyle {
+                prefix: "⚠️  ".to_string(),
+                prefix_style: Style::default().fg(Color::Rgb(253, 224, 71)),
+                text_style: Style::default().fg(Color::Rgb(250, 204, 21)),
+            },
+            error: AppMessageStyle {
+                prefix: "⛔  ".to_string(),
+                prefix_style: Style::default().fg(Color::LightRed),
+                text_style: Style::default().fg(Color::LightRed),
+            },
+        }
+    }
+
+    pub fn style(&self, kind: AppMessageKind) -> &AppMessageStyle {
+        match kind {
+            AppMessageKind::Info => &self.info,
+            AppMessageKind::Warning => &self.warning,
+            AppMessageKind::Error => &self.error,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -11,6 +56,7 @@ pub struct Theme {
     pub assistant_text_style: Style,
     pub system_text_style: Style,
     pub error_text_style: Style,
+    pub app_messages: AppMessageStyles,
 
     // Chrome
     pub title_style: Style,
@@ -57,6 +103,7 @@ impl Theme {
             assistant_text_style: Style::default().fg(Color::White),
             system_text_style: Style::default().fg(Color::DarkGray),
             error_text_style: Style::default().fg(Color::LightRed),
+            app_messages: AppMessageStyles::fallback(),
 
             title_style: Style::default().fg(Color::Gray),
             streaming_indicator_style: Style::default().fg(Color::White),
@@ -99,6 +146,23 @@ impl Theme {
             assistant_text_style: Style::default().fg(Color::Black),
             system_text_style: Style::default().fg(Color::Gray),
             error_text_style: Style::default().fg(Color::Red),
+            app_messages: AppMessageStyles {
+                info: AppMessageStyle {
+                    prefix: "ℹ️  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(37, 99, 235)),
+                    text_style: Style::default().fg(Color::Rgb(29, 78, 216)),
+                },
+                warning: AppMessageStyle {
+                    prefix: "⚠️  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(217, 119, 6)),
+                    text_style: Style::default().fg(Color::Rgb(202, 138, 4)),
+                },
+                error: AppMessageStyle {
+                    prefix: "⛔  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Red),
+                    text_style: Style::default().fg(Color::Red),
+                },
+            },
 
             title_style: Style::default().fg(Color::DarkGray),
             streaming_indicator_style: Style::default().fg(Color::Black),
@@ -141,6 +205,23 @@ impl Theme {
             assistant_text_style: Style::default().fg(Color::Gray),
             system_text_style: Style::default().fg(Color::DarkGray),
             error_text_style: Style::default().fg(Color::LightRed),
+            app_messages: AppMessageStyles {
+                info: AppMessageStyle {
+                    prefix: "ℹ️  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(139, 233, 253)),
+                    text_style: Style::default().fg(Color::Rgb(189, 246, 255)),
+                },
+                warning: AppMessageStyle {
+                    prefix: "⚠️  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(255, 184, 108)),
+                    text_style: Style::default().fg(Color::Rgb(255, 170, 0)),
+                },
+                error: AppMessageStyle {
+                    prefix: "⛔  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(255, 85, 85)),
+                    text_style: Style::default().fg(Color::Rgb(255, 121, 121)),
+                },
+            },
 
             title_style: Style::default().fg(Color::LightMagenta),
             streaming_indicator_style: Style::default().fg(Color::LightMagenta),
@@ -297,6 +378,35 @@ impl Theme {
             .and_then(parse_color)
             .unwrap_or(Color::Black);
 
+        let mut app_messages = AppMessageStyles::fallback();
+        if let Some(prefix) = &spec.app_info_prefix {
+            app_messages.info.prefix = prefix.clone();
+        }
+        if let Some(style) = &spec.app_info_prefix_style {
+            app_messages.info.prefix_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(style) = &spec.app_info_text {
+            app_messages.info.text_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(prefix) = &spec.app_warning_prefix {
+            app_messages.warning.prefix = prefix.clone();
+        }
+        if let Some(style) = &spec.app_warning_prefix_style {
+            app_messages.warning.prefix_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(style) = &spec.app_warning_text {
+            app_messages.warning.text_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(prefix) = &spec.app_error_prefix {
+            app_messages.error.prefix = prefix.clone();
+        }
+        if let Some(style) = &spec.app_error_prefix_style {
+            app_messages.error.prefix_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(style) = &spec.app_error_text {
+            app_messages.error.text_style = parse_style(&Some(style.clone()));
+        }
+
         let mut theme = Theme {
             background_color,
             user_prefix_style: parse_style(&spec.user_prefix),
@@ -305,6 +415,7 @@ impl Theme {
             system_text_style: parse_style(&spec.system_text),
             error_text_style: Style::default()
                 .fg(Self::select_error_color_for_bg(background_color)),
+            app_messages,
 
             title_style: parse_style(&spec.title),
             streaming_indicator_style: parse_style(&spec.streaming_indicator),
@@ -367,6 +478,10 @@ impl Theme {
             theme.selection_highlight_style = theme.selection_highlight_style.patch(fallback);
         }
         theme
+    }
+
+    pub fn app_message_style(&self, kind: AppMessageKind) -> &AppMessageStyle {
+        self.app_messages.style(kind)
     }
 
     // Choose a readable error color for the given background.

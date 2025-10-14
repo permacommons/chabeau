@@ -65,6 +65,16 @@ user_text = "#9cdcfe"
 assistant_text = "#ce9178"
 selection_highlight = "#264f78"
 input_border = "#3a3d41"
+# Optional: customize app messages emitted by Chabeau itself
+app_info_prefix = "ℹ️  "
+app_info_prefix_style = "#4fc1ff"
+app_info_text = "#9cdcfe"
+app_warning_prefix = "⚠️  "
+app_warning_prefix_style = "#d19a66"
+app_warning_text = "#d7ba7d"
+app_error_prefix = "⛔  "
+app_error_prefix_style = "#f44747"
+app_error_text = "#f44747"
 
 # Define personas to represent different user identities in conversations.
 # Use `/persona` in the TUI or `--persona <id>` on the CLI to activate.

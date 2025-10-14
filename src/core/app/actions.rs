@@ -697,11 +697,11 @@ fn handle_picker_apply_selection(
                         app.picker.startup_requires_model = false;
                     }
                     // Load default character for this provider/model if configured
-                    load_default_character_if_configured(app);
+                    load_default_character_if_configured(app, ctx);
                     // Load default persona for this provider/model if configured
-                    load_default_persona_if_configured(app);
+                    load_default_persona_if_configured(app, ctx);
                     // Load default preset for this provider/model if configured
-                    load_default_preset_if_configured(app);
+                    load_default_preset_if_configured(app, ctx);
                 }
                 Err(e) => set_status_message(app, format!("Model error: {}", e), ctx),
             }
@@ -740,11 +740,11 @@ fn handle_picker_apply_selection(
                         followup = Some(AppCommand::LoadModelPicker(request));
                     } else {
                         // Load default character for this provider/model if configured
-                        load_default_character_if_configured(app);
+                        load_default_character_if_configured(app, ctx);
                         // Load default persona for this provider/model if configured
-                        load_default_persona_if_configured(app);
+                        load_default_persona_if_configured(app, ctx);
                         // Load default preset for this provider/model if configured
-                        load_default_preset_if_configured(app);
+                        load_default_preset_if_configured(app, ctx);
                     }
                 }
                 Err(e) => {
@@ -904,7 +904,21 @@ fn selected_picker_id(app: &App) -> Option<String> {
 }
 
 /// Load default character for current provider/model if one is configured
-fn load_default_character_if_configured(app: &mut App) {
+fn push_error_app_message(app: &mut App, message: String, ctx: AppActionContext) {
+    if ctx.term_width > 0 && ctx.term_height > 0 {
+        let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
+        let mut conversation = app.conversation();
+        conversation.add_app_message(AppMessageKind::Error, message);
+        let available_height =
+            conversation.calculate_available_height(ctx.term_height, input_area_height);
+        conversation.update_scroll_position(available_height, ctx.term_width);
+    } else {
+        app.conversation()
+            .add_app_message(AppMessageKind::Error, message);
+    }
+}
+
+fn load_default_character_if_configured(app: &mut App, ctx: AppActionContext) {
     let cfg = Config::load_test_safe();
     if let Some(default_name) =
         cfg.get_default_character(&app.session.provider_name, &app.session.model)
@@ -921,9 +935,10 @@ fn load_default_character_if_configured(app: &mut App) {
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "Warning: Could not load default character '{}': {}",
-                    default_name, e
+                push_error_app_message(
+                    app,
+                    format!("Could not load default character '{}': {}", default_name, e),
+                    ctx,
                 );
             }
         }
@@ -931,7 +946,7 @@ fn load_default_character_if_configured(app: &mut App) {
 }
 
 /// Load default persona for current provider/model if one is configured
-fn load_default_persona_if_configured(app: &mut App) {
+fn load_default_persona_if_configured(app: &mut App, ctx: AppActionContext) {
     // Don't load default persona if one is already active (e.g., from CLI)
     if app.persona_manager.get_active_persona().is_some() {
         return;
@@ -952,9 +967,10 @@ fn load_default_persona_if_configured(app: &mut App) {
                 app.ui.update_user_display_name(persona_name);
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: Could not load default persona '{}': {}",
-                    persona_id, e
+                push_error_app_message(
+                    app,
+                    format!("Could not load default persona '{}': {}", persona_id, e),
+                    ctx,
                 );
             }
         }
@@ -962,7 +978,7 @@ fn load_default_persona_if_configured(app: &mut App) {
 }
 
 /// Load default preset for current provider/model if one is configured
-fn load_default_preset_if_configured(app: &mut App) {
+fn load_default_preset_if_configured(app: &mut App, ctx: AppActionContext) {
     if app.preset_manager.get_active_preset().is_some() {
         return;
     }
@@ -973,9 +989,10 @@ fn load_default_preset_if_configured(app: &mut App) {
     {
         let preset_id = preset_id.to_string();
         if let Err(e) = app.preset_manager.set_active_preset(&preset_id) {
-            eprintln!(
-                "Warning: Could not load default preset '{}': {}",
-                preset_id, e
+            push_error_app_message(
+                app,
+                format!("Could not load default preset '{}': {}", preset_id, e),
+                ctx,
             );
         }
     }
@@ -1510,8 +1527,8 @@ mod tests {
         assert!(app.session.active_character.is_none());
 
         // Call the helper function directly (simulating model selection)
-        load_default_character_if_configured(&mut app);
-        load_default_persona_if_configured(&mut app);
+        load_default_character_if_configured(&mut app, AppActionContext::default());
+        load_default_persona_if_configured(&mut app, AppActionContext::default());
 
         // Verify character is still not loaded (no default set)
         assert!(app.session.active_character.is_none());
@@ -1559,7 +1576,7 @@ mod tests {
         assert!(app.persona_manager.get_active_persona().is_none());
 
         // Call the helper function directly (simulating model selection)
-        load_default_persona_if_configured(&mut app);
+        load_default_persona_if_configured(&mut app, AppActionContext::default());
 
         // Verify persona is now loaded
         let active_persona = app.persona_manager.get_active_persona();
@@ -1609,7 +1626,7 @@ mod tests {
         app.ui.update_user_display_name("Bob".to_string());
 
         // Call the helper function (simulating model selection)
-        load_default_persona_if_configured(&mut app);
+        load_default_persona_if_configured(&mut app, AppActionContext::default());
 
         // Verify the original persona is still active (default not loaded)
         let active_persona = app.persona_manager.get_active_persona();
@@ -1758,7 +1775,7 @@ mod tests {
 
         assert!(app.preset_manager.get_active_preset().is_none());
 
-        load_default_preset_if_configured(&mut app);
+        load_default_preset_if_configured(&mut app, AppActionContext::default());
 
         let active = app
             .preset_manager
@@ -1800,7 +1817,7 @@ mod tests {
             .set_active_preset("summary")
             .expect("activate preset");
 
-        load_default_preset_if_configured(&mut app);
+        load_default_preset_if_configured(&mut app, AppActionContext::default());
 
         let active = app
             .preset_manager

@@ -75,10 +75,9 @@ mod integration_tests {
         );
 
         assert!(result.is_ok());
-        let loaded_card = result.unwrap();
-        assert!(loaded_card.is_some());
-
-        let card = loaded_card.unwrap();
+        let outcome = result.unwrap();
+        assert!(outcome.errors.is_empty());
+        let card = outcome.character.unwrap();
         assert_eq!(card.data.name, "TestCLI");
         assert_eq!(card.data.first_mes, "Hello from CLI!");
     }
@@ -119,9 +118,9 @@ mod integration_tests {
         );
 
         assert!(result.is_ok());
-        let loaded_card = result.unwrap();
-        assert!(loaded_card.is_some());
-        assert_eq!(loaded_card.unwrap().data.name, "PickerChar1");
+        let outcome = result.unwrap();
+        assert!(outcome.errors.is_empty());
+        assert_eq!(outcome.character.unwrap().data.name, "PickerChar1");
     }
 
     #[test]
@@ -158,9 +157,9 @@ mod integration_tests {
         let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(None, "openai", "gpt-4", &config, &mut service);
 
-        let loaded_card = result.expect("default load result");
-        assert!(loaded_card.is_some());
-        assert_eq!(loaded_card.unwrap().data.name, "DefaultChar");
+        let outcome = result.expect("default load result");
+        assert!(outcome.errors.is_empty());
+        assert_eq!(outcome.character.unwrap().data.name, "DefaultChar");
     }
 
     #[test]
@@ -483,11 +482,11 @@ mod integration_tests {
         );
 
         assert!(result.is_ok());
-        let loaded = result.unwrap();
-        assert!(loaded.is_some());
+        let outcome = result.unwrap();
+        assert!(outcome.errors.is_empty());
 
         // Should load CLI character, not default
-        assert_eq!(loaded.unwrap().data.name, "CLIChar");
+        assert_eq!(outcome.character.unwrap().data.name, "CLIChar");
     }
 
     #[test]

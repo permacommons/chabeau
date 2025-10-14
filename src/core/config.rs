@@ -62,6 +62,9 @@ pub struct Config {
     pub theme: Option<String>,
     #[serde(default)]
     pub custom_themes: Vec<CustomTheme>,
+    /// Include built-in presets shipped with the binary
+    #[serde(default)]
+    pub builtin_presets: Option<bool>,
     /// Enable markdown rendering in the chat area
     pub markdown: Option<bool>,
     /// Enable syntax highlighting for fenced code blocks when markdown is enabled

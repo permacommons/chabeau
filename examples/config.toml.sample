@@ -17,6 +17,9 @@ syntax = true
 # Use `/theme` (Alt+Enter to persist) or `chabeau set theme <theme-id>`.
 theme = "dark"
 
+# Uncomment to hide built-in presets that ship with Chabeau.
+# builtin_presets = false
+
 # Persist default models per provider.
 # Set them with: `chabeau set default-model <provider> <model>`
 [default_models]

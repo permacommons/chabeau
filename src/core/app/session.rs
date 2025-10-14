@@ -39,6 +39,7 @@ pub struct SessionBootstrap {
     pub session: SessionContext,
     pub theme: Theme,
     pub startup_requires_provider: bool,
+    pub startup_errors: Vec<String>,
 }
 
 pub struct UninitializedSessionBootstrap {
@@ -92,6 +93,13 @@ impl SessionContext {
     }
 }
 
+/// Result of attempting to load a character during session initialization.
+#[derive(Debug)]
+pub(crate) struct CharacterLoadOutcome {
+    pub character: Option<CharacterCard>,
+    pub errors: Vec<String>,
+}
+
 /// Load character card for session initialization
 /// Priority: CLI flag > default for provider/model > None
 pub(crate) fn load_character_for_session(
@@ -100,36 +108,48 @@ pub(crate) fn load_character_for_session(
     model: &str,
     config: &Config,
     character_service: &mut CharacterService,
-) -> Result<Option<CharacterCard>, Box<dyn std::error::Error>> {
+) -> Result<CharacterLoadOutcome, Box<dyn std::error::Error>> {
     // If CLI character is specified, use it (highest priority)
     if let Some(character_name) = cli_character {
         let card = character_service
             .resolve(character_name)
             .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
-        return Ok(Some(card));
+        return Ok(CharacterLoadOutcome {
+            character: Some(card),
+            errors: Vec::new(),
+        });
     }
 
     // Otherwise, check for default character for this provider/model
+    let mut errors = Vec::new();
     match character_service.load_default_for_session(provider, model, config) {
-        Ok(Some((_name, card))) => return Ok(Some(card)),
+        Ok(Some((_name, card))) => {
+            return Ok(CharacterLoadOutcome {
+                character: Some(card),
+                errors,
+            })
+        }
         Ok(None) => {}
         Err(err) => {
             if let Some(default_character) = config.get_default_character(provider, model) {
-                eprintln!(
-                    "Warning: Failed to load default character '{}' for {}:{}: {}",
+                errors.push(format!(
+                    "Failed to load default character '{}' for {}:{}: {}",
                     default_character, provider, model, err
-                );
+                ));
             } else {
-                eprintln!(
-                    "Warning: Failed to load default character for {}:{}: {}",
+                errors.push(format!(
+                    "Failed to load default character for {}:{}: {}",
                     provider, model, err
-                );
+                ));
             }
         }
     }
 
     // No character specified or found
-    Ok(None)
+    Ok(CharacterLoadOutcome {
+        character: None,
+        errors,
+    })
 }
 
 pub(crate) fn initialize_logging(
@@ -213,7 +233,10 @@ pub(crate) async fn prepare_with_auth(
     let resolved_theme = resolve_theme(config);
 
     // Load character card if specified via CLI or config
-    let active_character = load_character_for_session(
+    let CharacterLoadOutcome {
+        character: active_character,
+        errors: startup_errors,
+    } = load_character_for_session(
         character.as_deref(),
         &provider_name,
         &final_model,
@@ -243,6 +266,7 @@ pub(crate) async fn prepare_with_auth(
         session,
         theme: resolved_theme,
         startup_requires_provider: false,
+        startup_errors,
     })
 }
 
@@ -565,11 +589,12 @@ mod tests {
     fn load_character_for_session_no_character() {
         let config = Config::default();
         let mut service = crate::character::CharacterService::new();
-        let result =
+        let outcome =
             super::load_character_for_session(None, "openai", "gpt-4", &config, &mut service)
                 .expect("load_character_for_session");
 
-        assert!(result.is_none());
+        assert!(outcome.character.is_none());
+        assert!(outcome.errors.is_empty());
     }
 
     #[test]
@@ -623,9 +648,19 @@ mod tests {
         // the logic exists in the function)
         // This test verifies the function signature and basic behavior
         let mut service = crate::character::CharacterService::new();
-        let result =
-            super::load_character_for_session(None, "openai", "gpt-4", &config, &mut service);
-        assert!(result.is_ok());
+        let result = super::load_character_for_session(
+            Some(card_path.to_str().unwrap()),
+            "openai",
+            "gpt-4",
+            &config,
+            &mut service,
+        );
+        let outcome = result.expect("cli load");
+        assert!(outcome.errors.is_empty());
+        assert_eq!(
+            outcome.character.expect("character loaded").data.name,
+            "TestChar"
+        );
     }
 
     #[test]
@@ -672,9 +707,10 @@ mod tests {
             &mut service,
         );
         assert!(result.is_ok());
-        let loaded_card = result.unwrap();
-        assert!(loaded_card.is_some());
-        assert_eq!(loaded_card.unwrap().data.name, "FilePathChar");
+        let outcome = result.unwrap();
+        assert!(outcome.character.is_some());
+        assert_eq!(outcome.character.unwrap().data.name, "FilePathChar");
+        assert!(outcome.errors.is_empty());
     }
 
     #[test]

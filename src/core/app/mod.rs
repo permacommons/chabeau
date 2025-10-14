@@ -2,6 +2,7 @@ use crate::api::models::fetch_models;
 use crate::api::ModelsResponse;
 use crate::character::service::CharacterService;
 use crate::core::config::Config;
+use crate::core::message::AppMessageKind;
 #[cfg(test)]
 use crate::core::message::Message;
 use crate::core::providers::ProviderSession;
@@ -54,6 +55,7 @@ pub async fn new_with_auth(
         session,
         theme,
         startup_requires_provider,
+        mut startup_errors,
     } = session::prepare_with_auth(
         init_config.model,
         init_config.log_file,
@@ -77,10 +79,10 @@ pub async fn new_with_auth(
         {
             let default_persona_id = default_persona_id.to_string(); // Clone to avoid borrow issues
             if let Err(e) = persona_manager.set_active_persona(&default_persona_id) {
-                eprintln!(
-                    "Warning: Could not load default persona '{}': {}",
+                startup_errors.push(format!(
+                    "Could not load default persona '{}': {}",
                     default_persona_id, e
-                );
+                ));
             }
         }
     }
@@ -94,10 +96,10 @@ pub async fn new_with_auth(
     {
         let default_preset_id = default_preset_id.to_string();
         if let Err(e) = preset_manager.set_active_preset(&default_preset_id) {
-            eprintln!(
-                "Warning: Could not load default preset '{}': {}",
+            startup_errors.push(format!(
+                "Could not load default preset '{}': {}",
                 default_preset_id, e
-            );
+            ));
         }
     }
 
@@ -119,6 +121,13 @@ pub async fn new_with_auth(
 
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;
+    }
+
+    if !startup_errors.is_empty() {
+        let mut conversation = app.conversation();
+        for error in startup_errors {
+            conversation.add_app_message(AppMessageKind::Error, error);
+        }
     }
 
     Ok(app)

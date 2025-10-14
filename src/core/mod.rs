@@ -1,4 +1,5 @@
 pub mod app;
+pub mod builtin_presets;
 pub mod builtin_providers;
 pub mod chat_stream;
 pub mod config;

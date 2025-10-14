@@ -1,7 +1,9 @@
 use super::shared_selection::{ManagedItem, SelectionState};
 use crate::api::ChatMessage;
+use crate::core::builtin_presets;
 use crate::core::config::{Config, Preset};
 use crate::core::persona::PersonaManager;
+use std::collections::HashSet;
 
 impl ManagedItem for Preset {
     fn id(&self) -> &str {
@@ -17,8 +19,23 @@ pub struct PresetManager {
 impl PresetManager {
     /// Create a new PresetManager and load presets from configuration
     pub fn load_presets(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut working_config = config.clone();
+
+        if working_config.builtin_presets.unwrap_or(true) {
+            let mut seen: HashSet<String> = working_config
+                .presets
+                .iter()
+                .map(|preset| preset.id.clone())
+                .collect();
+            for preset in builtin_presets::load_builtin_presets() {
+                if seen.insert(preset.id.clone()) {
+                    working_config.presets.push(preset);
+                }
+            }
+        }
+
         let shared = SelectionState::load_from_config(
-            config,
+            &working_config,
             |cfg| &cfg.presets,
             |cfg| &cfg.default_presets,
             Config::set_default_preset,
@@ -174,7 +191,7 @@ impl PresetManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{Persona, Preset};
+    use crate::core::config::{Config, Persona, Preset};
 
     fn create_test_config() -> Config {
         Config {
@@ -190,6 +207,52 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_builtin_presets_enabled_by_default() {
+        let config = Config::default();
+        let manager = PresetManager::load_presets(&config).expect("load presets");
+
+        let ids: Vec<String> = manager
+            .list_presets()
+            .iter()
+            .map(|preset| preset.id.clone())
+            .collect();
+
+        assert!(ids.contains(&"short".to_string()));
+        assert!(ids.contains(&"roleplay".to_string()));
+        assert!(ids.contains(&"casual".to_string()));
+    }
+
+    #[test]
+    fn test_builtin_presets_can_be_disabled() {
+        let config = Config {
+            builtin_presets: Some(false),
+            ..Default::default()
+        };
+
+        let manager = PresetManager::load_presets(&config).expect("load presets");
+        assert!(manager.list_presets().is_empty());
+    }
+
+    #[test]
+    fn test_user_presets_override_builtins() {
+        let config = Config {
+            presets: vec![Preset {
+                id: "short".to_string(),
+                pre: "Custom short instructions.".to_string(),
+                post: String::new(),
+            }],
+            ..Default::default()
+        };
+
+        let manager = PresetManager::load_presets(&config).expect("load presets");
+        let preset = manager
+            .find_preset_by_id("short")
+            .expect("custom preset to exist");
+
+        assert_eq!(preset.pre, "Custom short instructions.");
     }
 
     fn create_messages() -> Vec<ChatMessage> {

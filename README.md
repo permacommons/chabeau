@@ -234,6 +234,8 @@ Personas and character cards work together seamlessly:
 
 Presets let you inject reusable system instructions into the first and last system messages that Chabeau sends to the model. They are ideal for lightweight tone or formatting tweaks that you want to toggle quickly.
 
+Chabeau ships with three built-in presets (`short`, `roleplay`, and `casual`) so you can experiment without editing your config. Set `builtin_presets = false` in `config.toml` to hide them from `/preset`, `/preset <id>`, and the `--preset` flag. If you define a preset with the same ID, your version overrides the built-in automatically.
+
 ### Configure Presets
 
 Add presets to your `config.toml`:

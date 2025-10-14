@@ -53,7 +53,7 @@ impl<'a> CommandInvocation<'a> {
         self.args
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     /// Returns an iterator over whitespace-delimited argument tokens.
     pub fn args_iter(&'a self) -> impl Iterator<Item = &'a str> + 'a {
         self.tokens.iter().copied()
@@ -208,7 +208,7 @@ pub fn all_commands() -> &'static [Command] {
     REGISTRY.all()
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn find_command(name: &str) -> Option<&'static Command> {
     REGISTRY.find(name)
 }

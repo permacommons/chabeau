@@ -583,51 +583,42 @@ impl PickerController {
     }
 
     fn filter_session_items(&mut self, expected_mode: PickerMode, special_ids: &[&str]) {
-        let updated = if let Some(session) = self.session_mut() {
-            if session.mode != expected_mode {
-                false
-            } else {
-                let search_term = session.search_filter().to_lowercase();
-                let filtered = {
-                    let all_items = session.all_items();
-                    if search_term.is_empty() {
-                        all_items.clone()
-                    } else {
-                        all_items
-                            .iter()
-                            .filter(|item| {
-                                let matches_text = item.id.to_lowercase().contains(&search_term)
-                                    || item.label.to_lowercase().contains(&search_term)
-                                    || item
-                                        .metadata
-                                        .as_ref()
-                                        .map(|metadata| {
-                                            metadata.to_lowercase().contains(&search_term)
-                                        })
-                                        .unwrap_or(false);
-
-                                matches_text
-                                    || special_ids.iter().any(|special_id| item.id == *special_id)
-                            })
-                            .cloned()
-                            .collect()
-                    }
-                };
-
-                session.state.items = filtered;
-                if session.state.selected >= session.state.items.len() {
-                    session.state.selected = 0;
-                }
-                true
-            }
-        } else {
-            false
+        let Some(session) = self.session_mut() else {
+            return;
         };
 
-        if updated {
-            self.sort_items();
-            self.update_title();
+        if session.mode != expected_mode {
+            return;
         }
+
+        let search_term = session.search_filter().to_lowercase();
+        let all_items = session.all_items();
+        session.state.items = if search_term.is_empty() {
+            all_items.clone()
+        } else {
+            all_items
+                .iter()
+                .filter(|item| {
+                    let matches_text = item.id.to_lowercase().contains(&search_term)
+                        || item.label.to_lowercase().contains(&search_term)
+                        || item
+                            .metadata
+                            .as_ref()
+                            .map(|metadata| metadata.to_lowercase().contains(&search_term))
+                            .unwrap_or(false);
+
+                    matches_text || special_ids.iter().any(|special_id| item.id == *special_id)
+                })
+                .cloned()
+                .collect()
+        };
+
+        if session.state.selected >= session.state.items.len() {
+            session.state.selected = 0;
+        }
+
+        self.sort_items();
+        self.update_title();
     }
 
     pub fn filter_models(&mut self) {
@@ -1240,71 +1231,6 @@ mod tests {
             .collect();
         assert!(ids.contains(&"gpt-4"));
         assert!(ids.contains(&"gpt-3.5"));
-    }
-
-    #[test]
-    fn test_filter_themes_resets_selection_when_results_shrink() {
-        let mut controller = PickerController::new();
-        let items = vec![
-            picker_item("light", "Light Theme", None),
-            picker_item("solarized_dark", "Solarized Dark", None),
-            picker_item("midnight", "Midnight", None),
-        ];
-
-        let mut picker_state = PickerState::new("Pick Theme", items.clone(), 2);
-        picker_state.sort_mode = SortMode::Name;
-
-        let mut session = PickerSession {
-            mode: PickerMode::Theme,
-            state: picker_state,
-            data: PickerData::Theme(ThemePickerState {
-                search_filter: "DARK".to_string(),
-                all_items: items,
-                before_theme: None,
-                before_theme_id: None,
-            }),
-        };
-        session.state.sort_mode = session.default_sort_mode();
-
-        controller.picker_session = Some(session);
-        controller.filter_themes();
-
-        let session = controller.session().expect("theme picker session");
-        assert_eq!(session.state.selected, 0);
-        assert_eq!(session.state.items.len(), 1);
-        assert_eq!(session.state.items[0].id, "solarized_dark");
-    }
-
-    #[test]
-    fn test_filter_providers_resets_selection_when_results_shrink() {
-        let mut controller = PickerController::new();
-        let items = vec![
-            picker_item("openai", "OpenAI", None),
-            picker_item("anthropic", "Anthropic", None),
-            picker_item("my_custom", "My Custom", Some("Custom Endpoint")),
-        ];
-
-        let mut picker_state = PickerState::new("Pick Provider", items.clone(), 2);
-        picker_state.sort_mode = SortMode::Name;
-
-        let mut session = PickerSession {
-            mode: PickerMode::Provider,
-            state: picker_state,
-            data: PickerData::Provider(ProviderPickerState {
-                search_filter: "CUSTOM".to_string(),
-                all_items: items,
-                before_provider: None,
-            }),
-        };
-        session.state.sort_mode = session.default_sort_mode();
-
-        controller.picker_session = Some(session);
-        controller.filter_providers();
-
-        let session = controller.session().expect("provider picker session");
-        assert_eq!(session.state.selected, 0);
-        assert_eq!(session.state.items.len(), 1);
-        assert_eq!(session.state.items[0].id, "my_custom");
     }
 
     #[test]

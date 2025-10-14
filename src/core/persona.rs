@@ -1,72 +1,55 @@
+use super::shared_selection::{ManagedItem, SelectionState};
 use crate::core::config::{Config, Persona};
-use std::collections::HashMap;
+
+impl ManagedItem for Persona {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
 
 /// Manages persona state and operations
 pub struct PersonaManager {
-    /// List of available personas loaded from configuration
-    personas: Vec<Persona>,
-    /// Currently active persona
-    active_persona: Option<Persona>,
-    /// Provider-specific default persona storage keyed by (provider, model)
-    defaults: HashMap<(String, String), String>,
+    shared: SelectionState<Persona>,
 }
 
 impl PersonaManager {
     /// Create a new PersonaManager and load personas from configuration
     pub fn load_personas(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        // Convert config's default_personas to the internal format
-        let mut defaults = HashMap::new();
-        for (provider, models) in &config.default_personas {
-            for (model, persona_id) in models {
-                let provider_key = provider.to_lowercase();
-                defaults.insert((provider_key, model.clone()), persona_id.clone());
-            }
-        }
+        let shared = SelectionState::load_from_config(
+            config,
+            |cfg| &cfg.personas,
+            |cfg| &cfg.default_personas,
+            Config::set_default_persona,
+            Config::unset_default_persona,
+            "Persona",
+        )?;
 
-        Ok(PersonaManager {
-            personas: config.personas.clone(),
-            active_persona: None,
-            defaults,
-        })
+        Ok(PersonaManager { shared })
     }
 
     /// Get the list of available personas
     pub fn list_personas(&self) -> &Vec<Persona> {
-        &self.personas
+        self.shared.items()
     }
 
     /// Find a persona by its ID
     pub fn find_persona_by_id(&self, id: &str) -> Option<&Persona> {
-        self.personas.iter().find(|p| p.id == id)
+        self.shared.find_by_id(id)
     }
 
     /// Set the active persona by ID
     pub fn set_active_persona(&mut self, persona_id: &str) -> Result<(), String> {
-        match self.find_persona_by_id(persona_id) {
-            Some(persona) => {
-                self.active_persona = Some(persona.clone());
-                Ok(())
-            }
-            None => {
-                let available_ids: Vec<&str> =
-                    self.personas.iter().map(|p| p.id.as_str()).collect();
-                Err(format!(
-                    "Persona '{}' not found. Available personas: {}",
-                    persona_id,
-                    available_ids.join(", ")
-                ))
-            }
-        }
+        self.shared.set_active(persona_id)
     }
 
     /// Clear the active persona (deactivate)
     pub fn clear_active_persona(&mut self) {
-        self.active_persona = None;
+        self.shared.clear_active();
     }
 
     /// Get the currently active persona
     pub fn get_active_persona(&self) -> Option<&Persona> {
-        self.active_persona.as_ref()
+        self.shared.get_active()
     }
 
     /// Apply character and user substitutions to text
@@ -74,10 +57,11 @@ impl PersonaManager {
     /// {{user}} is replaced with the active persona name (or "Anon" if no persona)
     pub fn apply_substitutions(&self, text: &str, char_name: Option<&str>) -> String {
         let char_replacement = char_name.unwrap_or("Assistant");
-        let user_replacement = match &self.active_persona {
-            Some(persona) => &persona.display_name,
-            None => "Anon",
-        };
+        let user_replacement = self
+            .shared
+            .get_active()
+            .map(|persona| persona.display_name.as_str())
+            .unwrap_or("Anon");
 
         text.replace("{{char}}", char_replacement)
             .replace("{{user}}", user_replacement)
@@ -86,16 +70,16 @@ impl PersonaManager {
     /// Get the display name for the user in conversations
     /// Returns the active persona's name or "You" if no persona is active
     pub fn get_display_name(&self) -> String {
-        match &self.active_persona {
-            Some(persona) => persona.display_name.clone(),
-            None => "You".to_string(),
-        }
+        self.shared
+            .get_active()
+            .map(|persona| persona.display_name.clone())
+            .unwrap_or_else(|| "You".to_string())
     }
 
     /// Get the modified system prompt with persona bio prepended
     /// If a persona is active, prepends the persona's bio (with substitutions applied) to the base prompt
     pub fn get_modified_system_prompt(&self, base_prompt: &str, char_name: Option<&str>) -> String {
-        match &self.active_persona {
+        match self.shared.get_active() {
             Some(persona) => {
                 if let Some(bio) = &persona.bio {
                     let substituted_bio = self.apply_substitutions(bio, char_name);
@@ -115,8 +99,7 @@ impl PersonaManager {
 
     /// Get the default persona for a provider/model combination
     pub fn get_default_for_provider_model(&self, provider: &str, model: &str) -> Option<&str> {
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.get(&key).map(|s| s.as_str())
+        self.shared.get_default_for_provider_model(provider, model)
     }
 
     /// Set the default persona for a provider/model combination and persist to config
@@ -126,20 +109,8 @@ impl PersonaManager {
         model: &str,
         persona_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Update internal state
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.insert(key, persona_id.to_string());
-
-        // Persist to config
-        let provider = provider.to_string();
-        let model = model.to_string();
-        let persona_id = persona_id.to_string();
-        Config::mutate(move |config| {
-            config.set_default_persona(provider, model, persona_id);
-            Ok(())
-        })?;
-
-        Ok(())
+        self.shared
+            .set_default_persistent(provider, model, persona_id)
     }
 
     /// Unset the default persona for a provider/model combination and persist to config
@@ -148,19 +119,7 @@ impl PersonaManager {
         provider: &str,
         model: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Update internal state
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.remove(&key);
-
-        // Persist to config
-        let provider = provider.to_string();
-        let model = model.to_string();
-        Config::mutate(move |config| {
-            config.unset_default_persona(&provider, &model);
-            Ok(())
-        })?;
-
-        Ok(())
+        self.shared.unset_default_persistent(provider, model)
     }
 }
 

@@ -8,4 +8,5 @@ pub mod persona;
 pub mod persona_integration_tests;
 pub mod preset;
 pub mod providers;
+mod shared_selection;
 pub mod text_wrapping;

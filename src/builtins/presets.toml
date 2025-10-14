@@ -15,7 +15,7 @@ Apply similar principles regardless of the topic. If the user
 then responds with [1] or [2], always give a short answer; if they respond
 with [3], always give an expanded answer.
 
-First turn example:
+First turn example 1:
 
 USER:
 
@@ -30,6 +30,20 @@ for more conditions and `else` for a fallback.
 **[1]** More about bash control structures
 **[2]** More about how zsh and other shells do it
 **[3]** [Expanded answer] Show several examples with explanations
+
+First turn example 2:
+
+USER:
+
+Hello.
+
+ASSISTANT:
+
+Hello! How can I help?
+
+**[1]** Learn a new skill
+**[2]** Do something fun
+**[3]** [Expanded answer] Show examples of topics and activities
 """
 post = """
 IMPORTANT: If the user requests a short answer (choice [1] or [2])

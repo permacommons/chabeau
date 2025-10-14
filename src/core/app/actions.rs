@@ -149,6 +149,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
             {
                 let mut conversation = app.conversation();
+                conversation.remove_trailing_empty_assistant_messages();
                 conversation.add_app_message(AppMessageKind::Error, error_message);
                 let available_height =
                     conversation.calculate_available_height(ctx.term_height, input_area_height);
@@ -1073,6 +1074,7 @@ fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppComma
 mod tests {
     use super::*;
     use crate::core::app::picker::{ModelPickerState, PickerData, PickerMode, PickerSession};
+    use crate::core::message::{ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::picker::{PickerItem, PickerState};
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use tempfile::tempdir;
@@ -1082,6 +1084,61 @@ mod tests {
             term_width: 80,
             term_height: 24,
         }
+    }
+
+    #[test]
+    fn stream_errored_drops_empty_assistant_placeholder() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        let command = apply_action(
+            &mut app,
+            AppAction::SubmitMessage {
+                message: "Hello there".into(),
+            },
+            ctx,
+        );
+
+        let stream_id = match command {
+            Some(AppCommand::SpawnStream(params)) => params.stream_id,
+            Some(_) => panic!("unexpected app command returned for submit message"),
+            None => panic!("expected spawn stream command"),
+        };
+
+        assert!(app
+            .ui
+            .messages
+            .iter()
+            .any(|msg| msg.role == ROLE_ASSISTANT && msg.content.is_empty()));
+
+        let result = apply_action(
+            &mut app,
+            AppAction::StreamErrored {
+                message: " network failure ".into(),
+                stream_id,
+            },
+            ctx,
+        );
+        assert!(result.is_none());
+
+        assert!(app
+            .ui
+            .messages
+            .iter()
+            .all(|msg| msg.role != ROLE_ASSISTANT || !msg.content.trim().is_empty()));
+
+        let last_message = app
+            .ui
+            .messages
+            .back()
+            .expect("expected trailing error message");
+        assert_eq!(last_message.role, ROLE_APP_ERROR);
+        assert_eq!(last_message.content, "network failure");
+
+        assert_eq!(app.ui.messages.len(), 2);
+        let first = app.ui.messages.front().expect("missing user message");
+        assert_eq!(first.role, ROLE_USER);
+        assert_eq!(first.content, "Hello there");
     }
 
     #[test]

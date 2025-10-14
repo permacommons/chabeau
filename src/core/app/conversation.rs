@@ -73,8 +73,31 @@ impl<'a> ConversationController<'a> {
         }
     }
 
+    pub fn remove_trailing_empty_assistant_messages(&mut self) {
+        let mut removed = false;
+
+        while let Some(last_message) = self.ui.messages.back() {
+            if last_message.role == ROLE_ASSISTANT && last_message.content.trim().is_empty() {
+                self.ui.messages.pop_back();
+                removed = true;
+            } else {
+                break;
+            }
+        }
+
+        if removed {
+            if let Some(index) = self.session.retrying_message_index {
+                if index >= self.ui.messages.len() {
+                    self.session.retrying_message_index = None;
+                }
+            }
+        }
+    }
+
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
         self.clear_status();
+
+        self.remove_trailing_empty_assistant_messages();
 
         let user_message = Message {
             role: ROLE_USER.to_string(),
@@ -136,6 +159,10 @@ impl<'a> ConversationController<'a> {
         // Add conversation history (including greeting if present)
         // Note: Transcript app messages (help, status) are excluded here
         for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
+            if msg.role == ROLE_ASSISTANT && msg.content.trim().is_empty() {
+                continue;
+            }
+
             if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
                 api_messages.push(crate::api::ChatMessage {
                     role: msg.role.clone(),
@@ -529,6 +556,55 @@ mod tests {
         for msg in &api_messages {
             assert!(!message::is_app_message_role(&msg.role));
         }
+    }
+
+    #[test]
+    fn add_user_message_omits_trailing_empty_assistant_turns() {
+        let mut app = create_test_app();
+
+        app.ui
+            .messages
+            .push_back(create_test_message(ROLE_USER, "First attempt"));
+        app.ui
+            .messages
+            .push_back(create_test_message(ROLE_ASSISTANT, ""));
+
+        let api_messages = {
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
+            conversation.add_user_message("Try again?".to_string())
+        };
+
+        assert_eq!(api_messages.len(), 2);
+        assert_eq!(api_messages[0].role, ROLE_USER);
+        assert_eq!(api_messages[0].content, "First attempt");
+        assert_eq!(api_messages[1].role, ROLE_USER);
+        assert_eq!(api_messages[1].content, "Try again?");
+        assert!(api_messages
+            .iter()
+            .all(|msg| msg.role != ROLE_ASSISTANT || !msg.content.trim().is_empty()));
+
+        let mut iter = app.ui.messages.iter().rev();
+        let last = iter.next().expect("missing assistant placeholder");
+        assert_eq!(last.role, ROLE_ASSISTANT);
+        assert!(last.content.is_empty());
+
+        let second_last = iter.next().expect("missing user retry message");
+        assert_eq!(second_last.role, ROLE_USER);
+        assert_eq!(second_last.content, "Try again?");
+
+        assert_eq!(
+            app.ui
+                .messages
+                .iter()
+                .filter(|msg| msg.role == ROLE_ASSISTANT && msg.content.is_empty())
+                .count(),
+            1
+        );
     }
 
     #[test]

@@ -1,72 +1,57 @@
+use super::shared_selection::{ManagedItem, SelectionState};
 use crate::api::ChatMessage;
 use crate::core::config::{Config, Preset};
 use crate::core::persona::PersonaManager;
-use std::collections::HashMap;
+
+impl ManagedItem for Preset {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
 
 /// Manages preset state and operations
 pub struct PresetManager {
-    presets: Vec<Preset>,
-    active_preset: Option<Preset>,
-    defaults: HashMap<(String, String), String>,
+    shared: SelectionState<Preset>,
 }
 
 impl PresetManager {
     /// Create a new PresetManager and load presets from configuration
     pub fn load_presets(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut defaults = HashMap::new();
-        for (provider, models) in &config.default_presets {
-            for (model, preset_id) in models {
-                defaults.insert((provider.to_lowercase(), model.clone()), preset_id.clone());
-            }
-        }
+        let shared = SelectionState::load_from_config(
+            config,
+            |cfg| &cfg.presets,
+            |cfg| &cfg.default_presets,
+            Config::set_default_preset,
+            Config::unset_default_preset,
+            "Preset",
+        )?;
 
-        Ok(Self {
-            presets: config.presets.clone(),
-            active_preset: None,
-            defaults,
-        })
+        Ok(Self { shared })
     }
 
     /// Get the list of available presets
     pub fn list_presets(&self) -> &Vec<Preset> {
-        &self.presets
+        self.shared.items()
     }
 
     /// Find a preset by its ID
     pub fn find_preset_by_id(&self, id: &str) -> Option<&Preset> {
-        self.presets.iter().find(|preset| preset.id == id)
+        self.shared.find_by_id(id)
     }
 
     /// Set the active preset by ID
     pub fn set_active_preset(&mut self, preset_id: &str) -> Result<(), String> {
-        match self.find_preset_by_id(preset_id) {
-            Some(preset) => {
-                self.active_preset = Some(preset.clone());
-                Ok(())
-            }
-            None => {
-                let available_ids: Vec<&str> = self
-                    .presets
-                    .iter()
-                    .map(|preset| preset.id.as_str())
-                    .collect();
-                Err(format!(
-                    "Preset '{}' not found. Available presets: {}",
-                    preset_id,
-                    available_ids.join(", ")
-                ))
-            }
-        }
+        self.shared.set_active(preset_id)
     }
 
     /// Clear the active preset (deactivate)
     pub fn clear_active_preset(&mut self) {
-        self.active_preset = None;
+        self.shared.clear_active();
     }
 
     /// Get the currently active preset
     pub fn get_active_preset(&self) -> Option<&Preset> {
-        self.active_preset.as_ref()
+        self.shared.get_active()
     }
 
     /// Apply preset instructions to the provided messages
@@ -77,7 +62,7 @@ impl PresetManager {
         persona_manager: &PersonaManager,
         char_name: Option<&str>,
     ) {
-        let Some(active_preset) = &self.active_preset else {
+        let Some(active_preset) = self.shared.get_active() else {
             return;
         };
 
@@ -162,8 +147,7 @@ impl PresetManager {
 
     /// Get the default preset for a provider/model combination
     pub fn get_default_for_provider_model(&self, provider: &str, model: &str) -> Option<&str> {
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.get(&key).map(|s| s.as_str())
+        self.shared.get_default_for_provider_model(provider, model)
     }
 
     /// Set the default preset for a provider/model combination and persist to config
@@ -173,19 +157,8 @@ impl PresetManager {
         model: &str,
         preset_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.insert(key, preset_id.to_string());
-
-        let provider = provider.to_string();
-        let model = model.to_string();
-        let preset_id = preset_id.to_string();
-
-        Config::mutate(move |config| {
-            config.set_default_preset(provider, model, preset_id);
-            Ok(())
-        })?;
-
-        Ok(())
+        self.shared
+            .set_default_persistent(provider, model, preset_id)
     }
 
     /// Unset the default preset for a provider/model combination and persist to config
@@ -194,18 +167,7 @@ impl PresetManager {
         provider: &str,
         model: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let key = (provider.to_lowercase(), model.to_string());
-        self.defaults.remove(&key);
-
-        let provider = provider.to_string();
-        let model = model.to_string();
-
-        Config::mutate(move |config| {
-            config.unset_default_preset(&provider, &model);
-            Ok(())
-        })?;
-
-        Ok(())
+        self.shared.unset_default_persistent(provider, model)
     }
 }
 
@@ -251,6 +213,19 @@ mod tests {
 
         manager.clear_active_preset();
         assert!(manager.get_active_preset().is_none());
+    }
+
+    #[test]
+    fn test_set_active_preset_error_message_mentions_available_options() {
+        let config = create_test_config();
+        let mut manager = PresetManager::load_presets(&config).expect("load presets");
+
+        let error = manager
+            .set_active_preset("missing")
+            .expect_err("expected failure for missing preset");
+
+        assert!(error.contains("Preset 'missing' not found"));
+        assert!(error.contains("focus"));
     }
 
     #[test]

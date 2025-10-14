@@ -70,6 +70,17 @@ pub fn quantize_theme_if_needed(
     theme.assistant_text_style = quantize_style(theme.assistant_text_style, depth);
     theme.system_text_style = quantize_style(theme.system_text_style, depth);
     theme.error_text_style = quantize_style(theme.error_text_style, depth);
+    theme.app_messages.info.prefix_style =
+        quantize_style(theme.app_messages.info.prefix_style, depth);
+    theme.app_messages.info.text_style = quantize_style(theme.app_messages.info.text_style, depth);
+    theme.app_messages.warning.prefix_style =
+        quantize_style(theme.app_messages.warning.prefix_style, depth);
+    theme.app_messages.warning.text_style =
+        quantize_style(theme.app_messages.warning.text_style, depth);
+    theme.app_messages.error.prefix_style =
+        quantize_style(theme.app_messages.error.prefix_style, depth);
+    theme.app_messages.error.text_style =
+        quantize_style(theme.app_messages.error.text_style, depth);
 
     theme.title_style = quantize_style(theme.title_style, depth);
     theme.streaming_indicator_style = quantize_style(theme.streaming_indicator_style, depth);

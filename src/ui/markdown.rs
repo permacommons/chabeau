@@ -1,5 +1,5 @@
 #![allow(clippy::items_after_test_module)]
-use crate::core::message::Message;
+use crate::core::message::{self, AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::ui::layout::MessageLineSpan;
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
@@ -65,12 +65,17 @@ pub fn render_message_markdown_details_with_policy_and_user_name(
 pub enum RoleKind {
     User,
     Assistant,
+    App(AppMessageKind),
 }
 
 impl RoleKind {
-    fn from_role(role: &str) -> Self {
-        if role == "user" {
+    fn from_message(msg: &Message) -> Self {
+        if msg.role == ROLE_USER {
             RoleKind::User
+        } else if msg.role == ROLE_ASSISTANT {
+            RoleKind::Assistant
+        } else if message::is_app_message_role(&msg.role) {
+            RoleKind::App(message::app_message_kind_from_role(&msg.role))
         } else {
             RoleKind::Assistant
         }
@@ -81,6 +86,7 @@ fn base_text_style(role: RoleKind, theme: &Theme) -> Style {
     match role {
         RoleKind::User => theme.user_text_style,
         RoleKind::Assistant => theme.md_paragraph_style(),
+        RoleKind::App(kind) => theme.app_message_style(kind).text_style,
     }
 }
 
@@ -160,7 +166,7 @@ pub fn render_message_with_config(
     theme: &Theme,
     config: MessageRenderConfig,
 ) -> RenderedMessageDetails {
-    let role = RoleKind::from_role(&msg.role);
+    let role = RoleKind::from_message(msg);
     let (lines, ranges, metadata) = if config.markdown {
         let renderer_config = MarkdownRendererConfig {
             collect_span_metadata: config.collect_span_metadata,
@@ -210,7 +216,8 @@ struct MarkdownRenderer<'a> {
     in_code_block: Option<String>,
     code_block_lines: Vec<String>,
     table_renderer: Option<TableRenderer>,
-    did_prefix_user: bool,
+    did_prefix: bool,
+    app_prefix_indent: Option<String>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
@@ -220,6 +227,13 @@ impl<'a> MarkdownRenderer<'a> {
         theme: &'a Theme,
         config: MarkdownRendererConfig,
     ) -> Self {
+        let app_prefix_indent = if let RoleKind::App(kind) = role {
+            let prefix = theme.app_message_style(kind).prefix.clone();
+            let width = prefix.width().max(1);
+            Some(" ".repeat(width))
+        } else {
+            None
+        };
         Self {
             role,
             content,
@@ -238,7 +252,8 @@ impl<'a> MarkdownRenderer<'a> {
             in_code_block: None,
             code_block_lines: Vec::new(),
             table_renderer: None,
-            did_prefix_user: role != RoleKind::User,
+            did_prefix: !matches!(role, RoleKind::User | RoleKind::App(_)),
+            app_prefix_indent,
         }
     }
 
@@ -246,6 +261,62 @@ impl<'a> MarkdownRenderer<'a> {
         match &self.config.user_display_name {
             Some(name) => format!("{}: ", name),
             None => "You: ".to_string(),
+        }
+    }
+
+    fn ensure_role_prefix_or_indent(&mut self) {
+        match self.role {
+            RoleKind::User => {
+                if !self.did_prefix {
+                    let user_prefix = self.get_user_prefix();
+                    self.push_span(
+                        Span::styled(user_prefix, self.theme.user_prefix_style),
+                        SpanKind::UserPrefix,
+                    );
+                    self.did_prefix = true;
+                } else {
+                    self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
+                }
+            }
+            RoleKind::App(kind) => {
+                let style = self.theme.app_message_style(kind);
+                if !self.did_prefix {
+                    self.push_span(
+                        Span::styled(style.prefix.clone(), style.prefix_style),
+                        SpanKind::AppPrefix,
+                    );
+                    self.did_prefix = true;
+                } else if let Some(indent) = self.app_prefix_indent.clone() {
+                    self.push_span(Span::raw(indent), SpanKind::Text);
+                }
+            }
+            RoleKind::Assistant => {}
+        }
+    }
+
+    fn ensure_role_prefix_once(&mut self) {
+        match self.role {
+            RoleKind::User => {
+                if !self.did_prefix {
+                    let user_prefix = self.get_user_prefix();
+                    self.push_span(
+                        Span::styled(user_prefix, self.theme.user_prefix_style),
+                        SpanKind::UserPrefix,
+                    );
+                    self.did_prefix = true;
+                }
+            }
+            RoleKind::App(kind) => {
+                if !self.did_prefix {
+                    let style = self.theme.app_message_style(kind);
+                    self.push_span(
+                        Span::styled(style.prefix.clone(), style.prefix_style),
+                        SpanKind::AppPrefix,
+                    );
+                    self.did_prefix = true;
+                }
+            }
+            RoleKind::Assistant => {}
         }
     }
 
@@ -265,29 +336,15 @@ impl<'a> MarkdownRenderer<'a> {
             match event {
                 Event::Start(tag) => match tag {
                     Tag::Paragraph => {
-                        if self.role == RoleKind::User {
-                            if !self.did_prefix_user {
-                                let user_prefix = self.get_user_prefix();
-                                self.push_span(
-                                    Span::styled(user_prefix, self.theme.user_prefix_style),
-                                    SpanKind::UserPrefix,
-                                );
-                                self.did_prefix_user = true;
-                            } else {
-                                self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
-                            }
+                        if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
+                            self.ensure_role_prefix_or_indent();
                         }
                     }
                     Tag::Heading { level, .. } => {
                         self.flush_current_spans(true);
                         let style = self.theme.md_heading_style(level as u8);
-                        if self.role == RoleKind::User && !self.did_prefix_user {
-                            let user_prefix = self.get_user_prefix();
-                            self.push_span(
-                                Span::styled(user_prefix, self.theme.user_prefix_style),
-                                SpanKind::UserPrefix,
-                            );
-                            self.did_prefix_user = true;
+                        if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
+                            self.ensure_role_prefix_once();
                         }
                         self.style_stack.push(style);
                         let current_kind =
@@ -332,13 +389,8 @@ impl<'a> MarkdownRenderer<'a> {
                         if let Some(indent) = self.list_indent_stack.last_mut() {
                             *indent = marker.width();
                         }
-                        if self.role == RoleKind::User && !self.did_prefix_user {
-                            let user_prefix = self.get_user_prefix();
-                            self.push_span(
-                                Span::styled(user_prefix, self.theme.user_prefix_style),
-                                SpanKind::UserPrefix,
-                            );
-                            self.did_prefix_user = true;
+                        if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
+                            self.ensure_role_prefix_once();
                         }
                         self.pending_list_indent = None;
                         self.push_span(
@@ -558,8 +610,18 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 Event::SoftBreak => {
                     self.flush_current_spans(true);
-                    if self.role == RoleKind::User && self.did_prefix_user {
-                        self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
+                    if matches!(self.role, RoleKind::User | RoleKind::App(_)) && self.did_prefix {
+                        match self.role {
+                            RoleKind::User => {
+                                self.push_span(Span::raw(USER_CONTINUATION_INDENT), SpanKind::Text);
+                            }
+                            RoleKind::App(_) => {
+                                if let Some(indent) = self.app_prefix_indent.clone() {
+                                    self.push_span(Span::raw(indent), SpanKind::Text);
+                                }
+                            }
+                            RoleKind::Assistant => {}
+                        }
                     }
                 }
                 Event::HardBreak => {
@@ -634,7 +696,8 @@ impl<'a> MarkdownRenderer<'a> {
                     .zip(self.current_span_kinds.iter().cloned())
                     .collect();
                 let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
-                let indent_wrapped_user_lines = indent_user_wraps && self.role == RoleKind::User;
+                let indent_wrapped_user_lines =
+                    indent_user_wraps && matches!(self.role, RoleKind::User | RoleKind::App(_));
                 for (idx, segs) in wrapped.into_iter().enumerate() {
                     let (mut spans_only, mut kinds_only): (Vec<_>, Vec<_>) =
                         segs.into_iter().unzip();
@@ -643,7 +706,14 @@ impl<'a> MarkdownRenderer<'a> {
                     } else {
                         let mut spans_with_indent = Vec::with_capacity(spans_only.len() + 1);
                         let mut kinds_with_indent = Vec::with_capacity(kinds_only.len() + 1);
-                        spans_with_indent.push(Span::raw(USER_CONTINUATION_INDENT));
+                        let indent_span = match self.role {
+                            RoleKind::User => Span::raw(USER_CONTINUATION_INDENT),
+                            RoleKind::App(_) => Span::raw(
+                                self.app_prefix_indent.clone().unwrap_or_else(|| " ".into()),
+                            ),
+                            RoleKind::Assistant => Span::raw(""),
+                        };
+                        spans_with_indent.push(indent_span);
                         kinds_with_indent.push(SpanKind::Text);
                         spans_with_indent.append(&mut spans_only);
                         kinds_with_indent.append(&mut kinds_only);
@@ -693,10 +763,11 @@ pub fn compute_codeblock_ranges(
     let mut out = Vec::new();
     let mut offset = 0usize;
     for msg in messages {
-        let is_user = msg.role == "user";
-        if msg.role == "system" {
+        let is_user = msg.role == ROLE_USER;
+        if message::is_app_message_role(&msg.role) {
+            let app_role = RoleKind::App(message::app_message_kind_from_role(&msg.role));
             let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant,
+                app_role,
                 &msg.content,
                 theme,
                 true, // syntax_enabled
@@ -766,49 +837,45 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     let mut out = Vec::new();
     let mut offset = 0usize;
     for msg in messages {
-        match msg.role.as_str() {
-            "system" => {
-                let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                    RoleKind::Assistant,
-                    &msg.content,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                    policy,
-                    None,
-                );
-                offset += lines.len();
+        if message::is_app_message_role(&msg.role) {
+            let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::App(message::app_message_kind_from_role(&msg.role)),
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+                None,
+            );
+            offset += lines.len();
+        } else if msg.role == ROLE_USER {
+            let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::User,
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+                user_display_name,
+            );
+            for (start, len, content) in ranges {
+                out.push((offset + start, len, content));
             }
-            "user" => {
-                let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
-                    RoleKind::User,
-                    &msg.content,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                    policy,
-                    user_display_name,
-                );
-                for (start, len, content) in ranges {
-                    out.push((offset + start, len, content));
-                }
-                offset += lines.len();
+            offset += lines.len();
+        } else {
+            let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
+                RoleKind::Assistant,
+                &msg.content,
+                theme,
+                syntax_enabled,
+                terminal_width,
+                policy,
+                None,
+            );
+            for (start, len, content) in ranges {
+                out.push((offset + start, len, content));
             }
-            _ => {
-                let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
-                    RoleKind::Assistant,
-                    &msg.content,
-                    theme,
-                    syntax_enabled,
-                    terminal_width,
-                    policy,
-                    None,
-                );
-                for (start, len, content) in ranges {
-                    out.push((offset + start, len, content));
-                }
-                offset += lines.len();
-            }
+            offset += lines.len();
         }
     }
     out
@@ -819,7 +886,7 @@ pub fn compute_codeblock_contents_with_lang(
 ) -> Vec<(String, Option<String>)> {
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     for msg in messages {
-        if msg.role == "system" {
+        if message::is_app_message_role(&msg.role) {
             continue;
         }
         let mut options = Options::empty();
@@ -1008,6 +1075,28 @@ mod tests {
         let first_line = &metadata[0];
         assert!(!first_line.is_empty());
         assert!(matches!(first_line[0], SpanKind::UserPrefix));
+        assert!(first_line.iter().skip(1).all(|k| k.is_text()));
+    }
+
+    #[test]
+    fn metadata_marks_app_prefix() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message::app_info("Heads up");
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &message,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+
+        let metadata = details.span_metadata.expect("metadata present");
+        assert!(!metadata.is_empty());
+        let first_line = &metadata[0];
+        assert!(!first_line.is_empty());
+        assert!(matches!(first_line[0], SpanKind::AppPrefix));
         assert!(first_line.iter().skip(1).all(|k| k.is_text()));
     }
 
@@ -2668,6 +2757,28 @@ fn render_plain_message(
                     metadata.push(vec![SpanKind::Text]);
                 }
                 lines.push(Line::from(span));
+            }
+        }
+        RoleKind::App(kind) => {
+            let style = theme.app_message_style(kind);
+            let indent_width = style.prefix.width().max(1);
+            let indent = " ".repeat(indent_width);
+            for (idx, line) in content.lines().enumerate() {
+                let mut spans = Vec::new();
+                let mut kinds = Vec::new();
+                if idx == 0 {
+                    spans.push(Span::styled(style.prefix.clone(), style.prefix_style));
+                    kinds.push(SpanKind::AppPrefix);
+                } else {
+                    spans.push(Span::raw(indent.clone()));
+                    kinds.push(SpanKind::Text);
+                }
+                spans.push(Span::styled(detab(line), style.text_style));
+                kinds.push(SpanKind::Text);
+                if collect_span_metadata {
+                    metadata.push(kinds);
+                }
+                lines.push(Line::from(spans));
             }
         }
     }

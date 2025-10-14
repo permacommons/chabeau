@@ -1,4 +1,4 @@
-use crate::core::message::Message;
+use crate::core::message::{Message, ROLE_USER};
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::span::SpanKind;
@@ -391,7 +391,7 @@ impl ScrollCalculator {
 
         if let Some(sel) = selected_index {
             if let Some(msg) = messages.get(sel) {
-                if msg.role == "user" {
+                if msg.role == ROLE_USER {
                     if let Some(span) = layout.message_spans.get(sel) {
                         let highlight_style = theme.selection_highlight_style.patch(highlight);
                         for (offset, (line, kinds)) in layout
@@ -405,7 +405,7 @@ impl ScrollCalculator {
                             let include_empty = offset < span.len.saturating_sub(1);
                             let has_content =
                                 kinds.iter().zip(line.spans.iter()).any(|(kind, span)| {
-                                    !kind.is_user_prefix() && !span.content.trim().is_empty()
+                                    !kind.is_prefix() && !span.content.trim().is_empty()
                                 });
                             if include_empty || has_content {
                                 Self::apply_selection_highlight(
@@ -1136,16 +1136,19 @@ mod tests {
     }
 
     #[test]
-    fn test_system_message_formatting() {
+    fn test_app_message_formatting() {
         let mut messages = VecDeque::new();
-        messages.push_back(create_test_message("system", "System message"));
+        messages.push_back(create_test_message(
+            crate::core::message::ROLE_APP_INFO,
+            "App message",
+        ));
 
         let lines = ScrollCalculator::build_display_lines(&messages);
-        assert_eq!(lines.len(), 2); // System message + spacing
+        assert_eq!(lines.len(), 2); // App message + spacing
 
-        // System messages should not have "You: " prefix
+        // App messages should not have "You: " prefix
         assert!(!lines[0].to_string().starts_with("You: "));
-        assert!(lines[0].to_string().contains("System message"));
+        assert!(lines[0].to_string().contains("App message"));
     }
 
     #[test]

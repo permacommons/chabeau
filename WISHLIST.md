@@ -6,10 +6,6 @@ Items are removed when completed.
 
 ## Features
 
-- Custom styling for system messages — [OPEN]
-  - Add dedicated `RoleKind::System` with configurable styling separate from assistant messages
-  - Allow theme customization of system message colors, prefixes, and formatting
-  - Currently system messages use assistant styling which may not be ideal for all themes
 - Better handling of repeating messages like "Generating..."
   - Deduplicate/compress repeated status lines — [OPEN]
 - Support common "character cards" — [PARTIAL]

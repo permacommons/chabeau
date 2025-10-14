@@ -9,6 +9,8 @@ pub enum SpanKind {
     Text,
     /// A user message prefix (e.g., "You: ") rendered ahead of content.
     UserPrefix,
+    /// An app message prefix rendered ahead of app-authored content.
+    AppPrefix,
     /// A hyperlink span emitted by the markdown renderer.
     Link(LinkMeta),
 }
@@ -30,6 +32,16 @@ impl SpanKind {
     #[inline]
     pub fn is_user_prefix(&self) -> bool {
         matches!(self, SpanKind::UserPrefix)
+    }
+
+    #[inline]
+    pub fn is_app_prefix(&self) -> bool {
+        matches!(self, SpanKind::AppPrefix)
+    }
+
+    #[inline]
+    pub fn is_prefix(&self) -> bool {
+        self.is_user_prefix() || self.is_app_prefix()
     }
 
     #[inline]

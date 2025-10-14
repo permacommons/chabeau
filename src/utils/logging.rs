@@ -1,4 +1,4 @@
-use crate::core::message::Message;
+use crate::core::message::{self, Message, ROLE_ASSISTANT, ROLE_USER};
 use chrono::Utc;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -122,19 +122,19 @@ impl LoggingState {
 
         // Write all messages in the same format as log_message
         for msg in messages {
-            if msg.role == "user" {
+            if msg.role == ROLE_USER {
                 // Write user messages with the current user display name prefix
                 for line in format!("{}: {}", user_display_name, msg.content).lines() {
                     writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
-            } else if msg.role == "system" {
-                // Write system messages as-is
+            } else if message::is_app_message_role(&msg.role) {
+                // Write app messages as-is
                 for line in msg.content.lines() {
                     writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
-            } else if msg.role == "assistant" && !msg.content.is_empty() {
+            } else if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
                 // Write assistant messages as-is (no prefix)
                 for line in msg.content.lines() {
                     writeln!(file, "{line}")?;

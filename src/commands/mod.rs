@@ -3,6 +3,7 @@ mod registry;
 pub use registry::{all_commands, matching_commands, CommandInvocation};
 
 use crate::core::app::App;
+use crate::core::message::{self, AppMessageKind};
 use chrono::Utc;
 use registry::DispatchOutcome;
 use std::fs::File;
@@ -43,7 +44,8 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
             help_md.push('\n');
         }
     }
-    app.conversation().add_system_message(help_md);
+    app.conversation()
+        .add_app_message(AppMessageKind::Info, help_md);
     CommandResult::Continue
 }
 
@@ -351,12 +353,12 @@ pub fn dump_conversation_with_overwrite(
     filename: &str,
     overwrite: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Filter out system messages and check if conversation is empty
+    // Filter out app messages and check if conversation is empty
     let conversation_messages: Vec<_> = app
         .ui
         .messages
         .iter()
-        .filter(|msg| msg.role != "system")
+        .filter(|msg| !message::is_app_message_role(&msg.role))
         .collect();
 
     if conversation_messages.is_empty() {
@@ -511,9 +513,10 @@ mod tests {
         app.ui
             .messages
             .push_back(create_test_message("assistant", "Hi there!"));
-        app.ui
-            .messages
-            .push_back(create_test_message("system", "System message"));
+        app.ui.messages.push_back(create_test_message(
+            crate::core::message::ROLE_APP_INFO,
+            "App message",
+        ));
 
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();
@@ -530,8 +533,8 @@ mod tests {
         // Check that the contents match what we expect
         assert!(contents.contains("You: Hello"));
         assert!(contents.contains("Hi there!"));
-        // System messages should be excluded from dumps
-        assert!(!contents.contains("System message"));
+        // App messages should be excluded from dumps
+        assert!(!contents.contains("App message"));
 
         // Clean up
         drop(file);

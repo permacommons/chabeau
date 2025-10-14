@@ -1,5 +1,5 @@
 use crate::core::config::Config;
-use crate::core::message::Message;
+use crate::core::message::{AppMessageKind, Message, ROLE_USER};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
@@ -112,7 +112,7 @@ impl UiState {
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, m)| m.role == "user")
+            .find(|(_, m)| m.role == ROLE_USER)
             .map(|(i, _)| i)
     }
 
@@ -126,7 +126,7 @@ impl UiState {
             .enumerate()
             .take(from_index)
             .rev()
-            .find(|(_, m)| m.role == "user")
+            .find(|(_, m)| m.role == ROLE_USER)
             .map(|(i, _)| i)
     }
 
@@ -135,7 +135,7 @@ impl UiState {
             .iter()
             .enumerate()
             .skip(from_index + 1)
-            .find(|(_, m)| m.role == "user")
+            .find(|(_, m)| m.role == ROLE_USER)
             .map(|(i, _)| i)
     }
 
@@ -143,7 +143,7 @@ impl UiState {
         self.messages
             .iter()
             .enumerate()
-            .find(|(_, m)| m.role == "user")
+            .find(|(_, m)| m.role == ROLE_USER)
             .map(|(i, _)| i)
     }
 
@@ -703,5 +703,8 @@ fn compute_theme_signature(theme: &crate::ui::theme::Theme) -> u64 {
     format!("{:?}", theme.md_codeblock_bg_color()).hash(&mut h);
     format!("{:?}", theme.user_text_style).hash(&mut h);
     format!("{:?}", theme.assistant_text_style).hash(&mut h);
+    format!("{:?}", theme.app_message_style(AppMessageKind::Info)).hash(&mut h);
+    format!("{:?}", theme.app_message_style(AppMessageKind::Warning)).hash(&mut h);
+    format!("{:?}", theme.app_message_style(AppMessageKind::Error)).hash(&mut h);
     h.finish()
 }

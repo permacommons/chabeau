@@ -1,6 +1,6 @@
 use super::{session::SessionContext, ui_state::UiState};
 use crate::character::card::CharacterCard;
-use crate::core::message::Message;
+use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::utils::scroll::ScrollCalculator;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -64,7 +64,7 @@ impl<'a> ConversationController<'a> {
         if self.session.should_show_greeting() {
             if let Some(greeting) = self.character_greeting_text() {
                 let greeting_message = Message {
-                    role: "assistant".to_string(),
+                    role: ROLE_ASSISTANT.to_string(),
                     content: greeting,
                 };
                 self.ui.messages.push_back(greeting_message);
@@ -77,7 +77,7 @@ impl<'a> ConversationController<'a> {
         self.clear_status();
 
         let user_message = Message {
-            role: "user".to_string(),
+            role: ROLE_USER.to_string(),
             content: content.clone(),
         };
 
@@ -93,7 +93,7 @@ impl<'a> ConversationController<'a> {
         self.ui.messages.push_back(user_message);
 
         let assistant_message = Message {
-            role: "assistant".to_string(),
+            role: ROLE_ASSISTANT.to_string(),
             content: String::new(),
         };
         self.ui.messages.push_back(assistant_message);
@@ -134,9 +134,9 @@ impl<'a> ConversationController<'a> {
         }
 
         // Add conversation history (including greeting if present)
-        // Note: Transcript system messages (help, status) are excluded here
+        // Note: Transcript app messages (help, status) are excluded here
         for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
-            if msg.role == "user" || msg.role == "assistant" {
+            if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
                 api_messages.push(crate::api::ChatMessage {
                     role: msg.role.clone(),
                     content: msg.content.clone(),
@@ -156,12 +156,9 @@ impl<'a> ConversationController<'a> {
         api_messages
     }
 
-    pub fn add_system_message(&mut self, content: String) {
-        let system_message = Message {
-            role: "system".to_string(),
-            content,
-        };
-        self.ui.messages.push_back(system_message);
+    pub fn add_app_message(&mut self, kind: AppMessageKind, content: String) {
+        let message = Message::app(kind, content);
+        self.ui.messages.push_back(message);
     }
 
     pub fn set_status<S: Into<String>>(&mut self, s: S) {
@@ -188,12 +185,12 @@ impl<'a> ConversationController<'a> {
 
         if let Some(retry_index) = self.session.retrying_message_index {
             if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                if msg.role == "assistant" {
+                if msg.role == ROLE_ASSISTANT {
                     msg.content.push_str(content);
                 }
             }
         } else if let Some(last_msg) = self.ui.messages.back_mut() {
-            if last_msg.role == "assistant" {
+            if last_msg.role == ROLE_ASSISTANT {
                 last_msg.content.push_str(content);
             }
         }
@@ -300,7 +297,7 @@ impl<'a> ConversationController<'a> {
                 if !self.session.has_received_assistant_message {
                     if let Some(greeting) = self.character_greeting_text() {
                         if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                            if msg.role == "assistant" {
+                            if msg.role == ROLE_ASSISTANT {
                                 msg.content = greeting;
                                 self.ui.current_response.clear();
                                 self.session.retrying_message_index = None;
@@ -311,7 +308,7 @@ impl<'a> ConversationController<'a> {
                 }
 
                 if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                    if msg.role == "assistant" {
+                    if msg.role == ROLE_ASSISTANT {
                         msg.content.clear();
                         self.ui.current_response.clear();
                     }
@@ -321,7 +318,7 @@ impl<'a> ConversationController<'a> {
             let mut target_index = None;
 
             for (i, msg) in self.ui.messages.iter().enumerate().rev() {
-                if msg.role == "assistant" && !msg.content.is_empty() {
+                if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
                     target_index = Some(i);
                     break;
                 }
@@ -331,7 +328,7 @@ impl<'a> ConversationController<'a> {
                 if !self.session.has_received_assistant_message {
                     if let Some(greeting) = self.character_greeting_text() {
                         if let Some(msg) = self.ui.messages.get_mut(index) {
-                            if msg.role == "assistant" {
+                            if msg.role == ROLE_ASSISTANT {
                                 msg.content = greeting;
                                 self.ui.current_response.clear();
                                 self.session.retrying_message_index = None;
@@ -410,7 +407,7 @@ impl<'a> ConversationController<'a> {
         // Add conversation history up to retry point
         if let Some(retry_index) = self.session.retrying_message_index {
             for (i, msg) in self.ui.messages.iter().enumerate() {
-                if i < retry_index && (msg.role == "user" || msg.role == "assistant") {
+                if i < retry_index && (msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT) {
                     api_messages.push(crate::api::ChatMessage {
                         role: msg.role.clone(),
                         content: msg.content.clone(),
@@ -461,7 +458,7 @@ impl<'a> ConversationController<'a> {
         self.ui
             .messages
             .iter()
-            .any(|msg| msg.role == "assistant" && !msg.content.is_empty())
+            .any(|msg| msg.role == ROLE_ASSISTANT && !msg.content.is_empty())
     }
 }
 
@@ -469,14 +466,14 @@ impl<'a> ConversationController<'a> {
 mod tests {
     use super::*;
     use crate::core::config::{Config, Persona};
-    use crate::core::message::Message;
+    use crate::core::message::{self, Message};
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message};
     use std::fs;
     use tempfile::tempdir;
 
     #[test]
-    fn test_system_messages_excluded_from_api() {
+    fn test_app_messages_excluded_from_api() {
         let mut app = create_test_app();
 
         app.ui
@@ -490,8 +487,9 @@ mod tests {
                 &app.persona_manager,
                 &app.preset_manager,
             );
-            conversation.add_system_message(
-                "This is a system message that should not be sent to API".to_string(),
+            conversation.add_app_message(
+                AppMessageKind::Info,
+                "This is an app message that should not be sent to API".to_string(),
             );
         }
 
@@ -506,7 +504,8 @@ mod tests {
                 &app.persona_manager,
                 &app.preset_manager,
             );
-            conversation.add_system_message("Another system message".to_string());
+            conversation
+                .add_app_message(AppMessageKind::Warning, "Another app message".to_string());
         }
 
         let api_messages = {
@@ -520,15 +519,15 @@ mod tests {
         };
 
         assert_eq!(api_messages.len(), 3);
-        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].role, ROLE_USER);
         assert_eq!(api_messages[0].content, "Hello");
-        assert_eq!(api_messages[1].role, "assistant");
+        assert_eq!(api_messages[1].role, ROLE_ASSISTANT);
         assert_eq!(api_messages[1].content, "Hi there!");
-        assert_eq!(api_messages[2].role, "user");
+        assert_eq!(api_messages[2].role, ROLE_USER);
         assert_eq!(api_messages[2].content, "How are you?");
 
         for msg in &api_messages {
-            assert_ne!(msg.role, "system");
+            assert!(!message::is_app_message_role(&msg.role));
         }
     }
 
@@ -548,12 +547,14 @@ mod tests {
                 &app.persona_manager,
                 &app.preset_manager,
             );
-            conversation
-                .add_system_message("System message between user and assistant".to_string());
+            conversation.add_app_message(
+                AppMessageKind::Info,
+                "App message between user and assistant".to_string(),
+            );
         }
 
         app.ui.messages.push_back(Message {
-            role: "assistant".to_string(),
+            role: ROLE_ASSISTANT.to_string(),
             content: "Test response".to_string(),
         });
 
@@ -571,11 +572,11 @@ mod tests {
         };
 
         assert_eq!(api_messages.len(), 1);
-        assert_eq!(api_messages[0].role, "user");
+        assert_eq!(api_messages[0].role, ROLE_USER);
         assert_eq!(api_messages[0].content, "Test question");
 
         for msg in &api_messages {
-            assert_ne!(msg.role, "system");
+            assert!(!message::is_app_message_role(&msg.role));
         }
     }
 
@@ -1112,7 +1113,7 @@ mod tests {
             .messages
             .push_back(create_test_message("user", "Hello"));
 
-        // Add transcript system message (should be excluded from API)
+        // Add transcript app message (should be excluded from API)
         {
             let mut conversation = ConversationController::new(
                 &mut app.session,
@@ -1120,7 +1121,10 @@ mod tests {
                 &app.persona_manager,
                 &app.preset_manager,
             );
-            conversation.add_system_message("Help text displayed in UI".to_string());
+            conversation.add_app_message(
+                AppMessageKind::Info,
+                "Help text displayed in UI".to_string(),
+            );
         }
 
         // Add assistant response
@@ -1139,19 +1143,19 @@ mod tests {
         };
 
         // Should have: character system prompt, first user, first assistant, new user
-        // Transcript system message should be excluded
+        // Transcript app message should be excluded
         assert_eq!(api_messages.len(), 4);
 
         assert_eq!(api_messages[0].role, "system");
         assert!(api_messages[0].content.contains("You are TestBot."));
 
-        assert_eq!(api_messages[1].role, "user");
+        assert_eq!(api_messages[1].role, ROLE_USER);
         assert_eq!(api_messages[1].content, "Hello");
 
-        assert_eq!(api_messages[2].role, "assistant");
+        assert_eq!(api_messages[2].role, ROLE_ASSISTANT);
         assert_eq!(api_messages[2].content, "Hi there!");
 
-        assert_eq!(api_messages[3].role, "user");
+        assert_eq!(api_messages[3].role, ROLE_USER);
         assert_eq!(api_messages[3].content, "How are you?");
 
         // Verify transcript system message is not in API messages

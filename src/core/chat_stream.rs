@@ -52,12 +52,51 @@ fn process_sse_line(
         .unwrap_or(false)
 }
 
+fn extract_error_summary(value: &serde_json::Value) -> Option<String> {
+    let summary = value
+        .pointer("/error/message")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            value.get("error").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.to_string()),
+                serde_json::Value::Object(map) => map
+                    .get("message")
+                    .and_then(|message| message.as_str().map(str::to_owned)),
+                _ => None,
+            })
+        })
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|v| v.as_str().map(str::to_owned))
+        });
+
+    summary.map(|text| {
+        let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        collapsed.trim().to_string()
+    })
+}
+
 fn format_api_error(error_text: &str) -> String {
     let trimmed = error_text.trim();
 
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        format!("API Error:\n```json\n{}\n```", trimmed)
-    } else if trimmed.starts_with('<') && trimmed.ends_with('>') {
+    if trimmed.is_empty() {
+        return "API Error:\n```\n<empty>\n```".to_string();
+    }
+
+    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Ok(pretty_json) = serde_json::to_string_pretty(&json_value) {
+            if let Some(summary) = extract_error_summary(&json_value) {
+                if !summary.is_empty() {
+                    return format!("API Error: {}\n```json\n{}\n```", summary, pretty_json);
+                }
+            }
+            return format!("API Error:\n```json\n{}\n```", pretty_json);
+        }
+    }
+
+    if trimmed.starts_with('<') && trimmed.ends_with('>') {
         format!("API Error:\n```xml\n{}\n```", trimmed)
     } else {
         format!("API Error:\n```\n{}\n```", trimmed)
@@ -230,5 +269,48 @@ mod tests {
         }
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn format_api_error_prettifies_json_with_summary() {
+        let raw = r#"{"error":{"message":"model overloaded","type":"invalid_request_error"}}"#;
+        let formatted = format_api_error(raw);
+
+        let expected = r#"API Error: model overloaded
+```json
+{
+  "error": {
+    "message": "model overloaded",
+    "type": "invalid_request_error"
+  }
+}
+```"#;
+        assert_eq!(formatted, expected);
+    }
+
+    #[test]
+    fn format_api_error_handles_json_without_summary() {
+        let raw = r#"{"status":"failed"}"#;
+        let formatted = format_api_error(raw);
+
+        let expected = r#"API Error:
+```json
+{
+  "status": "failed"
+}
+```"#;
+        assert_eq!(formatted, expected);
+    }
+
+    #[test]
+    fn format_api_error_handles_xml_and_plaintext() {
+        let xml = "<error>bad</error>";
+        let plain = "api failure";
+
+        let formatted_xml = format_api_error(xml);
+        let formatted_plain = format_api_error(plain);
+
+        assert_eq!(formatted_xml, "API Error:\n```xml\n<error>bad</error>\n```");
+        assert_eq!(formatted_plain, "API Error:\n```\napi failure\n```");
     }
 }

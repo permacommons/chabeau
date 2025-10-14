@@ -145,7 +145,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
             if stream_id != app.session.current_stream_id {
                 return None;
             }
-            let error_message = format!("Error: {}", message.trim());
+            let error_message = message.trim().to_string();
             let input_area_height = app.ui.calculate_input_area_height(ctx.term_width);
             {
                 let mut conversation = app.conversation();

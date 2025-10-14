@@ -1,13 +1,22 @@
 use super::CommandResult;
 use crate::core::app::App;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::fmt;
 
+/// Function pointer used by the registry to invoke a command implementation.
+///
+/// Command handlers receive the shared [`App`] state plus the parsed
+/// [`CommandInvocation`].
 pub type CommandHandler = fn(&mut App, CommandInvocation<'_>) -> CommandResult;
 
+/// One usage line that can be surfaced in command help.
 pub struct CommandUsage {
     pub syntax: &'static str,
     pub description: &'static str,
 }
 
+/// Metadata describing a single slash command.
 pub struct Command {
     pub name: &'static str,
     pub usages: &'static [CommandUsage],
@@ -15,34 +24,203 @@ pub struct Command {
     pub handler: CommandHandler,
 }
 
-#[derive(Clone, Copy)]
+/// Parsed view of a command input string, produced by [`CommandRegistry::dispatch`].
+///
+/// An invocation carries the original input (sans leading slash), the arguments as
+/// contiguous text, and a cached token list for handlers that prefer positional
+/// access.
 pub struct CommandInvocation<'a> {
+    pub command: &'static Command,
     pub input: &'a str,
-    pub args: &'a str,
+    args: &'a str,
+    tokens: Vec<&'a str>,
 }
 
-pub fn all_commands() -> &'static [Command] {
-    COMMANDS
+impl<'a> fmt::Debug for CommandInvocation<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandInvocation")
+            .field("command", &self.command.name)
+            .field("input", &self.input)
+            .field("args", &self.args)
+            .field("tokens", &self.tokens)
+            .finish()
+    }
 }
 
-pub fn find_command(name: &str) -> Option<&'static Command> {
-    all_commands()
-        .iter()
-        .find(|command| command.name.eq_ignore_ascii_case(name))
+impl<'a> CommandInvocation<'a> {
+    /// Returns the raw argument substring after the command name.
+    pub fn args_text(&self) -> &'a str {
+        self.args
+    }
+
+    #[cfg(test)]
+    /// Returns an iterator over whitespace-delimited argument tokens.
+    pub fn args_iter(&'a self) -> impl Iterator<Item = &'a str> + 'a {
+        self.tokens.iter().copied()
+    }
+
+    /// Returns the number of whitespace-delimited tokens in the invocation.
+    pub fn args_len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// Returns the `index`th argument token if it exists.
+    pub fn arg(&self, index: usize) -> Option<&'a str> {
+        self.tokens.get(index).copied()
+    }
+
+    /// Maps the first argument onto a toggle intent. If no argument is provided
+    /// the command toggles its state; otherwise the handler must pass a known
+    /// literal such as `on`, `off`, or `toggle`.
+    pub fn toggle_action(&self) -> Result<ToggleAction, ToggleError<'a>> {
+        match self.arg(0) {
+            None => Ok(ToggleAction::Toggle),
+            Some(arg) if arg.eq_ignore_ascii_case("toggle") => Ok(ToggleAction::Toggle),
+            Some(arg) if arg.eq_ignore_ascii_case("on") => Ok(ToggleAction::Enable),
+            Some(arg) if arg.eq_ignore_ascii_case("off") => Ok(ToggleAction::Disable),
+            Some(arg) => Err(ToggleError::InvalidValue(arg)),
+        }
+    }
 }
 
-pub fn matching_commands(prefix: &str) -> Vec<&'static Command> {
-    let lower_prefix = prefix.to_ascii_lowercase();
-    all_commands()
-        .iter()
-        .filter(|command| {
-            if lower_prefix.is_empty() {
-                true
-            } else {
-                command.name.to_ascii_lowercase().starts_with(&lower_prefix)
-            }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToggleAction {
+    Enable,
+    Disable,
+    Toggle,
+}
+
+impl ToggleAction {
+    pub fn apply(self, current: bool) -> bool {
+        match self {
+            ToggleAction::Enable => true,
+            ToggleAction::Disable => false,
+            ToggleAction::Toggle => !current,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ToggleError<'a> {
+    InvalidValue(&'a str),
+}
+
+#[derive(Debug)]
+/// Result of attempting to dispatch an input string through the registry.
+pub enum DispatchOutcome<'a> {
+    Invocation(CommandInvocation<'a>),
+    NotACommand,
+    UnknownCommand,
+}
+
+/// Central registry that owns the statically-defined command table and handles
+/// parsing/dispatch.
+pub struct CommandRegistry {
+    commands: &'static [Command],
+    lookup: HashMap<String, usize>,
+}
+
+impl CommandRegistry {
+    /// Builds a registry for the statically-declared command table.
+    pub fn new() -> Self {
+        let mut lookup = HashMap::new();
+        for (index, command) in COMMANDS.iter().enumerate() {
+            lookup.insert(command.name.to_ascii_lowercase(), index);
+        }
+        Self {
+            commands: COMMANDS,
+            lookup,
+        }
+    }
+
+    /// Returns every command known to the registry.
+    pub fn all(&self) -> &'static [Command] {
+        self.commands
+    }
+
+    /// Looks up a command by name using case-insensitive matching.
+    pub fn find(&self, name: &str) -> Option<&'static Command> {
+        let key = name.to_ascii_lowercase();
+        self.lookup
+            .get(&key)
+            .and_then(|index| self.commands.get(*index))
+    }
+
+    /// Returns commands whose names share the provided prefix (case-insensitive).
+    pub fn matching(&self, prefix: &str) -> Vec<&'static Command> {
+        let lower_prefix = prefix.to_ascii_lowercase();
+        self.commands
+            .iter()
+            .filter(|command| {
+                if lower_prefix.is_empty() {
+                    true
+                } else {
+                    command.name.to_ascii_lowercase().starts_with(&lower_prefix)
+                }
+            })
+            .collect()
+    }
+
+    /// Parses an input line once, splitting the command name from its arguments.
+    ///
+    /// Handlers receive a [`CommandInvocation`] that exposes cached argument
+    /// tokens, allowing them to focus on business logic instead of parsing.
+    pub fn dispatch<'a>(&'static self, input: &'a str) -> DispatchOutcome<'a> {
+        let trimmed = input.trim();
+        if !trimmed.starts_with('/') {
+            return DispatchOutcome::NotACommand;
+        }
+
+        let body = trimmed[1..].trim();
+        if body.is_empty() {
+            return DispatchOutcome::UnknownCommand;
+        }
+
+        let (name, args) = match body.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name, rest.trim()),
+            None => (body, ""),
+        };
+
+        let command = match self.find(name) {
+            Some(cmd) => cmd,
+            None => return DispatchOutcome::UnknownCommand,
+        };
+
+        let tokens: Vec<&'a str> = if args.is_empty() {
+            Vec::new()
+        } else {
+            args.split_whitespace().collect()
+        };
+
+        DispatchOutcome::Invocation(CommandInvocation {
+            command,
+            input: trimmed,
+            args,
+            tokens,
         })
-        .collect()
+    }
+}
+
+static REGISTRY: Lazy<CommandRegistry> = Lazy::new(CommandRegistry::new);
+
+/// Provides read-only access to the registered command metadata.
+pub fn all_commands() -> &'static [Command] {
+    REGISTRY.all()
+}
+
+#[cfg(test)]
+pub fn find_command(name: &str) -> Option<&'static Command> {
+    REGISTRY.find(name)
+}
+
+/// Returns commands whose names share the provided prefix.
+pub fn matching_commands(prefix: &str) -> Vec<&'static Command> {
+    REGISTRY.matching(prefix)
+}
+
+/// Exposes the lazily-initialised registry singleton for direct queries.
+pub fn registry() -> &'static CommandRegistry {
+    &REGISTRY
 }
 
 const COMMANDS: &[Command] = &[

@@ -36,18 +36,12 @@ Items are removed when completed.
 
 ### Medium priority
 
-- Character card architecture improvements — [OPEN]
-  - Consider extracting character card logic into a dedicated service/controller — [OPEN]
-  - Add character card validation at import time with detailed error messages — [OPEN]
-  - Consider caching parsed character cards in addition to metadata — [OPEN]
 - Reduce duplication in `src/ui/markdown.rs` for code block flushing (extract helper) — [OPEN]
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]
 - Height/scroll DRYing — [PARTIAL]
   - Continue standardizing on the conversation controller helpers across renderer and chat loop — [OPEN]
 - Stream spawning DRYing — [PARTIAL]
   - Use a config struct (already added) and consider moving the helper out of `chat_loop` for reuse — [PARTIAL]
-- Unify command routing in `src/commands/mod.rs` — [OPEN]
-  - Replace the long conditional ladder with a registry of commands plus shared helpers so new commands stay declarative and testable — [OPEN]
 
 ### Low priority
 

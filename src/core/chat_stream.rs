@@ -33,13 +33,19 @@ fn handle_data_payload(
                     let _ = tx.send((StreamMessage::Chunk(content.clone()), stream_id));
                 }
             }
+            false
         }
-        Err(e) => {
-            eprintln!("Failed to parse JSON: {e} - Data: {payload}");
+        Err(_) => {
+            if payload.trim().is_empty() {
+                return false;
+            }
+
+            let formatted_error = format_api_error(payload);
+            let _ = tx.send((StreamMessage::Error(formatted_error), stream_id));
+            let _ = tx.send((StreamMessage::End, stream_id));
+            true
         }
     }
-
-    false
 }
 
 fn process_sse_line(
@@ -267,6 +273,38 @@ mod tests {
             assert_eq!(received_id, stream_id);
             assert!(matches!(message, StreamMessage::End));
         }
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_sse_line_routes_stream_errors() {
+        let (service, mut rx) = ChatStreamService::new();
+        let error_line = r#"data: {"error":{"message":"internal server error"}}"#;
+        let stream_id = 99;
+
+        assert!(process_sse_line(error_line, &service.tx, stream_id));
+
+        let (message, received_id) = rx.try_recv().expect("expected error message");
+        assert_eq!(received_id, stream_id);
+        match message {
+            StreamMessage::Error(text) => {
+                let expected = r#"API Error: internal server error
+```json
+{
+  "error": {
+    "message": "internal server error"
+  }
+}
+```"#;
+                assert_eq!(text, expected);
+            }
+            other => panic!("expected error message, got {:?}", other),
+        }
+
+        let (message, received_id) = rx.try_recv().expect("expected end message");
+        assert_eq!(received_id, stream_id);
+        assert!(matches!(message, StreamMessage::End));
 
         assert!(rx.try_recv().is_err());
     }

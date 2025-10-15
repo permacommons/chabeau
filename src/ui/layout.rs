@@ -4,7 +4,7 @@ use ratatui::text::Line;
 
 use super::span::SpanKind;
 use super::theme::Theme;
-use crate::core::message::Message;
+use crate::core::message::{self, Message};
 
 /// Policy for how tables should behave when they cannot reasonably fit within the terminal width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,8 +114,10 @@ impl LayoutEngine {
                 span_metadata.extend(msg_metadata);
                 lines.append(&mut msg_lines);
                 message_spans.push(MessageLineSpan { start, len });
-                for (offset, cb_len, content) in msg_ranges {
-                    codeblock_ranges.push((start + offset, cb_len, content));
+                if !message::is_app_message_role(&msg.role) {
+                    for (offset, cb_len, content) in msg_ranges {
+                        codeblock_ranges.push((start + offset, cb_len, content));
+                    }
                 }
             }
             Layout {
@@ -173,7 +175,7 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::{LayoutConfig, LayoutEngine, Theme};
-    use crate::core::message::Message;
+    use crate::core::message::{Message, ROLE_ASSISTANT};
     use std::collections::VecDeque;
 
     #[test]
@@ -248,5 +250,31 @@ mod tests {
         let first_meta = layout.span_metadata.first().expect("meta");
         assert_eq!(first_line.spans.len(), first_meta.len());
         assert!(first_meta.iter().all(|kind| kind.is_link()));
+    }
+
+    #[test]
+    fn layout_codeblock_ranges_skip_app_messages() {
+        let theme = Theme::dark_default();
+        let mut messages = VecDeque::new();
+        messages.push_back(Message::app_error("```text\nerror\n```"));
+        messages.push_back(Message {
+            role: ROLE_ASSISTANT.into(),
+            content: "```rust\nfn main() {}\n```".into(),
+        });
+
+        let cfg = LayoutConfig::default();
+        let layout = LayoutEngine::layout_messages(&messages, &theme, &cfg);
+        let expected = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
+            &messages,
+            &theme,
+            cfg.width,
+            cfg.table_overflow_policy,
+            cfg.syntax_enabled,
+            cfg.user_display_name.as_deref(),
+        );
+
+        assert_eq!(layout.codeblock_ranges, expected);
+        assert_eq!(layout.codeblock_ranges.len(), 1);
+        assert!(layout.codeblock_ranges[0].2.contains("fn main"));
     }
 }

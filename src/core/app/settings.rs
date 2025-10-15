@@ -30,7 +30,7 @@ impl<'a> ThemeController<'a> {
     }
 
     pub fn apply_theme_by_id(&mut self, id: &str) -> Result<(), String> {
-        let config = Config::load_test_safe();
+        let config = Config::load_test_safe().map_err(|err| err.to_string())?;
         let theme = Self::resolve_theme(id, &config)?;
         self.apply_theme(theme);
         self.ui.current_theme_id = Some(id.to_string());
@@ -51,7 +51,7 @@ impl<'a> ThemeController<'a> {
     }
 
     pub fn apply_theme_by_id_session_only(&mut self, id: &str) -> Result<(), String> {
-        let config = Config::load_test_safe();
+        let config = Config::load_test_safe().map_err(|err| err.to_string())?;
         let theme = Self::resolve_theme(id, &config)?;
         self.apply_theme(theme);
         self.ui.current_theme_id = Some(id.to_string());
@@ -65,9 +65,10 @@ impl<'a> ThemeController<'a> {
     }
 
     pub fn preview_theme_by_id(&mut self, id: &str) {
-        let config = Config::load_test_safe();
-        if let Ok(theme) = Self::resolve_theme(id, &config) {
-            self.apply_theme(theme);
+        if let Ok(config) = Config::load_test_safe() {
+            if let Ok(theme) = Self::resolve_theme(id, &config) {
+                self.apply_theme(theme);
+            }
         }
     }
 
@@ -145,8 +146,14 @@ impl<'a> ProviderController<'a> {
             return (Ok(()), false);
         }
 
-        let auth_manager = AuthManager::new();
-        let config = Config::load_test_safe();
+        let auth_manager = match AuthManager::new() {
+            Ok(manager) => manager,
+            Err(err) => return (Err(err.to_string()), false),
+        };
+        let config = match Config::load_test_safe() {
+            Ok(config) => config,
+            Err(err) => return (Err(err.to_string()), false),
+        };
 
         match auth_manager.resolve_authentication(Some(provider_id), &config) {
             Ok((api_key, base_url, provider_name, provider_display_name)) => {

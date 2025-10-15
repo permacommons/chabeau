@@ -8,7 +8,7 @@ use crate::core::config::Config;
 use std::error::Error;
 
 pub async fn list_providers() -> Result<(), Box<dyn Error>> {
-    let auth_manager = AuthManager::new();
+    let auth_manager = AuthManager::new()?;
     let config = Config::load()?;
 
     println!("🔗 Available Providers");

@@ -269,7 +269,13 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
 
     match args.command {
         Some(Commands::Auth) => {
-            let mut auth_manager = AuthManager::new();
+            let mut auth_manager = match AuthManager::new() {
+                Ok(manager) => manager,
+                Err(err) => {
+                    eprintln!("❌ Failed to load configuration: {err}");
+                    std::process::exit(1);
+                }
+            };
             if let Err(e) = auth_manager.interactive_auth() {
                 eprintln!("❌ Authentication failed: {e}");
                 std::process::exit(1);
@@ -277,7 +283,13 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some(Commands::Deauth) => {
-            let mut auth_manager = AuthManager::new();
+            let mut auth_manager = match AuthManager::new() {
+                Ok(manager) => manager,
+                Err(err) => {
+                    eprintln!("❌ Failed to load configuration: {err}");
+                    std::process::exit(1);
+                }
+            };
             if let Err(e) = auth_manager.interactive_deauth(args.provider) {
                 eprintln!("❌ Deauthentication failed: {e}");
                 std::process::exit(1);

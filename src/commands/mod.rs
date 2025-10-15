@@ -760,7 +760,7 @@ mod tests {
     #[test]
     fn theme_picker_supports_filtering() {
         let mut app = create_test_app();
-        app.open_theme_picker();
+        app.open_theme_picker().expect("theme picker opens");
 
         // Should store all themes for filtering
         assert!(app
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn picker_supports_home_end_navigation_and_metadata() {
         let mut app = create_test_app();
-        app.open_theme_picker();
+        app.open_theme_picker().expect("theme picker opens");
 
         if let Some(picker) = app.picker_state_mut() {
             // Test Home key (move to start)
@@ -826,7 +826,7 @@ mod tests {
         let mut app = create_test_app();
 
         // Open theme picker - should default to A-Z (Name mode)
-        app.open_theme_picker();
+        app.open_theme_picker().expect("theme picker opens");
 
         if let Some(picker) = app.picker_state() {
             // Should default to Name mode (A-Z)

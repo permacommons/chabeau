@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use std::error::Error;
 
 pub async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>> {
-    let auth_manager = AuthManager::new();
+    let auth_manager = AuthManager::new()?;
     let config = Config::load()?;
 
     // Use the shared authentication resolution function

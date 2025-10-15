@@ -3,6 +3,7 @@ pub mod builtin_presets;
 pub mod builtin_providers;
 pub mod chat_stream;
 pub mod config;
+pub mod keyring;
 pub mod message;
 pub mod persona;
 #[cfg(test)]

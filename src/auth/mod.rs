@@ -123,6 +123,9 @@ impl AuthManager {
         provider_name: &str,
         token: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.use_keyring {
+            return Ok(());
+        }
         let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
         entry.set_password(token)?;
         Ok(())

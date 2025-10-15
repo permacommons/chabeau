@@ -4,22 +4,19 @@ use crate::core::keyring::KeyringAccessError;
 use crate::core::providers::{
     resolve_session, ProviderAuthSource, ProviderMetadata, ResolveSessionError,
 };
-use crate::utils::input::sanitize_text_input;
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
-use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+
+mod ui;
+
+use self::ui::{
+    prompt_auth_menu, prompt_custom_provider_details, prompt_deauth_menu, prompt_provider_token,
+    AuthMenuSelection, CustomProviderInput, DeauthMenuItem, ProviderMenuItem, UiError,
 };
-use std::io::{self, Write};
-use std::time::Duration;
+use std::collections::HashSet;
 
 // Constants for repeated strings
 const KEYRING_SERVICE: &str = "chabeau";
-const MASKED_INPUT_PROMPT: &str = "Enter your API token (press F2 to reveal last 4 chars): ";
-const INVALID_CHOICE_MSG: &str = "Invalid choice";
-const TOKEN_EMPTY_ERROR: &str = "Token cannot be empty";
 
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -29,6 +26,16 @@ pub struct Provider {
 }
 
 type ConfiguredProviderEntry = (String, String, bool);
+
+fn map_ui_result<T>(result: Result<T, UiError>) -> Result<T, Box<dyn std::error::Error>> {
+    result.map_err(|err| Box::new(err) as Box<dyn std::error::Error>)
+}
+
+struct CustomProviderSummary {
+    provider_id: String,
+    display_name: String,
+    base_url: String,
+}
 
 impl Provider {
     pub fn new(
@@ -186,48 +193,44 @@ impl AuthManager {
     }
 
     pub fn interactive_auth(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔐 Chabeau Authentication Setup");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!();
-
-        // Show available providers
-        println!("Available providers:");
-        for (i, provider) in self.providers.iter().enumerate() {
-            let has_token = self.get_token(&provider.name)?.is_some();
-            let status = if has_token {
-                "✓ configured"
-            } else {
-                "not configured"
-            };
-            println!(
-                "  {}. {} ({}) - {}",
-                i + 1,
-                provider.display_name,
-                provider.name,
-                status
-            );
-        }
-        println!("  {}. Custom provider", self.providers.len() + 1);
-        println!();
-
-        print!("Select a provider (1-{}): ", self.providers.len() + 1);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let choice: usize = input.trim().parse().map_err(|_| INVALID_CHOICE_MSG)?;
-
-        if choice == 0 || choice > self.providers.len() + 1 {
-            return Err(INVALID_CHOICE_MSG.into());
+        let mut menu_items = Vec::new();
+        for provider in &self.providers {
+            let configured = self.get_token(&provider.name)?.is_some();
+            menu_items.push(ProviderMenuItem {
+                id: provider.name.clone(),
+                display_name: provider.display_name.clone(),
+                configured,
+            });
         }
 
-        if choice <= self.providers.len() {
-            // Built-in provider
-            let provider = &self.providers[choice - 1];
-            self.setup_provider_auth(&provider.name, &provider.display_name)?;
-        } else {
-            // Custom provider
-            self.setup_custom_provider()?;
+        let selection = map_ui_result(prompt_auth_menu(&menu_items))?;
+
+        match selection {
+            AuthMenuSelection::Provider(index) => {
+                let provider = &self.providers[index];
+                let token = map_ui_result(prompt_provider_token(&provider.display_name))?;
+                if token.is_empty() {
+                    return Err("Token cannot be empty".into());
+                }
+                self.store_token(&provider.name, &token)?;
+                println!("✓ Token stored securely for {}", provider.display_name);
+            }
+            AuthMenuSelection::Custom => {
+                let existing_ids = self.collect_existing_provider_ids();
+                let custom_input =
+                    map_ui_result(prompt_custom_provider_details(&existing_ids, |name| {
+                        suggest_provider_id(name)
+                    }))?;
+                let summary = self.setup_custom_provider(custom_input)?;
+                println!(
+                    "✓ Custom provider '{}' (ID: {}) configured with URL: {}",
+                    summary.display_name, summary.provider_id, summary.base_url
+                );
+            }
+            AuthMenuSelection::Cancel => {
+                println!("Cancelled.");
+                return Ok(());
+            }
         }
 
         println!();
@@ -237,108 +240,46 @@ impl AuthManager {
         Ok(())
     }
 
-    fn setup_provider_auth(
-        &self,
-        provider_name: &str,
-        display_name: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        println!();
-        println!("Selected provider: {display_name}");
-        print!("{}", MASKED_INPUT_PROMPT);
-        io::stdout().flush()?;
+    fn setup_custom_provider(
+        &mut self,
+        details: CustomProviderInput,
+    ) -> Result<CustomProviderSummary, Box<dyn std::error::Error>> {
+        let CustomProviderInput {
+            display_name,
+            provider_id,
+            base_url,
+            token,
+        } = details;
 
-        let token = self.read_masked_input()?;
-
-        if token.is_empty() {
-            return Err(TOKEN_EMPTY_ERROR.into());
-        }
-
-        self.store_token(provider_name, &token)?;
-        println!("✓ Token stored securely for {display_name}");
-
-        Ok(())
-    }
-
-    fn setup_custom_provider(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!();
-        print!("Enter a display name for your custom provider: ");
-        io::stdout().flush()?;
-
-        let mut display_name = String::new();
-        io::stdin().read_line(&mut display_name)?;
-        let display_name = display_name.trim();
-
-        if display_name.is_empty() {
-            return Err("Display name cannot be empty".into());
-        }
-
-        // Suggest an ID based on the display name
-        let suggested_id = suggest_provider_id(display_name);
-        print!("Enter an ID for your provider [default: {suggested_id}]: ");
-        io::stdout().flush()?;
-
-        let mut id_input = String::new();
-        io::stdin().read_line(&mut id_input)?;
-        let id = id_input.trim();
-
-        let final_id = if id.is_empty() {
-            suggested_id
-        } else {
-            // Validate the ID - only alphanumeric characters
-            if !id.chars().all(|c| c.is_alphanumeric()) {
-                return Err("Provider ID can only contain alphanumeric characters".into());
-            }
-            id.to_lowercase()
-        };
-
-        // Check if ID already exists
-        if self.find_provider_by_name(&final_id).is_some()
-            || self.get_custom_provider(&final_id).is_some()
-        {
-            return Err(format!("Provider with ID '{final_id}' already exists").into());
-        }
-
-        print!("Enter the API base URL (typically, https://some-url.example/api/v1): ");
-        io::stdout().flush()?;
-
-        let mut base_url = String::new();
-        io::stdin().read_line(&mut base_url)?;
-        let base_url = base_url.trim();
-
-        if base_url.is_empty() {
-            return Err("Base URL cannot be empty".into());
-        }
-
-        // Normalize the base URL to remove trailing slashes
-        let normalized_base_url = normalize_base_url(base_url);
-
-        let auth_mode = None; // Default to openai mode for now
-
-        print!("{}", MASKED_INPUT_PROMPT);
-        io::stdout().flush()?;
-
-        let token = self.read_masked_input()?;
-
-        if token.is_empty() {
-            return Err(TOKEN_EMPTY_ERROR.into());
-        }
-
-        // Create and store the custom provider
+        let normalized_base_url = normalize_base_url(&base_url);
         let custom_provider = CustomProvider::new(
-            final_id.clone(),
-            display_name.to_string(),
+            provider_id.clone(),
+            display_name.clone(),
             normalized_base_url.clone(),
-            auth_mode,
+            None,
         );
 
         self.store_custom_provider(custom_provider)?;
-        self.store_token(&final_id, &token)?;
+        self.store_token(&provider_id, &token)?;
 
-        println!(
-            "✓ Custom provider '{display_name}' (ID: {final_id}) configured with URL: {normalized_base_url}"
-        );
+        if self
+            .providers
+            .iter()
+            .all(|existing| existing.name != provider_id)
+        {
+            self.providers.push(Provider::new(
+                provider_id.clone(),
+                normalized_base_url.clone(),
+                display_name.clone(),
+                None,
+            ));
+        }
 
-        Ok(())
+        Ok(CustomProviderSummary {
+            provider_id,
+            display_name,
+            base_url: normalized_base_url,
+        })
     }
 
     pub fn get_auth_for_provider(
@@ -417,70 +358,29 @@ impl AuthManager {
     }
 
     fn interactive_deauth_menu(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🗑️  Chabeau Authentication Removal");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!();
-
-        // Collect all configured providers
         let configured_providers = self.collect_configured_providers(|name| {
             self.get_token(name).map(|token| token.is_some())
         })?;
 
-        if configured_providers.is_empty() {
-            println!("No configured providers found.");
-            return Ok(());
+        let menu_items: Vec<DeauthMenuItem> = configured_providers
+            .iter()
+            .map(|(name, display_name, is_custom)| DeauthMenuItem {
+                id: name.clone(),
+                display_name: display_name.clone(),
+                is_custom: *is_custom,
+            })
+            .collect();
+
+        if let Some(selection) = map_ui_result(prompt_deauth_menu(&menu_items))? {
+            self.remove_provider_auth(&selection.provider_id)?;
+
+            if selection.is_custom {
+                self.remove_custom_provider(&selection.provider_id)?;
+            }
+
+            println!("✅ Authentication removed for {}", selection.display_name);
         }
 
-        println!("Configured providers:");
-        for (i, (_name, display_name, is_custom)) in configured_providers.iter().enumerate() {
-            let provider_type = if *is_custom { " (custom)" } else { "" };
-            println!("  {}. {}{}", i + 1, display_name, provider_type);
-        }
-        println!("  {}. Cancel", configured_providers.len() + 1);
-        println!();
-
-        print!(
-            "Select a provider to remove (1-{}): ",
-            configured_providers.len() + 1
-        );
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let choice: usize = input.trim().parse().map_err(|_| "Invalid choice")?;
-
-        if choice == 0 || choice > configured_providers.len() + 1 {
-            return Err("Invalid choice".into());
-        }
-
-        if choice == configured_providers.len() + 1 {
-            println!("Cancelled.");
-            return Ok(());
-        }
-
-        let (provider_name, display_name, is_custom) = &configured_providers[choice - 1];
-
-        // Confirm removal
-        print!("Are you sure you want to remove authentication for {display_name}? (y/N): ");
-        io::stdout().flush()?;
-
-        let mut confirm = String::new();
-        io::stdin().read_line(&mut confirm)?;
-        let confirm = confirm.trim().to_lowercase();
-
-        if confirm != "y" && confirm != "yes" {
-            println!("Cancelled.");
-            return Ok(());
-        }
-
-        self.remove_provider_auth(provider_name)?;
-
-        if *is_custom {
-            // Also remove the custom provider URL and from the list
-            self.remove_custom_provider(provider_name)?;
-        }
-
-        println!("✅ Authentication removed for {display_name}");
         Ok(())
     }
 
@@ -520,6 +420,17 @@ impl AuthManager {
         Ok(configured_providers)
     }
 
+    fn collect_existing_provider_ids(&self) -> HashSet<String> {
+        let mut ids = HashSet::new();
+        for provider in &self.providers {
+            ids.insert(provider.name.clone());
+        }
+        for custom in self.config.list_custom_providers() {
+            ids.insert(custom.id.clone());
+        }
+        ids
+    }
+
     fn remove_provider_auth(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", provider_name)?;
         match entry.delete_credential() {
@@ -539,149 +450,6 @@ impl AuthManager {
         self.config.remove_custom_provider(provider_id);
         self.config.save()?;
         Ok(())
-    }
-
-    /// Read masked input with F2 to reveal last 4 characters
-    ///
-    /// Features:
-    /// - Input is masked with asterisks (*)
-    /// - F2 toggles showing the last 4 characters
-    /// - Backspace/Delete to remove characters
-    /// - Ctrl+U to clear entire line
-    /// - Ctrl+W to delete last word
-    /// - Ctrl+C or Esc to cancel
-    /// - Enter or newlines (\n, \r) to confirm input
-    /// - Proper paste handling with sanitization
-    fn read_masked_input(&self) -> Result<String, Box<dyn std::error::Error>> {
-        enable_raw_mode()?;
-
-        // Enable bracketed paste mode to handle paste events properly
-        let mut stdout = io::stdout();
-        execute!(stdout, event::EnableBracketedPaste)?;
-
-        let mut input = String::new();
-        let mut show_last_four = false;
-        let mut needs_redraw = true;
-
-        let result = loop {
-            // Only redraw when necessary
-            if needs_redraw {
-                self.display_masked_prompt(&input, show_last_four)?;
-                needs_redraw = false;
-            }
-
-            // Wait for events with a timeout
-            if event::poll(Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        match key.code {
-                            KeyCode::Enter => {
-                                break Ok(input);
-                            }
-                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                // Check for newline characters and submit immediately
-                                if c == '\n' || c == '\r' {
-                                    break Ok(input);
-                                }
-                                input.push(c);
-                                show_last_four = false; // Hide reveal when typing
-                                needs_redraw = true;
-                            }
-                            KeyCode::Backspace | KeyCode::Delete => {
-                                if !input.is_empty() {
-                                    input.pop();
-                                    show_last_four = false; // Hide reveal when editing
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::F(2) => {
-                                show_last_four = !show_last_four;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                // Ctrl+U: Clear entire line
-                                input.clear();
-                                show_last_four = false;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                // Ctrl+W: Delete last word
-                                self.delete_last_word(&mut input);
-                                show_last_four = false;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                break Err("Cancelled by user".into());
-                            }
-                            KeyCode::Esc => {
-                                break Err("Cancelled by user".into());
-                            }
-                            _ => {}
-                        }
-                    }
-                    Event::Paste(text) => {
-                        // Handle paste events with sanitization
-                        let sanitized_text = sanitize_text_input(&text);
-
-                        // Check if the sanitized text contains newlines - if so, submit immediately
-                        if sanitized_text.contains('\n') {
-                            // Take everything before the first newline as the input
-                            let before_newline = sanitized_text.split('\n').next().unwrap_or("");
-                            input.push_str(before_newline);
-
-                            // Show the masked input before submitting
-                            self.display_masked_prompt(&input, false)?;
-
-                            break Ok(input);
-                        } else {
-                            // No newlines, just add the sanitized text
-                            input.push_str(&sanitized_text);
-                            show_last_four = false; // Hide reveal when pasting
-                            needs_redraw = true;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        };
-
-        // Cleanup: disable bracketed paste mode and raw mode
-        disable_raw_mode()?;
-        execute!(stdout, event::DisableBracketedPaste)?;
-        println!(); // Move to next line
-
-        result
-    }
-
-    /// Display the masked input prompt with optional reveal of last 4 characters
-    fn display_masked_prompt(
-        &self,
-        input: &str,
-        show_last_four: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        print!("\r\x1b[K"); // Clear line
-        if show_last_four && input.len() >= 4 {
-            let masked_part = "*".repeat(input.len() - 4);
-            let visible_part = &input[input.len() - 4..];
-            print!("{}{}{}", MASKED_INPUT_PROMPT, masked_part, visible_part);
-        } else {
-            let masked = "*".repeat(input.len());
-            print!("{}{}", MASKED_INPUT_PROMPT, masked);
-        }
-        io::stdout().flush()?;
-        Ok(())
-    }
-
-    /// Delete the last word from the input string (Ctrl+W functionality)
-    fn delete_last_word(&self, input: &mut String) {
-        // Remove trailing spaces
-        while input.ends_with(' ') {
-            input.pop();
-        }
-        // Remove the last word
-        while !input.is_empty() && !input.ends_with(' ') {
-            input.pop();
-        }
     }
 }
 
@@ -779,60 +547,6 @@ mod tests {
             configured[1],
             ("custom".to_string(), "Custom Provider".to_string(), true,)
         );
-    }
-
-    fn create_test_auth_manager() -> AuthManager {
-        with_test_config_env(|_| {
-            AuthManager::new_with_keyring(false).expect("auth manager initializes")
-        })
-    }
-
-    #[test]
-    fn test_delete_last_word_single_word() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::from("hello");
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "");
-    }
-
-    #[test]
-    fn test_delete_last_word_multiple_words() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::from("hello world test");
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "hello world ");
-    }
-
-    #[test]
-    fn test_delete_last_word_trailing_spaces() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::from("hello world   ");
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "hello ");
-    }
-
-    #[test]
-    fn test_delete_last_word_empty_string() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::new();
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "");
-    }
-
-    #[test]
-    fn test_delete_last_word_only_spaces() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::from("   ");
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "");
-    }
-
-    #[test]
-    fn test_delete_last_word_mixed_spaces() {
-        let auth_manager = create_test_auth_manager();
-        let mut input = String::from("hello  world  test  ");
-        auth_manager.delete_last_word(&mut input);
-        assert_eq!(input, "hello  world  ");
     }
 
     #[test]

@@ -94,6 +94,64 @@ impl<'a> ConversationController<'a> {
         }
     }
 
+    fn assemble_api_messages<'m, I>(&self, history: I) -> Vec<crate::api::ChatMessage>
+    where
+        I: Iterator<Item = &'m Message>,
+    {
+        let mut api_messages = Vec::new();
+
+        let character = self.session.get_character();
+
+        if let Some(character) = character {
+            let user_name = self
+                .persona_manager
+                .get_active_persona()
+                .map(|p| p.display_name.as_str());
+            let char_name = Some(character.data.name.as_str());
+            let base_system_prompt =
+                character.build_system_prompt_with_substitutions(user_name, char_name);
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
+            api_messages.push(crate::api::ChatMessage {
+                role: "system".to_string(),
+                content: modified_system_prompt,
+            });
+        } else {
+            let base_system_prompt = "";
+            let modified_system_prompt =
+                self.apply_persona_to_system_prompt(base_system_prompt, None);
+            if !modified_system_prompt.is_empty() {
+                api_messages.push(crate::api::ChatMessage {
+                    role: "system".to_string(),
+                    content: modified_system_prompt,
+                });
+            }
+        }
+
+        for msg in history {
+            if msg.role == ROLE_ASSISTANT && msg.content.trim().is_empty() {
+                continue;
+            }
+
+            if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
+                api_messages.push(crate::api::ChatMessage {
+                    role: msg.role.clone(),
+                    content: msg.content.clone(),
+                });
+            }
+        }
+
+        if let Some(character) = character {
+            if let Some(message) = self.post_history_system_message(character) {
+                api_messages.push(message);
+            }
+        }
+
+        self.apply_preset_to_messages(&mut api_messages);
+
+        api_messages
+    }
+
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
         self.clear_status();
 
@@ -124,63 +182,8 @@ impl<'a> ConversationController<'a> {
 
         self.session.retrying_message_index = None;
 
-        let mut api_messages = Vec::new();
-
-        // Inject character instructions as API system message if active
-        // Note: This is role="system" for the API, not a transcript system message
-        if let Some(character) = self.session.get_character() {
-            // Apply persona substitutions to character system prompt
-            let user_name = self
-                .persona_manager
-                .get_active_persona()
-                .map(|p| p.display_name.as_str());
-            let char_name = Some(character.data.name.as_str());
-            let base_system_prompt =
-                character.build_system_prompt_with_substitutions(user_name, char_name);
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
-            api_messages.push(crate::api::ChatMessage {
-                role: "system".to_string(),
-                content: modified_system_prompt,
-            });
-        } else {
-            // No character active, but check if persona should modify an empty system prompt
-            let base_system_prompt = "";
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(base_system_prompt, None);
-            if !modified_system_prompt.is_empty() {
-                api_messages.push(crate::api::ChatMessage {
-                    role: "system".to_string(),
-                    content: modified_system_prompt,
-                });
-            }
-        }
-
-        // Add conversation history (including greeting if present)
-        // Note: Transcript app messages (help, status) are excluded here
-        for msg in self.ui.messages.iter().take(self.ui.messages.len() - 1) {
-            if msg.role == ROLE_ASSISTANT && msg.content.trim().is_empty() {
-                continue;
-            }
-
-            if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
-                api_messages.push(crate::api::ChatMessage {
-                    role: msg.role.clone(),
-                    content: msg.content.clone(),
-                });
-            }
-        }
-
-        // Add post-history instructions as API system message if present
-        if let Some(character) = self.session.get_character() {
-            if let Some(message) = self.post_history_system_message(character) {
-                api_messages.push(message);
-            }
-        }
-
-        self.apply_preset_to_messages(&mut api_messages);
-
-        api_messages
+        let history_len = self.ui.messages.len().saturating_sub(1);
+        self.assemble_api_messages(self.ui.messages.iter().take(history_len))
     }
 
     pub fn add_app_message(&mut self, kind: AppMessageKind, content: String) {
@@ -400,57 +403,9 @@ impl<'a> ConversationController<'a> {
 
         self.ui.auto_scroll = true;
 
-        let mut api_messages = Vec::new();
+        let retry_index = self.session.retrying_message_index?;
 
-        // Inject character instructions as API system message if active
-        if let Some(character) = self.session.get_character() {
-            // Apply persona substitutions to character system prompt
-            let user_name = self
-                .persona_manager
-                .get_active_persona()
-                .map(|p| p.display_name.as_str());
-            let char_name = Some(character.data.name.as_str());
-            let base_system_prompt =
-                character.build_system_prompt_with_substitutions(user_name, char_name);
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
-            api_messages.push(crate::api::ChatMessage {
-                role: "system".to_string(),
-                content: modified_system_prompt,
-            });
-        } else {
-            // No character active, but check if persona should modify an empty system prompt
-            let base_system_prompt = "";
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(base_system_prompt, None);
-            if !modified_system_prompt.is_empty() {
-                api_messages.push(crate::api::ChatMessage {
-                    role: "system".to_string(),
-                    content: modified_system_prompt,
-                });
-            }
-        }
-
-        // Add conversation history up to retry point
-        if let Some(retry_index) = self.session.retrying_message_index {
-            for (i, msg) in self.ui.messages.iter().enumerate() {
-                if i < retry_index && (msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT) {
-                    api_messages.push(crate::api::ChatMessage {
-                        role: msg.role.clone(),
-                        content: msg.content.clone(),
-                    });
-                }
-            }
-        }
-
-        // Add post-history instructions as API system message if present
-        if let Some(character) = self.session.get_character() {
-            if let Some(message) = self.post_history_system_message(character) {
-                api_messages.push(message);
-            }
-        }
-
-        self.apply_preset_to_messages(&mut api_messages);
+        let api_messages = self.assemble_api_messages(self.ui.messages.iter().take(retry_index));
 
         Some(api_messages)
     }

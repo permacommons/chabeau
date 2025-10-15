@@ -31,7 +31,7 @@ pub async fn bootstrap_app(
     character_service: CharacterService,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
-    let auth_manager = AuthManager::new();
+    let auth_manager = AuthManager::new()?;
 
     // Gather providers with stored tokens (ignored in env-only mode)
     let mut token_providers: Vec<String> = Vec::new();

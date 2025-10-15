@@ -2,6 +2,8 @@ use directories::ProjectDirs;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error as StdError;
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -151,6 +153,56 @@ static CONFIG_ORCHESTRATOR: Lazy<ConfigOrchestrator> =
 #[cfg(test)]
 static TEST_ORCHESTRATOR: Lazy<Mutex<Option<ConfigOrchestrator>>> = Lazy::new(|| Mutex::new(None));
 
+#[derive(Debug)]
+pub enum ConfigError {
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+}
+
+impl ConfigError {
+    fn display_path(path: &Path) -> String {
+        path_display(path)
+    }
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::Read { path, source } => {
+                write!(
+                    f,
+                    "Failed to read config at {}: {}",
+                    Self::display_path(path),
+                    source
+                )
+            }
+            ConfigError::Parse { path, source } => {
+                write!(
+                    f,
+                    "Failed to parse config at {}: {}",
+                    Self::display_path(path),
+                    source
+                )
+            }
+        }
+    }
+}
+
+impl StdError for ConfigError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            ConfigError::Read { source, .. } => Some(source),
+            ConfigError::Parse { source, .. } => Some(source),
+        }
+    }
+}
+
 impl ConfigOrchestrator {
     fn new(path: PathBuf) -> Self {
         Self {
@@ -230,20 +282,27 @@ impl Config {
 
     /// Load config, but return default config when in test mode to avoid side effects
     #[cfg(test)]
-    pub fn load_test_safe() -> Config {
-        Config::default()
+    pub fn load_test_safe() -> Result<Config, Box<dyn StdError>> {
+        Ok(Config::default())
     }
 
     /// Load config, but return default config when in test mode to avoid side effects
     #[cfg(not(test))]
-    pub fn load_test_safe() -> Config {
-        Self::load().unwrap_or_default()
+    pub fn load_test_safe() -> Result<Config, Box<dyn StdError>> {
+        Self::load()
     }
 
     pub fn load_from_path(config_path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
         if config_path.exists() {
-            let contents = fs::read_to_string(config_path)?;
-            let config: Config = toml::from_str(&contents)?;
+            let contents = fs::read_to_string(config_path).map_err(|source| ConfigError::Read {
+                path: config_path.clone(),
+                source,
+            })?;
+            let config: Config =
+                toml::from_str(&contents).map_err(|source| ConfigError::Parse {
+                    path: config_path.clone(),
+                    source,
+                })?;
             Ok(config)
         } else {
             Ok(Config::default())

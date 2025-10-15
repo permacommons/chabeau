@@ -209,7 +209,7 @@ pub(crate) async fn prepare_with_auth(
     } else if env_only {
         resolve_env_session().map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?
     } else {
-        let auth_manager = AuthManager::new();
+        let auth_manager = AuthManager::new()?;
         match resolve_session(&auth_manager, config, provider.as_deref()) {
             Ok(session) => session,
             Err(ResolveSessionError::Provider(err)) => return Err(Box::new(err)),

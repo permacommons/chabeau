@@ -51,21 +51,15 @@ pub struct AuthManager {
     use_keyring: bool,
 }
 
-impl Default for AuthManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AuthManager {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_keyring(true)
     }
 
     /// Construct an AuthManager, optionally disabling keyring access (useful for tests)
-    pub fn new_with_keyring(use_keyring: bool) -> Self {
+    pub fn new_with_keyring(use_keyring: bool) -> Result<Self, Box<dyn std::error::Error>> {
         // Load config first
-        let config = Config::load().unwrap_or_default();
+        let config = Config::load()?;
 
         // Load built-in providers from configuration
         let builtin_providers = load_builtin_providers();
@@ -84,11 +78,11 @@ impl AuthManager {
             ));
         }
 
-        Self {
+        Ok(Self {
             providers,
             config,
             use_keyring,
-        }
+        })
     }
 
     pub fn find_provider_by_name(&self, name: &str) -> Option<&Provider> {
@@ -788,7 +782,9 @@ mod tests {
     }
 
     fn create_test_auth_manager() -> AuthManager {
-        with_test_config_env(|_| AuthManager::new_with_keyring(false))
+        with_test_config_env(|_| {
+            AuthManager::new_with_keyring(false).expect("auth manager initializes")
+        })
     }
 
     #[test]
@@ -846,7 +842,7 @@ mod tests {
             let mut env_guard = TestEnvVarGuard::new();
             env_guard.set_var("OPENAI_API_KEY", "sk-test");
             env_guard.set_var("OPENAI_BASE_URL", "https://api.openai.com/v1");
-            let am = AuthManager::new_with_keyring(false);
+            let am = AuthManager::new_with_keyring(false).expect("auth manager loads");
             let cfg = Config::default();
             let (_key, base, prov, display) = am
                 .resolve_authentication(None, &cfg)
@@ -865,7 +861,7 @@ mod tests {
             let mut env_guard = TestEnvVarGuard::new();
             env_guard.set_var("OPENAI_API_KEY", "sk-test");
             env_guard.set_var("OPENAI_BASE_URL", "https://example.com/v1");
-            let am = AuthManager::new_with_keyring(false);
+            let am = AuthManager::new_with_keyring(false).expect("auth manager loads");
             let cfg = Config::default();
             let (_key, base, prov, display) = am
                 .resolve_authentication(None, &cfg)
@@ -881,7 +877,7 @@ mod tests {
     #[test]
     fn resolve_deauth_target_normalizes_builtin_provider() {
         with_test_config_env(|_| {
-            let manager = AuthManager::new_with_keyring(false);
+            let manager = AuthManager::new_with_keyring(false).expect("auth manager loads");
             let (resolved, is_custom) = manager
                 .resolve_deauth_target("OpenAI")
                 .expect("provider should resolve");
@@ -904,7 +900,7 @@ mod tests {
             })
             .expect("custom provider persisted");
 
-            let mut manager = AuthManager::new_with_keyring(false);
+            let mut manager = AuthManager::new_with_keyring(false).expect("auth manager loads");
             let (resolved, is_custom) = manager
                 .resolve_deauth_target("MYCUSTOM")
                 .expect("provider should resolve");

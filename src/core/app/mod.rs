@@ -328,8 +328,8 @@ impl App {
     }
 
     /// Open a theme picker modal with built-in and custom themes
-    pub fn open_theme_picker(&mut self) {
-        self.picker.open_theme_picker(&mut self.ui);
+    pub fn open_theme_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.picker.open_theme_picker(&mut self.ui)
     }
 
     /// Apply theme temporarily for preview (does not persist config)
@@ -346,7 +346,7 @@ impl App {
 
     /// Open a model picker modal with available models from current provider
     pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let request = self.prepare_model_picker_request();
+        let request = self.prepare_model_picker_request()?;
         let ModelPickerRequest {
             client,
             base_url,
@@ -360,19 +360,21 @@ impl App {
         self.complete_model_picker_request(default_model_for_provider, models_response)
     }
 
-    pub fn prepare_model_picker_request(&mut self) -> ModelPickerRequest {
+    pub fn prepare_model_picker_request(
+        &mut self,
+    ) -> Result<ModelPickerRequest, Box<dyn std::error::Error>> {
         self.ui.begin_activity(ActivityKind::ModelRequest);
-        let cfg = Config::load_test_safe();
+        let cfg = Config::load_test_safe()?;
         let default_model_for_provider =
             cfg.get_default_model(&self.session.provider_name).cloned();
 
-        ModelPickerRequest {
+        Ok(ModelPickerRequest {
             client: self.session.client.clone(),
             base_url: self.session.base_url.clone(),
             api_key: self.session.api_key.clone(),
             provider_name: self.session.provider_name.clone(),
             default_model_for_provider,
-        }
+        })
     }
 
     pub fn complete_model_picker_request(
@@ -731,7 +733,7 @@ mod tests {
         app.ui.current_theme_id = Some("light".to_string());
 
         // Open the theme picker
-        app.open_theme_picker();
+        app.open_theme_picker().expect("theme picker opens");
 
         // After sorting and selection alignment, ensure selected item has id "light"
         if let Some(picker) = app.picker_state() {

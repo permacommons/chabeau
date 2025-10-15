@@ -342,8 +342,11 @@ impl PickerController {
         self.picker_session = None;
     }
 
-    pub fn open_theme_picker(&mut self, ui: &mut UiState) {
-        let cfg = Config::load_test_safe();
+    pub fn open_theme_picker(
+        &mut self,
+        ui: &mut UiState,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let cfg = Config::load_test_safe()?;
 
         let mut items: Vec<PickerItem> = Vec::new();
         let default_theme_id = cfg.theme.clone();
@@ -437,6 +440,7 @@ impl PickerController {
                 session.state.selected = idx;
             }
         }
+        Ok(())
     }
 
     pub fn populate_model_picker_from_response(
@@ -797,8 +801,8 @@ impl PickerController {
     }
 
     pub fn open_provider_picker(&mut self, session_context: &SessionContext) -> Result<(), String> {
-        let auth_manager = AuthManager::new();
-        let cfg = Config::load_test_safe();
+        let auth_manager = AuthManager::new().map_err(|err| err.to_string())?;
+        let cfg = Config::load_test_safe().map_err(|err| err.to_string())?;
         let default_provider = cfg.default_provider.clone();
         let mut items: Vec<PickerItem> = Vec::new();
 
@@ -937,7 +941,7 @@ impl PickerController {
         }
 
         // Get the default character for the current provider/model
-        let cfg = Config::load_test_safe();
+        let cfg = Config::load_test_safe().map_err(|err| err.to_string())?;
         let default_character =
             cfg.get_default_character(&session_context.provider_name, &session_context.model);
 

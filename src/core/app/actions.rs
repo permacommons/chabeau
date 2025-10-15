@@ -472,16 +472,21 @@ fn handle_process_command(
             let params = prepare_stream_params_for_message(app, message, ctx);
             Some(AppCommand::SpawnStream(params))
         }
-        CommandResult::OpenModelPicker => {
-            let request = app.prepare_model_picker_request();
-            Some(AppCommand::LoadModelPicker(request))
-        }
+        CommandResult::OpenModelPicker => match app.prepare_model_picker_request() {
+            Ok(request) => Some(AppCommand::LoadModelPicker(request)),
+            Err(err) => {
+                set_status_message(app, format!("Model picker error: {}", err), ctx);
+                None
+            }
+        },
         CommandResult::OpenProviderPicker => {
             app.open_provider_picker();
             None
         }
         CommandResult::OpenThemePicker => {
-            app.open_theme_picker();
+            if let Err(err) = app.open_theme_picker() {
+                set_status_message(app, format!("Theme picker error: {}", err), ctx);
+            }
             None
         }
         CommandResult::OpenCharacterPicker => {
@@ -737,8 +742,18 @@ fn handle_picker_apply_selection(
                             app.picker.startup_requires_provider = false;
                             app.picker.startup_requires_model = true;
                         }
-                        let request = app.prepare_model_picker_request();
-                        followup = Some(AppCommand::LoadModelPicker(request));
+                        match app.prepare_model_picker_request() {
+                            Ok(request) => {
+                                followup = Some(AppCommand::LoadModelPicker(request));
+                            }
+                            Err(err) => {
+                                set_status_message(
+                                    app,
+                                    format!("Model picker error: {}", err),
+                                    ctx,
+                                );
+                            }
+                        }
                     } else {
                         // Load default character for this provider/model if configured
                         load_default_character_if_configured(app, ctx);
@@ -796,8 +811,13 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
             match controller.unset_default_model(&provider_name) {
                 Ok(_) => {
                     set_status_message(app, format!("Removed default: {}", selected_id), ctx);
-                    let request = app.prepare_model_picker_request();
-                    Some(AppCommand::LoadModelPicker(request))
+                    match app.prepare_model_picker_request() {
+                        Ok(request) => Some(AppCommand::LoadModelPicker(request)),
+                        Err(err) => {
+                            set_status_message(app, format!("Model picker error: {}", err), ctx);
+                            None
+                        }
+                    }
                 }
                 Err(e) => {
                     set_status_message(app, format!("Error removing default: {}", e), ctx);
@@ -810,7 +830,9 @@ fn handle_picker_unset_default(app: &mut App, ctx: AppActionContext) -> Option<A
             match controller.unset_default_theme() {
                 Ok(_) => {
                     set_status_message(app, format!("Removed default: {}", selected_id), ctx);
-                    app.open_theme_picker();
+                    if let Err(err) = app.open_theme_picker() {
+                        set_status_message(app, format!("Theme picker error: {}", err), ctx);
+                    }
                     None
                 }
                 Err(e) => {
@@ -920,7 +942,13 @@ fn push_error_app_message(app: &mut App, message: String, ctx: AppActionContext)
 }
 
 fn load_default_character_if_configured(app: &mut App, ctx: AppActionContext) {
-    let cfg = Config::load_test_safe();
+    let cfg = match Config::load_test_safe() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            push_error_app_message(app, format!("Failed to load configuration: {}", err), ctx);
+            return;
+        }
+    };
     if let Some(default_name) =
         cfg.get_default_character(&app.session.provider_name, &app.session.model)
     {
@@ -1147,7 +1175,7 @@ mod tests {
         let ctx = default_ctx();
         let original_color = app.ui.theme.background_color;
 
-        app.open_theme_picker();
+        app.open_theme_picker().expect("theme picker opens");
         apply_action(&mut app, AppAction::PickerMoveDown, ctx);
 
         assert_ne!(app.ui.theme.background_color, original_color);

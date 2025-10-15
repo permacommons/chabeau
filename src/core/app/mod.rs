@@ -1,6 +1,9 @@
+use std::time::Instant;
+
 use crate::api::models::fetch_models;
-use crate::api::ModelsResponse;
+use crate::api::{ChatMessage, ModelsResponse};
 use crate::character::service::CharacterService;
+use crate::core::chat_stream::StreamParams;
 use crate::core::config::Config;
 use crate::core::message::AppMessageKind;
 #[cfg(test)]
@@ -11,6 +14,7 @@ use crate::ui::span::SpanKind;
 #[cfg(any(test, feature = "bench"))]
 use crate::ui::theme::Theme;
 use ratatui::text::Line;
+use tokio_util::sync::CancellationToken;
 
 pub mod actions;
 pub mod conversation;
@@ -251,6 +255,116 @@ impl App {
             &self.persona_manager,
             &self.preset_manager,
         )
+    }
+
+    pub fn clear_status(&mut self) {
+        self.conversation().clear_status();
+    }
+
+    pub fn toggle_compose_mode(&mut self) {
+        self.ui.toggle_compose_mode();
+    }
+
+    pub fn cancel_file_prompt(&mut self) {
+        self.ui.cancel_file_prompt();
+    }
+
+    pub fn has_in_place_edit(&self) -> bool {
+        self.ui.in_place_edit_index().is_some()
+    }
+
+    pub fn cancel_in_place_edit(&mut self) {
+        self.ui.cancel_in_place_edit();
+    }
+
+    pub fn clear_input(&mut self) {
+        self.ui.clear_input();
+    }
+
+    pub fn recompute_input_layout_after_edit(&mut self, width: u16) {
+        self.ui.recompute_input_layout_after_edit(width);
+    }
+
+    pub fn insert_into_input(&mut self, text: &str, width: u16) {
+        self.ui.apply_textarea_edit_and_recompute(width, |ta| {
+            ta.insert_str(text);
+        });
+    }
+
+    pub fn complete_in_place_edit(&mut self, index: usize, new_text: String) {
+        let Some(actual_index) = self.ui.take_in_place_edit_index() else {
+            return;
+        };
+
+        if actual_index != index {
+            return;
+        }
+
+        if actual_index >= self.ui.messages.len() || self.ui.messages[actual_index].role != "user" {
+            return;
+        }
+
+        self.ui.messages[actual_index].content = new_text;
+        self.invalidate_prewrap_cache();
+        let user_display_name = self.persona_manager.get_display_name();
+        let _ = self
+            .session
+            .logging
+            .rewrite_log_without_last_response(&self.ui.messages, &user_display_name);
+    }
+
+    pub fn request_exit(&mut self) {
+        self.ui.exit_requested = true;
+    }
+
+    pub fn update_user_display_name(&mut self, name: String) {
+        self.ui.update_user_display_name(name);
+    }
+
+    pub fn is_current_stream(&self, stream_id: u64) -> bool {
+        self.session.current_stream_id == stream_id
+    }
+
+    pub fn input_area_height(&self, width: u16) -> u16 {
+        self.ui.calculate_input_area_height(width)
+    }
+
+    pub fn end_streaming(&mut self) {
+        self.ui.end_streaming();
+    }
+
+    pub fn cancel_current_stream(&mut self) {
+        self.conversation().cancel_current_stream();
+    }
+
+    pub fn enable_auto_scroll(&mut self) {
+        self.ui.auto_scroll = true;
+    }
+
+    pub fn build_stream_params(
+        &self,
+        api_messages: Vec<ChatMessage>,
+        cancel_token: CancellationToken,
+        stream_id: u64,
+    ) -> StreamParams {
+        StreamParams {
+            client: self.session.client.clone(),
+            base_url: self.session.base_url.clone(),
+            api_key: self.session.api_key.clone(),
+            provider_name: self.session.provider_name.clone(),
+            model: self.session.model.clone(),
+            api_messages,
+            cancel_token,
+            stream_id,
+        }
+    }
+
+    pub fn last_retry_time(&self) -> Instant {
+        self.session.last_retry_time
+    }
+
+    pub fn update_last_retry_time(&mut self, instant: Instant) {
+        self.session.last_retry_time = instant;
     }
 
     /// Close any active picker session.

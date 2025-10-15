@@ -1,5 +1,6 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::{suggest_provider_id, Config, CustomProvider};
+use crate::core::keyring::KeyringAccessError;
 use crate::core::providers::{
     resolve_session, ProviderAuthSource, ProviderMetadata, ResolveSessionError,
 };
@@ -134,11 +135,16 @@ impl AuthManager {
         if !self.use_keyring {
             return Ok(None);
         }
-        let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
+        let entry = match Entry::new(KEYRING_SERVICE, provider_name) {
+            Ok(entry) => entry,
+            Err(err) => {
+                return Err(Box::new(KeyringAccessError::from(err)));
+            }
+        };
         match entry.get_password() {
             Ok(token) => Ok(Some(token)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(Box::new(e)),
+            Err(err) => Err(Box::new(KeyringAccessError::from(err))),
         }
     }
 

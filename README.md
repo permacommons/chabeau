@@ -367,6 +367,7 @@ Chabeau uses a modular design with focused components:
   - `message.rs` – Message data structures
 - `auth/` – Authentication and provider management
   - `mod.rs` – Authentication manager implementation
+  - `ui.rs` – Interactive prompts and input helpers for auth flows
 - `character/` – Character card support (v2 format)
   - `mod.rs` – Module exports and public API
   - `card.rs` – Character card data structures and v2 spec parsing

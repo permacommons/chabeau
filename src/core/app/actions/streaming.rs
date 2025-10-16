@@ -17,6 +17,17 @@ pub(super) fn handle_streaming_action(
             append_response_chunk(app, &content, ctx);
             None
         }
+        AppAction::StreamAppMessage {
+            kind,
+            message,
+            stream_id,
+        } => {
+            if !app.is_current_stream(stream_id) {
+                return None;
+            }
+            append_stream_app_message(app, kind, message, ctx);
+            None
+        }
         AppAction::StreamErrored { message, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
@@ -64,6 +75,25 @@ fn append_response_chunk(app: &mut App, chunk: &str, ctx: AppActionContext) {
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.append_to_response(chunk, available_height, ctx.term_width);
+}
+
+fn append_stream_app_message(
+    app: &mut App,
+    kind: AppMessageKind,
+    message: String,
+    ctx: AppActionContext,
+) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let input_area_height = app.input_area_height(ctx.term_width);
+    let mut conversation = app.conversation();
+    conversation.add_app_message(kind, trimmed.to_string());
+    let available_height =
+        conversation.calculate_available_height(ctx.term_height, input_area_height);
+    conversation.update_scroll_position(available_height, ctx.term_width);
 }
 
 fn handle_stream_error(app: &mut App, message: String, ctx: AppActionContext) {
@@ -148,7 +178,9 @@ fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppComma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::message::{ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
+    use crate::core::message::{
+        AppMessageKind, ROLE_APP_ERROR, ROLE_APP_WARNING, ROLE_ASSISTANT, ROLE_USER,
+    };
     use crate::utils::test_utils::create_test_app;
 
     fn default_ctx() -> AppActionContext {
@@ -156,6 +188,49 @@ mod tests {
             term_width: 80,
             term_height: 24,
         }
+    }
+
+    #[test]
+    fn stream_app_message_adds_trimmed_content_and_keeps_stream_alive() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        let command = handle_streaming_action(
+            &mut app,
+            AppAction::SubmitMessage {
+                message: "Hello there".into(),
+            },
+            ctx,
+        );
+
+        let stream_id = match command {
+            Some(AppCommand::SpawnStream(params)) => params.stream_id,
+            Some(_) => panic!("unexpected app command returned for submit message"),
+            None => panic!("expected spawn stream command"),
+        };
+
+        assert!(app.ui.is_streaming);
+
+        let result = handle_streaming_action(
+            &mut app,
+            AppAction::StreamAppMessage {
+                kind: AppMessageKind::Warning,
+                message: "  invalid utf8  ".into(),
+                stream_id,
+            },
+            ctx,
+        );
+        assert!(result.is_none());
+
+        let last_message = app
+            .ui
+            .messages
+            .back()
+            .expect("expected trailing app message");
+        assert_eq!(last_message.role, ROLE_APP_WARNING);
+        assert_eq!(last_message.content, "invalid utf8");
+
+        assert!(app.ui.is_streaming);
     }
 
     #[test]

@@ -9,10 +9,16 @@ use super::App;
 use crate::api::ModelsResponse;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::message::AppMessageKind;
 
 pub enum AppAction {
     AppendResponseChunk {
         content: String,
+        stream_id: u64,
+    },
+    StreamAppMessage {
+        kind: AppMessageKind,
+        message: String,
         stream_id: u64,
     },
     StreamErrored {
@@ -132,6 +138,7 @@ pub fn apply_actions(
 pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> Option<AppCommand> {
     match action {
         AppAction::AppendResponseChunk { .. }
+        | AppAction::StreamAppMessage { .. }
         | AppAction::StreamErrored { .. }
         | AppAction::StreamCompleted { .. }
         | AppAction::CancelStreaming

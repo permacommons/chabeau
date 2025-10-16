@@ -3,12 +3,17 @@ use memchr::memchr;
 use tokio::sync::mpsc;
 
 use crate::api::{ChatMessage, ChatRequest, ChatResponse};
+use crate::core::message::AppMessageKind;
 use crate::utils::url::construct_api_url;
 
 #[derive(Clone, Debug)]
 pub enum StreamMessage {
     Chunk(String),
     Error(String),
+    App {
+        kind: AppMessageKind,
+        content: String,
+    },
     End,
 }
 
@@ -58,9 +63,34 @@ fn process_sse_line(
         .unwrap_or(false)
 }
 
+fn route_sse_frame(
+    frame: SseFrame,
+    tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
+    stream_id: u64,
+) -> bool {
+    match frame {
+        SseFrame::Data(line) => process_sse_line(&line, tx, stream_id),
+        SseFrame::AppMessage { kind, content } => {
+            if !content.trim().is_empty() {
+                let _ = tx.send((StreamMessage::App { kind, content }, stream_id));
+            }
+            false
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SseFrame {
+    Data(String),
+    AppMessage {
+        kind: AppMessageKind,
+        content: String,
+    },
+}
+
 pub trait SseFramer {
-    fn push(&mut self, chunk: &[u8]) -> Vec<String>;
-    fn finish(&mut self) -> Vec<String>;
+    fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame>;
+    fn finish(&mut self) -> Vec<SseFrame>;
 }
 
 #[derive(Default)]
@@ -73,7 +103,7 @@ impl SimpleSseFramer {
         Self::default()
     }
 
-    fn normalize_line(bytes: &[u8]) -> Option<String> {
+    fn normalize_line(bytes: &[u8]) -> Option<SseFrame> {
         if bytes.is_empty() {
             return None;
         }
@@ -84,19 +114,21 @@ impl SimpleSseFramer {
                 if trimmed.is_empty() {
                     None
                 } else {
-                    Some(trimmed.to_string())
+                    Some(SseFrame::Data(trimmed.to_string()))
                 }
             }
-            Err(err) => {
-                eprintln!("Invalid UTF-8 in SSE stream: {err}");
-                None
-            }
+            Err(err) => Some(SseFrame::AppMessage {
+                kind: AppMessageKind::Warning,
+                content: format!(
+                    "Received invalid UTF-8 in response stream: {err}. Bytes were ignored."
+                ),
+            }),
         }
     }
 }
 
 impl SseFramer for SimpleSseFramer {
-    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+    fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
         self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
         let mut search_index = 0;
@@ -122,7 +154,7 @@ impl SseFramer for SimpleSseFramer {
         frames
     }
 
-    fn finish(&mut self) -> Vec<String> {
+    fn finish(&mut self) -> Vec<SseFrame> {
         if self.buffer.is_empty() {
             return Vec::new();
         }
@@ -271,16 +303,16 @@ impl ChatStreamService {
                                 }
 
                                 if let Ok(chunk_bytes) = chunk {
-                                    for line in framer.push(&chunk_bytes) {
-                                        if process_sse_line(&line, &tx_clone, stream_id) {
+                                    for frame in framer.push(&chunk_bytes) {
+                                        if route_sse_frame(frame, &tx_clone, stream_id) {
                                             return;
                                         }
                                     }
                                 }
                             }
 
-                            for line in framer.finish() {
-                                if process_sse_line(&line, &tx_clone, stream_id) {
+                            for frame in framer.finish() {
+                                if route_sse_frame(frame, &tx_clone, stream_id) {
                                     return;
                                 }
                             }
@@ -313,8 +345,14 @@ mod tests {
     #[test]
     fn simple_sse_framer_handles_crlf_and_blank_lines() {
         let mut framer = SimpleSseFramer::new();
-        let lines = framer.push(b"data: hello\r\nid:1\r\n\r\n");
-        assert_eq!(lines, vec!["data: hello".to_string(), "id:1".to_string()]);
+        let frames = framer.push(b"data: hello\r\nid:1\r\n\r\n");
+        assert_eq!(
+            frames,
+            vec![
+                SseFrame::Data("data: hello".to_string()),
+                SseFrame::Data("id:1".to_string()),
+            ]
+        );
 
         let trailing = framer.finish();
         assert!(trailing.is_empty());
@@ -325,8 +363,28 @@ mod tests {
         let mut framer = SimpleSseFramer::new();
         assert!(framer.push(b"data: partial").is_empty());
 
-        let lines = framer.finish();
-        assert_eq!(lines, vec!["data: partial".to_string()]);
+        let frames = framer.finish();
+        assert_eq!(frames, vec![SseFrame::Data("data: partial".to_string())]);
+    }
+
+    #[test]
+    fn simple_sse_framer_reports_invalid_utf8() {
+        let mut framer = SimpleSseFramer::new();
+        let mut bytes = b"data:".to_vec();
+        bytes.extend_from_slice(&[0xF0, 0x28, 0x8C, 0x28]);
+        bytes.extend_from_slice(b"\n");
+
+        let frames = framer.push(&bytes);
+        match frames.as_slice() {
+            [SseFrame::AppMessage { kind, content }] => {
+                assert_eq!(*kind, AppMessageKind::Warning);
+                assert!(content.contains("Received invalid UTF-8 in response stream"));
+                assert!(content.contains("Bytes were ignored."));
+            }
+            other => panic!("unexpected frames: {other:?}"),
+        }
+
+        assert!(framer.finish().is_empty());
     }
 
     #[test]

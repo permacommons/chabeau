@@ -11,3 +11,4 @@ pub mod picker;
 pub mod renderer;
 pub mod span;
 pub mod theme;
+pub mod title;

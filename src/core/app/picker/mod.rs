@@ -877,6 +877,10 @@ impl PickerController {
         let default_character =
             cfg.get_default_character(&session_context.provider_name, &session_context.model);
 
+        let active_character_id = session_context
+            .get_character()
+            .map(|character| character.data.name.clone());
+
         let mut items: Vec<PickerItem> = cards
             .into_iter()
             .map(|card| {
@@ -911,7 +915,10 @@ impl PickerController {
             );
         }
 
-        let selected = 0;
+        let selected = active_character_id
+            .as_deref()
+            .and_then(|active_id| items.iter().position(|item| item.id == active_id))
+            .unwrap_or(0);
         let picker_state = PickerState::new("Pick Character", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
@@ -921,7 +928,7 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, None);
+        self.start_picker_session(session, active_character_id);
 
         Ok(())
     }
@@ -932,6 +939,9 @@ impl PickerController {
         session_context: &SessionContext,
     ) -> Result<(), String> {
         let personas = persona_manager.list_personas();
+        let active_persona_id = persona_manager
+            .get_active_persona()
+            .map(|persona| persona.id.clone());
 
         if personas.is_empty() {
             return Err("No personas found. Add personas to your config.toml file.".to_string());
@@ -997,7 +1007,10 @@ impl PickerController {
             );
         }
 
-        let selected = 0;
+        let selected = active_persona_id
+            .as_deref()
+            .and_then(|active_id| items.iter().position(|item| item.id == active_id))
+            .unwrap_or(0);
         let picker_state = PickerState::new("Pick Persona", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
@@ -1007,7 +1020,7 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, None);
+        self.start_picker_session(session, active_persona_id);
 
         Ok(())
     }
@@ -1018,6 +1031,9 @@ impl PickerController {
         session_context: &SessionContext,
     ) -> Result<(), String> {
         let presets = preset_manager.list_presets();
+        let active_preset_id = preset_manager
+            .get_active_preset()
+            .map(|preset| preset.id.clone());
 
         if presets.is_empty() {
             return Err("No presets found. Add presets to your config.toml file.".to_string());
@@ -1079,7 +1095,10 @@ impl PickerController {
             );
         }
 
-        let selected = 0usize;
+        let selected = active_preset_id
+            .as_deref()
+            .and_then(|active_id| items.iter().position(|item| item.id == active_id))
+            .unwrap_or(0);
         let picker_state = PickerState::new("Pick Preset", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
@@ -1089,7 +1108,7 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, None);
+        self.start_picker_session(session, active_preset_id);
 
         Ok(())
     }
@@ -1553,6 +1572,136 @@ mod tests {
 
         // Verify we still have all items after sorting
         assert_eq!(picker_items.len(), items_before_sort);
+    }
+
+    #[test]
+    fn test_character_picker_highlights_active_character() {
+        use crate::character::cache::CachedCardMetadata;
+        use crate::character::card::{CharacterCard, CharacterData};
+        use crate::utils::test_utils::create_test_app;
+
+        let mut app = create_test_app();
+        let active_card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Beta".to_string(),
+                description: "Test character Beta".to_string(),
+                personality: "Helpful".to_string(),
+                scenario: "Testing".to_string(),
+                first_mes: "Hello".to_string(),
+                mes_example: "{{user}}: Hi\n{{char}}: Hello".to_string(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(active_card);
+
+        let cards = vec![
+            CachedCardMetadata {
+                name: "Alpha".to_string(),
+                description: "Alpha description".to_string(),
+            },
+            CachedCardMetadata {
+                name: "Beta".to_string(),
+                description: "Beta description".to_string(),
+            },
+        ];
+
+        app.picker
+            .open_character_picker(cards, &app.session)
+            .unwrap();
+
+        let session = app.picker.session().expect("character picker session");
+        let selected_item = &session.state.items[session.state.selected];
+        assert_eq!(selected_item.id, "Beta");
+    }
+
+    #[test]
+    fn test_persona_picker_highlights_active_persona() {
+        use crate::core::config::{Config, Persona};
+        use crate::core::persona::PersonaManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            personas: vec![
+                Persona {
+                    id: "alpha".to_string(),
+                    display_name: "Alpha".to_string(),
+                    bio: Some("Alpha bio".to_string()),
+                },
+                Persona {
+                    id: "beta".to_string(),
+                    display_name: "Beta".to_string(),
+                    bio: Some("Beta bio".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut persona_manager = PersonaManager::load_personas(&config).unwrap();
+        persona_manager.set_active_persona("beta").unwrap();
+
+        let mut app = create_test_app();
+        app.persona_manager = persona_manager;
+        app.persona_manager
+            .set_active_persona("beta")
+            .expect("active persona available");
+
+        app.picker
+            .open_persona_picker(&app.persona_manager, &app.session)
+            .unwrap();
+
+        let session = app.picker.session().expect("persona picker session");
+        let selected_item = &session.state.items[session.state.selected];
+        assert_eq!(selected_item.id, "beta");
+    }
+
+    #[test]
+    fn test_preset_picker_highlights_active_preset() {
+        use crate::core::config::{Config, Preset};
+        use crate::core::preset::PresetManager;
+        use crate::utils::test_utils::create_test_app;
+
+        let config = Config {
+            builtin_presets: Some(false),
+            presets: vec![
+                Preset {
+                    id: "focus".to_string(),
+                    pre: "Focus".to_string(),
+                    post: String::new(),
+                },
+                Preset {
+                    id: "casual".to_string(),
+                    pre: "Casual".to_string(),
+                    post: String::new(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut preset_manager = PresetManager::load_presets(&config).unwrap();
+        preset_manager.set_active_preset("casual").unwrap();
+
+        let mut app = create_test_app();
+        app.preset_manager = preset_manager;
+        app.preset_manager
+            .set_active_preset("casual")
+            .expect("active preset available");
+
+        app.picker
+            .open_preset_picker(&app.preset_manager, &app.session)
+            .unwrap();
+
+        let session = app.picker.session().expect("preset picker session");
+        let selected_item = &session.state.items[session.state.selected];
+        assert_eq!(selected_item.id, "casual");
     }
 
     #[test]

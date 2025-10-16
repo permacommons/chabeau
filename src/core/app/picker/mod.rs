@@ -290,6 +290,37 @@ impl PickerController {
         self.picker_session = None;
     }
 
+    fn start_picker_session(
+        &mut self,
+        mut session: PickerSession,
+        preferred_selection: Option<String>,
+    ) {
+        let mode = session.mode();
+        session.state.sort_mode = session.default_sort_mode();
+        self.picker_session = Some(session);
+
+        self.sort_items();
+        self.update_title();
+
+        if let Some(preferred) = preferred_selection {
+            if let Some(session) = self.session_mut() {
+                if let Some((idx, _)) =
+                    session
+                        .state
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| match mode {
+                            PickerMode::Theme => item.id.eq_ignore_ascii_case(preferred.as_str()),
+                            _ => item.id == preferred,
+                        })
+                {
+                    session.state.selected = idx;
+                }
+            }
+        }
+    }
+
     pub fn open_theme_picker(
         &mut self,
         ui: &mut UiState,
@@ -360,7 +391,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Theme", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Theme(ThemePickerState {
                 search_filter: String::new(),
@@ -370,23 +401,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
-
-        if let (Some(theme_id), Some(session)) = (active_theme_id, self.session_mut()) {
-            if let Some((idx, _)) = session
-                .state
-                .items
-                .iter()
-                .enumerate()
-                .find(|(_, it)| it.id.eq_ignore_ascii_case(&theme_id))
-            {
-                session.state.selected = idx;
-            }
-        }
+        self.start_picker_session(session, active_theme_id);
         Ok(())
     }
 
@@ -500,7 +515,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Model", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
@@ -510,24 +525,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
-
-        let current_model = session_context.model.clone();
-        if let Some(session) = self.session_mut() {
-            if let Some((idx, _)) = session
-                .state
-                .items
-                .iter()
-                .enumerate()
-                .find(|(_, it)| it.id == current_model)
-            {
-                session.state.selected = idx;
-            }
-        }
+        self.start_picker_session(session, Some(session_context.model.clone()));
 
         Ok(())
     }
@@ -833,7 +831,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Provider", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Provider(ProviderPickerState {
                 search_filter: String::new(),
@@ -845,24 +843,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
-
-        let current_provider = session_context.provider_name.clone();
-        if let Some(session) = self.session_mut() {
-            if let Some((idx, _)) = session
-                .state
-                .items
-                .iter()
-                .enumerate()
-                .find(|(_, it)| it.id == current_provider)
-            {
-                session.state.selected = idx;
-            }
-        }
+        self.start_picker_session(session, Some(session_context.provider_name.clone()));
 
         Ok(())
     }
@@ -932,7 +913,7 @@ impl PickerController {
 
         let selected = 0;
         let picker_state = PickerState::new("Pick Character", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: String::new(),
@@ -940,11 +921,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
+        self.start_picker_session(session, None);
 
         Ok(())
     }
@@ -1022,7 +999,7 @@ impl PickerController {
 
         let selected = 0;
         let picker_state = PickerState::new("Pick Persona", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
                 search_filter: String::new(),
@@ -1030,11 +1007,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
+        self.start_picker_session(session, None);
 
         Ok(())
     }
@@ -1108,7 +1081,7 @@ impl PickerController {
 
         let selected = 0usize;
         let picker_state = PickerState::new("Pick Preset", items.clone(), selected);
-        let mut session = PickerSession {
+        let session = PickerSession {
             state: picker_state,
             data: PickerData::Preset(PresetPickerState {
                 search_filter: String::new(),
@@ -1116,11 +1089,7 @@ impl PickerController {
             }),
         };
 
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
-
-        self.sort_items();
-        self.update_title();
+        self.start_picker_session(session, None);
 
         Ok(())
     }

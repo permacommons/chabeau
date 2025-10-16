@@ -96,24 +96,119 @@ pub enum PickerData {
     Preset(PresetPickerState),
 }
 
+impl PickerData {
+    pub fn mode(&self) -> PickerMode {
+        match self {
+            PickerData::Theme(_) => PickerMode::Theme,
+            PickerData::Model(_) => PickerMode::Model,
+            PickerData::Provider(_) => PickerMode::Provider,
+            PickerData::Character(_) => PickerMode::Character,
+            PickerData::Persona(_) => PickerMode::Persona,
+            PickerData::Preset(_) => PickerMode::Preset,
+        }
+    }
+
+    fn prefers_alphabetical(&self) -> bool {
+        match self {
+            PickerData::Model(state) => !state.has_dates,
+            PickerData::Theme(_)
+            | PickerData::Provider(_)
+            | PickerData::Character(_)
+            | PickerData::Persona(_)
+            | PickerData::Preset(_) => true,
+        }
+    }
+
+    fn filter_hint_threshold(&self) -> usize {
+        match self.mode() {
+            PickerMode::Model => 20,
+            _ => 10,
+        }
+    }
+
+    fn base_title(&self) -> &'static str {
+        match self.mode() {
+            PickerMode::Model => "Pick Model",
+            PickerMode::Provider => "Pick Provider",
+            PickerMode::Theme => "Pick Theme",
+            PickerMode::Character => "Pick Character",
+            PickerMode::Persona => "Pick Persona",
+            PickerMode::Preset => "Pick Preset",
+        }
+    }
+
+    fn search_filter(&self) -> &String {
+        match self {
+            PickerData::Theme(state) => &state.search_filter,
+            PickerData::Model(state) => &state.search_filter,
+            PickerData::Provider(state) => &state.search_filter,
+            PickerData::Character(state) => &state.search_filter,
+            PickerData::Persona(state) => &state.search_filter,
+            PickerData::Preset(state) => &state.search_filter,
+        }
+    }
+
+    fn all_items(&self) -> &Vec<PickerItem> {
+        match self {
+            PickerData::Theme(state) => &state.all_items,
+            PickerData::Model(state) => &state.all_items,
+            PickerData::Provider(state) => &state.all_items,
+            PickerData::Character(state) => &state.all_items,
+            PickerData::Persona(state) => &state.all_items,
+            PickerData::Preset(state) => &state.all_items,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PickerSession {
-    pub mode: PickerMode,
     pub state: PickerState,
     pub data: PickerData,
 }
 
-impl PickerSession {
-    fn prefers_alphabetical(&self) -> bool {
-        match (&self.mode, &self.data) {
-            (PickerMode::Theme, _)
-            | (PickerMode::Provider, _)
-            | (PickerMode::Character, _)
-            | (PickerMode::Persona, _)
-            | (PickerMode::Preset, _) => true,
-            (PickerMode::Model, PickerData::Model(state)) => !state.has_dates,
-            _ => false,
+macro_rules! picker_state_accessors {
+    ($(($variant:ident, $getter:ident, $getter_mut:ident, $state:ty)),+ $(,)?) => {
+        impl PickerData {
+            $(
+                pub fn $getter(&self) -> Option<&$state> {
+                    if let Self::$variant(state) = self {
+                        Some(state)
+                    } else {
+                        None
+                    }
+                }
+
+                pub fn $getter_mut(&mut self) -> Option<&mut $state> {
+                    if let Self::$variant(state) = self {
+                        Some(state)
+                    } else {
+                        None
+                    }
+                }
+            )+
         }
+
+        impl PickerSession {
+            $(
+                pub fn $getter(&self) -> Option<&$state> {
+                    self.data.$getter()
+                }
+
+                pub fn $getter_mut(&mut self) -> Option<&mut $state> {
+                    self.data.$getter_mut()
+                }
+            )+
+        }
+    };
+}
+
+impl PickerSession {
+    pub fn mode(&self) -> PickerMode {
+        self.data.mode()
+    }
+
+    fn prefers_alphabetical(&self) -> bool {
+        self.data.prefers_alphabetical()
     }
 
     pub(crate) fn default_sort_mode(&self) -> SortMode {
@@ -125,44 +220,29 @@ impl PickerSession {
     }
 
     fn filter_hint_threshold(&self) -> usize {
-        match self.mode {
-            PickerMode::Model => 20,
-            _ => 10,
-        }
+        self.data.filter_hint_threshold()
     }
 
     fn base_title(&self) -> &'static str {
-        match self.mode {
-            PickerMode::Model => "Pick Model",
-            PickerMode::Provider => "Pick Provider",
-            PickerMode::Theme => "Pick Theme",
-            PickerMode::Character => "Pick Character",
-            PickerMode::Persona => "Pick Persona",
-            PickerMode::Preset => "Pick Preset",
-        }
+        self.data.base_title()
     }
 
     fn search_filter(&self) -> &String {
-        match &self.data {
-            PickerData::Model(state) => &state.search_filter,
-            PickerData::Theme(state) => &state.search_filter,
-            PickerData::Provider(state) => &state.search_filter,
-            PickerData::Character(state) => &state.search_filter,
-            PickerData::Persona(state) => &state.search_filter,
-            PickerData::Preset(state) => &state.search_filter,
-        }
+        self.data.search_filter()
     }
 
     fn all_items(&self) -> &Vec<PickerItem> {
-        match &self.data {
-            PickerData::Model(state) => &state.all_items,
-            PickerData::Theme(state) => &state.all_items,
-            PickerData::Provider(state) => &state.all_items,
-            PickerData::Character(state) => &state.all_items,
-            PickerData::Persona(state) => &state.all_items,
-            PickerData::Preset(state) => &state.all_items,
-        }
+        self.data.all_items()
     }
+}
+
+picker_state_accessors! {
+    (Theme, theme_state, theme_state_mut, ThemePickerState),
+    (Model, model_state, model_state_mut, ModelPickerState),
+    (Provider, provider_state, provider_state_mut, ProviderPickerState),
+    (Character, character_state, character_state_mut, CharacterPickerState),
+    (Persona, persona_state, persona_state_mut, PersonaPickerState),
+    (Preset, preset_state, preset_state_mut, PresetPickerState),
 }
 
 pub struct PickerController {
@@ -195,7 +275,7 @@ impl PickerController {
     }
 
     pub fn current_mode(&self) -> Option<PickerMode> {
-        self.session().map(|session| session.mode)
+        self.session().map(PickerSession::mode)
     }
 
     pub fn state(&self) -> Option<&PickerState> {
@@ -204,138 +284,6 @@ impl PickerController {
 
     pub fn state_mut(&mut self) -> Option<&mut PickerState> {
         self.session_mut().map(|session| &mut session.state)
-    }
-
-    pub fn theme_state(&self) -> Option<&ThemePickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Theme,
-                data: PickerData::Theme(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn theme_state_mut(&mut self) -> Option<&mut ThemePickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Theme,
-                data: PickerData::Theme(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn model_state(&self) -> Option<&ModelPickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Model,
-                data: PickerData::Model(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn model_state_mut(&mut self) -> Option<&mut ModelPickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Model,
-                data: PickerData::Model(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn provider_state(&self) -> Option<&ProviderPickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Provider,
-                data: PickerData::Provider(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn provider_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Provider,
-                data: PickerData::Provider(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn character_state(&self) -> Option<&CharacterPickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Character,
-                data: PickerData::Character(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn character_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Character,
-                data: PickerData::Character(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn persona_state(&self) -> Option<&PersonaPickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Persona,
-                data: PickerData::Persona(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn persona_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Persona,
-                data: PickerData::Persona(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn preset_state(&self) -> Option<&PresetPickerState> {
-        match self.session() {
-            Some(PickerSession {
-                mode: PickerMode::Preset,
-                data: PickerData::Preset(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
-    }
-
-    pub fn preset_state_mut(&mut self) -> Option<&mut PresetPickerState> {
-        match self.session_mut() {
-            Some(PickerSession {
-                mode: PickerMode::Preset,
-                data: PickerData::Preset(state),
-                ..
-            }) => Some(state),
-            _ => None,
-        }
     }
 
     pub fn close(&mut self) {
@@ -413,7 +361,6 @@ impl PickerController {
 
         let picker_state = PickerState::new("Pick Theme", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Theme,
             state: picker_state,
             data: PickerData::Theme(ThemePickerState {
                 search_filter: String::new(),
@@ -554,7 +501,6 @@ impl PickerController {
 
         let picker_state = PickerState::new("Pick Model", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
@@ -591,7 +537,7 @@ impl PickerController {
             return;
         };
 
-        if session.mode != expected_mode {
+        if session.mode() != expected_mode {
             return;
         }
 
@@ -639,14 +585,17 @@ impl PickerController {
 
     pub fn revert_model_preview(&mut self, session: &mut SessionContext) {
         let previous_model = self
-            .model_state()
+            .session()
+            .and_then(PickerSession::model_state)
             .and_then(|state| state.before_model.clone());
 
-        if let Some(state) = self.model_state_mut() {
-            state.before_model = None;
-            state.search_filter.clear();
-            state.all_items.clear();
-            state.has_dates = false;
+        if let Some(session) = self.session_mut() {
+            if let Some(state) = session.model_state_mut() {
+                state.before_model = None;
+                state.search_filter.clear();
+                state.all_items.clear();
+                state.has_dates = false;
+            }
         }
 
         if let Some(prev) = previous_model {
@@ -660,13 +609,16 @@ impl PickerController {
 
     pub fn revert_provider_preview(&mut self, session: &mut SessionContext) {
         let previous_provider = self
-            .provider_state()
+            .session()
+            .and_then(PickerSession::provider_state)
             .and_then(|state| state.before_provider.clone());
 
-        if let Some(state) = self.provider_state_mut() {
-            state.before_provider = None;
-            state.search_filter.clear();
-            state.all_items.clear();
+        if let Some(session) = self.session_mut() {
+            if let Some(state) = session.provider_state_mut() {
+                state.before_provider = None;
+                state.search_filter.clear();
+                state.all_items.clear();
+            }
         }
 
         if let Some((prev_name, prev_display)) = previous_provider {
@@ -882,7 +834,6 @@ impl PickerController {
 
         let picker_state = PickerState::new("Pick Provider", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Provider,
             state: picker_state,
             data: PickerData::Provider(ProviderPickerState {
                 search_filter: String::new(),
@@ -982,7 +933,6 @@ impl PickerController {
         let selected = 0;
         let picker_state = PickerState::new("Pick Character", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: String::new(),
@@ -1073,7 +1023,6 @@ impl PickerController {
         let selected = 0;
         let picker_state = PickerState::new("Pick Persona", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Persona,
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
                 search_filter: String::new(),
@@ -1160,7 +1109,6 @@ impl PickerController {
         let selected = 0usize;
         let picker_state = PickerState::new("Pick Preset", items.clone(), selected);
         let mut session = PickerSession {
-            mode: PickerMode::Preset,
             state: picker_state,
             data: PickerData::Preset(PresetPickerState {
                 search_filter: String::new(),
@@ -1210,7 +1158,6 @@ mod tests {
         picker_state.sort_mode = SortMode::Name;
 
         let mut session = PickerSession {
-            mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: "GPT".to_string(),
@@ -1254,7 +1201,6 @@ mod tests {
         picker_state.sort_mode = SortMode::Name;
 
         let mut session = PickerSession {
-            mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: "GAMMA".to_string(),
@@ -1290,7 +1236,6 @@ mod tests {
         picker_state.sort_mode = SortMode::Name;
 
         let mut session = PickerSession {
-            mode: PickerMode::Persona,
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
                 search_filter: "ADVISER".to_string(),
@@ -1326,7 +1271,6 @@ mod tests {
         picker_state.sort_mode = SortMode::Name;
 
         let mut session = PickerSession {
-            mode: PickerMode::Preset,
             state: picker_state,
             data: PickerData::Preset(PresetPickerState {
                 search_filter: "FOCUS".to_string(),

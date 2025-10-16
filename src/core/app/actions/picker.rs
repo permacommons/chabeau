@@ -663,7 +663,7 @@ mod tests {
     use super::*;
     use crate::character::card::{CharacterCard, CharacterData};
     use crate::core::app::picker::{
-        CharacterPickerState, ModelPickerState, PickerData, PickerMode, PickerSession,
+        CharacterPickerState, ModelPickerState, PickerData, PickerSession,
     };
     use crate::core::config::{Config, Persona, Preset};
     use crate::ui::picker::{PickerItem, PickerState};
@@ -725,7 +725,6 @@ mod tests {
         let picker_state = PickerState::new("Pick Model", items.clone(), 0);
 
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
@@ -762,7 +761,6 @@ mod tests {
 
         let picker_state = PickerState::new("Pick Character", items.clone(), 0);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: String::new(),
@@ -800,7 +798,6 @@ mod tests {
 
         let picker_state = PickerState::new("Pick Character", items.clone(), 0);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: String::new(),

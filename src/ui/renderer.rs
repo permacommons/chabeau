@@ -2,6 +2,7 @@ use crate::core::app::App;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
 use crate::ui::span::SpanKind;
+use crate::ui::title::build_main_title;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -79,7 +80,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let scroll_offset = app.ui.scroll_offset.min(max_offset);
 
     // Create enhanced title with version, provider, model name and logging status
-    let title_text = build_main_title(app);
+    let title_text = build_main_title(app, chunks[0].width);
     let block = Block::default().title(Span::styled(title_text, app.ui.theme.title_style));
     let inner_area = block.inner(chunks[0]);
     let picker_active = app.picker_state().is_some();
@@ -383,38 +384,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn build_main_title(app: &App) -> String {
-    let model_display = if app.picker.in_provider_model_transition || app.session.model.is_empty() {
-        "no model selected".to_string()
-    } else {
-        app.session.model.clone()
-    };
-    let provider_display = if app.session.provider_display_name.trim().is_empty() {
-        "(no provider selected)".to_string()
-    } else {
-        app.session.provider_display_name.clone()
-    };
-
-    let mut segments = vec![format!(
-        "Chabeau v{} - {} ({})",
-        env!("CARGO_PKG_VERSION"),
-        provider_display,
-        model_display
-    )];
-
-    if let Some(character) = &app.session.active_character {
-        segments.push(format!("Character: {}", character.data.name));
-    }
-
-    if let Some(preset) = app.preset_manager.get_active_preset() {
-        segments.push(format!("Preset: {}", preset.id));
-    }
-
-    segments.push(format!("Logging: {}", app.get_logging_status()));
-
-    segments.join(" • ")
-}
-
 /// Generate help text for picker dialogs with appropriate shortcuts
 fn generate_picker_help_text(app: &App) -> String {
     // Check if current selection is a default (has asterisk)
@@ -606,6 +575,26 @@ mod tests {
         });
     }
 
+    fn find_segment<'a>(title: &'a str, prefix: &str) -> Option<&'a str> {
+        title
+            .split(" • ")
+            .find(|segment| segment.starts_with(prefix))
+    }
+
+    fn find_title_with<F>(app: &App, mut width: u16, predicate: F) -> Option<(u16, String)>
+    where
+        F: Fn(&str) -> bool,
+    {
+        while width > 0 {
+            width -= 1;
+            let title = build_main_title(app, width);
+            if predicate(&title) {
+                return Some((width, title));
+            }
+        }
+        None
+    }
+
     #[test]
     fn title_shows_no_model_selected_during_transition() {
         let mut app = create_test_app();
@@ -613,7 +602,7 @@ mod tests {
         app.session.model = "foo-model".to_string();
         app.picker.in_provider_model_transition = true;
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(title.contains("(no model selected)"));
         assert!(!title.contains("foo-model"));
         assert!(!title.contains("Preset:"));
@@ -626,7 +615,7 @@ mod tests {
         app.session.model = "foo-model".to_string();
         app.picker.in_provider_model_transition = false;
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(title.contains("foo-model"));
         assert!(!title.contains("(no model selected)"));
         assert!(!title.contains("Preset:"));
@@ -835,7 +824,7 @@ mod tests {
         };
         app.session.active_character = Some(card);
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(title.contains("Character: Alice"));
         assert!(title.contains("OpenAI"));
         assert!(title.contains("gpt-4"));
@@ -849,7 +838,7 @@ mod tests {
         app.session.model = "gpt-4".to_string();
         app.session.active_character = None;
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(!title.contains("Character:"));
         assert!(title.contains("OpenAI"));
         assert!(title.contains("gpt-4"));
@@ -865,7 +854,7 @@ mod tests {
             .set_active_preset("short")
             .expect("preset to activate");
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(title.contains("Preset: short"));
         assert!(title.contains("(gpt-4) • Preset: short"));
     }
@@ -902,7 +891,85 @@ mod tests {
         };
         app.session.active_character = Some(card);
 
-        let title = build_main_title(&app);
+        let title = build_main_title(&app, 1000);
         assert!(title.contains("Character: Alice • Preset: short"));
+    }
+
+    #[test]
+    fn title_abbreviates_and_hides_fields_based_on_width() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+        app.preset_manager
+            .set_active_preset("roleplay")
+            .expect("preset to activate");
+
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Jean-Luc Picard".to_string(),
+                description: "A starship captain".to_string(),
+                personality: "Decisive".to_string(),
+                scenario: "Commanding the Enterprise".to_string(),
+                first_mes: "Make it so.".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+        app.session.active_character = Some(card);
+
+        let wide_title = build_main_title(&app, 1000);
+        assert!(matches!(
+            find_segment(&wide_title, "Character: "),
+            Some(segment) if segment.ends_with("Jean-Luc Picard")
+        ));
+        assert!(matches!(
+            find_segment(&wide_title, "Preset: "),
+            Some(segment) if segment.ends_with("roleplay")
+        ));
+
+        let (char_width, char_abbrev_title) = find_title_with(&app, 1000, |title| {
+            matches!(
+                find_segment(title, "Character: "),
+                Some(segment) if segment.contains('…') && !segment.ends_with("Picard")
+            )
+        })
+        .expect("character should abbreviate before hiding");
+        assert_eq!(
+            find_segment(&char_abbrev_title, "Preset: "),
+            Some("Preset: roleplay")
+        );
+
+        let (preset_width, preset_abbrev_title) = find_title_with(&app, char_width, |title| {
+            matches!(
+                find_segment(title, "Preset: "),
+                Some(segment) if segment.contains('…') && !segment.ends_with("roleplay")
+            )
+        })
+        .expect("preset should abbreviate after character");
+        assert!(find_segment(&preset_abbrev_title, "Character: ").is_some());
+
+        let (char_hidden_width, char_hidden_title) = find_title_with(&app, preset_width, |title| {
+            find_segment(title, "Character: ").is_none()
+        })
+        .expect("character should hide before preset");
+        assert!(find_segment(&char_hidden_title, "Preset: ").is_some());
+
+        let (_, preset_hidden_title) = find_title_with(&app, char_hidden_width, |title| {
+            find_segment(title, "Preset: ").is_none()
+        })
+        .expect("preset should hide after character");
+        assert!(find_segment(&preset_hidden_title, "Character: ").is_none());
+        assert!(find_segment(&preset_hidden_title, "Preset: ").is_none());
+        assert!(find_segment(&preset_hidden_title, "Logging: ").is_some());
     }
 }

@@ -276,6 +276,8 @@ Assign defaults per provider/model with `default-presets`:
 
 Launch with an ID like `--preset focus`, or pick interactively with `/preset`. The picker includes a "Turn off preset" option to clear the active preset.
 
+The status bar shows the current preset when one is active so you can confirm the context you're using at a glance.
+
 ## Appearance and Rendering
 
 ### Themes

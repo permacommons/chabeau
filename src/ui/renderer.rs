@@ -395,21 +395,24 @@ fn build_main_title(app: &App) -> String {
         app.session.provider_display_name.clone()
     };
 
-    // Include character name if active
-    let character_display = if let Some(character) = &app.session.active_character {
-        format!(" • Character: {}", character.data.name)
-    } else {
-        String::new()
-    };
-
-    format!(
-        "Chabeau v{} - {} ({}){} • Logging: {}",
+    let mut segments = vec![format!(
+        "Chabeau v{} - {} ({})",
         env!("CARGO_PKG_VERSION"),
         provider_display,
-        model_display,
-        character_display,
-        app.get_logging_status()
-    )
+        model_display
+    )];
+
+    if let Some(character) = &app.session.active_character {
+        segments.push(format!("Character: {}", character.data.name));
+    }
+
+    if let Some(preset) = app.preset_manager.get_active_preset() {
+        segments.push(format!("Preset: {}", preset.id));
+    }
+
+    segments.push(format!("Logging: {}", app.get_logging_status()));
+
+    segments.join(" • ")
 }
 
 /// Generate help text for picker dialogs with appropriate shortcuts
@@ -613,6 +616,7 @@ mod tests {
         let title = build_main_title(&app);
         assert!(title.contains("(no model selected)"));
         assert!(!title.contains("foo-model"));
+        assert!(!title.contains("Preset:"));
     }
 
     #[test]
@@ -625,6 +629,7 @@ mod tests {
         let title = build_main_title(&app);
         assert!(title.contains("foo-model"));
         assert!(!title.contains("(no model selected)"));
+        assert!(!title.contains("Preset:"));
     }
 
     #[test]
@@ -834,6 +839,7 @@ mod tests {
         assert!(title.contains("Character: Alice"));
         assert!(title.contains("OpenAI"));
         assert!(title.contains("gpt-4"));
+        assert!(!title.contains("Preset:"));
     }
 
     #[test]
@@ -847,5 +853,56 @@ mod tests {
         assert!(!title.contains("Character:"));
         assert!(title.contains("OpenAI"));
         assert!(title.contains("gpt-4"));
+        assert!(!title.contains("Preset:"));
+    }
+
+    #[test]
+    fn title_shows_active_preset_when_set() {
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+        app.preset_manager
+            .set_active_preset("short")
+            .expect("preset to activate");
+
+        let title = build_main_title(&app);
+        assert!(title.contains("Preset: short"));
+        assert!(title.contains("(gpt-4) • Preset: short"));
+    }
+
+    #[test]
+    fn title_places_preset_after_character_when_active() {
+        use crate::character::card::{CharacterCard, CharacterData};
+
+        let mut app = create_test_app();
+        app.session.provider_display_name = "OpenAI".to_string();
+        app.session.model = "gpt-4".to_string();
+        app.preset_manager
+            .set_active_preset("short")
+            .expect("preset to activate");
+
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "Alice".to_string(),
+                description: "A helpful assistant".to_string(),
+                personality: "Friendly".to_string(),
+                scenario: "Helping users".to_string(),
+                first_mes: "Hello!".to_string(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+        app.session.active_character = Some(card);
+
+        let title = build_main_title(&app);
+        assert!(title.contains("Character: Alice • Preset: short"));
     }
 }

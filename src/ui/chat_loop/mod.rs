@@ -349,6 +349,13 @@ fn process_stream_updates(
                 coalesced_chunks.push_str(&content);
                 chunk_stream_id = Some(msg_stream_id);
             }
+            StreamMessage::App { kind, content } => {
+                followup_actions.push(AppAction::StreamAppMessage {
+                    kind,
+                    message: content,
+                    stream_id: msg_stream_id,
+                });
+            }
             StreamMessage::Error(err) => {
                 followup_actions.push(AppAction::StreamErrored {
                     message: err,

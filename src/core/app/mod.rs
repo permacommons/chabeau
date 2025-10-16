@@ -217,27 +217,35 @@ impl App {
     }
 
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
-        self.picker.theme_state()
+        self.picker.session().and_then(PickerSession::theme_state)
     }
 
     pub fn theme_picker_state_mut(&mut self) -> Option<&mut ThemePickerState> {
-        self.picker.theme_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::theme_state_mut)
     }
 
     pub fn model_picker_state(&self) -> Option<&ModelPickerState> {
-        self.picker.model_state()
+        self.picker.session().and_then(PickerSession::model_state)
     }
 
     pub fn model_picker_state_mut(&mut self) -> Option<&mut ModelPickerState> {
-        self.picker.model_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::model_state_mut)
     }
 
     pub fn provider_picker_state(&self) -> Option<&ProviderPickerState> {
-        self.picker.provider_state()
+        self.picker
+            .session()
+            .and_then(PickerSession::provider_state)
     }
 
     pub fn provider_picker_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
-        self.picker.provider_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::provider_state_mut)
     }
 
     pub fn theme_controller(&mut self) -> ThemeController<'_> {
@@ -800,32 +808,40 @@ impl App {
 
     /// Get character picker state accessor
     pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
-        self.picker.character_state()
+        self.picker
+            .session()
+            .and_then(PickerSession::character_state)
     }
 
     /// Get mutable character picker state accessor
     pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
-        self.picker.character_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::character_state_mut)
     }
 
     /// Get persona picker state accessor
     pub fn persona_picker_state(&self) -> Option<&PersonaPickerState> {
-        self.picker.persona_state()
+        self.picker.session().and_then(PickerSession::persona_state)
     }
 
     /// Get mutable persona picker state accessor
     pub fn persona_picker_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
-        self.picker.persona_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::persona_state_mut)
     }
 
     /// Get preset picker state accessor
     pub fn preset_picker_state(&self) -> Option<&PresetPickerState> {
-        self.picker.preset_state()
+        self.picker.session().and_then(PickerSession::preset_state)
     }
 
     /// Get mutable preset picker state accessor
     pub fn preset_picker_state_mut(&mut self) -> Option<&mut PresetPickerState> {
-        self.picker.preset_state_mut()
+        self.picker
+            .session_mut()
+            .and_then(PickerSession::preset_state_mut)
     }
 }
 
@@ -880,7 +896,6 @@ mod tests {
         let mut picker_state = PickerState::new("Pick Model", items.clone(), 0);
         picker_state.sort_mode = crate::ui::picker::SortMode::Name;
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
@@ -950,7 +965,6 @@ mod tests {
         let mut app = create_test_app();
         // Theme picker prefers alphabetical → Name
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Theme,
             state: PickerState::new("Pick Theme", vec![], 0),
             data: PickerData::Theme(ThemePickerState {
                 search_filter: String::new(),
@@ -965,7 +979,6 @@ mod tests {
         ));
         // Provider picker prefers alphabetical → Name
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Provider,
             state: PickerState::new("Pick Provider", vec![], 0),
             data: PickerData::Provider(ProviderPickerState {
                 search_filter: String::new(),
@@ -979,7 +992,6 @@ mod tests {
         ));
         // Model picker with dates → Date
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Model,
             state: PickerState::new("Pick Model", vec![], 0),
             data: PickerData::Model(ModelPickerState {
                 search_filter: String::new(),
@@ -1714,7 +1726,6 @@ Some additional text after the table."#;
         assert!(app.session.active_character.is_some());
 
         app.picker.picker_session = Some(picker::PickerSession {
-            mode: picker::PickerMode::Character,
             state: PickerState::new(
                 "Pick Character",
                 vec![PickerItem {

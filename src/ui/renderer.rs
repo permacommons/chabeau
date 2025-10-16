@@ -523,7 +523,7 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 mod tests {
     use super::*;
     use crate::core::app::{
-        App, CharacterPickerState, ModelPickerState, PickerData, PickerMode, PickerSession,
+        App, CharacterPickerState, ModelPickerState, PickerData, PickerSession,
         ProviderPickerState, ThemePickerState,
     };
     use crate::ui::picker::PickerState;
@@ -542,7 +542,6 @@ mod tests {
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Model,
             state: picker_state,
             data: PickerData::Model(ModelPickerState {
                 search_filter: search_filter.to_string(),
@@ -561,7 +560,6 @@ mod tests {
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Theme,
             state: picker_state,
             data: PickerData::Theme(ThemePickerState {
                 search_filter: search_filter.to_string(),
@@ -580,7 +578,6 @@ mod tests {
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Provider,
             state: picker_state,
             data: PickerData::Provider(ProviderPickerState {
                 search_filter: search_filter.to_string(),
@@ -598,7 +595,6 @@ mod tests {
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
-            mode: PickerMode::Character,
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: search_filter.to_string(),

@@ -58,6 +58,86 @@ fn process_sse_line(
         .unwrap_or(false)
 }
 
+pub trait SseFramer {
+    fn push(&mut self, chunk: &[u8]) -> Vec<String>;
+    fn finish(&mut self) -> Vec<String>;
+}
+
+#[derive(Default)]
+pub struct SimpleSseFramer {
+    buffer: Vec<u8>,
+}
+
+impl SimpleSseFramer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn normalize_line(bytes: &[u8]) -> Option<String> {
+        if bytes.is_empty() {
+            return None;
+        }
+
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            Err(err) => {
+                eprintln!("Invalid UTF-8 in SSE stream: {err}");
+                None
+            }
+        }
+    }
+}
+
+impl SseFramer for SimpleSseFramer {
+    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.buffer.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        let mut search_index = 0;
+
+        while let Some(relative_pos) = memchr(b'\n', &self.buffer[search_index..]) {
+            let newline_index = search_index + relative_pos;
+            let mut line_end = newline_index;
+            if line_end > search_index && self.buffer[line_end - 1] == b'\r' {
+                line_end -= 1;
+            }
+
+            if let Some(line) = Self::normalize_line(&self.buffer[search_index..line_end]) {
+                frames.push(line);
+            }
+
+            search_index = newline_index + 1;
+        }
+
+        if search_index > 0 {
+            self.buffer.drain(..search_index);
+        }
+
+        frames
+    }
+
+    fn finish(&mut self) -> Vec<String> {
+        if self.buffer.is_empty() {
+            return Vec::new();
+        }
+
+        let mut line_end = self.buffer.len();
+        while line_end > 0 && self.buffer[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
+
+        let line = Self::normalize_line(&self.buffer[..line_end]);
+        self.buffer.clear();
+        line.into_iter().collect()
+    }
+}
+
 fn extract_error_summary(value: &serde_json::Value) -> Option<String> {
     let summary = value
         .pointer("/error/message")
@@ -183,7 +263,7 @@ impl ChatStreamService {
                             }
 
                             let mut stream = response.bytes_stream();
-                            let mut buffer: Vec<u8> = Vec::new();
+                            let mut framer = SimpleSseFramer::new();
 
                             while let Some(chunk) = stream.next().await {
                                 if cancel_token.is_cancelled() {
@@ -191,28 +271,17 @@ impl ChatStreamService {
                                 }
 
                                 if let Ok(chunk_bytes) = chunk {
-                                    buffer.extend_from_slice(&chunk_bytes);
-
-                                    while let Some(newline_pos) = memchr(b'\n', &buffer) {
-                                        let line_str = match std::str::from_utf8(&buffer[..newline_pos]) {
-                                            Ok(s) => s.trim(),
-                                            Err(e) => {
-                                                eprintln!("Invalid UTF-8 in stream: {e}");
-                                                buffer.drain(..=newline_pos);
-                                                continue;
-                                            }
-                                        };
-
-                                        let should_end = process_sse_line(
-                                            line_str,
-                                            &tx_clone,
-                                            stream_id,
-                                        );
-                                        buffer.drain(..=newline_pos);
-                                        if should_end {
+                                    for line in framer.push(&chunk_bytes) {
+                                        if process_sse_line(&line, &tx_clone, stream_id) {
                                             return;
                                         }
                                     }
+                                }
+                            }
+
+                            for line in framer.finish() {
+                                if process_sse_line(&line, &tx_clone, stream_id) {
+                                    return;
                                 }
                             }
 
@@ -240,6 +309,25 @@ impl ChatStreamService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simple_sse_framer_handles_crlf_and_blank_lines() {
+        let mut framer = SimpleSseFramer::new();
+        let lines = framer.push(b"data: hello\r\nid:1\r\n\r\n");
+        assert_eq!(lines, vec!["data: hello".to_string(), "id:1".to_string()]);
+
+        let trailing = framer.finish();
+        assert!(trailing.is_empty());
+    }
+
+    #[test]
+    fn simple_sse_framer_flushes_end_of_stream() {
+        let mut framer = SimpleSseFramer::new();
+        assert!(framer.push(b"data: partial").is_empty());
+
+        let lines = framer.finish();
+        assert_eq!(lines, vec!["data: partial".to_string()]);
+    }
 
     #[test]
     fn process_sse_line_handles_spacing_variants() {

@@ -96,6 +96,7 @@ pub trait SseFramer {
 #[derive(Default)]
 pub struct SimpleSseFramer {
     buffer: Vec<u8>,
+    utf8_warning_emitted: bool,
 }
 
 impl SimpleSseFramer {
@@ -103,7 +104,7 @@ impl SimpleSseFramer {
         Self::default()
     }
 
-    fn normalize_line(bytes: &[u8]) -> Option<SseFrame> {
+    fn normalize_line(&mut self, bytes: &[u8]) -> Option<SseFrame> {
         if bytes.is_empty() {
             return None;
         }
@@ -117,12 +118,19 @@ impl SimpleSseFramer {
                     Some(SseFrame::Data(trimmed.to_string()))
                 }
             }
-            Err(err) => Some(SseFrame::AppMessage {
-                kind: AppMessageKind::Warning,
-                content: format!(
-                    "Received invalid UTF-8 in response stream: {err}. Bytes were ignored."
-                ),
-            }),
+            Err(err) => {
+                if self.utf8_warning_emitted {
+                    None
+                } else {
+                    self.utf8_warning_emitted = true;
+                    Some(SseFrame::AppMessage {
+                        kind: AppMessageKind::Warning,
+                        content: format!(
+                            "Received invalid UTF-8 in response stream: {err}. Bytes were ignored. Additional invalid UTF-8 warnings will be suppressed."
+                        ),
+                    })
+                }
+            }
         }
     }
 }
@@ -140,7 +148,8 @@ impl SseFramer for SimpleSseFramer {
                 line_end -= 1;
             }
 
-            if let Some(line) = Self::normalize_line(&self.buffer[search_index..line_end]) {
+            let line_bytes = self.buffer[search_index..line_end].to_vec();
+            if let Some(line) = self.normalize_line(&line_bytes) {
                 frames.push(line);
             }
 
@@ -164,7 +173,8 @@ impl SseFramer for SimpleSseFramer {
             line_end -= 1;
         }
 
-        let line = Self::normalize_line(&self.buffer[..line_end]);
+        let line_bytes = self.buffer[..line_end].to_vec();
+        let line = self.normalize_line(&line_bytes);
         self.buffer.clear();
         line.into_iter().collect()
     }
@@ -380,9 +390,27 @@ mod tests {
                 assert_eq!(*kind, AppMessageKind::Warning);
                 assert!(content.contains("Received invalid UTF-8 in response stream"));
                 assert!(content.contains("Bytes were ignored."));
+                assert!(content.contains("Additional invalid UTF-8 warnings will be suppressed."));
             }
             other => panic!("unexpected frames: {other:?}"),
         }
+
+        assert!(framer.finish().is_empty());
+    }
+
+    #[test]
+    fn simple_sse_framer_suppresses_repeated_invalid_utf8() {
+        let mut framer = SimpleSseFramer::new();
+
+        let mut bytes = b"data:".to_vec();
+        bytes.extend_from_slice(&[0xF0, 0x28, 0x8C, 0x28]);
+        bytes.extend_from_slice(b"\n");
+        assert_eq!(framer.push(&bytes).len(), 1);
+
+        let mut second_bytes = b"data:".to_vec();
+        second_bytes.extend_from_slice(&[0xF0, 0x28, 0x8C, 0x28]);
+        second_bytes.extend_from_slice(b"\n");
+        assert!(framer.push(&second_bytes).is_empty());
 
         assert!(framer.finish().is_empty());
     }

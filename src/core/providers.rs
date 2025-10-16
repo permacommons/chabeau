@@ -292,7 +292,7 @@ mod tests {
             &self,
             _provider: &str,
         ) -> Result<Option<(String, String)>, Box<dyn StdError>> {
-            let backend_error = io::Error::new(io::ErrorKind::Other, "mock backend unavailable");
+            let backend_error = io::Error::other("mock backend unavailable");
             let keyring_error = keyring::Error::NoStorageAccess(Box::new(backend_error));
             Err(Box::new(KeyringAccessError::from(keyring_error)))
         }
@@ -337,8 +337,10 @@ mod tests {
             env_guard.set_var("OPENAI_API_KEY", "sk-env");
             env_guard.set_var("OPENAI_BASE_URL", "https://example.com/v1");
 
-            let mut config = Config::default();
-            config.default_provider = Some("openai".to_string());
+            let config = Config {
+                default_provider: Some("openai".to_string()),
+                ..Default::default()
+            };
 
             let session = resolve_session(&MockSource {}, &config, None)
                 .expect("recoverable error should fall back to env");

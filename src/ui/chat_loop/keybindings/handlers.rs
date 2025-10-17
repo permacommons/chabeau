@@ -12,11 +12,11 @@ use crate::commands;
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
-use crate::ui::chat_loop::{
+use crate::ui::chat_loop::modes::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
-    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event, AppHandle,
-    KeyLoopAction,
+    handle_enter_key, handle_external_editor_shortcut, handle_picker_key_event,
 };
+use crate::ui::chat_loop::{AppHandle, KeyLoopAction};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

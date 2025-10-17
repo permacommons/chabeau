@@ -384,6 +384,9 @@ Chabeau uses a modular design with focused components:
 - `ui/` – Terminal interface rendering
   - `mod.rs` – UI module declarations
   - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
+    - `event_loop.rs` – Async terminal loop orchestration, event polling, and stream dispatch
+    - `lifecycle.rs` – Terminal setup/teardown helpers and resource guards
+    - `modes.rs` – Mode-aware key handlers and text interaction utilities
   - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
   - `markdown.rs` / `markdown_wrap.rs` – Markdown renderer and wrapping helpers that emit span metadata
   - `renderer.rs` – Terminal interface rendering (chat area, input, pickers)

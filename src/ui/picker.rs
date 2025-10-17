@@ -6,6 +6,7 @@ pub struct PickerItem {
     pub id: String,
     pub label: String,
     pub metadata: Option<String>, // For creation date, theme type, etc.
+    pub inspect_metadata: Option<String>, // For full-screen inspect view
     pub sort_key: Option<String>, // For sorting by date or name
 }
 
@@ -78,5 +79,12 @@ impl PickerState {
 
     pub fn get_selected_metadata(&self) -> Option<&str> {
         self.items.get(self.selected)?.metadata.as_deref()
+    }
+
+    pub fn get_selected_inspect_metadata(&self) -> Option<&str> {
+        let item = self.items.get(self.selected)?;
+        item.inspect_metadata
+            .as_deref()
+            .or(item.metadata.as_deref())
     }
 }

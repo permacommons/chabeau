@@ -990,7 +990,7 @@ impl KeyHandler for PickerHandler {
         // Check if there's a picker session before handling the key
         let had_picker_before = app.read(|app| app.picker_session().is_some()).await;
 
-        handle_picker_key_event(dispatcher, key, term_width, term_height).await;
+        handle_picker_key_event(app, dispatcher, key, term_width, term_height).await;
 
         // If we had a picker session before, then the key was handled by the picker
         // (even if it resulted in closing the picker, like Esc does)

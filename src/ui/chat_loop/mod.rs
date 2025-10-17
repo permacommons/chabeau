@@ -1073,13 +1073,21 @@ async fn handle_ctrl_j_shortcut(
 /// - Enter: Select item (non-persistent)
 /// - Alt+Enter: Select item and set as default (persistent)
 /// - Ctrl+J: Select item and set as default (persistent)
+/// - Ctrl+O: Inspect the selected item's full metadata
 /// - Escape: Cancel and close picker
 /// - Home/End: Jump to first/last item
 /// - F6: Cycle sort mode
 /// - Delete: Unset default for selected item
 /// - Backspace: Remove last character from search filter
 /// - Any character: Add to search filter
+///
+/// Inspect view controls:
+/// - Esc: Return to picker
+/// - Up/Down: Scroll one line
+/// - PageUp/PageDown: Scroll by a larger step
+/// - Home/End: Jump to start/end of the inspected text
 async fn handle_picker_key_event(
+    app: &AppHandle,
     dispatcher: &AppActionDispatcher,
     key: &event::KeyEvent,
     term_width: u16,
@@ -1087,30 +1095,53 @@ async fn handle_picker_key_event(
 ) {
     let mut actions = Vec::new();
 
-    match key.code {
-        event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
-        event::KeyCode::Up => actions.push(AppAction::PickerMoveUp),
-        event::KeyCode::Down => actions.push(AppAction::PickerMoveDown),
-        event::KeyCode::Char('k') => actions.push(AppAction::PickerMoveUp),
-        event::KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            actions.push(AppAction::PickerApplySelection { persistent: true });
-        }
-        event::KeyCode::Char('j') => actions.push(AppAction::PickerMoveDown),
-        event::KeyCode::Home => actions.push(AppAction::PickerMoveToStart),
-        event::KeyCode::End => actions.push(AppAction::PickerMoveToEnd),
-        event::KeyCode::F(6) => actions.push(AppAction::PickerCycleSortMode),
-        event::KeyCode::Enter => {
-            let persistent = key.modifiers.contains(event::KeyModifiers::ALT);
-            actions.push(AppAction::PickerApplySelection { persistent });
-        }
-        event::KeyCode::Delete => actions.push(AppAction::PickerUnsetDefault),
-        event::KeyCode::Backspace => actions.push(AppAction::PickerBackspace),
-        event::KeyCode::Char(c) => {
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                actions.push(AppAction::PickerTypeChar { ch: c });
+    let inspect_active = app.read(|app| app.picker_inspect_state().is_some()).await;
+
+    if inspect_active {
+        let page_lines = term_height.saturating_sub(8).max(1) as i32;
+        match key.code {
+            event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
+            event::KeyCode::Up => actions.push(AppAction::PickerInspectScroll { lines: -1 }),
+            event::KeyCode::Down => actions.push(AppAction::PickerInspectScroll { lines: 1 }),
+            event::KeyCode::PageUp => {
+                actions.push(AppAction::PickerInspectScroll { lines: -page_lines })
             }
+            event::KeyCode::PageDown => {
+                actions.push(AppAction::PickerInspectScroll { lines: page_lines })
+            }
+            event::KeyCode::Home => actions.push(AppAction::PickerInspectScrollToStart),
+            event::KeyCode::End => actions.push(AppAction::PickerInspectScrollToEnd),
+            _ => {}
         }
-        _ => {}
+    } else {
+        match key.code {
+            event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
+            event::KeyCode::Up => actions.push(AppAction::PickerMoveUp),
+            event::KeyCode::Down => actions.push(AppAction::PickerMoveDown),
+            event::KeyCode::Char('k') => actions.push(AppAction::PickerMoveUp),
+            event::KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                actions.push(AppAction::PickerApplySelection { persistent: true });
+            }
+            event::KeyCode::Char('j') => actions.push(AppAction::PickerMoveDown),
+            event::KeyCode::Home => actions.push(AppAction::PickerMoveToStart),
+            event::KeyCode::End => actions.push(AppAction::PickerMoveToEnd),
+            event::KeyCode::F(6) => actions.push(AppAction::PickerCycleSortMode),
+            event::KeyCode::Enter => {
+                let persistent = key.modifiers.contains(event::KeyModifiers::ALT);
+                actions.push(AppAction::PickerApplySelection { persistent });
+            }
+            event::KeyCode::Delete => actions.push(AppAction::PickerUnsetDefault),
+            event::KeyCode::Backspace => actions.push(AppAction::PickerBackspace),
+            event::KeyCode::Char('o') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                actions.push(AppAction::PickerInspectSelection);
+            }
+            event::KeyCode::Char(c) => {
+                if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                    actions.push(AppAction::PickerTypeChar { ch: c });
+                }
+            }
+            _ => {}
+        }
     }
 
     if !actions.is_empty() {
@@ -1322,7 +1353,8 @@ mod tests {
             };
 
             let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-            handle_picker_key_event(&dispatcher, &key, TERM_WIDTH, TERM_HEIGHT).await;
+            let app = AppHandle::new(Arc::new(Mutex::new(setup_app())));
+            handle_picker_key_event(&app, &dispatcher, &key, TERM_WIDTH, TERM_HEIGHT).await;
 
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert_eq!(envelopes.len(), 1);

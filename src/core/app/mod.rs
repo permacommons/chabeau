@@ -31,8 +31,9 @@ pub use conversation::ConversationController;
 #[cfg(test)]
 pub use picker::PickerData;
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
-    PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
+    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController,
+    PickerInspectState, PickerMode, PickerSession, PresetPickerState, ProviderPickerState,
+    ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -214,6 +215,34 @@ impl App {
 
     pub fn picker_state_mut(&mut self) -> Option<&mut PickerState> {
         self.picker.state_mut()
+    }
+
+    pub fn picker_inspect_state(&self) -> Option<&PickerInspectState> {
+        self.picker.inspect_state()
+    }
+
+    pub fn picker_inspect_state_mut(&mut self) -> Option<&mut PickerInspectState> {
+        self.picker.inspect_state_mut()
+    }
+
+    pub fn open_picker_inspect(&mut self, title: String, content: String) {
+        self.picker.open_inspect(title, content);
+    }
+
+    pub fn close_picker_inspect(&mut self) {
+        self.picker.close_inspect();
+    }
+
+    pub fn scroll_picker_inspect(&mut self, lines: i32) {
+        self.picker.scroll_inspect(lines);
+    }
+
+    pub fn scroll_picker_inspect_to_start(&mut self) {
+        self.picker.scroll_inspect_to_start();
+    }
+
+    pub fn scroll_picker_inspect_to_end(&mut self) {
+        self.picker.scroll_inspect_to_end();
     }
 
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
@@ -884,12 +913,14 @@ mod tests {
                 id: "a-model".into(),
                 label: "a-model".into(),
                 metadata: None,
+                inspect_metadata: None,
                 sort_key: None,
             },
             PickerItem {
                 id: "z-model".into(),
                 label: "z-model".into(),
                 metadata: None,
+                inspect_metadata: None,
                 sort_key: None,
             },
         ];
@@ -1732,6 +1763,7 @@ Some additional text after the table."#;
                     id: picker::TURN_OFF_CHARACTER_ID.to_string(),
                     label: "[Turn off character mode]".to_string(),
                     metadata: Some("Disable character".to_string()),
+                    inspect_metadata: Some("Disable character".to_string()),
                     sort_key: None,
                 }],
                 0,

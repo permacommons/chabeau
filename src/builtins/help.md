@@ -26,6 +26,7 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 
 - Enter: Apply selection (session only)
 - Alt+Enter or Ctrl+J: Apply selection and save to config
+- Ctrl+O: Inspect full details (Esc=Back to picker)
 - Esc: Cancel picker
 - ↑/↓ or j/k: Navigate options
 - Home/End: Jump to first/last option

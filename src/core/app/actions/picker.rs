@@ -45,6 +45,22 @@ pub(super) fn handle_picker_action(
             handle_picker_type_char(app, ch);
             None
         }
+        AppAction::PickerInspectSelection => {
+            handle_picker_inspect(app, ctx);
+            None
+        }
+        AppAction::PickerInspectScroll { lines } => {
+            app.scroll_picker_inspect(lines);
+            None
+        }
+        AppAction::PickerInspectScrollToStart => {
+            app.scroll_picker_inspect_to_start();
+            None
+        }
+        AppAction::PickerInspectScrollToEnd => {
+            app.scroll_picker_inspect_to_end();
+            None
+        }
         AppAction::ModelPickerLoaded {
             default_model_for_provider,
             models_response,
@@ -73,6 +89,9 @@ enum PickerMovement {
 }
 
 fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
+    if app.picker_inspect_state().is_some() {
+        return;
+    }
     let mode = app.current_picker_mode();
     let selected_theme = {
         let mut selected = None;
@@ -95,6 +114,9 @@ fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
 }
 
 fn handle_picker_cycle_sort_mode(app: &mut App) {
+    if app.picker_inspect_state().is_some() {
+        return;
+    }
     if let Some(state) = app.picker_state_mut() {
         state.cycle_sort_mode();
     }
@@ -103,6 +125,9 @@ fn handle_picker_cycle_sort_mode(app: &mut App) {
 }
 
 fn handle_picker_backspace(app: &mut App) {
+    if app.picker_inspect_state().is_some() {
+        return;
+    }
     match app.current_picker_mode() {
         Some(PickerMode::Model) => {
             if let Some(state) = app.model_picker_state_mut() {
@@ -157,6 +182,9 @@ fn handle_picker_backspace(app: &mut App) {
 }
 
 fn handle_picker_type_char(app: &mut App, ch: char) {
+    if app.picker_inspect_state().is_some() {
+        return;
+    }
     if ch.is_control() {
         return;
     }
@@ -202,7 +230,60 @@ fn handle_picker_type_char(app: &mut App, ch: char) {
     }
 }
 
+fn handle_picker_inspect(app: &mut App, ctx: AppActionContext) {
+    let (title, metadata) = {
+        let Some(session) = app.picker_session() else {
+            return;
+        };
+        let state = &session.state;
+
+        let Some(item) = state.get_selected_item() else {
+            return;
+        };
+
+        let mut display_label = item.label.clone();
+        if display_label.ends_with('*') {
+            display_label.pop();
+            display_label = display_label.trim_end().to_string();
+        }
+
+        let title = format!("{} – {}", session.base_title(), display_label);
+        (
+            title,
+            state
+                .get_selected_inspect_metadata()
+                .map(|text| text.to_string()),
+        )
+    };
+
+    match metadata {
+        Some(text) if text.trim().is_empty() => {
+            input::set_status_message(app, "Nothing to inspect for this item".to_string(), ctx);
+        }
+        Some(text) => {
+            app.open_picker_inspect(title, text);
+            input::set_status_message(
+                app,
+                "Inspecting selection (Esc=Back to picker)".to_string(),
+                ctx,
+            );
+        }
+        None => {
+            input::set_status_message(app, "Nothing to inspect for this item".to_string(), ctx);
+        }
+    }
+}
+
 fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
+    if app.picker_inspect_state().is_some() {
+        app.close_picker_inspect();
+        input::set_status_message(
+            app,
+            "Returned to picker (Ctrl+O=Inspect again)".to_string(),
+            ctx,
+        );
+        return;
+    }
     match app.current_picker_mode() {
         Some(PickerMode::Theme) => {
             app.revert_theme_preview();
@@ -719,6 +800,7 @@ mod tests {
             id: "new-model".into(),
             label: "New Model".into(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
 
@@ -756,6 +838,7 @@ mod tests {
             id: "alice".to_string(),
             label: "Alice".to_string(),
             metadata: Some("A helpful assistant".to_string()),
+            inspect_metadata: Some("A helpful assistant".to_string()),
             sort_key: Some("Alice".to_string()),
         }];
 
@@ -786,12 +869,14 @@ mod tests {
                 id: "alice".to_string(),
                 label: "alice*".to_string(),
                 metadata: Some("A helpful assistant".to_string()),
+                inspect_metadata: Some("A helpful assistant".to_string()),
                 sort_key: Some("alice".to_string()),
             },
             PickerItem {
                 id: "bob".to_string(),
                 label: "bob".to_string(),
                 metadata: Some("Another character".to_string()),
+                inspect_metadata: Some("Another character".to_string()),
                 sort_key: Some("bob".to_string()),
             },
         ];

@@ -1,8 +1,8 @@
 use super::CommandResult;
 use crate::core::app::App;
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 /// Function pointer used by the registry to invoke a command implementation.
 ///
@@ -201,7 +201,7 @@ impl CommandRegistry {
     }
 }
 
-static REGISTRY: Lazy<CommandRegistry> = Lazy::new(CommandRegistry::new);
+static REGISTRY: LazyLock<CommandRegistry> = LazyLock::new(CommandRegistry::new);
 
 /// Provides read-only access to the registered command metadata.
 pub fn all_commands() -> &'static [Command] {

@@ -1,8 +1,6 @@
-use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex};
-
-use once_cell::sync::Lazy;
 use ratatui::{layout::Rect, text::Line};
+use std::ops::RangeInclusive;
+use std::sync::{Arc, LazyLock, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -20,8 +18,8 @@ pub struct OscRenderState {
     pub spans: Vec<OscSpan>,
 }
 
-static OSC_RENDER_STATE: Lazy<Mutex<OscRenderState>> =
-    Lazy::new(|| Mutex::new(OscRenderState::default()));
+static OSC_RENDER_STATE: LazyLock<Mutex<OscRenderState>> =
+    LazyLock::new(|| Mutex::new(OscRenderState::default()));
 
 pub fn set_render_state(state: OscRenderState) {
     if let Ok(mut guard) = OSC_RENDER_STATE.lock() {

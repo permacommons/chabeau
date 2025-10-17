@@ -1,5 +1,4 @@
 use directories::ProjectDirs;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -7,7 +6,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
@@ -147,11 +146,12 @@ struct ConfigOrchestrator {
     state: Mutex<ConfigCacheState>,
 }
 
-static CONFIG_ORCHESTRATOR: Lazy<ConfigOrchestrator> =
-    Lazy::new(|| ConfigOrchestrator::new(Config::get_config_path()));
+static CONFIG_ORCHESTRATOR: LazyLock<ConfigOrchestrator> =
+    LazyLock::new(|| ConfigOrchestrator::new(Config::get_config_path()));
 
 #[cfg(test)]
-static TEST_ORCHESTRATOR: Lazy<Mutex<Option<ConfigOrchestrator>>> = Lazy::new(|| Mutex::new(None));
+static TEST_ORCHESTRATOR: LazyLock<Mutex<Option<ConfigOrchestrator>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug)]
 pub enum ConfigError {

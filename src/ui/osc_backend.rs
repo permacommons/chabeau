@@ -397,11 +397,9 @@ mod tests {
     use crate::ui::span::LinkMeta;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, LazyLock, Mutex};
 
-    use once_cell::sync::Lazy;
-
-    static TEST_RENDER_STATE_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    static TEST_RENDER_STATE_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn cell_with_symbol(symbol: &str) -> Cell {
         let mut cell = Cell::default();

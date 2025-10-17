@@ -3,8 +3,8 @@
 //! This module handles loading and managing built-in provider configurations
 //! from the builtins/models.toml file at build time.
 
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuiltinProvider {
@@ -33,7 +33,7 @@ impl BuiltinProvider {
 
 const CONFIG_CONTENT: &str = include_str!("../builtins/models.toml");
 
-static BUILTIN_PROVIDERS: Lazy<Vec<BuiltinProvider>> = Lazy::new(|| {
+static BUILTIN_PROVIDERS: LazyLock<Vec<BuiltinProvider>> = LazyLock::new(|| {
     let config: BuiltinProvidersConfig =
         toml::from_str(CONFIG_CONTENT).expect("Failed to parse builtins/models.toml");
 

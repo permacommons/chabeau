@@ -7,8 +7,6 @@ use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::theme::Theme;
 #[cfg(test)]
-use once_cell::sync::Lazy;
-#[cfg(test)]
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::env;
@@ -17,15 +15,15 @@ use std::ffi::{OsStr, OsString};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 #[cfg(test)]
 use tempfile::TempDir;
 
 #[cfg(test)]
-static TEST_CONFIG_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static TEST_CONFIG_ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[cfg(test)]
-static TEST_ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static TEST_ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[cfg(test)]
 pub struct TestConfigEnv {

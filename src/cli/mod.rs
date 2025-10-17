@@ -8,9 +8,9 @@ pub mod provider_list;
 pub mod theme_list;
 
 use std::error::Error;
+use std::sync::LazyLock;
 
 use clap::{Parser, Subcommand};
-use once_cell::sync::Lazy;
 
 // Import specific items we need
 use crate::auth::AuthManager;
@@ -80,8 +80,8 @@ fn print_version_info() {
 }
 
 // Unified help text used for both short and long help
-// Uses Lazy to compute the cards directory path at runtime
-static HELP_ABOUT: Lazy<String> = Lazy::new(|| {
+// Uses LazyLock to compute the cards directory path at runtime
+static HELP_ABOUT: LazyLock<String> = LazyLock::new(|| {
     let cards_dir = crate::core::config::path_display(crate::character::loader::get_cards_dir());
     format!(
         "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\

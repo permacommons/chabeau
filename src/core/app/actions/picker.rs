@@ -667,7 +667,7 @@ mod tests {
     };
     use crate::core::config::{Config, Persona, Preset};
     use crate::ui::picker::{PickerItem, PickerState};
-    use crate::utils::test_utils::create_test_app;
+    use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
     use std::fs;
     use tempfile::tempdir;
 
@@ -840,7 +840,8 @@ mod tests {
         let card_path = cards_dir.join("alice.json");
         fs::write(&card_path, serde_json::to_string(&test_card).unwrap()).unwrap();
 
-        std::env::set_var("CHABEAU_CONFIG_DIR", temp_dir.path());
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path());
 
         assert!(app.session.active_character.is_none());
 
@@ -849,8 +850,6 @@ mod tests {
 
         assert!(app.session.active_character.is_none());
         assert!(app.persona_manager.get_active_persona().is_none());
-
-        std::env::remove_var("CHABEAU_CONFIG_DIR");
     }
 
     #[test]

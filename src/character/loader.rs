@@ -2,7 +2,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::character::CharacterCard;
+use crate::character::{png_text, CharacterCard};
 use base64::Engine;
 
 /// Errors that can occur when loading character cards
@@ -148,32 +148,29 @@ pub fn load_json_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoad
 pub fn load_png_card<P: AsRef<Path>>(path: P) -> Result<CharacterCard, CardLoadError> {
     let path = path.as_ref();
 
-    // Open the PNG file
-    let file = fs::File::open(path)
+    let data = fs::read(path)
         .map_err(|e| CardLoadError::FileNotFound(format!("{}: {}", path.display(), e)))?;
 
-    // Create PNG decoder
-    let decoder = png::Decoder::new(file);
-    let reader = decoder
-        .read_info()
-        .map_err(|e| CardLoadError::InvalidPng(format!("{}: {}", path.display(), e)))?;
-
-    // Extract tEXt chunk with key "chara"
-    let info = reader.info();
-    let chara_text = info
-        .uncompressed_latin1_text
-        .iter()
-        .find(|chunk| chunk.keyword == "chara")
-        .ok_or_else(|| {
-            CardLoadError::MissingMetadata(format!(
+    let chara_text = match png_text::extract_text(&data, "chara") {
+        Ok(text) => text,
+        Err(png_text::PngTextError::MissingKeyword(_)) => {
+            return Err(CardLoadError::MissingMetadata(format!(
                 "{}: PNG does not contain 'chara' metadata in tEXt chunk",
                 path.display()
-            ))
-        })?;
+            )))
+        }
+        Err(err) => {
+            return Err(CardLoadError::InvalidPng(format!(
+                "{}: {}",
+                path.display(),
+                err
+            )))
+        }
+    };
 
     // Base64 decode the chara data
     let decoded = base64::prelude::BASE64_STANDARD
-        .decode(&chara_text.text)
+        .decode(chara_text.as_bytes())
         .map_err(|e| {
             CardLoadError::InvalidJson(format!("{}: Base64 decode failed: {}", path.display(), e))
         })?;
@@ -225,8 +222,9 @@ pub fn validate_card(card: &CharacterCard) -> Result<(), CardLoadError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::CharacterData;
+    use crate::character::{png_text, CharacterData};
     use crate::utils::test_utils::TestEnvVarGuard;
+    use crc32fast::Hasher;
     use std::fs;
     use std::io::Write;
     use tempfile::{Builder, NamedTempFile, TempDir};
@@ -309,6 +307,56 @@ mod tests {
         temp_file.write_all(contents.as_bytes()).unwrap();
         temp_file.flush().unwrap();
         temp_file
+    }
+
+    const IHDR_DATA: [u8; 13] = [
+        0x00, 0x00, 0x00, 0x01, // width = 1
+        0x00, 0x00, 0x00, 0x01, // height = 1
+        0x08, // bit depth
+        0x02, // color type (truecolor)
+        0x00, // compression method
+        0x00, // filter method
+        0x00, // interlace method
+    ];
+
+    const IDAT_DATA: [u8; 12] = [
+        0x78, 0xDA, 0x63, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01,
+    ];
+
+    fn png_chunk(chunk_type: [u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::with_capacity(12 + data.len());
+        chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        chunk.extend_from_slice(&chunk_type);
+        chunk.extend_from_slice(data);
+        let mut hasher = Hasher::new();
+        hasher.update(&chunk_type);
+        hasher.update(data);
+        chunk.extend_from_slice(&hasher.finalize().to_be_bytes());
+        chunk
+    }
+
+    fn assemble_png(chara_payload: Option<&[u8]>) -> Vec<u8> {
+        let mut png = Vec::new();
+        png.extend_from_slice(&png_text::PNG_SIGNATURE);
+        png.extend_from_slice(&png_chunk(*b"IHDR", &IHDR_DATA));
+        if let Some(payload) = chara_payload {
+            let mut text_data = Vec::with_capacity("chara".len() + 1 + payload.len());
+            text_data.extend_from_slice(b"chara");
+            text_data.push(0);
+            text_data.extend_from_slice(payload);
+            png.extend_from_slice(&png_chunk(*b"tEXt", &text_data));
+        }
+        png.extend_from_slice(&png_chunk(*b"IDAT", &IDAT_DATA));
+        png.extend_from_slice(&png_chunk(*b"IEND", &[]));
+        png
+    }
+
+    fn build_png_with_text(text: &[u8]) -> Vec<u8> {
+        assemble_png(Some(text))
+    }
+
+    fn build_png_without_text() -> Vec<u8> {
+        assemble_png(None)
     }
 
     #[test]
@@ -662,32 +710,13 @@ mod tests {
 
     #[test]
     fn test_load_png_card_with_metadata() {
-        // Create a test PNG with embedded character data
-        use std::io::BufWriter;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        let file = fs::File::create(temp_file.path()).unwrap();
-        let w = BufWriter::new(file);
-
-        let mut encoder = png::Encoder::new(w, 100, 100);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-
         // Create character card JSON
         let card_json = create_valid_card_json();
         let encoded = base64::prelude::BASE64_STANDARD.encode(card_json.as_bytes());
+        let png_bytes = build_png_with_text(encoded.as_bytes());
 
-        // Add tEXt chunk with chara metadata
-        encoder
-            .add_text_chunk("chara".to_string(), encoded)
-            .unwrap();
-
-        let mut writer = encoder.write_header().unwrap();
-
-        // Write a simple RGB image (100x100 pixels, all black)
-        let data = vec![0u8; 100 * 100 * 3];
-        writer.write_image_data(&data).unwrap();
-        writer.finish().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
+        temp_file.as_file().write_all(&png_bytes).unwrap();
 
         // Now try to load the PNG card
         let result = load_png_card(temp_file.path());
@@ -706,20 +735,9 @@ mod tests {
     #[test]
     fn test_load_png_card_without_metadata() {
         // Create a PNG without chara metadata
-        use std::io::BufWriter;
-
+        let png_bytes = build_png_without_text();
         let temp_file = NamedTempFile::new().unwrap();
-        let file = fs::File::create(temp_file.path()).unwrap();
-        let w = BufWriter::new(file);
-
-        let mut encoder = png::Encoder::new(w, 100, 100);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-
-        let mut writer = encoder.write_header().unwrap();
-        let data = vec![0u8; 100 * 100 * 3];
-        writer.write_image_data(&data).unwrap();
-        writer.finish().unwrap();
+        temp_file.as_file().write_all(&png_bytes).unwrap();
 
         // Try to load the PNG card - should fail with MissingMetadata
         let result = load_png_card(temp_file.path());
@@ -735,26 +753,9 @@ mod tests {
 
     #[test]
     fn test_load_png_card_invalid_base64() {
-        // Create a PNG with invalid base64 in chara metadata
-        use std::io::BufWriter;
-
+        let png_bytes = build_png_with_text(b"not-valid-base64!!!");
         let temp_file = NamedTempFile::new().unwrap();
-        let file = fs::File::create(temp_file.path()).unwrap();
-        let w = BufWriter::new(file);
-
-        let mut encoder = png::Encoder::new(w, 100, 100);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-
-        // Add invalid base64
-        encoder
-            .add_text_chunk("chara".to_string(), "not-valid-base64!!!".to_string())
-            .unwrap();
-
-        let mut writer = encoder.write_header().unwrap();
-        let data = vec![0u8; 100 * 100 * 3];
-        writer.write_image_data(&data).unwrap();
-        writer.finish().unwrap();
+        temp_file.as_file().write_all(&png_bytes).unwrap();
 
         let result = load_png_card(temp_file.path());
         assert!(result.is_err());
@@ -773,28 +774,13 @@ mod tests {
 
     #[test]
     fn test_load_png_card_invalid_json() {
-        // Create a PNG with valid base64 but invalid JSON
-        use std::io::BufWriter;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        let file = fs::File::create(temp_file.path()).unwrap();
-        let w = BufWriter::new(file);
-
-        let mut encoder = png::Encoder::new(w, 100, 100);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-
         // Encode invalid JSON
         let invalid_json = "{ this is not valid json }";
         let encoded = base64::prelude::BASE64_STANDARD.encode(invalid_json.as_bytes());
-        encoder
-            .add_text_chunk("chara".to_string(), encoded)
-            .unwrap();
+        let png_bytes = build_png_with_text(encoded.as_bytes());
 
-        let mut writer = encoder.write_header().unwrap();
-        let data = vec![0u8; 100 * 100 * 3];
-        writer.write_image_data(&data).unwrap();
-        writer.finish().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
+        temp_file.as_file().write_all(&png_bytes).unwrap();
 
         let result = load_png_card(temp_file.path());
         assert!(result.is_err());

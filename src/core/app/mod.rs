@@ -595,7 +595,21 @@ impl App {
     /// Open a character picker modal with available character cards
     pub fn open_character_picker(&mut self) {
         match self.character_service.list_metadata() {
-            Ok(cards) => {
+            Ok(metadata) => {
+                let mut cards = Vec::with_capacity(metadata.len());
+                for entry in metadata {
+                    match self.character_service.resolve_by_name(&entry.name) {
+                        Ok(card) => cards.push(card),
+                        Err(err) => {
+                            self.conversation().set_status(format!(
+                                "Error loading character '{}': {}",
+                                entry.name, err
+                            ));
+                            return;
+                        }
+                    }
+                }
+
                 if let Err(message) = self.picker.open_character_picker(cards, &self.session) {
                     self.conversation().set_status(message);
                 }

@@ -2,11 +2,18 @@ use super::{SessionContext, UiState};
 use crate::api::models::sort_models;
 use crate::api::ModelsResponse;
 use crate::auth::AuthManager;
+use crate::character::CharacterCard;
 use crate::core::builtin_providers::load_builtin_providers;
-use crate::core::config::Config;
+use crate::core::config::{Config, CustomProvider};
 use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
+
+mod inspect;
+use inspect::{
+    character_inspect, provider_metadata_builtin, provider_metadata_custom, theme_metadata,
+    ThemeSource,
+};
 
 /// Special ID for the "turn off character mode" picker entry
 pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
@@ -19,7 +26,7 @@ pub(super) const TURN_OFF_PRESET_ID: &str = "[turn_off_preset]";
 ///
 /// Removes newlines, carriage returns, and other control characters that could
 /// break the TUI layout. Replaces sequences of whitespace with a single space.
-fn sanitize_picker_metadata(text: &str) -> String {
+pub(super) fn sanitize_picker_metadata(text: &str) -> String {
     text.chars()
         .map(|c| {
             if c == '\n' || c == '\r' || c.is_control() {
@@ -36,7 +43,7 @@ fn sanitize_picker_metadata(text: &str) -> String {
 
 /// Prepare metadata text for the inspect view, preserving intentional
 /// newlines while stripping any other control characters.
-fn sanitize_picker_metadata_for_inspect(text: &str) -> String {
+pub(super) fn sanitize_picker_metadata_for_inspect(text: &str) -> String {
     let mut cleaned = String::with_capacity(text.len());
 
     for c in text.chars() {
@@ -419,17 +426,12 @@ impl PickerController {
             } else {
                 t.display_name.clone()
             };
-            let metadata = if is_default {
-                Some("Built-in theme (default from config)".to_string())
-            } else {
-                Some("Built-in theme".to_string())
-            };
-            let inspect_metadata = metadata.clone();
+            let (metadata, inspect_metadata) = theme_metadata(&t, ThemeSource::Builtin, is_default);
             items.push(PickerItem {
                 id: t.id.clone(),
                 label,
-                metadata,
-                inspect_metadata,
+                metadata: Some(metadata),
+                inspect_metadata: Some(inspect_metadata),
                 sort_key: Some(t.display_name.clone()),
             });
         }
@@ -445,17 +447,14 @@ impl PickerController {
             } else {
                 base_label
             };
-            let metadata = if is_default {
-                Some("Custom theme (config.toml) (default from config)".to_string())
-            } else {
-                Some("Custom theme (config.toml)".to_string())
-            };
-            let inspect_metadata = metadata.clone();
+            let spec = crate::ui::builtin_themes::theme_spec_from_custom(ct);
+            let (metadata, inspect_metadata) =
+                theme_metadata(&spec, ThemeSource::Custom, is_default);
             items.push(PickerItem {
                 id: ct.id.clone(),
                 label,
-                metadata,
-                inspect_metadata,
+                metadata: Some(metadata),
+                inspect_metadata: Some(inspect_metadata),
                 sort_key: Some(ct.display_name.clone()),
             });
         }
@@ -855,20 +854,13 @@ impl PickerController {
                 } else {
                     builtin_provider.display_name.clone()
                 };
-                let metadata = if is_default {
-                    Some(format!(
-                        "Built-in provider ({}) (default from config)",
-                        builtin_provider.base_url
-                    ))
-                } else {
-                    Some(format!("Built-in provider ({})", builtin_provider.base_url))
-                };
-                let inspect_metadata = metadata.clone();
+                let (metadata, inspect_metadata) =
+                    provider_metadata_builtin(&builtin_provider, is_default);
                 items.push(PickerItem {
                     id: builtin_provider.id.clone(),
                     label,
-                    metadata,
-                    inspect_metadata,
+                    metadata: Some(metadata),
+                    inspect_metadata: Some(inspect_metadata),
                     sort_key: Some(builtin_provider.display_name.clone()),
                 });
             }
@@ -886,20 +878,23 @@ impl PickerController {
                 } else {
                     format!("{} (custom)", display_name)
                 };
-                let metadata = if is_default {
-                    Some(format!(
-                        "Custom provider ({}) (default from config)",
-                        base_url
-                    ))
-                } else {
-                    Some(format!("Custom provider ({})", base_url))
-                };
-                let inspect_metadata = metadata.clone();
+                let provider_details =
+                    auth_manager
+                        .get_custom_provider(&id)
+                        .cloned()
+                        .unwrap_or(CustomProvider {
+                            id: id.clone(),
+                            display_name: display_name.clone(),
+                            base_url: base_url.clone(),
+                            mode: None,
+                        });
+                let (metadata, inspect_metadata) =
+                    provider_metadata_custom(&provider_details, is_default);
                 items.push(PickerItem {
                     id,
                     label,
-                    metadata,
-                    inspect_metadata,
+                    metadata: Some(metadata),
+                    inspect_metadata: Some(inspect_metadata),
                     sort_key: Some(display_name),
                 });
             }
@@ -953,7 +948,7 @@ impl PickerController {
 
     pub fn open_character_picker(
         &mut self,
-        cards: Vec<crate::character::cache::CachedCardMetadata>,
+        cards: Vec<CharacterCard>,
         session_context: &SessionContext,
     ) -> Result<(), String> {
         if cards.is_empty() {
@@ -975,22 +970,26 @@ impl PickerController {
         let mut items: Vec<PickerItem> = cards
             .into_iter()
             .map(|card| {
-                let sanitized_description = sanitize_picker_metadata(&card.description);
-                let inspect_description = sanitize_picker_metadata_for_inspect(&card.description);
-                let is_default = default_character
-                    .map(|def| def == &card.name)
-                    .unwrap_or(false);
-                let label = if is_default {
-                    format!("{}*", card.name)
+                let name = card.data.name.clone();
+                let sanitized_description = sanitize_picker_metadata(&card.data.description);
+                let metadata_text = if sanitized_description.is_empty() {
+                    "No description".to_string()
                 } else {
-                    card.name.clone()
+                    sanitized_description
+                };
+                let inspect_definition = character_inspect(&card);
+                let is_default = default_character.map(|def| def == &name).unwrap_or(false);
+                let label = if is_default {
+                    format!("{}*", name)
+                } else {
+                    name.clone()
                 };
                 PickerItem {
-                    id: card.name.clone(),
+                    id: name.clone(),
                     label,
-                    metadata: Some(sanitized_description),
-                    inspect_metadata: Some(inspect_description),
-                    sort_key: Some(card.name.clone()),
+                    metadata: Some(metadata_text),
+                    inspect_metadata: Some(inspect_definition),
+                    sort_key: Some(name),
                 }
             })
             .collect();
@@ -1521,7 +1520,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1566,7 +1570,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1635,7 +1644,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1711,7 +1725,6 @@ mod tests {
 
     #[test]
     fn test_character_picker_highlights_active_character() {
-        use crate::character::cache::CachedCardMetadata;
         use crate::character::card::{CharacterCard, CharacterData};
         use crate::utils::test_utils::create_test_app;
 
@@ -1739,13 +1752,43 @@ mod tests {
         app.session.set_character(active_card);
 
         let cards = vec![
-            CachedCardMetadata {
-                name: "Alpha".to_string(),
-                description: "Alpha description".to_string(),
+            CharacterCard {
+                spec: "chara_card_v2".to_string(),
+                spec_version: "2.0".to_string(),
+                data: CharacterData {
+                    name: "Alpha".to_string(),
+                    description: "Alpha description".to_string(),
+                    personality: "Curious".to_string(),
+                    scenario: "Testing".to_string(),
+                    first_mes: "Hello".to_string(),
+                    mes_example: "{{user}}: Hi\n{{char}}: Hello".to_string(),
+                    creator_notes: None,
+                    system_prompt: None,
+                    post_history_instructions: None,
+                    alternate_greetings: None,
+                    tags: None,
+                    creator: None,
+                    character_version: None,
+                },
             },
-            CachedCardMetadata {
-                name: "Beta".to_string(),
-                description: "Beta description".to_string(),
+            CharacterCard {
+                spec: "chara_card_v2".to_string(),
+                spec_version: "2.0".to_string(),
+                data: CharacterData {
+                    name: "Beta".to_string(),
+                    description: "Beta description".to_string(),
+                    personality: "Helpful".to_string(),
+                    scenario: "Testing".to_string(),
+                    first_mes: "Hello".to_string(),
+                    mes_example: "{{user}}: Hi\n{{char}}: Hello".to_string(),
+                    creator_notes: None,
+                    system_prompt: None,
+                    post_history_instructions: None,
+                    alternate_greetings: None,
+                    tags: None,
+                    creator: None,
+                    character_version: None,
+                },
             },
         ];
 

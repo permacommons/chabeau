@@ -61,6 +61,12 @@ pub enum AppAction {
     PickerTypeChar {
         ch: char,
     },
+    PickerInspectSelection,
+    PickerInspectScroll {
+        lines: i32,
+    },
+    PickerInspectScrollToStart,
+    PickerInspectScrollToEnd,
     CompleteFilePromptDump {
         filename: String,
         overwrite: bool,
@@ -165,6 +171,10 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::PickerUnsetDefault
         | AppAction::PickerBackspace
         | AppAction::PickerTypeChar { .. }
+        | AppAction::PickerInspectSelection
+        | AppAction::PickerInspectScroll { .. }
+        | AppAction::PickerInspectScrollToStart
+        | AppAction::PickerInspectScrollToEnd
         | AppAction::ModelPickerLoaded { .. }
         | AppAction::ModelPickerLoadFailed { .. } => picker::handle_picker_action(app, action, ctx),
 

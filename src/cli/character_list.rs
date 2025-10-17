@@ -22,6 +22,13 @@ pub async fn list_characters(service: &mut CharacterService) -> Result<(), Box<d
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
                     println!("  • {} ({})", metadata.name, filename);
+                    let description = metadata.description.trim();
+                    if let Some(first_line) = description.lines().next() {
+                        let summary = first_line.trim();
+                        if !summary.is_empty() {
+                            println!("    {}", summary);
+                        }
+                    }
                 }
                 println!("\n💡 Use a character with:");
                 println!("   chabeau -c <character_name>");

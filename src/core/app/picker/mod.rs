@@ -2,11 +2,18 @@ use super::{SessionContext, UiState};
 use crate::api::models::sort_models;
 use crate::api::ModelsResponse;
 use crate::auth::AuthManager;
+use crate::character::CharacterCard;
 use crate::core::builtin_providers::load_builtin_providers;
-use crate::core::config::Config;
+use crate::core::config::{Config, CustomProvider};
 use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
+
+mod inspect;
+use inspect::{
+    character_inspect, provider_metadata_builtin, provider_metadata_custom, theme_metadata,
+    ThemeSource,
+};
 
 /// Special ID for the "turn off character mode" picker entry
 pub(super) const TURN_OFF_CHARACTER_ID: &str = "__turn_off_character__";
@@ -19,7 +26,7 @@ pub(super) const TURN_OFF_PRESET_ID: &str = "[turn_off_preset]";
 ///
 /// Removes newlines, carriage returns, and other control characters that could
 /// break the TUI layout. Replaces sequences of whitespace with a single space.
-fn sanitize_picker_metadata(text: &str) -> String {
+pub(super) fn sanitize_picker_metadata(text: &str) -> String {
     text.chars()
         .map(|c| {
             if c == '\n' || c == '\r' || c.is_control() {
@@ -32,6 +39,24 @@ fn sanitize_picker_metadata(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Prepare metadata text for the inspect view, preserving intentional
+/// newlines while stripping any other control characters.
+pub(super) fn sanitize_picker_metadata_for_inspect(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+
+    for c in text.chars() {
+        if c == '\n' {
+            cleaned.push('\n');
+        } else if c == '\r' || (c.is_control() && c != '\n') {
+            continue;
+        } else {
+            cleaned.push(c);
+        }
+    }
+
+    cleaned.trim().to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +151,7 @@ impl PickerData {
         }
     }
 
-    fn base_title(&self) -> &'static str {
+    pub(crate) fn base_title(&self) -> &'static str {
         match self.mode() {
             PickerMode::Model => "Pick Model",
             PickerMode::Provider => "Pick Provider",
@@ -164,6 +189,23 @@ impl PickerData {
 pub struct PickerSession {
     pub state: PickerState,
     pub data: PickerData,
+}
+
+#[derive(Debug, Clone)]
+pub struct PickerInspectState {
+    pub title: String,
+    pub content: String,
+    pub scroll_offset: u16,
+}
+
+impl PickerInspectState {
+    pub fn new(title: String, content: String) -> Self {
+        Self {
+            title,
+            content,
+            scroll_offset: 0,
+        }
+    }
 }
 
 macro_rules! picker_state_accessors {
@@ -223,7 +265,7 @@ impl PickerSession {
         self.data.filter_hint_threshold()
     }
 
-    fn base_title(&self) -> &'static str {
+    pub(crate) fn base_title(&self) -> &'static str {
         self.data.base_title()
     }
 
@@ -252,6 +294,7 @@ pub struct PickerController {
     pub startup_requires_provider: bool,
     pub startup_requires_model: bool,
     pub startup_multiple_providers_available: bool,
+    inspect_state: Option<PickerInspectState>,
 }
 
 impl PickerController {
@@ -263,6 +306,7 @@ impl PickerController {
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
+            inspect_state: None,
         }
     }
 
@@ -286,8 +330,49 @@ impl PickerController {
         self.session_mut().map(|session| &mut session.state)
     }
 
+    pub fn inspect_state(&self) -> Option<&PickerInspectState> {
+        self.inspect_state.as_ref()
+    }
+
+    pub fn inspect_state_mut(&mut self) -> Option<&mut PickerInspectState> {
+        self.inspect_state.as_mut()
+    }
+
+    pub fn open_inspect(&mut self, title: String, content: String) {
+        self.inspect_state = Some(PickerInspectState::new(title, content));
+    }
+
+    pub fn close_inspect(&mut self) {
+        self.inspect_state = None;
+    }
+
+    pub fn scroll_inspect(&mut self, lines: i32) {
+        if let Some(state) = self.inspect_state.as_mut() {
+            if lines.is_negative() {
+                let magnitude = lines.saturating_abs() as u16;
+                state.scroll_offset = state.scroll_offset.saturating_sub(magnitude);
+            } else {
+                let magnitude = lines.saturating_abs() as u16;
+                state.scroll_offset = state.scroll_offset.saturating_add(magnitude);
+            }
+        }
+    }
+
+    pub fn scroll_inspect_to_start(&mut self) {
+        if let Some(state) = self.inspect_state.as_mut() {
+            state.scroll_offset = 0;
+        }
+    }
+
+    pub fn scroll_inspect_to_end(&mut self) {
+        if let Some(state) = self.inspect_state.as_mut() {
+            state.scroll_offset = u16::MAX;
+        }
+    }
+
     pub fn close(&mut self) {
         self.picker_session = None;
+        self.close_inspect();
     }
 
     fn start_picker_session(
@@ -295,6 +380,7 @@ impl PickerController {
         mut session: PickerSession,
         preferred_selection: Option<String>,
     ) {
+        self.close_inspect();
         let mode = session.mode();
         session.state.sort_mode = session.default_sort_mode();
         self.picker_session = Some(session);
@@ -340,15 +426,12 @@ impl PickerController {
             } else {
                 t.display_name.clone()
             };
-            let metadata = if is_default {
-                Some("Built-in theme (default from config)".to_string())
-            } else {
-                Some("Built-in theme".to_string())
-            };
+            let (metadata, inspect_metadata) = theme_metadata(&t, ThemeSource::Builtin, is_default);
             items.push(PickerItem {
                 id: t.id.clone(),
                 label,
-                metadata,
+                metadata: Some(metadata),
+                inspect_metadata: Some(inspect_metadata),
                 sort_key: Some(t.display_name.clone()),
             });
         }
@@ -364,15 +447,14 @@ impl PickerController {
             } else {
                 base_label
             };
-            let metadata = if is_default {
-                Some("Custom theme (config.toml) (default from config)".to_string())
-            } else {
-                Some("Custom theme (config.toml)".to_string())
-            };
+            let spec = crate::ui::builtin_themes::theme_spec_from_custom(ct);
+            let (metadata, inspect_metadata) =
+                theme_metadata(&spec, ThemeSource::Custom, is_default);
             items.push(PickerItem {
                 id: ct.id.clone(),
                 label,
-                metadata,
+                metadata: Some(metadata),
+                inspect_metadata: Some(inspect_metadata),
                 sort_key: Some(ct.display_name.clone()),
             });
         }
@@ -496,10 +578,12 @@ impl PickerController {
                     None
                 };
 
+                let inspect_metadata = metadata.clone();
                 PickerItem {
                     id: model.id,
                     label,
                     metadata,
+                    inspect_metadata,
                     sort_key,
                 }
             })
@@ -531,6 +615,8 @@ impl PickerController {
     }
 
     fn filter_session_items(&mut self, expected_mode: PickerMode, special_ids: &[&str]) {
+        self.close_inspect();
+
         let Some(session) = self.session_mut() else {
             return;
         };
@@ -768,18 +854,13 @@ impl PickerController {
                 } else {
                     builtin_provider.display_name.clone()
                 };
-                let metadata = if is_default {
-                    Some(format!(
-                        "Built-in provider ({}) (default from config)",
-                        builtin_provider.base_url
-                    ))
-                } else {
-                    Some(format!("Built-in provider ({})", builtin_provider.base_url))
-                };
+                let (metadata, inspect_metadata) =
+                    provider_metadata_builtin(&builtin_provider, is_default);
                 items.push(PickerItem {
                     id: builtin_provider.id.clone(),
                     label,
-                    metadata,
+                    metadata: Some(metadata),
+                    inspect_metadata: Some(inspect_metadata),
                     sort_key: Some(builtin_provider.display_name.clone()),
                 });
             }
@@ -797,18 +878,23 @@ impl PickerController {
                 } else {
                     format!("{} (custom)", display_name)
                 };
-                let metadata = if is_default {
-                    Some(format!(
-                        "Custom provider ({}) (default from config)",
-                        base_url
-                    ))
-                } else {
-                    Some(format!("Custom provider ({})", base_url))
-                };
+                let provider_details =
+                    auth_manager
+                        .get_custom_provider(&id)
+                        .cloned()
+                        .unwrap_or(CustomProvider {
+                            id: id.clone(),
+                            display_name: display_name.clone(),
+                            base_url: base_url.clone(),
+                            mode: None,
+                        });
+                let (metadata, inspect_metadata) =
+                    provider_metadata_custom(&provider_details, is_default);
                 items.push(PickerItem {
                     id,
                     label,
-                    metadata,
+                    metadata: Some(metadata),
+                    inspect_metadata: Some(inspect_metadata),
                     sort_key: Some(display_name),
                 });
             }
@@ -862,7 +948,7 @@ impl PickerController {
 
     pub fn open_character_picker(
         &mut self,
-        cards: Vec<crate::character::cache::CachedCardMetadata>,
+        cards: Vec<CharacterCard>,
         session_context: &SessionContext,
     ) -> Result<(), String> {
         if cards.is_empty() {
@@ -884,20 +970,26 @@ impl PickerController {
         let mut items: Vec<PickerItem> = cards
             .into_iter()
             .map(|card| {
-                let sanitized_description = sanitize_picker_metadata(&card.description);
-                let is_default = default_character
-                    .map(|def| def == &card.name)
-                    .unwrap_or(false);
-                let label = if is_default {
-                    format!("{}*", card.name)
+                let name = card.data.name.clone();
+                let sanitized_description = sanitize_picker_metadata(&card.data.description);
+                let metadata_text = if sanitized_description.is_empty() {
+                    "No description".to_string()
                 } else {
-                    card.name.clone()
+                    sanitized_description
+                };
+                let inspect_definition = character_inspect(&card);
+                let is_default = default_character.map(|def| def == &name).unwrap_or(false);
+                let label = if is_default {
+                    format!("{}*", name)
+                } else {
+                    name.clone()
                 };
                 PickerItem {
-                    id: card.name.clone(),
+                    id: name.clone(),
                     label,
-                    metadata: Some(sanitized_description),
-                    sort_key: Some(card.name.clone()),
+                    metadata: Some(metadata_text),
+                    inspect_metadata: Some(inspect_definition),
+                    sort_key: Some(name),
                 }
             })
             .collect();
@@ -910,6 +1002,9 @@ impl PickerController {
                     id: TURN_OFF_CHARACTER_ID.to_string(),
                     label: "[Turn off character mode]".to_string(),
                     metadata: Some("Disable character and return to normal mode".to_string()),
+                    inspect_metadata: Some(
+                        "Disable character and return to normal mode".to_string(),
+                    ),
                     sort_key: None,
                 },
             );
@@ -966,7 +1061,7 @@ impl PickerController {
                 } else {
                     format!("{} ({})", persona.display_name, persona.id)
                 };
-                let metadata = persona
+                let (metadata, inspect_metadata) = persona
                     .bio
                     .as_ref()
                     .and_then(|bio| {
@@ -979,14 +1074,19 @@ impl PickerController {
                         if sanitized.is_empty() {
                             None
                         } else {
-                            Some(sanitized)
+                            let inspect = sanitize_picker_metadata_for_inspect(&substituted);
+                            Some((sanitized, inspect))
                         }
                     })
-                    .unwrap_or_else(|| "No bio".to_string());
+                    .unwrap_or_else(|| {
+                        let fallback = "No bio".to_string();
+                        (fallback.clone(), fallback)
+                    });
                 PickerItem {
                     id: persona.id.clone(),
                     label: display_label,
                     metadata: Some(metadata),
+                    inspect_metadata: Some(inspect_metadata),
                     sort_key: Some(persona.display_name.clone()),
                 }
             })
@@ -1000,6 +1100,9 @@ impl PickerController {
                     id: TURN_OFF_PERSONA_ID.to_string(),
                     label: "[Turn off persona]".to_string(),
                     metadata: Some(
+                        "Deactivate current persona and return to normal mode".to_string(),
+                    ),
+                    inspect_metadata: Some(
                         "Deactivate current persona and return to normal mode".to_string(),
                     ),
                     sort_key: None,
@@ -1053,11 +1156,14 @@ impl PickerController {
                 };
 
                 let mut parts = Vec::new();
+                let mut inspect_parts = Vec::new();
                 let pre_trim = preset.pre.trim();
                 if !pre_trim.is_empty() {
                     let sanitized = sanitize_picker_metadata(pre_trim);
                     if !sanitized.is_empty() {
                         parts.push(format!("Pre: {}", sanitized));
+                        let inspect = sanitize_picker_metadata_for_inspect(pre_trim);
+                        inspect_parts.push(format!("Pre:\n{}", inspect));
                     }
                 }
                 let post_trim = preset.post.trim();
@@ -1065,6 +1171,8 @@ impl PickerController {
                     let sanitized = sanitize_picker_metadata(post_trim);
                     if !sanitized.is_empty() {
                         parts.push(format!("Post: {}", sanitized));
+                        let inspect = sanitize_picker_metadata_for_inspect(post_trim);
+                        inspect_parts.push(format!("Post:\n{}", inspect));
                     }
                 }
 
@@ -1074,10 +1182,17 @@ impl PickerController {
                     Some(parts.join(" • "))
                 };
 
+                let inspect_metadata = if inspect_parts.is_empty() {
+                    Some("No instructions".to_string())
+                } else {
+                    Some(inspect_parts.join("\n\n"))
+                };
+
                 PickerItem {
                     id: preset.id.clone(),
                     label,
                     metadata,
+                    inspect_metadata,
                     sort_key: Some(preset.id.clone()),
                 }
             })
@@ -1090,6 +1205,7 @@ impl PickerController {
                     id: TURN_OFF_PRESET_ID.to_string(),
                     label: "[Turn off preset]".to_string(),
                     metadata: Some("Deactivate current preset".to_string()),
+                    inspect_metadata: Some("Deactivate current preset".to_string()),
                     sort_key: None,
                 },
             );
@@ -1125,10 +1241,12 @@ mod tests {
     use super::*;
 
     fn picker_item(id: &str, label: &str, metadata: Option<&str>) -> PickerItem {
+        let metadata_string = metadata.map(|value| value.to_string());
         PickerItem {
             id: id.to_string(),
             label: label.to_string(),
-            metadata: metadata.map(|value| value.to_string()),
+            metadata: metadata_string.clone(),
+            inspect_metadata: metadata_string,
             sort_key: None,
         }
     }
@@ -1282,6 +1400,8 @@ mod tests {
         let input = "Line 1\nLine 2\nLine 3";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Line 1 Line 2 Line 3");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Line 1\nLine 2\nLine 3");
     }
 
     #[test]
@@ -1289,6 +1409,8 @@ mod tests {
         let input = "Line 1\r\nLine 2\r\nLine 3";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Line 1 Line 2 Line 3");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Line 1\nLine 2\nLine 3");
     }
 
     #[test]
@@ -1296,6 +1418,8 @@ mod tests {
         let input = "Too    many     spaces";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Too many spaces");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Too    many     spaces");
     }
 
     #[test]
@@ -1303,6 +1427,8 @@ mod tests {
         let input = "Text\twith\ttabs\x00and\x01control\x02chars";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Text with tabs and control chars");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Textwithtabsandcontrolchars");
     }
 
     #[test]
@@ -1310,6 +1436,8 @@ mod tests {
         let input = "Mixed\n\r\t  whitespace\n\n\nhere";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Mixed whitespace here");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Mixed\n  whitespace\n\n\nhere");
     }
 
     #[test]
@@ -1317,6 +1445,8 @@ mod tests {
         let input = "Normal text with spaces";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "Normal text with spaces");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "Normal text with spaces");
     }
 
     #[test]
@@ -1324,6 +1454,8 @@ mod tests {
         let input = "";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "");
     }
 
     #[test]
@@ -1331,6 +1463,8 @@ mod tests {
         let input = "\n\r\t   \n";
         let result = sanitize_picker_metadata(input);
         assert_eq!(result, "");
+        let inspect = sanitize_picker_metadata_for_inspect(input);
+        assert_eq!(inspect, "");
     }
 
     #[test]
@@ -1386,7 +1520,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1431,7 +1570,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1500,7 +1644,12 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
 
-        let cards = service.list_metadata().expect("metadata");
+        let cards = service
+            .list_metadata()
+            .expect("metadata")
+            .into_iter()
+            .map(|meta| service.resolve_by_name(&meta.name).expect("card"))
+            .collect();
         let result = app.picker.open_character_picker(cards, &app.session);
 
         assert!(result.is_ok());
@@ -1576,7 +1725,6 @@ mod tests {
 
     #[test]
     fn test_character_picker_highlights_active_character() {
-        use crate::character::cache::CachedCardMetadata;
         use crate::character::card::{CharacterCard, CharacterData};
         use crate::utils::test_utils::create_test_app;
 
@@ -1604,13 +1752,43 @@ mod tests {
         app.session.set_character(active_card);
 
         let cards = vec![
-            CachedCardMetadata {
-                name: "Alpha".to_string(),
-                description: "Alpha description".to_string(),
+            CharacterCard {
+                spec: "chara_card_v2".to_string(),
+                spec_version: "2.0".to_string(),
+                data: CharacterData {
+                    name: "Alpha".to_string(),
+                    description: "Alpha description".to_string(),
+                    personality: "Curious".to_string(),
+                    scenario: "Testing".to_string(),
+                    first_mes: "Hello".to_string(),
+                    mes_example: "{{user}}: Hi\n{{char}}: Hello".to_string(),
+                    creator_notes: None,
+                    system_prompt: None,
+                    post_history_instructions: None,
+                    alternate_greetings: None,
+                    tags: None,
+                    creator: None,
+                    character_version: None,
+                },
             },
-            CachedCardMetadata {
-                name: "Beta".to_string(),
-                description: "Beta description".to_string(),
+            CharacterCard {
+                spec: "chara_card_v2".to_string(),
+                spec_version: "2.0".to_string(),
+                data: CharacterData {
+                    name: "Beta".to_string(),
+                    description: "Beta description".to_string(),
+                    personality: "Helpful".to_string(),
+                    scenario: "Testing".to_string(),
+                    first_mes: "Hello".to_string(),
+                    mes_example: "{{user}}: Hi\n{{char}}: Hello".to_string(),
+                    creator_notes: None,
+                    system_prompt: None,
+                    post_history_instructions: None,
+                    alternate_greetings: None,
+                    tags: None,
+                    creator: None,
+                    character_version: None,
+                },
             },
         ];
 

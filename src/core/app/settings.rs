@@ -311,6 +311,7 @@ mod tests {
             id: "test".into(),
             label: "Test".into(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
 

@@ -31,8 +31,9 @@ pub use conversation::ConversationController;
 #[cfg(test)]
 pub use picker::PickerData;
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
-    PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
+    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController,
+    PickerInspectState, PickerMode, PickerSession, PresetPickerState, ProviderPickerState,
+    ThemePickerState,
 };
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
 pub use settings::{ProviderController, ThemeController};
@@ -214,6 +215,34 @@ impl App {
 
     pub fn picker_state_mut(&mut self) -> Option<&mut PickerState> {
         self.picker.state_mut()
+    }
+
+    pub fn picker_inspect_state(&self) -> Option<&PickerInspectState> {
+        self.picker.inspect_state()
+    }
+
+    pub fn picker_inspect_state_mut(&mut self) -> Option<&mut PickerInspectState> {
+        self.picker.inspect_state_mut()
+    }
+
+    pub fn open_picker_inspect(&mut self, title: String, content: String) {
+        self.picker.open_inspect(title, content);
+    }
+
+    pub fn close_picker_inspect(&mut self) {
+        self.picker.close_inspect();
+    }
+
+    pub fn scroll_picker_inspect(&mut self, lines: i32) {
+        self.picker.scroll_inspect(lines);
+    }
+
+    pub fn scroll_picker_inspect_to_start(&mut self) {
+        self.picker.scroll_inspect_to_start();
+    }
+
+    pub fn scroll_picker_inspect_to_end(&mut self) {
+        self.picker.scroll_inspect_to_end();
     }
 
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
@@ -566,7 +595,21 @@ impl App {
     /// Open a character picker modal with available character cards
     pub fn open_character_picker(&mut self) {
         match self.character_service.list_metadata() {
-            Ok(cards) => {
+            Ok(metadata) => {
+                let mut cards = Vec::with_capacity(metadata.len());
+                for entry in metadata {
+                    match self.character_service.resolve_by_name(&entry.name) {
+                        Ok(card) => cards.push(card),
+                        Err(err) => {
+                            self.conversation().set_status(format!(
+                                "Error loading character '{}': {}",
+                                entry.name, err
+                            ));
+                            return;
+                        }
+                    }
+                }
+
                 if let Err(message) = self.picker.open_character_picker(cards, &self.session) {
                     self.conversation().set_status(message);
                 }
@@ -884,12 +927,14 @@ mod tests {
                 id: "a-model".into(),
                 label: "a-model".into(),
                 metadata: None,
+                inspect_metadata: None,
                 sort_key: None,
             },
             PickerItem {
                 id: "z-model".into(),
                 label: "z-model".into(),
                 metadata: None,
+                inspect_metadata: None,
                 sort_key: None,
             },
         ];
@@ -1732,6 +1777,7 @@ Some additional text after the table."#;
                     id: picker::TURN_OFF_CHARACTER_ID.to_string(),
                     label: "[Turn off character mode]".to_string(),
                     metadata: Some("Disable character".to_string()),
+                    inspect_metadata: Some("Disable character".to_string()),
                     sort_key: None,
                 }],
                 0,

@@ -153,7 +153,7 @@ chabeau -c hypatia                          # Start with character by name
 chabeau -c hypatia.json                     # Start with character by filename
 ```
 
-In the TUI, `/character` opens the character picker (↑↓ to navigate, Enter to select, Alt+Enter to set as default). You can also run `/character <name>` for quick switches.
+In the TUI, `/character` opens the character picker (↑↓ to navigate, Ctrl+O to inspect full definitions, Enter to select, Alt+Enter to set as default). You can also run `/character <name>` for quick switches.
 
 ### Defaults and Directories
 
@@ -210,7 +210,7 @@ name = "Jordan"
 chabeau --persona developer                 # Start with a specific persona
 ```
 
-In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Enter to select). You can also run `/persona <id>` for quick switches, or select "[Turn off persona]" to return to anonymous mode.
+In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Ctrl+O to read the persona text, Enter to select). You can also run `/persona <id>` for quick switches, or select "[Turn off persona]" to return to anonymous mode.
 
 When a persona is active:
 - Your messages are labeled with the persona's name instead of "You"
@@ -274,7 +274,7 @@ Assign defaults per provider/model with `default-presets`:
 
 ### Use Presets in Chat
 
-Launch with an ID like `--preset focus`, or pick interactively with `/preset`. The picker includes a "Turn off preset" option to clear the active preset.
+Launch with an ID like `--preset focus`, or pick interactively with `/preset`. Use Ctrl+O in the picker to review the preset instructions. The picker includes a "Turn off preset" option to clear the active preset.
 
 The status bar shows the current preset when one is active so you can confirm the context you're using at a glance.
 
@@ -324,6 +324,7 @@ See [the built-in help](src/builtins/help.md) for a full list of keyboard contro
 - Alt+Enter (or Ctrl+J) to start a new line; Enter sends; Shift+arrow moves cursor in the input area.
 - Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
 - Tab autocompletes slash commands so you can discover options quickly.
+- Ctrl+O opens the inspect view for picker items—providers include their ID, base URL, and auth mode; themes show their ID and every color override; character cards expand to the full v2 definition.
 
 ### Mousewheel
 

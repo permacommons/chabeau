@@ -309,8 +309,68 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Render modal picker overlay if present
-    if let Some(picker) = app.picker_state() {
+    // Render modal picker or inspect overlay if present
+    if app.picker_inspect_state().is_some() {
+        let theme = app.ui.theme.clone();
+        let inspect_title = app
+            .picker_inspect_state()
+            .map(|state| state.title.clone())
+            .unwrap_or_else(|| "Inspect".to_string());
+        let area = centered_rect(80, 80, f.area());
+
+        f.render_widget(Clear, area);
+        let modal_bg = Block::default().style(Style::default().bg(theme.background_color));
+        f.render_widget(modal_bg, area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.input_border_style)
+            .title(Span::styled(inspect_title, theme.title_style));
+        let content_area = modal_block.inner(area);
+        f.render_widget(modal_block, area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(2), Constraint::Length(2)])
+            .split(content_area);
+
+        let body_area = inset_rect(chunks[0], 1, 1);
+        let help_area = chunks[1];
+
+        if let Some(inspect_state) = app.picker_inspect_state_mut() {
+            let wrap_width = body_area.width as usize;
+            let wrap_config = WrapConfig::new(wrap_width);
+            let wrapped_text = TextWrapper::wrap_text(&inspect_state.content, &wrap_config);
+            let total_lines =
+                TextWrapper::count_wrapped_lines(&inspect_state.content, &wrap_config);
+            let visible_height = body_area.height.max(1) as usize;
+            let max_scroll = total_lines.saturating_sub(visible_height);
+            let max_scroll_u16 = max_scroll.min(u16::MAX as usize) as u16;
+            if inspect_state.scroll_offset > max_scroll_u16 {
+                inspect_state.scroll_offset = max_scroll_u16;
+            }
+
+            let paragraph = Paragraph::new(wrapped_text)
+                .style(
+                    theme
+                        .assistant_text_style
+                        .patch(Style::default().bg(theme.background_color)),
+                )
+                .wrap(Wrap { trim: false })
+                .scroll((inspect_state.scroll_offset, 0));
+            f.render_widget(paragraph, body_area);
+        }
+
+        let help_lines = vec![
+            Line::from(Span::styled(
+                "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Faster",
+                theme.system_text_style,
+            )),
+            Line::from(Span::styled("Home/End=Jump", theme.system_text_style)),
+        ];
+        let help = Paragraph::new(help_lines).style(theme.system_text_style);
+        f.render_widget(help, help_area);
+    } else if let Some(picker) = app.picker_state() {
         let area = centered_rect(60, 60, f.area());
 
         // Clear any content under the modal
@@ -428,10 +488,17 @@ fn generate_picker_help_text(app: &App) -> String {
         _ => "",
     };
 
+    let inspect_help = " • Ctrl+O=Inspect";
     let first_line = if search_filter.is_empty() {
-        format!("↑/↓=Navigate • F6=Sort • Type=Filter{}", del_help)
+        format!(
+            "↑/↓=Navigate • F6=Sort • Type=Filter{}{}",
+            inspect_help, del_help
+        )
     } else {
-        format!("↑/↓=Navigate • Backspace=Clear • F6=Sort{}", del_help)
+        format!(
+            "↑/↓=Navigate • Backspace=Clear • F6=Sort{}{}",
+            inspect_help, del_help
+        )
     };
 
     // Suppress persistent save option during env-only startup model selection
@@ -629,13 +696,14 @@ mod tests {
             id: "test-model".to_string(),
             label: "Test Model".to_string(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_model_picker(&mut app, "", items, 0, false);
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -647,13 +715,14 @@ mod tests {
             id: "test-model".to_string(),
             label: "Test Model".to_string(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_model_picker(&mut app, "gpt", items, 0, false);
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort"));
+        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Type=Filter"));
     }
@@ -666,6 +735,7 @@ mod tests {
             id: "default-provider".to_string(),
             label: "Default Provider*".to_string(), // Note: asterisk goes in label, not id
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_provider_picker(&mut app, "", items, 0);
@@ -673,7 +743,9 @@ mod tests {
         let help_text = generate_picker_help_text(&app);
 
         assert!(help_text.contains("Del=Remove default"));
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains(
+            "↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
+        ));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
 
@@ -685,6 +757,7 @@ mod tests {
             id: "default-model".to_string(),
             label: "Default Model*".to_string(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_model_picker(&mut app, "", items, 0, false);
@@ -692,7 +765,9 @@ mod tests {
         let help_text = generate_picker_help_text(&app);
 
         assert!(help_text.contains("Del=Remove default"));
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Del=Remove default"));
+        assert!(help_text.contains(
+            "↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
+        ));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
 
@@ -703,13 +778,14 @@ mod tests {
             id: "dark".to_string(),
             label: "Dark Theme".to_string(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_theme_picker(&mut app, "", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -722,6 +798,7 @@ mod tests {
             id: "dark".to_string(),
             label: "Dark Theme*".to_string(),
             metadata: None,
+            inspect_metadata: None,
             sort_key: None,
         }];
         set_theme_picker(&mut app, "", items, 0);
@@ -750,13 +827,14 @@ mod tests {
             id: "alice".to_string(),
             label: "Alice".to_string(),
             metadata: Some("A helpful assistant".to_string()),
+            inspect_metadata: Some("A helpful assistant".to_string()),
             sort_key: Some("Alice".to_string()),
         }];
         set_character_picker(&mut app, "", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter"));
+        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -768,13 +846,14 @@ mod tests {
             id: "alice".to_string(),
             label: "Alice".to_string(),
             metadata: Some("A helpful assistant".to_string()),
+            inspect_metadata: Some("A helpful assistant".to_string()),
             sort_key: Some("Alice".to_string()),
         }];
         set_character_picker(&mut app, "ali", items, 0);
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort"));
+        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"));
         assert!(!help_text.contains("Type=Filter"));
     }
 
@@ -785,6 +864,7 @@ mod tests {
             id: "alice".to_string(),
             label: "Alice*".to_string(),
             metadata: Some("A helpful assistant".to_string()),
+            inspect_metadata: Some("A helpful assistant".to_string()),
             sort_key: Some("Alice".to_string()),
         }];
         set_character_picker(&mut app, "", items, 0);

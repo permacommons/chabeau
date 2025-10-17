@@ -2,6 +2,7 @@ pub mod cache;
 pub mod card;
 pub mod import;
 pub mod loader;
+pub mod png_text;
 pub mod service;
 
 #[cfg(test)]

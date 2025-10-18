@@ -9,8 +9,6 @@ Items are removed when completed.
 - Better handling of repeating messages like "Generating..."
   - Deduplicate/compress repeated status lines — [OPEN]
 - Support common "character cards" — [PARTIAL]
-  - Add "Show full description" feature for character picker — [OPEN]
-    - Consider adding a detail view (e.g., press 'i' for info) to show full multi-line descriptions
   - Lorebook/world info support from character cards — [OPEN]
 - Make assistant messages editable (may require further rethinking of input area) — [OPEN]
 - Basic "push a file into context" support — [OPEN]
@@ -36,8 +34,6 @@ Items are removed when completed.
 - Consolidate plain vs markdown rendering path selection — [PARTIAL]
 - Height/scroll DRYing — [PARTIAL]
   - Continue standardizing on the conversation controller helpers across renderer and chat loop — [OPEN]
-- Stream spawning DRYing — [PARTIAL]
-  - Use a config struct (already added) and consider moving the helper out of `chat_loop` for reuse — [PARTIAL]
 
 ### Low priority
 

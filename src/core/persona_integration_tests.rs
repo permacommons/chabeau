@@ -5,7 +5,7 @@
 mod integration_tests {
     use crate::commands::{process_input, CommandResult};
     use crate::core::app::conversation::ConversationController;
-    use crate::core::config::{Config, Persona};
+    use crate::core::config::data::{Config, Persona};
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::create_test_app;
     use std::fs;

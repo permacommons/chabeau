@@ -1,7 +1,7 @@
 use super::shared_selection::{ManagedItem, SelectionState};
 use crate::api::ChatMessage;
 use crate::core::builtin_presets;
-use crate::core::config::{Config, Preset};
+use crate::core::config::data::{Config, Preset};
 use crate::core::persona::PersonaManager;
 use std::collections::HashSet;
 
@@ -191,7 +191,7 @@ impl PresetManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{Config, Persona, Preset};
+    use crate::core::config::data::{Config, Persona, Preset};
 
     fn create_test_config() -> Config {
         Config {

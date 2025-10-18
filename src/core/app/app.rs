@@ -54,7 +54,7 @@ impl App {
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
 
         // Create a test PersonaManager with empty config
-        let test_config = crate::core::config::Config::default();
+        let test_config = crate::core::config::data::Config::default();
         let persona_manager = crate::core::persona::PersonaManager::load_personas(&test_config)
             .expect("Failed to create test PersonaManager");
         let preset_manager = crate::core::preset::PresetManager::load_presets(&test_config)

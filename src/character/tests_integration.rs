@@ -8,7 +8,7 @@ mod integration_tests {
     use crate::character::import::{import_card, ImportError};
     use crate::core::app::conversation::ConversationController;
     use crate::core::app::session::load_character_for_session;
-    use crate::core::config::Config;
+    use crate::core::config::data::Config;
     use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
     use std::fs;
     use std::io::Write;

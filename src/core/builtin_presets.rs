@@ -1,4 +1,4 @@
-use crate::core::config::Preset;
+use crate::core::config::data::Preset;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

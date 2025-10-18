@@ -1,5 +1,5 @@
 use crate::core::builtin_providers::load_builtin_providers;
-use crate::core::config::{suggest_provider_id, Config, CustomProvider};
+use crate::core::config::data::{suggest_provider_id, Config, CustomProvider};
 use crate::core::keyring::KeyringAccessError;
 use crate::core::providers::{
     resolve_session, ProviderAuthSource, ProviderMetadata, ResolveSessionError,

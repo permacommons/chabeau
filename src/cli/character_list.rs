@@ -1,6 +1,6 @@
 use crate::character::loader::get_cards_dir;
 use crate::character::CharacterService;
-use crate::core::config::path_display;
+use crate::core::config::data::path_display;
 use std::error::Error;
 
 pub async fn list_characters(service: &mut CharacterService) -> Result<(), Box<dyn Error>> {

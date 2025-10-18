@@ -1,5 +1,5 @@
 use super::shared_selection::{ManagedItem, SelectionState};
-use crate::core::config::{Config, Persona};
+use crate::core::config::data::{Config, Persona};
 
 impl ManagedItem for Persona {
     fn id(&self) -> &str {

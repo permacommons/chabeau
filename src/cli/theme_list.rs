@@ -1,4 +1,4 @@
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::ui::builtin_themes::load_builtin_themes;
 
 pub async fn list_themes() -> Result<(), Box<dyn std::error::Error>> {

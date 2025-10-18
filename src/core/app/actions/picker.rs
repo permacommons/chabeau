@@ -1,6 +1,6 @@
 use super::{input, App, AppAction, AppActionContext, AppCommand};
 use crate::core::app::picker::PickerMode;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
 
 pub(super) fn handle_picker_action(
@@ -746,7 +746,7 @@ mod tests {
     use crate::core::app::picker::{
         CharacterPickerState, ModelPickerState, PickerData, PickerSession,
     };
-    use crate::core::config::{Config, Persona, Preset};
+    use crate::core::config::data::{Config, Persona, Preset};
     use crate::ui::picker::{PickerItem, PickerState};
     use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
     use std::fs;

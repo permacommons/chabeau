@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use crate::character::cache::{CachedCardMetadata, CardCache};
 use crate::character::loader::{self, CardLoadError};
 use crate::character::CharacterCard;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 
 #[derive(Debug)]
 pub enum CharacterServiceError {

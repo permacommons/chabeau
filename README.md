@@ -366,7 +366,14 @@ Chabeau uses a modular design with focused components:
     - `ui_state.rs` – UI state management and text input helpers
   - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
   - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
-  - `config.rs` – Configuration management
+  - `config/` – Configuration data, defaults, caching, and persistence
+    - `mod.rs` – Public exports for configuration helpers
+    - `data.rs` – Configuration data types and pure helpers
+    - `orchestrator.rs` – Cached config loader and mutation orchestrator
+    - `defaults.rs` – Default selection helpers and `Config` implementations
+    - `io.rs` – Config path resolution and persistence routines
+    - `printing.rs` – CLI-facing config print helpers
+    - `tests.rs` – Configuration module tests
   - `message.rs` – Message data structures
 - `auth/` – Authentication and provider management
   - `mod.rs` – Authentication manager implementation

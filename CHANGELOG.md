@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
 ### Added
 - Added a picker inspect action so you can review full metadata for characters, presets, and providers without leaving the selector, with CLI/TUI shortcuts and detailed views (`src/core/app/picker`, `src/ui/picker.rs`, `src/cli/character_list.rs`).

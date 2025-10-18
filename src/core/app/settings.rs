@@ -1,6 +1,6 @@
 use super::{picker::PickerController, session::SessionContext, ui_state::UiState};
 use crate::auth::AuthManager;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
 use crate::ui::theme::Theme;
 

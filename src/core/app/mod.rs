@@ -1,5 +1,5 @@
 use crate::character::service::CharacterService;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
 use crate::core::providers::ProviderSession;
 

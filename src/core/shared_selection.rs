@@ -1,4 +1,4 @@
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use std::collections::HashMap;
 
 pub(crate) trait ManagedItem: Clone {

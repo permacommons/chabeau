@@ -447,7 +447,7 @@ impl<'a> ConversationController<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{Config, Persona};
+    use crate::core::config::data::{Config, Persona};
     use crate::core::message::{self, Message};
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message};
@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn test_retry_character_greeting_updates_after_persona_change() {
         use crate::character::card::{CharacterCard, CharacterData};
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
 
         let mut app = create_test_app();
@@ -1331,7 +1331,7 @@ mod tests {
     #[test]
     fn test_character_greeting_with_persona_substitutions() {
         use crate::character::card::{CharacterCard, CharacterData};
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
 
         let mut app = create_test_app();

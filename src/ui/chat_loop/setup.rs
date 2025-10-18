@@ -10,7 +10,7 @@ use crate::{
     core::{
         app,
         builtin_providers::load_builtin_providers,
-        config::Config,
+        config::data::Config,
         providers::{resolve_session, ProviderResolutionError, ResolveSessionError},
     },
 };

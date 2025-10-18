@@ -4,7 +4,7 @@ use crate::api::ModelsResponse;
 use crate::auth::AuthManager;
 use crate::character::CharacterCard;
 use crate::core::builtin_providers::load_builtin_providers;
-use crate::core::config::{Config, CustomProvider};
+use crate::core::config::data::{Config, CustomProvider};
 use crate::ui::builtin_themes::load_builtin_themes;
 use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
@@ -1671,7 +1671,7 @@ mod tests {
 
     #[test]
     fn test_turn_off_persona_stays_at_top_after_sort() {
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
         use crate::utils::test_utils::create_test_app;
 
@@ -1803,7 +1803,7 @@ mod tests {
 
     #[test]
     fn test_persona_picker_highlights_active_persona() {
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
         use crate::utils::test_utils::create_test_app;
 
@@ -1843,7 +1843,7 @@ mod tests {
 
     #[test]
     fn test_preset_picker_highlights_active_preset() {
-        use crate::core::config::{Config, Preset};
+        use crate::core::config::data::{Config, Preset};
         use crate::core::preset::PresetManager;
         use crate::utils::test_utils::create_test_app;
 
@@ -1884,7 +1884,7 @@ mod tests {
 
     #[test]
     fn test_persona_picker_sanitizes_bio_metadata() {
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
         use crate::utils::test_utils::create_test_app;
 
@@ -1920,7 +1920,7 @@ mod tests {
 
     #[test]
     fn test_persona_picker_metadata_defaults_to_no_bio_when_empty() {
-        use crate::core::config::{Config, Persona};
+        use crate::core::config::data::{Config, Persona};
         use crate::core::persona::PersonaManager;
         use crate::utils::test_utils::create_test_app;
 

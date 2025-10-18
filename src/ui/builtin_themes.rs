@@ -1,4 +1,4 @@
-use crate::core::config::CustomTheme;
+use crate::core::config::data::CustomTheme;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,4 +1,4 @@
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::core::keyring::KeyringAccessError;
 use std::error::Error;
 use std::fmt;

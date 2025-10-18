@@ -1,6 +1,6 @@
 use crate::character::CharacterCard;
 use crate::core::builtin_providers::BuiltinProvider;
-use crate::core::config::CustomProvider;
+use crate::core::config::data::CustomProvider;
 use crate::ui::builtin_themes::ThemeSpec;
 
 use super::{sanitize_picker_metadata, sanitize_picker_metadata_for_inspect};

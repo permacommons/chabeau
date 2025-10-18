@@ -310,7 +310,7 @@ fn handle_toggle_command<F, G>(
 ) -> CommandResult
 where
     F: FnMut(&mut App, bool),
-    G: FnMut(&mut crate::core::config::Config, bool),
+    G: FnMut(&mut crate::core::config::data::Config, bool),
 {
     let action = match invocation.toggle_action() {
         Ok(action) => action,
@@ -329,7 +329,7 @@ where
         text.off_word
     };
 
-    match crate::core::config::Config::load() {
+    match crate::core::config::data::Config::load() {
         Ok(mut cfg) => {
             persist_config(&mut cfg, new_state);
             let status = if cfg.save().is_ok() {
@@ -416,7 +416,7 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{Config, Persona};
+    use crate::core::config::data::{Config, Persona};
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
     use std::fs;
@@ -914,8 +914,8 @@ mod tests {
     #[test]
     fn persona_command_with_valid_id_updates_user_display_name() {
         let mut app = create_test_app();
-        let mut config = crate::core::config::Config::default();
-        config.personas.push(crate::core::config::Persona {
+        let mut config = crate::core::config::data::Config::default();
+        config.personas.push(crate::core::config::data::Persona {
             id: "alice-dev".to_string(),
             display_name: "Alice".to_string(),
             bio: Some("A senior software developer".to_string()),

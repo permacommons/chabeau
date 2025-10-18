@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::AuthManager;
 use crate::character::card::CharacterCard;
 use crate::character::service::CharacterService;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::core::providers::{
     resolve_env_session, resolve_session, ProviderSession, ResolveSessionError,
 };
@@ -308,7 +308,7 @@ pub(crate) async fn prepare_uninitialized(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::Config;
+    use crate::core::config::data::Config;
     use crate::core::providers::ProviderSession;
     use tempfile::tempdir;
 

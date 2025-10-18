@@ -1,4 +1,4 @@
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::core::message::{AppMessageKind, Message, ROLE_USER};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::span::SpanKind;

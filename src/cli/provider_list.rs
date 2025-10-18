@@ -4,7 +4,7 @@
 
 use crate::auth::AuthManager;
 use crate::core::builtin_providers::load_builtin_providers;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use std::error::Error;
 
 pub async fn list_providers() -> Result<(), Box<dyn Error>> {

@@ -5,7 +5,7 @@ use super::picker::{
 use super::ui_state::ActivityKind;
 use super::App;
 use crate::api::ModelsResponse;
-use crate::core::config::Config;
+use crate::core::config::data::Config;
 use crate::ui::picker::PickerState;
 use reqwest::Client;
 

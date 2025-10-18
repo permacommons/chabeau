@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added a picker inspect action so you can review full metadata for characters, presets, and providers without leaving the selector, with CLI/TUI shortcuts and detailed views (`src/core/app/picker`, `src/ui/picker.rs`, `src/cli/character_list.rs`).
+- Introduced configurable built-in presets alongside a status bar badge that highlights the active preset, making it easier to see which instructions are in effect (`src/core/preset.rs`, `src/core/builtin_presets.rs`, `src/ui/renderer.rs`).
+- Expanded theming support so informational, warning, and error app messages render with styled prefixes across the UI, logs, and configuration presets (`src/core/message.rs`, `src/ui/theme.rs`, `src/utils/logging.rs`).
+
+### Changed
+- Made the TUI title bar adaptive so session metadata, presets, and connection details reflow cleanly across terminal widths (`src/ui/title.rs`, `src/ui/renderer.rs`).
+- Improved API error presentation by surfacing structured context during startup and streaming, reducing guesswork when providers fail (`src/core/chat_stream.rs`, `src/core/app/actions.rs`, `src/main.rs`).
+
+### Fixed
+- Hardened credential handling by skipping the keyring when it is disabled and falling back to environment variables when the system keyring is unavailable (`src/auth/mod.rs`, `src/core/keyring.rs`, `src/core/providers.rs`).
+- Prevented empty assistant message tails by trimming unfinished responses when streams abort unexpectedly (`src/core/app/conversation.rs`, `src/core/app/actions.rs`).
+- Propagated configuration load failures through the CLI and UI so errors are reported immediately instead of risking silent data loss (`src/core/config.rs`, `src/cli/mod.rs`, `src/core/app/settings.rs`).
+- Routed server-sent event errors to the UI and deduplicated warning spam so streaming problems are visible without overwhelming the interface (`src/core/chat_stream.rs`, `src/ui/chat_loop/mod.rs`).
+
 ## 0.5.0
 
 ### Added

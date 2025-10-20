@@ -19,8 +19,10 @@ use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
 use crate::cli::theme_list::list_themes;
+use crate::core::builtin_providers::find_builtin_provider;
 use crate::core::config::data::Config;
 use crate::core::persona::PersonaManager;
+use crate::ui::builtin_themes::find_builtin_theme;
 use crate::ui::chat_loop::run_chat;
 
 fn print_version_info() {
@@ -225,6 +227,28 @@ fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Err
     Ok(())
 }
 
+/// Resolve a provider identifier against built-in and custom providers.
+/// Returns the canonical provider ID if found.
+fn resolve_provider_id(config: &Config, input: &str) -> Option<String> {
+    if let Some(provider) = find_builtin_provider(input) {
+        return Some(provider.id);
+    }
+
+    config
+        .get_custom_provider(input)
+        .map(|provider| provider.id.clone())
+}
+
+/// Resolve a theme identifier against built-in and custom themes.
+/// Returns the canonical theme ID if found.
+fn resolve_theme_id(config: &Config, input: &str) -> Option<String> {
+    if let Some(theme) = find_builtin_theme(input) {
+        return Some(theme.id);
+    }
+
+    config.get_custom_theme(input).map(|theme| theme.id.clone())
+}
+
 /// Validate preset argument against available presets in config
 fn validate_preset(preset_id: &str, config: &Config) -> Result<(), Box<dyn Error>> {
     let preset_manager = crate::core::preset::PresetManager::load_presets(config)?;
@@ -302,26 +326,50 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                 match key.as_str() {
                     "default-provider" => {
                         if !value.is_empty() {
-                            let provider = value.join(" ");
-                            let persist_value = provider.clone();
-                            Config::mutate(move |config| {
-                                config.default_provider = Some(persist_value);
-                                Ok(())
-                            })?;
-                            println!("✅ Set default-provider to: {}", provider);
+                            let provider_input = value.join(" ");
+                            let config_snapshot = Config::load()?;
+
+                            match resolve_provider_id(&config_snapshot, &provider_input) {
+                                Some(resolved_provider) => {
+                                    let provider_msg = resolved_provider.clone();
+                                    Config::mutate(move |config| {
+                                        config.default_provider = Some(resolved_provider);
+                                        Ok(())
+                                    })?;
+                                    println!("✅ Set default-provider to: {provider_msg}");
+                                }
+                                None => {
+                                    eprintln!(
+                                        "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
                         } else {
                             Config::load()?.print_all();
                         }
                     }
                     "theme" => {
                         if !value.is_empty() {
-                            let theme_name = value.join(" ");
-                            let persist_value = theme_name.clone();
-                            Config::mutate(move |config| {
-                                config.theme = Some(persist_value);
-                                Ok(())
-                            })?;
-                            println!("✅ Set theme to: {}", theme_name);
+                            let theme_input = value.join(" ");
+                            let config_snapshot = Config::load()?;
+
+                            match resolve_theme_id(&config_snapshot, &theme_input) {
+                                Some(resolved_theme) => {
+                                    let theme_msg = resolved_theme.clone();
+                                    Config::mutate(move |config| {
+                                        config.theme = Some(resolved_theme);
+                                        Ok(())
+                                    })?;
+                                    println!("✅ Set theme to: {theme_msg}");
+                                }
+                                None => {
+                                    eprintln!(
+                                        "❌ Unknown theme: {theme_input}. Run 'chabeau themes' to list available themes."
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
                         } else {
                             Config::load()?.print_all();
                         }
@@ -331,12 +379,23 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                             let val_str = value.join(" ");
                             let parts: Vec<&str> = val_str.splitn(2, ' ').collect();
                             if parts.len() == 2 {
-                                let provider = parts[0].to_string();
+                                let provider_input = parts[0].to_string();
                                 let model = parts[1].to_string();
-                                let provider_msg = provider.clone();
+                                let config_snapshot = Config::load()?;
+
+                                let Some(resolved_provider) =
+                                    resolve_provider_id(&config_snapshot, &provider_input)
+                                else {
+                                    eprintln!(
+                                        "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
+                                    );
+                                    std::process::exit(1);
+                                };
+
+                                let provider_msg = resolved_provider.clone();
                                 let model_msg = model.clone();
                                 Config::mutate(move |config| {
-                                    config.set_default_model(provider, model);
+                                    config.set_default_model(resolved_provider, model);
                                     Ok(())
                                 })?;
                                 println!(
@@ -355,17 +414,31 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                     }
                     "default-character" => {
                         if value.len() >= 3 {
-                            let provider = value[0].to_string();
+                            let provider_input = value[0].to_string();
                             let model = value[1].to_string();
                             let character = value[2..].join(" ");
 
+                            let config_snapshot = Config::load()?;
+                            let Some(resolved_provider) =
+                                resolve_provider_id(&config_snapshot, &provider_input)
+                            else {
+                                eprintln!(
+                                    "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
+                                );
+                                std::process::exit(1);
+                            };
+
                             match character_service.resolve_by_name(&character) {
                                 Ok(_) => {
-                                    let provider_msg = provider.clone();
+                                    let provider_msg = resolved_provider.clone();
                                     let model_msg = model.clone();
                                     let character_msg = character.clone();
                                     Config::mutate(move |config| {
-                                        config.set_default_character(provider, model, character);
+                                        config.set_default_character(
+                                            resolved_provider,
+                                            model,
+                                            character,
+                                        );
                                         Ok(())
                                     })?;
                                     println!(
@@ -563,6 +636,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::data::{CustomProvider, CustomTheme};
     use crate::utils::test_utils::{with_test_config_env, TestEnvVarGuard};
     use std::fs;
     use tempfile::TempDir;
@@ -635,6 +709,76 @@ mod tests {
 
         let args = Args::try_parse_from(["chabeau"]).unwrap();
         assert_eq!(args.preset, None);
+    }
+
+    #[test]
+    fn test_resolve_provider_id_builtin_and_custom() {
+        with_test_config_env(|_| {
+            Config::mutate(|config| {
+                config.add_custom_provider(CustomProvider::new(
+                    "custom".to_string(),
+                    "Custom".to_string(),
+                    "https://example.com".to_string(),
+                    None,
+                ));
+                Ok(())
+            })
+            .unwrap();
+
+            let config = Config::load().unwrap();
+            assert_eq!(
+                resolve_provider_id(&config, "OpenAI"),
+                Some("openai".to_string())
+            );
+            assert_eq!(
+                resolve_provider_id(&config, "CUSTOM"),
+                Some("custom".to_string())
+            );
+            assert!(resolve_provider_id(&config, "unknown").is_none());
+        });
+    }
+
+    #[test]
+    fn test_resolve_theme_id_builtin_and_custom() {
+        with_test_config_env(|_| {
+            Config::mutate(|config| {
+                config.custom_themes.push(CustomTheme {
+                    id: "sunset".to_string(),
+                    display_name: "Sunset".to_string(),
+                    background: None,
+                    user_prefix: None,
+                    user_text: None,
+                    assistant_text: None,
+                    system_text: None,
+                    app_info_prefix: None,
+                    app_info_prefix_style: None,
+                    app_info_text: None,
+                    app_warning_prefix: None,
+                    app_warning_prefix_style: None,
+                    app_warning_text: None,
+                    app_error_prefix: None,
+                    app_error_prefix_style: None,
+                    app_error_text: None,
+                    title: None,
+                    streaming_indicator: None,
+                    selection_highlight: None,
+                    input_border: None,
+                    input_title: None,
+                    input_text: None,
+                    input_cursor_modifiers: None,
+                });
+                Ok(())
+            })
+            .unwrap();
+
+            let config = Config::load().unwrap();
+            assert_eq!(resolve_theme_id(&config, "Dark"), Some("dark".to_string()));
+            assert_eq!(
+                resolve_theme_id(&config, "sunset"),
+                Some("sunset".to_string())
+            );
+            assert!(resolve_theme_id(&config, "unknown").is_none());
+        });
     }
 
     #[test]

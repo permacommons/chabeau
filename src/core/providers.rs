@@ -1,5 +1,5 @@
 use crate::core::config::data::Config;
-use crate::core::keyring::KeyringAccessError;
+use crate::core::keyring::{KeyringAccessError, SharedKeyringAccessError};
 use std::error::Error;
 use std::fmt;
 
@@ -229,21 +229,32 @@ fn handle_keyring_failure(
     provider_name: Option<&str>,
 ) -> Result<ProviderSession, ResolveSessionError> {
     match err.downcast::<KeyringAccessError>() {
-        Ok(keyring_err) => {
-            if keyring_err.is_recoverable() {
-                let context = provider_name
-                    .map(|name| format!(" for provider '{name}'"))
-                    .unwrap_or_default();
-                eprintln!(
-                    "⚠️  Unable to access stored credentials{context}: {}. Falling back to environment variables if available.",
-                    keyring_err
-                );
-                resolve_env_session().map_err(ResolveSessionError::Provider)
-            } else {
-                Err(ResolveSessionError::Source(keyring_err))
-            }
-        }
-        Err(original_err) => Err(ResolveSessionError::Source(original_err)),
+        Ok(keyring_err) => handle_shared_keyring_failure(
+            SharedKeyringAccessError::new(*keyring_err),
+            provider_name,
+        ),
+        Err(err) => match err.downcast::<SharedKeyringAccessError>() {
+            Ok(shared_err) => handle_shared_keyring_failure(*shared_err, provider_name),
+            Err(original_err) => Err(ResolveSessionError::Source(original_err)),
+        },
+    }
+}
+
+fn handle_shared_keyring_failure(
+    keyring_err: SharedKeyringAccessError,
+    provider_name: Option<&str>,
+) -> Result<ProviderSession, ResolveSessionError> {
+    if keyring_err.is_recoverable() {
+        let context = provider_name
+            .map(|name| format!(" for provider '{name}'"))
+            .unwrap_or_default();
+        eprintln!(
+            "⚠️  Unable to access stored credentials{context}: {}. Falling back to environment variables if available.",
+            keyring_err
+        );
+        resolve_env_session().map_err(ResolveSessionError::Provider)
+    } else {
+        Err(ResolveSessionError::Source(Box::new(keyring_err)))
     }
 }
 
@@ -384,10 +395,15 @@ mod tests {
 
             match err {
                 ResolveSessionError::Source(source_err) => {
-                    let keyring_err = source_err
-                        .downcast::<KeyringAccessError>()
-                        .expect("error should be a KeyringAccessError");
-                    assert!(!keyring_err.is_recoverable());
+                    match source_err.downcast::<KeyringAccessError>() {
+                        Ok(keyring_err) => assert!(!keyring_err.is_recoverable()),
+                        Err(other) => {
+                            let keyring_err = other
+                                .downcast::<SharedKeyringAccessError>()
+                                .expect("error should be a KeyringAccessError");
+                            assert!(!keyring_err.is_recoverable());
+                        }
+                    }
                 }
                 _ => panic!("unexpected error variant"),
             }

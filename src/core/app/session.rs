@@ -193,6 +193,20 @@ pub(crate) fn resolve_theme(config: &Config) -> Theme {
     quantize_theme_for_current_terminal(resolved_theme)
 }
 
+#[derive(Debug)]
+struct MissingAuthContextError;
+
+impl std::fmt::Display for MissingAuthContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "authentication context is required when session is not pre-resolved"
+        )
+    }
+}
+
+impl std::error::Error for MissingAuthContextError {}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_with_auth(
     model: String,
@@ -201,6 +215,7 @@ pub(crate) async fn prepare_with_auth(
     env_only: bool,
     config: &Config,
     pre_resolved_session: Option<ProviderSession>,
+    auth_manager: Option<&AuthManager>,
     character: Option<String>,
     character_service: &mut CharacterService,
 ) -> Result<SessionBootstrap, Box<dyn std::error::Error>> {
@@ -209,8 +224,8 @@ pub(crate) async fn prepare_with_auth(
     } else if env_only {
         resolve_env_session().map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?
     } else {
-        let auth_manager = AuthManager::new()?;
-        match resolve_session(&auth_manager, config, provider.as_deref()) {
+        let auth_manager = auth_manager.ok_or_else(|| Box::new(MissingAuthContextError))?;
+        match resolve_session(auth_manager, config, provider.as_deref()) {
             Ok(session) => session,
             Err(ResolveSessionError::Provider(err)) => return Err(Box::new(err)),
             Err(ResolveSessionError::Source(err)) => return Err(err),
@@ -364,6 +379,7 @@ mod tests {
                 &config,
                 Some(provider_session.clone()),
                 None,
+                None,
                 &mut service,
             ))
             .expect("prepare_with_auth");
@@ -382,6 +398,32 @@ mod tests {
         assert!(!bootstrap.session.startup_env_only);
         assert!(bootstrap.session.active_character.is_none());
         assert!(!bootstrap.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn prepare_with_auth_requires_auth_context_when_session_missing() {
+        let config = Config::default();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let mut service = crate::character::CharacterService::new();
+
+        let err = runtime
+            .block_on(super::prepare_with_auth(
+                "default".to_string(),
+                None,
+                Some("openai".to_string()),
+                false,
+                &config,
+                None,
+                None,
+                None,
+                &mut service,
+            ))
+            .err()
+            .expect("missing auth manager should error");
+
+        assert!(err
+            .to_string()
+            .contains("authentication context is required"));
     }
 
     #[test]

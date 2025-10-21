@@ -6,6 +6,8 @@ use crate::core::providers::{
 };
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 mod ui;
 
@@ -56,6 +58,7 @@ pub struct AuthManager {
     providers: Vec<Provider>,
     config: Config,
     use_keyring: bool,
+    token_cache: RefCell<HashMap<String, Option<String>>>,
 }
 
 impl AuthManager {
@@ -89,6 +92,7 @@ impl AuthManager {
             providers,
             config,
             use_keyring,
+            token_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -129,6 +133,9 @@ impl AuthManager {
         }
         let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
         entry.set_password(token)?;
+        self.token_cache
+            .borrow_mut()
+            .insert(provider_name.to_string(), Some(token.to_string()));
         Ok(())
     }
 
@@ -139,17 +146,24 @@ impl AuthManager {
         if !self.use_keyring {
             return Ok(None);
         }
+        if let Some(cached) = self.token_cache.borrow().get(provider_name) {
+            return Ok(cached.clone());
+        }
         let entry = match Entry::new(KEYRING_SERVICE, provider_name) {
             Ok(entry) => entry,
             Err(err) => {
                 return Err(Box::new(KeyringAccessError::from(err)));
             }
         };
-        match entry.get_password() {
-            Ok(token) => Ok(Some(token)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(Box::new(KeyringAccessError::from(err))),
-        }
+        let result = match entry.get_password() {
+            Ok(token) => Some(token),
+            Err(keyring::Error::NoEntry) => None,
+            Err(err) => return Err(Box::new(KeyringAccessError::from(err))),
+        };
+        self.token_cache
+            .borrow_mut()
+            .insert(provider_name.to_string(), result.clone());
+        Ok(result)
     }
 
     pub fn store_custom_provider(
@@ -434,9 +448,17 @@ impl AuthManager {
     fn remove_provider_auth(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", provider_name)?;
         match entry.delete_credential() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.token_cache
+                    .borrow_mut()
+                    .insert(provider_name.to_string(), None);
+                Ok(())
+            }
             Err(keyring::Error::NoEntry) => {
                 // Already not configured, that's fine
+                self.token_cache
+                    .borrow_mut()
+                    .insert(provider_name.to_string(), None);
                 Ok(())
             }
             Err(e) => Err(Box::new(e)),
@@ -530,6 +552,7 @@ mod tests {
             providers,
             config,
             use_keyring: false,
+            token_cache: RefCell::new(HashMap::new()),
         };
 
         let configured = manager

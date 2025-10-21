@@ -1,3 +1,4 @@
+use crate::auth::AuthManager;
 use crate::character::service::CharacterService;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
@@ -53,6 +54,7 @@ pub struct AppInitConfig {
 pub async fn new_with_auth(
     init_config: AppInitConfig,
     config: &Config,
+    auth_manager: Option<&AuthManager>,
     mut character_service: CharacterService,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let SessionBootstrap {
@@ -67,6 +69,7 @@ pub async fn new_with_auth(
         init_config.env_only,
         config,
         init_config.pre_resolved_session,
+        auth_manager,
         init_config.character,
         &mut character_service,
     )

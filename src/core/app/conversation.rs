@@ -94,7 +94,11 @@ impl<'a> ConversationController<'a> {
         }
     }
 
-    fn assemble_api_messages<'m, I>(&self, history: I) -> Vec<crate::api::ChatMessage>
+    fn assemble_api_messages<'m, I>(
+        &self,
+        history: I,
+        additional_system_prompt: Option<String>,
+    ) -> Vec<crate::api::ChatMessage>
     where
         I: Iterator<Item = &'m Message>,
     {
@@ -102,30 +106,34 @@ impl<'a> ConversationController<'a> {
 
         let character = self.session.get_character();
 
-        if let Some(character) = character {
+        let base_system_prompt = if let Some(character) = character {
             let user_name = self
                 .persona_manager
                 .get_active_persona()
                 .map(|p| p.display_name.as_str());
             let char_name = Some(character.data.name.as_str());
-            let base_system_prompt =
-                character.build_system_prompt_with_substitutions(user_name, char_name);
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
+            character.build_system_prompt_with_substitutions(user_name, char_name)
+        } else {
+            "".to_string()
+        };
+
+        let char_name = character.map(|c| c.data.name.as_str());
+        let modified_system_prompt =
+            self.apply_persona_to_system_prompt(&base_system_prompt, char_name);
+
+        let mut final_system_prompt = modified_system_prompt;
+        if let Some(additional) = additional_system_prompt {
+            if !final_system_prompt.is_empty() {
+                final_system_prompt.push_str("\n\n");
+            }
+            final_system_prompt.push_str(&additional);
+        }
+
+        if !final_system_prompt.is_empty() {
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
-                content: modified_system_prompt,
+                content: final_system_prompt,
             });
-        } else {
-            let base_system_prompt = "";
-            let modified_system_prompt =
-                self.apply_persona_to_system_prompt(base_system_prompt, None);
-            if !modified_system_prompt.is_empty() {
-                api_messages.push(crate::api::ChatMessage {
-                    role: "system".to_string(),
-                    content: modified_system_prompt,
-                });
-            }
         }
 
         for msg in history {
@@ -181,9 +189,11 @@ impl<'a> ConversationController<'a> {
         self.ui.current_response.clear();
 
         self.session.retrying_message_index = None;
+        self.session.original_refining_content = None;
+        self.session.last_refine_prompt = None;
 
         let history_len = self.ui.messages.len().saturating_sub(1);
-        self.assemble_api_messages(self.ui.messages.iter().take(history_len))
+        self.assemble_api_messages(self.ui.messages.iter().take(history_len), None)
     }
 
     pub fn add_app_message(&mut self, kind: AppMessageKind, content: String) {
@@ -207,15 +217,17 @@ impl<'a> ConversationController<'a> {
         available_height: u16,
         terminal_width: u16,
     ) {
-        self.ui.current_response.push_str(content);
-
-        if !content.is_empty() {
-            self.session.has_received_assistant_message = true;
+        let is_first_refine_chunk = self.session.is_refining;
+        if is_first_refine_chunk {
+            self.session.is_refining = false; // consume the flag
         }
 
         if let Some(retry_index) = self.session.retrying_message_index {
             if let Some(msg) = self.ui.messages.get_mut(retry_index) {
                 if msg.role == ROLE_ASSISTANT {
+                    if is_first_refine_chunk {
+                        msg.content.clear();
+                    }
                     msg.content.push_str(content);
                 }
             }
@@ -223,6 +235,12 @@ impl<'a> ConversationController<'a> {
             if last_msg.role == ROLE_ASSISTANT {
                 last_msg.content.push_str(content);
             }
+        }
+
+        self.ui.current_response.push_str(content);
+
+        if !content.is_empty() {
+            self.session.has_received_assistant_message = true;
         }
 
         let total_wrapped_lines = {
@@ -287,7 +305,11 @@ impl<'a> ConversationController<'a> {
             }
         }
 
-        self.session.retrying_message_index = None;
+        if self.session.original_refining_content.is_none() {
+            self.session.retrying_message_index = None;
+        }
+        self.session.is_refining = false;
+        self.ui.current_response.clear();
     }
 
     pub fn cancel_current_stream(&mut self) {
@@ -318,6 +340,10 @@ impl<'a> ConversationController<'a> {
     ) -> Option<Vec<crate::api::ChatMessage>> {
         if !self.can_retry() {
             return None;
+        }
+
+        if let Some(last_prompt) = self.session.last_refine_prompt.clone() {
+            return self.prepare_refine(last_prompt, available_height, terminal_width, true);
         }
 
         self.session.last_retry_time = Instant::now();
@@ -405,7 +431,8 @@ impl<'a> ConversationController<'a> {
 
         let retry_index = self.session.retrying_message_index?;
 
-        let api_messages = self.assemble_api_messages(self.ui.messages.iter().take(retry_index));
+        let api_messages =
+            self.assemble_api_messages(self.ui.messages.iter().take(retry_index), None);
 
         Some(api_messages)
     }
@@ -441,6 +468,89 @@ impl<'a> ConversationController<'a> {
             .messages
             .iter()
             .any(|msg| msg.role == ROLE_ASSISTANT && !msg.content.is_empty())
+    }
+
+    pub fn prepare_refine(
+        &mut self,
+        prompt: String,
+        available_height: u16,
+        terminal_width: u16,
+        use_original: bool,
+    ) -> Option<Vec<crate::api::ChatMessage>> {
+        if !self.can_retry() {
+            return None;
+        }
+
+        self.session.last_retry_time = Instant::now();
+        self.session.is_refining = true;
+
+        if self.session.retrying_message_index.is_none() {
+            let mut target_index = None;
+            for (i, msg) in self.ui.messages.iter().enumerate().rev() {
+                if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
+                    target_index = Some(i);
+                    break;
+                }
+            }
+            self.session.retrying_message_index = target_index;
+        }
+
+        if !use_original {
+            self.session.original_refining_content = None;
+            self.session.last_refine_prompt = Some(prompt.clone());
+        }
+
+        if self.session.original_refining_content.is_none() {
+            if let Some(index) = self.session.retrying_message_index {
+                if let Some(msg) = self.ui.messages.get(index) {
+                    self.session.original_refining_content = Some(msg.content.clone());
+                }
+            }
+        }
+
+        if let Some(retry_index) = self.session.retrying_message_index {
+            if retry_index > 0 {
+                let user_message_index = retry_index - 1;
+                self.ui.scroll_offset = self.calculate_scroll_to_message(
+                    user_message_index,
+                    terminal_width,
+                    available_height,
+                );
+            } else {
+                self.ui.scroll_offset = 0;
+            }
+            self.ui.auto_scroll = true;
+
+            let mut history_for_api: Vec<Message> = self
+                .ui
+                .messages
+                .iter()
+                .take(retry_index + 1)
+                .cloned()
+                .collect();
+
+            if use_original {
+                if let Some(original_content) = &self.session.original_refining_content {
+                    if let Some(last_msg) = history_for_api.last_mut() {
+                        if last_msg.role == ROLE_ASSISTANT {
+                            last_msg.content = original_content.clone();
+                        }
+                    }
+                }
+            }
+
+            let instructions = self.session.refine_instructions.clone();
+            let prefix = self.session.refine_prefix.as_str();
+            let mut api_messages =
+                self.assemble_api_messages(history_for_api.iter(), Some(instructions));
+            api_messages.push(crate::api::ChatMessage {
+                role: ROLE_USER.to_string(),
+                content: format!("{} {}", prefix, prompt),
+            });
+            Some(api_messages)
+        } else {
+            None
+        }
     }
 }
 

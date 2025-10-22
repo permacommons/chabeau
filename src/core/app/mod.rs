@@ -114,6 +114,7 @@ pub async fn new_with_auth(
         character_service,
         persona_manager,
         preset_manager,
+        config: config.clone(),
     };
 
     app.ui.set_input_text(String::new());
@@ -164,6 +165,7 @@ pub async fn new_uninitialized(
         character_service,
         persona_manager,
         preset_manager,
+        config: config.clone(),
     };
 
     app.ui.set_input_text(String::new());
@@ -183,4 +185,5 @@ pub struct App {
     pub character_service: CharacterService,
     pub persona_manager: crate::core::persona::PersonaManager,
     pub preset_manager: crate::core::preset::PresetManager,
+    pub config: Config,
 }

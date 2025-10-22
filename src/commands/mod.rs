@@ -1,3 +1,4 @@
+mod refine;
 mod registry;
 
 pub use registry::{all_commands, matching_commands, CommandInvocation};
@@ -18,6 +19,7 @@ pub enum CommandResult {
     OpenCharacterPicker,
     OpenPersonaPicker,
     OpenPresetPicker,
+    Refine(String),
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {

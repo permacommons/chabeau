@@ -47,6 +47,7 @@ pub(super) fn handle_streaming_action(
             None
         }
         AppAction::SubmitMessage { message } => Some(spawn_stream_for_message(app, message, ctx)),
+        AppAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
         AppAction::RetryLastMessage => retry_last_message(app, ctx),
         _ => unreachable!("non-streaming action routed to streaming handler"),
     }
@@ -63,6 +64,14 @@ pub(super) fn spawn_stream_for_message(
 
 pub(super) fn retry_last_message(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     prepare_retry_stream(app, ctx)
+}
+
+pub(super) fn refine_last_message(
+    app: &mut App,
+    prompt: String,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    prepare_refine_stream(app, prompt, ctx)
 }
 
 fn append_response_chunk(app: &mut App, chunk: &str, ctx: AppActionContext) {
@@ -165,6 +174,40 @@ fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppComma
 
     if let Some((api_messages, cancel_token, stream_id)) = maybe_params {
         app.update_last_retry_time(now);
+        Some(AppCommand::SpawnStream(app.build_stream_params(
+            api_messages,
+            cancel_token,
+            stream_id,
+        )))
+    } else {
+        None
+    }
+}
+
+fn prepare_refine_stream(
+    app: &mut App,
+    prompt: String,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    if ctx.term_width == 0 || ctx.term_height == 0 {
+        return None;
+    }
+
+    let input_area_height = app.input_area_height(ctx.term_width);
+    let maybe_params = {
+        let mut conversation = app.conversation();
+        let available_height =
+            conversation.calculate_available_height(ctx.term_height, input_area_height);
+        conversation
+            .prepare_refine(prompt, available_height, ctx.term_width, false)
+            .map(|api_messages| {
+                let (cancel_token, stream_id) = conversation.start_new_stream();
+                (api_messages, cancel_token, stream_id)
+            })
+    };
+
+    if let Some((api_messages, cancel_token, stream_id)) = maybe_params {
+        app.update_last_retry_time(Instant::now());
         Some(AppCommand::SpawnStream(app.build_stream_params(
             api_messages,
             cancel_token,

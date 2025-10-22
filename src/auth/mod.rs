@@ -6,10 +6,10 @@ use crate::core::providers::{
 };
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::{Mutex, OnceLock};
 
 mod ui;
 
@@ -58,7 +58,6 @@ pub struct AuthManager {
     providers: Vec<Provider>,
     config: Config,
     use_keyring: bool,
-    token_cache: RefCell<HashMap<String, KeyringCacheEntry>>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,7 +98,6 @@ impl AuthManager {
             providers,
             config,
             use_keyring,
-            token_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -151,7 +149,7 @@ impl AuthManager {
         if !self.use_keyring {
             return Ok(None);
         }
-        if let Some(cached) = self.token_cache.borrow().get(provider_name) {
+        if let Some(cached) = get_cached_entry(provider_name) {
             return match cached {
                 KeyringCacheEntry::Present(token) => Ok(Some(token.clone())),
                 KeyringCacheEntry::Missing => Ok(None),
@@ -506,9 +504,9 @@ impl AuthManager {
             return;
         }
 
-        self.token_cache
-            .borrow_mut()
-            .insert(provider_name.to_string(), entry);
+        if let Ok(mut cache) = token_cache().lock() {
+            cache.insert(provider_name.to_string(), entry);
+        }
     }
 
     fn log_lookup(&self, provider_name: &str, detail: &str) {
@@ -520,6 +518,16 @@ impl AuthManager {
             let _ = writeln!(file, "provider={provider_name} {detail}");
         }
     }
+}
+
+fn get_cached_entry(provider_name: &str) -> Option<KeyringCacheEntry> {
+    let cache = token_cache().lock().ok()?;
+    cache.get(provider_name).cloned()
+}
+
+fn token_cache() -> &'static Mutex<HashMap<String, KeyringCacheEntry>> {
+    static TOKEN_CACHE: OnceLock<Mutex<HashMap<String, KeyringCacheEntry>>> = OnceLock::new();
+    TOKEN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 impl ProviderAuthSource for AuthManager {
@@ -599,7 +607,6 @@ mod tests {
             providers,
             config,
             use_keyring: false,
-            token_cache: RefCell::new(HashMap::new()),
         };
 
         let configured = manager

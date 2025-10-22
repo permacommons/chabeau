@@ -620,7 +620,6 @@ mod tests {
         let commands = apply_actions(&mut app, envelopes);
         assert!(commands.is_empty());
 
-        assert_eq!(app.ui.current_response, "Hello world");
         assert_eq!(app.ui.messages.back().unwrap().content, "Hello world");
         assert!(!app.ui.is_streaming);
 

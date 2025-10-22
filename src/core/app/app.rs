@@ -45,6 +45,8 @@ impl App {
             current_stream_id: 0,
             last_retry_time: std::time::Instant::now(),
             retrying_message_index: None,
+            is_refining: false,
+            original_refining_content: None,
             startup_env_only: false,
             active_character: None,
             character_greeting_shown: false,
@@ -67,6 +69,7 @@ impl App {
             character_service: CharacterService::new(),
             persona_manager,
             preset_manager,
+            config: test_config,
         }
     }
 

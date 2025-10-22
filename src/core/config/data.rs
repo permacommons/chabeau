@@ -95,6 +95,8 @@ pub struct Config {
     /// User-defined presets for conversation contexts
     #[serde(default)]
     pub presets: Vec<Preset>,
+    pub refine_instructions: Option<String>,
+    pub refine_prefix: Option<String>,
 }
 
 /// Get a user-friendly display string for a path

@@ -373,4 +373,13 @@ const COMMANDS: &[Command] = &[
         extra_help: &[],
         handler: super::handle_preset,
     },
+    Command {
+        name: "refine",
+        usages: &[CommandUsage {
+            syntax: "/refine <prompt>",
+            description: "Refine the previous response with new instructions.",
+        }],
+        extra_help: &[],
+        handler: super::refine::handle_refine,
+    },
 ];

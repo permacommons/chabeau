@@ -1,4 +1,5 @@
 mod registry;
+mod refine;
 
 pub use registry::{all_commands, matching_commands, CommandInvocation};
 
@@ -9,6 +10,12 @@ use registry::DispatchOutcome;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
+pub struct RefineParams {
+    pub prompt: String,
+    pub instructions: String,
+    pub prefix: String,
+}
+
 pub enum CommandResult {
     Continue,
     ProcessAsMessage(String),
@@ -18,6 +25,7 @@ pub enum CommandResult {
     OpenCharacterPicker,
     OpenPersonaPicker,
     OpenPresetPicker,
+    Refine(RefineParams),
 }
 
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {

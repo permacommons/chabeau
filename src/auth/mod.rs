@@ -1,11 +1,13 @@
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::data::{suggest_provider_id, Config, CustomProvider};
-use crate::core::keyring::KeyringAccessError;
+use crate::core::keyring::{KeyringAccessError, SharedKeyringAccessError};
 use crate::core::providers::{
     resolve_session, ProviderAuthSource, ProviderMetadata, ResolveSessionError,
 };
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 mod ui;
 
@@ -13,8 +15,6 @@ use self::ui::{
     prompt_auth_menu, prompt_custom_provider_details, prompt_deauth_menu, prompt_provider_token,
     AuthMenuSelection, CustomProviderInput, DeauthMenuItem, ProviderMenuItem, UiError,
 };
-use std::collections::HashSet;
-
 // Constants for repeated strings
 const KEYRING_SERVICE: &str = "chabeau";
 
@@ -56,6 +56,13 @@ pub struct AuthManager {
     providers: Vec<Provider>,
     config: Config,
     use_keyring: bool,
+}
+
+#[derive(Clone, Debug)]
+enum KeyringCacheEntry {
+    Present(String),
+    Missing,
+    Error(SharedKeyringAccessError),
 }
 
 impl AuthManager {
@@ -129,6 +136,7 @@ impl AuthManager {
         }
         let entry = Entry::new(KEYRING_SERVICE, provider_name)?;
         entry.set_password(token)?;
+        self.cache_lookup(provider_name, KeyringCacheEntry::Present(token.to_string()));
         Ok(())
     }
 
@@ -139,16 +147,37 @@ impl AuthManager {
         if !self.use_keyring {
             return Ok(None);
         }
+        if let Some(cached) = get_cached_entry(provider_name) {
+            return match cached {
+                KeyringCacheEntry::Present(token) => Ok(Some(token.clone())),
+                KeyringCacheEntry::Missing => Ok(None),
+                KeyringCacheEntry::Error(err) => Err(Box::new(err.clone())),
+            };
+        }
         let entry = match Entry::new(KEYRING_SERVICE, provider_name) {
             Ok(entry) => entry,
             Err(err) => {
-                return Err(Box::new(KeyringAccessError::from(err)));
+                let keyring_err = KeyringAccessError::from(err);
+                let shared_err = SharedKeyringAccessError::new(keyring_err);
+                self.cache_lookup(provider_name, KeyringCacheEntry::Error(shared_err.clone()));
+                return Err(Box::new(shared_err));
             }
         };
         match entry.get_password() {
-            Ok(token) => Ok(Some(token)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(Box::new(KeyringAccessError::from(err))),
+            Ok(token) => {
+                self.cache_lookup(provider_name, KeyringCacheEntry::Present(token.clone()));
+                Ok(Some(token))
+            }
+            Err(keyring::Error::NoEntry) => {
+                self.cache_lookup(provider_name, KeyringCacheEntry::Missing);
+                Ok(None)
+            }
+            Err(err) => {
+                let keyring_err = KeyringAccessError::from(err);
+                let shared_err = SharedKeyringAccessError::new(keyring_err);
+                self.cache_lookup(provider_name, KeyringCacheEntry::Error(shared_err.clone()));
+                Err(Box::new(shared_err))
+            }
         }
     }
 
@@ -434,9 +463,12 @@ impl AuthManager {
     fn remove_provider_auth(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let entry = Entry::new("chabeau", provider_name)?;
         match entry.delete_credential() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.cache_lookup(provider_name, KeyringCacheEntry::Missing);
+                Ok(())
+            }
             Err(keyring::Error::NoEntry) => {
-                // Already not configured, that's fine
+                self.cache_lookup(provider_name, KeyringCacheEntry::Missing);
                 Ok(())
             }
             Err(e) => Err(Box::new(e)),
@@ -451,6 +483,28 @@ impl AuthManager {
         self.config.save()?;
         Ok(())
     }
+}
+
+impl AuthManager {
+    fn cache_lookup(&self, provider_name: &str, entry: KeyringCacheEntry) {
+        if !self.use_keyring {
+            return;
+        }
+
+        if let Ok(mut cache) = token_cache().lock() {
+            cache.insert(provider_name.to_string(), entry);
+        }
+    }
+}
+
+fn get_cached_entry(provider_name: &str) -> Option<KeyringCacheEntry> {
+    let cache = token_cache().lock().ok()?;
+    cache.get(provider_name).cloned()
+}
+
+fn token_cache() -> &'static Mutex<HashMap<String, KeyringCacheEntry>> {
+    static TOKEN_CACHE: OnceLock<Mutex<HashMap<String, KeyringCacheEntry>>> = OnceLock::new();
+    TOKEN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 impl ProviderAuthSource for AuthManager {

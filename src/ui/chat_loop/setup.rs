@@ -33,28 +33,15 @@ pub async fn bootstrap_app(
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
 
-    // Gather providers with stored tokens (ignored in env-only mode)
-    let mut token_providers: Vec<String> = Vec::new();
-    if !env_only {
-        for bp in load_builtin_providers() {
-            if auth_manager.get_token(&bp.id).unwrap_or(None).is_some() {
-                token_providers.push(bp.id);
-            }
-        }
-        for (id, _display, _url, has_token) in auth_manager.list_custom_providers() {
-            if has_token {
-                token_providers.push(id);
-            }
-        }
-    }
+    // Lazily gather providers with stored tokens so we only touch the keyring when required
+    let mut token_providers: Option<Vec<String>> = None;
 
     let has_env_openai = std::env::var("OPENAI_API_KEY").is_ok();
 
     // Provider selection rules mirror the prior implementation.
     let mut selected_provider: Option<String> = None;
     let mut open_provider_picker = false;
-    let total_available = token_providers.len() + if has_env_openai { 1 } else { 0 };
-    let multiple_providers_available = total_available > 1;
+    let mut multiple_providers_available = has_env_openai;
 
     if !env_only {
         if let Some(p) = provider.clone() {
@@ -69,18 +56,51 @@ pub async fn bootstrap_app(
             eprintln!("❌ --env used but OPENAI_API_KEY is not set");
             std::process::exit(2);
         }
-        if let Some(default_p) = &config.default_provider {
-            selected_provider = Some(default_p.clone());
-        } else if token_providers.len() == 1 {
-            selected_provider = token_providers.first().cloned();
+
+        if !env_only {
+            if let Some(default_p) = &config.default_provider {
+                selected_provider = Some(default_p.clone());
+            }
+        }
+    }
+
+    if selected_provider.is_none() {
+        populate_token_providers(&auth_manager, env_only, &mut token_providers);
+        let providers_with_tokens = token_providers
+            .as_ref()
+            .expect("token provider cache should be initialized");
+        let total_available = providers_with_tokens.len() + if has_env_openai { 1 } else { 0 };
+        multiple_providers_available = total_available > 1;
+
+        if providers_with_tokens.len() == 1 {
+            selected_provider = providers_with_tokens.first().cloned();
         } else if total_available > 1 {
             open_provider_picker = true;
         } else if has_env_openai {
             selected_provider = None;
         } else {
-            eprintln!("❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional");
+            eprintln!(
+                "❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+            );
             std::process::exit(2);
         }
+    } else if let Some(providers_with_tokens) = token_providers.as_ref() {
+        let total_available = providers_with_tokens.len() + if has_env_openai { 1 } else { 0 };
+        multiple_providers_available = total_available > 1;
+    }
+
+    if !env_only
+        && selected_provider.is_none()
+        && !has_env_openai
+        && token_providers
+            .as_ref()
+            .map(|providers| providers.is_empty())
+            .unwrap_or(true)
+    {
+        eprintln!(
+            "❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional"
+        );
+        std::process::exit(2);
     }
 
     let mut character_service = Some(character_service);
@@ -165,7 +185,11 @@ pub async fn bootstrap_app(
         if app.session.model.is_empty() {
             app.picker.startup_requires_model = true;
             app.picker.startup_multiple_providers_available = multiple_providers_available;
-            let env_only = has_env_openai && token_providers.is_empty();
+            let env_only = has_env_openai
+                && token_providers
+                    .as_ref()
+                    .map(|providers| providers.is_empty())
+                    .unwrap_or(false);
             app.session.startup_env_only = env_only;
             if let Err(e) = app.open_model_picker().await {
                 app.conversation()
@@ -179,4 +203,35 @@ pub async fn bootstrap_app(
     let app = Arc::new(Mutex::new(app));
 
     Ok(AppHandle::new(app))
+}
+
+fn populate_token_providers(
+    auth_manager: &AuthManager,
+    env_only: bool,
+    token_providers: &mut Option<Vec<String>>,
+) {
+    if token_providers.is_some() {
+        return;
+    }
+
+    let providers = if env_only {
+        Vec::new()
+    } else {
+        let mut providers_with_tokens = Vec::new();
+        for bp in load_builtin_providers() {
+            if auth_manager.get_token(&bp.id).unwrap_or(None).is_some() {
+                providers_with_tokens.push(bp.id);
+            }
+        }
+
+        for (id, _display, _url, has_token) in auth_manager.list_custom_providers() {
+            if has_token {
+                providers_with_tokens.push(id);
+            }
+        }
+
+        providers_with_tokens
+    };
+
+    *token_providers = Some(providers);
 }

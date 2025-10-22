@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 /// Describes failures when attempting to access the system keyring.
 ///
@@ -47,5 +48,30 @@ impl fmt::Display for KeyringAccessError {
 impl Error for KeyringAccessError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(self.inner())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SharedKeyringAccessError(Arc<KeyringAccessError>);
+
+impl SharedKeyringAccessError {
+    pub fn new(error: KeyringAccessError) -> Self {
+        Self(Arc::new(error))
+    }
+
+    pub fn is_recoverable(&self) -> bool {
+        self.0.is_recoverable()
+    }
+}
+
+impl fmt::Display for SharedKeyringAccessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl Error for SharedKeyringAccessError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.0.source()
     }
 }

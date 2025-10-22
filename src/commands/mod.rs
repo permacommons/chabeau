@@ -49,6 +49,17 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
     CommandResult::Continue
 }
 
+pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {
+    app.ui.messages.clear();
+    app.session.retrying_message_index = None;
+    app.session.has_received_assistant_message = false;
+    app.session.character_greeting_shown = false;
+    app.conversation().show_character_greeting_if_needed();
+    app.conversation()
+        .set_status("Transcript cleared".to_string());
+    CommandResult::Continue
+}
+
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
     match invocation.args_len() {
         0 => match app.session.logging.toggle_logging() {
@@ -428,6 +439,23 @@ mod tests {
     fn read_config(path: &Path) -> Value {
         let contents = std::fs::read_to_string(path).unwrap();
         toml::from_str(&contents).unwrap()
+    }
+
+    #[test]
+    fn clear_command_clears_messages() {
+        let mut app = create_test_app();
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hello"));
+        app.ui
+            .messages
+            .push_back(create_test_message("assistant", "Hi there!"));
+        assert_eq!(app.ui.messages.len(), 2);
+
+        let result = process_input(&mut app, "/clear");
+        assert!(matches!(result, CommandResult::Continue));
+        assert!(app.ui.messages.is_empty());
+        assert_eq!(app.ui.status.as_deref(), Some("Transcript cleared"));
     }
 
     #[test]

@@ -234,6 +234,15 @@ const COMMANDS: &[Command] = &[
         handler: super::handle_help,
     },
     Command {
+        name: "clear",
+        usages: &[CommandUsage {
+            syntax: "/clear",
+            description: "Clear the conversation transcript.",
+        }],
+        extra_help: &[],
+        handler: super::handle_clear,
+    },
+    Command {
         name: "log",
         usages: &[CommandUsage {
             syntax: "/log [filename]",

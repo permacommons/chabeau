@@ -412,10 +412,6 @@ Chabeau uses a modular design with focused components:
 
 ## Development
 
-### Keyring diagnostics
-
-Chabeau caches provider credentials in memory after the first successful keyring lookup per session, ensuring subsequent auth checks avoid redundant keyring traffic. Every cache miss is recorded in a `lookups.log` file (created in the current working directory) with the provider identifier, the retrieved token, or any lookup error details to aid debugging.
-
 ### Running Tests
 ```bash
 cargo test                    # All tests

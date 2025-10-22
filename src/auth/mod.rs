@@ -7,8 +7,6 @@ use crate::core::providers::{
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
 use std::collections::{HashMap, HashSet};
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
 mod ui;
@@ -156,38 +154,27 @@ impl AuthManager {
                 KeyringCacheEntry::Error(err) => Err(Box::new(err.clone())),
             };
         }
-        self.log_lookup(provider_name, "attempt");
         let entry = match Entry::new(KEYRING_SERVICE, provider_name) {
             Ok(entry) => entry,
             Err(err) => {
                 let keyring_err = KeyringAccessError::from(err);
                 let shared_err = SharedKeyringAccessError::new(keyring_err);
-                self.log_lookup(
-                    provider_name,
-                    &format!("error=entry_new message={}", shared_err),
-                );
                 self.cache_lookup(provider_name, KeyringCacheEntry::Error(shared_err.clone()));
                 return Err(Box::new(shared_err));
             }
         };
         match entry.get_password() {
             Ok(token) => {
-                self.log_lookup(provider_name, &format!("result=success token={token}"));
                 self.cache_lookup(provider_name, KeyringCacheEntry::Present(token.clone()));
                 Ok(Some(token))
             }
             Err(keyring::Error::NoEntry) => {
-                self.log_lookup(provider_name, "result=missing");
                 self.cache_lookup(provider_name, KeyringCacheEntry::Missing);
                 Ok(None)
             }
             Err(err) => {
                 let keyring_err = KeyringAccessError::from(err);
                 let shared_err = SharedKeyringAccessError::new(keyring_err);
-                self.log_lookup(
-                    provider_name,
-                    &format!("result=error message={}", shared_err),
-                );
                 self.cache_lookup(provider_name, KeyringCacheEntry::Error(shared_err.clone()));
                 Err(Box::new(shared_err))
             }
@@ -506,16 +493,6 @@ impl AuthManager {
 
         if let Ok(mut cache) = token_cache().lock() {
             cache.insert(provider_name.to_string(), entry);
-        }
-    }
-
-    fn log_lookup(&self, provider_name: &str, detail: &str) {
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("lookups.log")
-        {
-            let _ = writeln!(file, "provider={provider_name} {detail}");
         }
     }
 }

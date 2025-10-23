@@ -449,6 +449,10 @@ pub async fn run_chat(
         .await?;
 
         let term_size = current_terminal_size(&terminal).await;
+        app.update(|app| {
+            app.ui.last_term_size = term_size;
+        })
+        .await;
 
         let event_outcome = process_ui_events(
             &app,
@@ -516,12 +520,18 @@ pub async fn run_chat(
     event_reader_handle.abort();
     restore_terminal(&terminal).await?;
 
-    let should_print = app.read(|app| app.ui.print_transcript_on_exit).await;
+    let (should_print, last_term_size) = app
+        .read(|app| (app.ui.print_transcript_on_exit, app.ui.last_term_size))
+        .await;
+
     if should_print {
-        let messages = app.read(|app| app.ui.messages.clone()).await;
-        for message in messages {
-            println!("{}: {}", message.role, message.content);
-        }
+        app.update(|app| {
+            let lines = app.ui.get_prewrapped_lines_cached(last_term_size.width);
+            for line in lines {
+                println!("{}", line.to_string());
+            }
+        })
+        .await;
     }
 
     result

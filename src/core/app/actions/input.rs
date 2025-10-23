@@ -99,6 +99,10 @@ fn handle_process_command(
             app.open_preset_picker();
             None
         }
+        CommandResult::Refine(prompt) => {
+            let action = AppAction::RefineLastMessage { prompt };
+            streaming::handle_streaming_action(app, action, ctx)
+        }
     }
 }
 

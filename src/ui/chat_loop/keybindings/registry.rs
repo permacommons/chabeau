@@ -190,7 +190,7 @@ impl ModeAwareRegistry {
                         // These have dedicated handlers
                         return !matches!(
                             c,
-                            'c' | 'l' | 'd' | 'b' | 'p' | 'j' | 'r' | 't' | 'a' | 'e'
+                            'c' | 'l' | 'd' | 'b' | 'p' | 'j' | 'r' | 't' | 'a' | 'e' | 'n'
                         );
                     }
                     // All other character input (regular chars, Shift+chars, Alt+chars, etc.)
@@ -207,7 +207,7 @@ impl ModeAwareRegistry {
                     KeyCode::Enter => false, // Submit (needs special handling)
                     KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Block mode-switching shortcuts, allow text editing shortcuts
-                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd')
+                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n')
                     }
                     KeyCode::F(4) => false, // F4 toggle compose mode
                     // Alt+Enter needs special handling in FilePrompt for overwrite

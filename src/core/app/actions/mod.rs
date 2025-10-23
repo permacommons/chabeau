@@ -43,6 +43,9 @@ pub enum AppAction {
     SubmitMessage {
         message: String,
     },
+    RefineLastMessage {
+        prompt: String,
+    },
     RetryLastMessage,
     ProcessCommand {
         input: String,
@@ -149,6 +152,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::StreamCompleted { .. }
         | AppAction::CancelStreaming
         | AppAction::SubmitMessage { .. }
+        | AppAction::RefineLastMessage { .. }
         | AppAction::RetryLastMessage => streaming::handle_streaming_action(app, action, ctx),
 
         AppAction::ClearStatus

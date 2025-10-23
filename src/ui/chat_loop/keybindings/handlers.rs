@@ -11,6 +11,7 @@
 use crate::commands;
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
+use crate::core::message::ROLE_ASSISTANT;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::modes::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
@@ -887,6 +888,64 @@ impl KeyHandler for CtrlRHandler {
     }
 }
 
+/// Handler for Ctrl+N (repeat last refine)
+pub struct CtrlNHandler;
+
+#[async_trait::async_trait]
+impl KeyHandler for CtrlNHandler {
+    async fn handle(
+        &self,
+        app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
+        _key: &KeyEvent,
+        term_width: u16,
+        term_height: u16,
+        _last_input_layout_update: Option<Instant>,
+    ) -> KeyResult {
+        let (last_prompt, can_retry) = app
+            .read(|app| {
+                let prompt = app.session.last_refine_prompt.clone();
+                let can_retry = app
+                    .ui
+                    .messages
+                    .iter()
+                    .any(|msg| msg.role == ROLE_ASSISTANT && !msg.content.is_empty());
+                (prompt, can_retry)
+            })
+            .await;
+
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+
+        match last_prompt {
+            Some(prompt) if can_retry => {
+                dispatcher.dispatch_many([AppAction::RefineLastMessage { prompt }], ctx);
+                KeyResult::Continue
+            }
+            Some(_) => {
+                dispatcher.dispatch_many(
+                    [AppAction::SetStatus {
+                        message: "No previous message to refine.".to_string(),
+                    }],
+                    ctx,
+                );
+                KeyResult::Handled
+            }
+            None => {
+                dispatcher.dispatch_many(
+                    [AppAction::SetStatus {
+                        message: "No refine prompt yet (/refine <prompt>).".to_string(),
+                    }],
+                    ctx,
+                );
+                KeyResult::Handled
+            }
+        }
+    }
+}
+
 /// Handler for Ctrl+T (external editor)
 pub struct CtrlTHandler {
     pub terminal:
@@ -1006,11 +1065,12 @@ impl KeyHandler for PickerHandler {
 mod tests {
     use super::{
         wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, CtrlLHandler,
-        EscapeHandler, F4Handler, KeyHandler, KeyResult,
+        CtrlNHandler, EscapeHandler, F4Handler, KeyHandler, KeyResult,
     };
     use crate::core::app::actions::{
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
     };
+    use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::chat_loop::AppHandle;
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1025,6 +1085,107 @@ mod tests {
     ) {
         let (tx, rx) = mpsc::unbounded_channel();
         (AppActionDispatcher::new(tx), rx)
+    }
+
+    #[test]
+    fn ctrl_n_handler_dispatches_refine_action() {
+        let handler = CtrlNHandler;
+        let mut app = create_test_app();
+        app.session.last_refine_prompt = Some("Tighten it up".to_string());
+        app.ui.messages.push_back(Message {
+            role: ROLE_USER.to_string(),
+            content: "Question".to_string(),
+        });
+        app.ui.messages.push_back(Message {
+            role: ROLE_ASSISTANT.to_string(),
+            content: "Answer".to_string(),
+        });
+
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Continue);
+
+            let envelope = action_rx.try_recv().expect("expected refine action");
+            match envelope.action {
+                AppAction::RefineLastMessage { prompt } => {
+                    assert_eq!(prompt, "Tighten it up");
+                }
+                _ => panic!("unexpected action"),
+            }
+        });
+    }
+
+    #[test]
+    fn ctrl_n_handler_sets_status_when_prompt_missing() {
+        let handler = CtrlNHandler;
+        let mut app = create_test_app();
+        app.ui.messages.push_back(Message {
+            role: ROLE_USER.to_string(),
+            content: "Question".to_string(),
+        });
+        app.ui.messages.push_back(Message {
+            role: ROLE_ASSISTANT.to_string(),
+            content: "Answer".to_string(),
+        });
+
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let envelope = action_rx.try_recv().expect("expected status action");
+            match envelope.action {
+                AppAction::SetStatus { message } => {
+                    assert_eq!(message, "No refine prompt yet (/refine <prompt>).");
+                }
+                _ => panic!("unexpected action"),
+            }
+        });
+    }
+
+    #[test]
+    fn ctrl_n_handler_sets_status_when_cannot_retry() {
+        let handler = CtrlNHandler;
+        let mut app = create_test_app();
+        app.session.last_refine_prompt = Some("Polish it".to_string());
+        app.ui.messages.push_back(Message {
+            role: ROLE_USER.to_string(),
+            content: "Question".to_string(),
+        });
+        // No assistant message added
+
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let envelope = action_rx.try_recv().expect("expected status action");
+            match envelope.action {
+                AppAction::SetStatus { message } => {
+                    assert_eq!(message, "No previous message to refine.");
+                }
+                _ => panic!("unexpected action"),
+            }
+        });
     }
 
     #[test]

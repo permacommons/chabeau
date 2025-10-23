@@ -260,6 +260,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::Typing,
+            KeyPattern::ctrl(KeyCode::Char('n')),
+            Box::new(CtrlNHandler),
+        )
+        .register_for_context(
+            KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('t')),
             Box::new(CtrlTHandler {
                 terminal: terminal.clone(),

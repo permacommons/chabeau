@@ -40,6 +40,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - Secure API key storage in system keyring with config-based provider management
 - Multi-line input (IME-friendly) with compose mode for longer responses
 - Message retry and message editing
+- On-demand refinements of the last assistant response with `/refine <prompt>`
 - Slash command registry with Tab completion for faster command discovery
 - Conversation logging with pause/resume; quick `/dump` of contents to a file
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
@@ -323,6 +324,7 @@ See [the built-in help](src/builtins/help.md) for a full list of keyboard contro
 
 - Alt+Enter (or Ctrl+J) to start a new line; Enter sends; Shift+arrow moves cursor in the input area.
 - Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
+- Ctrl+N repeats your most recent `/refine` prompt on the latest assistant reply.
 - Tab autocompletes slash commands so you can discover options quickly.
 - Ctrl+O opens the inspect view for picker items—providers include their ID, base URL, and auth mode; themes show their ID and every color override; character cards expand to the full v2 definition.
 

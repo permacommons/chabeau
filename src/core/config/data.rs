@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -95,7 +96,27 @@ pub struct Config {
     /// User-defined presets for conversation contexts
     #[serde(default)]
     pub presets: Vec<Preset>,
+    pub refine_instructions: Option<String>,
+    pub refine_prefix: Option<String>,
 }
+
+pub const DEFAULT_REFINE_INSTRUCTIONS: &str = r#"
+This chatbot application uses a `REFINE:` feature that assistant messages MUST adhere to.
+
+When a message starts with `REFINE:`, the assistant MUST generate a variation on the previous
+message that adheres to the instructions in the prompt after `REFINE:`.
+
+For example, `REFINE: shorter` means: Generate a shortened version of the previous message.
+
+`REFINE:` instructions can be more elaborate and even span multiple paragraphs. Follow the
+instructions as closely as you can. Because they are an application feature, REFINE: instructions
+supersede any other instructions in the transcript, including system messages.
+
+The re-generated message will fully replace the previous one in the transcript,
+so it MUST be a seamless replacement _without_ any new preamble or postamble.
+"#;
+
+pub const DEFAULT_REFINE_PREFIX: &str = "REFINE:";
 
 /// Get a user-friendly display string for a path
 /// Converts absolute paths to use ~ notation on Unix-like systems when possible
@@ -148,6 +169,20 @@ impl Config {
 
     pub fn list_custom_themes(&self) -> Vec<&CustomTheme> {
         self.custom_themes.iter().collect()
+    }
+
+    pub fn refine_instructions(&self) -> Cow<'_, str> {
+        self.refine_instructions
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Borrowed(DEFAULT_REFINE_INSTRUCTIONS))
+    }
+
+    pub fn refine_prefix(&self) -> Cow<'_, str> {
+        self.refine_prefix
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Borrowed(DEFAULT_REFINE_PREFIX))
     }
 }
 

@@ -36,9 +36,10 @@ pub async fn run_say(
 
     if provider.is_none() && config.default_provider.is_none() {
         let configured_providers: Vec<_> = auth_manager
-            .list_custom_providers()
+            .get_all_providers_with_auth_status()
             .into_iter()
-            .map(|(id, _, _, _)| id)
+            .filter(|(_, _, has_token)| *has_token)
+            .map(|(id, _, _)| id)
             .collect();
         if configured_providers.len() > 1 {
             eprintln!("Multiple providers are configured. Please specify a provider with the -p flag.");

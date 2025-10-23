@@ -194,7 +194,6 @@ pub enum Commands {
     /// Send a single-turn message to a model without launching the TUI
     Say {
         /// The prompt to send to the model
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         prompt: Vec<String>,
     },
 }

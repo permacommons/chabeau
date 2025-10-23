@@ -483,6 +483,33 @@ impl AuthManager {
         self.config.save()?;
         Ok(())
     }
+
+    pub fn get_all_providers_with_auth_status(&self) -> Vec<(String, String, bool)> {
+        let mut providers = Vec::new();
+        let mut seen_ids = HashSet::new();
+
+        for provider in &self.providers {
+            if self.config.get_custom_provider(&provider.name).is_some() {
+                continue;
+            }
+            let has_token = self.get_token(&provider.name).unwrap_or(None).is_some();
+            providers.push((
+                provider.name.clone(),
+                provider.display_name.clone(),
+                has_token,
+            ));
+            seen_ids.insert(provider.name.clone());
+        }
+
+        for custom in self.config.list_custom_providers() {
+            if !seen_ids.contains(&custom.id) {
+                let has_token = self.get_token(&custom.id).unwrap_or(None).is_some();
+                providers.push((custom.id.clone(), custom.display_name.clone(), has_token));
+            }
+        }
+
+        providers
+    }
 }
 
 impl AuthManager {

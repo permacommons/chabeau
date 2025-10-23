@@ -5,6 +5,7 @@
 pub mod character_list;
 pub mod model_list;
 pub mod provider_list;
+pub mod say;
 pub mod theme_list;
 
 use std::error::Error;
@@ -189,6 +190,11 @@ pub enum Commands {
         /// Force overwrite if card already exists
         #[arg(short = 'f', long)]
         force: bool,
+    },
+    /// Send a single-turn message to a model without launching the TUI
+    Say {
+        /// The prompt to send to the model
+        prompt: Vec<String>,
     },
 }
 
@@ -629,6 +635,18 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                     std::process::exit(1);
                 }
             }
+        }
+        Some(Commands::Say { prompt }) => {
+            say::run_say(
+                prompt,
+                args.model,
+                args.provider,
+                args.env_only,
+                args.character,
+                args.persona,
+                args.preset,
+            )
+            .await
         }
     }
 }

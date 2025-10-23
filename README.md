@@ -348,69 +348,80 @@ Once set, press Ctrl+T in the TUI to launch the external editor.
 Chabeau uses a modular design with focused components:
 
 - `main.rs` – Entry point
-- `builtins/` – Build-time assets embedded into the binary
-  - `models.toml` – Supported provider definitions
-  - `themes.toml` – Built-in UI themes
-  - `help.md` – In-app keyboard shortcut and command reference
-- `cli/` – Command-line interface parsing and handling
-  - `mod.rs` – CLI argument parsing and command dispatching
-  - `model_list.rs` – Model listing functionality
-  - `provider_list.rs` – Provider listing functionality
-  - `character_list.rs` – Character card listing functionality
-  - `theme_list.rs` – Theme listing functionality
-- `core/` – Core application components
-  - `app/` – Application state and controllers
-    - `mod.rs` – App struct and module exports
-    - `actions.rs` – Internal action definitions and dispatcher for chat loop updates
-    - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
-    - `session.rs` – Session bootstrap and provider/model state
-    - `settings.rs` – Theme and provider controllers
-    - `ui_state.rs` – UI state management and text input helpers
-  - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
-  - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
-  - `config/` – Configuration data, defaults, caching, and persistence
-    - `mod.rs` – Public exports for configuration helpers
-    - `data.rs` – Configuration data types and pure helpers
-    - `orchestrator.rs` – Cached config loader and mutation orchestrator
-    - `defaults.rs` – Default selection helpers and `Config` implementations
-    - `io.rs` – Config path resolution and persistence routines
-    - `printing.rs` – CLI-facing config print helpers
-    - `tests.rs` – Configuration module tests
-  - `message.rs` – Message data structures
+- `api/` – API data structures and model-related helpers
+  - `mod.rs` – API data structures
+  - `models.rs` – Model fetching and sorting functionality
 - `auth/` – Authentication and provider management
   - `mod.rs` – Authentication manager implementation
   - `ui.rs` – Interactive prompts and input helpers for auth flows
+- `builtins/` – Build-time assets embedded into the binary
+  - `help.md` – In-app keyboard shortcut and command reference
+  - `models.toml` – Supported provider definitions
+  - `themes.toml` – Built-in UI themes
 - `character/` – Character card support (v2 format)
-  - `mod.rs` – Module exports and public API
-  - `card.rs` – Character card data structures and v2 spec parsing
-  - `loader.rs` – Card file loading (JSON and PNG with metadata extraction)
   - `cache.rs` – In-memory caching with invalidation
-  - `service.rs` – Shared character cache and resolution helpers for the TUI and CLI
+  - `card.rs` – Character card data structures and v2 spec parsing
   - `import.rs` – Import command and validation logic
-- `api/` – API types and models
-  - `mod.rs` – API data structures
-  - `models.rs` – Model fetching and sorting functionality
+  - `loader.rs` – Card file loading (JSON and PNG with metadata extraction)
+  - `mod.rs` – Module exports and public API
+  - `png_text.rs` – PNG tEXt chunk reader/writer
+  - `service.rs` – Shared character cache and resolution helpers for the TUI and CLI
+- `cli/` – Command-line interface parsing and handling
+  - `character_list.rs` – Character card listing functionality
+  - `mod.rs` – CLI argument parsing and command dispatching
+  - `model_list.rs` – Model listing functionality
+  - `provider_list.rs` – Provider listing functionality
+  - `theme_list.rs` – Theme listing functionality
+- `commands/` – Chat command processing and registry-driven dispatch
+  - `mod.rs` – Command handlers and dispatcher
+  - `registry.rs` – Static command metadata registry
+- `core/` – Core application components
+  - `app/` – Application state and controllers
+    - `actions/` – Internal action definitions and dispatcher for chat loop updates
+    - `app.rs` – Main `App` struct and event loop integration
+    - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
+    - `mod.rs` – App struct and module exports
+    - `picker/` – Generic picker that powers all TUI selection dialogs
+    - `pickers.rs` – Picker constructors and helpers for each picker type
+    - `session.rs` – Session bootstrap and provider/model state
+    - `settings.rs` – Theme and provider controllers
+    - `streaming.rs` – Handles streaming responses from the API
+    - `ui_helpers.rs` – UI state transition helpers
+    - `ui_state.rs` – UI state management and text input helpers
+  - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
+  - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
+  - `config/` – Configuration data, defaults, caching, and persistence
+    - `data.rs` – Configuration data types and pure helpers
+    - `defaults.rs` – Default selection helpers and `Config` implementations
+    - `io.rs` – Config path resolution and persistence routines
+    - `mod.rs` – Public exports for configuration helpers
+    - `orchestrator.rs` – Cached config loader and mutation orchestrator
+    - `printing.rs` – CLI-facing config print helpers
+    - `tests.rs` – Configuration module tests
+  - `message.rs` – Message data structures
 - `ui/` – Terminal interface rendering
-  - `mod.rs` – UI module declarations
+  - `appearance.rs` – Theme and style definitions
   - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
     - `event_loop.rs` – Async terminal loop orchestration, event polling, and stream dispatch
     - `lifecycle.rs` – Terminal setup/teardown helpers and resource guards
     - `modes.rs` – Mode-aware key handlers and text interaction utilities
+  - `help.rs` – Help text rendering
   - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
-  - `markdown.rs` / `markdown_wrap.rs` – Markdown renderer and wrapping helpers that emit span metadata
+  - `markdown/` – Markdown renderer and wrapping helpers that emit span metadata
+  - `mod.rs` – UI module declarations
+  - `osc/` – Crossterm backend wrapper that emits OSC 8 hyperlinks
+  - `picker.rs` – Picker controls and rendering
   - `renderer.rs` – Terminal interface rendering (chat area, input, pickers)
-  - `osc_backend.rs` / `osc_state.rs` / `osc.rs` – Crossterm backend wrapper that emits OSC 8 hyperlinks
-  - `picker.rs` / `appearance.rs` / `theme.rs` – Picker controls and theming utilities
+  - `span.rs` – Span metadata for clickable links
+  - `theme.rs` – Theme loading and management
+  - `title.rs` – Header bar rendering
 - `utils/` – Utility functions and helpers
-  - `mod.rs` – Utility module declarations
+  - `clipboard.rs` – Cross-platform clipboard helper
   - `color.rs` – Terminal color detection and palette quantization
   - `editor.rs` – External editor integration
   - `logging.rs` – Chat logging functionality
+  - `mod.rs` – Utility module declarations
   - `scroll.rs` – Text wrapping and scroll calculations
-  - `clipboard.rs` – Cross-platform clipboard helper
-- `commands/` – Chat command processing and registry-driven dispatch
-  - `mod.rs` – Command handlers and dispatcher
-  - `registry.rs` – Static command metadata registry
 
 ## Development
 

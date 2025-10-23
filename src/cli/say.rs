@@ -33,6 +33,20 @@ pub async fn run_say(
 
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
+
+    if provider.is_none() && config.default_provider.is_none() {
+        let configured_providers: Vec<_> = auth_manager
+            .list_custom_providers()
+            .into_iter()
+            .map(|(id, _, _, _)| id)
+            .collect();
+        if configured_providers.len() > 1 {
+            eprintln!("Multiple providers are configured. Please specify a provider with the -p flag.");
+            eprintln!("Available providers: {}", configured_providers.join(", "));
+            std::process::exit(1);
+        }
+    }
+
     let character_service = CharacterService::new();
 
     let session = match resolve_session(&auth_manager, &config, provider.as_deref()) {

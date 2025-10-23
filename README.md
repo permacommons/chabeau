@@ -101,6 +101,18 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
 chabeau --env     # Force using env vars even if providers are configured
 ```
 
+### Quick, Single-Turn Chats
+
+For quick, one-off questions without launching the full TUI, use the `say` command:
+
+```bash
+chabeau say "What is the capital of France?"
+```
+
+This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings and uses a monochrome theme for clean, readable output.
+
+If you have multiple providers configured but no default set, Chabeau will prompt you to specify a provider with the `-p` flag.
+
 Environment variable values can make their way into shell histories or other places they shouldn't, so using the keyring is generally advisable.
 
 ## Configuration

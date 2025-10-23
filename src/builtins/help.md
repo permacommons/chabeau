@@ -11,7 +11,8 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 - F4: Toggle compose mode (Enter=new line, Alt+Enter=send)
 - Ctrl+R: Retry last response
 - Ctrl+N: Re-run the most recent `/refine` prompt
-- Ctrl+D: Exit when input is empty; otherwise behaves like [Del]
+- Ctrl+D: Exit when input is empty (prints transcript); otherwise [Del]
+- Ctrl+C: Exit immediately (no transcript)
 - Ctrl+P: Edit previous messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message

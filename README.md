@@ -327,6 +327,7 @@ See [the built-in help](src/builtins/help.md) for a full list of keyboard contro
 - Ctrl+N repeats your most recent `/refine` prompt on the latest assistant reply.
 - Tab autocompletes slash commands so you can discover options quickly.
 - Ctrl+O opens the inspect view for picker items—providers include their ID, base URL, and auth mode; themes show their ID and every color override; character cards expand to the full v2 definition.
+- Ctrl+D on an empty input prints the transcript and exits; Ctrl+C exits immediately.
 
 ### Mousewheel
 

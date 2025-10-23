@@ -3,6 +3,7 @@ use crate::core::message::{AppMessageKind, Message, ROLE_USER};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
+use ratatui::prelude::Size;
 use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -60,7 +61,9 @@ pub struct UiState {
     pub status_set_at: Option<Instant>,
     pub user_display_name: String,
     pub exit_requested: bool,
+    pub print_transcript_on_exit: bool,
     pub compose_mode: bool,
+    pub last_term_size: Size,
 }
 
 impl UiState {
@@ -260,7 +263,9 @@ impl UiState {
             status_set_at: None,
             user_display_name: "You".to_string(),
             exit_requested: false,
+            print_transcript_on_exit: false,
             compose_mode: false,
+            last_term_size: Size::default(),
         }
     }
 

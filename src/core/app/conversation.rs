@@ -471,6 +471,40 @@ impl<'a> ConversationController<'a> {
             .any(|msg| msg.role == ROLE_ASSISTANT && !msg.content.is_empty())
     }
 
+    pub fn stream_parameters(
+        &mut self,
+        messages: Vec<Message>,
+        additional_system_prompt: Option<String>,
+    ) -> crate::core::chat_stream::StreamParams {
+        let (cancel_token, stream_id) = self.start_new_stream_headless();
+        let api_messages = self.assemble_api_messages(messages.iter(), additional_system_prompt);
+        crate::core::chat_stream::StreamParams {
+            api_messages,
+            client: self.session.client.clone(),
+            model: self.session.model.clone(),
+            api_key: self.session.api_key.clone(),
+            base_url: self.session.base_url.clone(),
+            provider_name: self.session.provider_name.clone(),
+            cancel_token,
+            stream_id,
+        }
+    }
+
+    fn cancel_current_stream_headless(&mut self) {
+        if let Some(token) = &self.session.stream_cancel_token {
+            token.cancel();
+        }
+        self.session.stream_cancel_token = None;
+    }
+
+    fn start_new_stream_headless(&mut self) -> (CancellationToken, u64) {
+        self.cancel_current_stream_headless();
+        self.session.current_stream_id += 1;
+        let token = CancellationToken::new();
+        self.session.stream_cancel_token = Some(token.clone());
+        (token, self.session.current_stream_id)
+    }
+
     pub fn prepare_refine(
         &mut self,
         prompt: String,

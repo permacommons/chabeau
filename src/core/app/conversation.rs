@@ -190,7 +190,6 @@ impl<'a> ConversationController<'a> {
 
         self.session.retrying_message_index = None;
         self.session.original_refining_content = None;
-        self.session.last_refine_prompt = None;
 
         let history_len = self.ui.messages.len().saturating_sub(1);
         self.assemble_api_messages(self.ui.messages.iter().take(history_len), None)
@@ -342,8 +341,10 @@ impl<'a> ConversationController<'a> {
             return None;
         }
 
-        if let Some(last_prompt) = self.session.last_refine_prompt.clone() {
-            return self.prepare_refine(last_prompt, available_height, terminal_width, true);
+        if self.session.original_refining_content.is_some() {
+            if let Some(last_prompt) = self.session.last_refine_prompt.clone() {
+                return self.prepare_refine(last_prompt, available_height, terminal_width, true);
+            }
         }
 
         self.session.last_retry_time = Instant::now();

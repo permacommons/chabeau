@@ -12,7 +12,6 @@ Items are removed when completed.
   - Lorebook/world info support from character cards — [OPEN]
 - Make assistant messages editable (may require further rethinking of input area) — [OPEN]
 - Basic "push a file into context" support — [OPEN]
-- "Rapid refine" - apply a previously created prompt to an output — [OPEN]
 - Microphone/speaker support? — [OPEN]
 - Extend span metadata to code blocks (e.g., `SpanKind::CodeBlock`) to unlock richer TUI interactions — [OPEN]
 

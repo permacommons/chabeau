@@ -217,6 +217,10 @@ impl KeyHandler for CtrlDHandler {
     ) -> KeyResult {
         let is_empty = app.read(|app| app.ui.get_input_text().is_empty()).await;
         if is_empty {
+            app.update(|app| {
+                app.ui.print_transcript_on_exit = true;
+            })
+            .await;
             KeyLoopAction::Break.into()
         } else {
             app.update(|app| {

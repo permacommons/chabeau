@@ -60,6 +60,7 @@ pub struct UiState {
     pub status_set_at: Option<Instant>,
     pub user_display_name: String,
     pub exit_requested: bool,
+    pub print_transcript_on_exit: bool,
     pub compose_mode: bool,
 }
 
@@ -260,6 +261,7 @@ impl UiState {
             status_set_at: None,
             user_display_name: "You".to_string(),
             exit_requested: false,
+            print_transcript_on_exit: false,
             compose_mode: false,
         }
     }

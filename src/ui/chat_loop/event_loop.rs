@@ -516,6 +516,14 @@ pub async fn run_chat(
     event_reader_handle.abort();
     restore_terminal(&terminal).await?;
 
+    let should_print = app.read(|app| app.ui.print_transcript_on_exit).await;
+    if should_print {
+        let messages = app.read(|app| app.ui.messages.clone()).await;
+        for message in messages {
+            println!("{}: {}", message.role, message.content);
+        }
+    }
+
     result
 }
 

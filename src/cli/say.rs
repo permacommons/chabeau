@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::io::{self, Write};
+use tokio::time::{sleep, Duration};
 
 use crate::auth::AuthManager;
 use crate::character::CharacterService;
@@ -35,8 +36,8 @@ pub async fn run_say(
     let auth_manager = AuthManager::new()?;
 
     if provider.is_none() && config.default_provider.is_none() {
-        let configured_providers: Vec<_> = auth_manager
-            .get_all_providers_with_auth_status()
+        let (providers, _) = auth_manager.get_all_providers_with_auth_status();
+        let configured_providers: Vec<_> = providers
             .into_iter()
             .filter(|(_, _, has_token)| *has_token)
             .map(|(id, _, _)| id)
@@ -139,6 +140,7 @@ pub async fn run_say(
         );
         for line in rendered.lines {
             println!("{}", line);
+            sleep(Duration::from_millis(10)).await;
         }
     }
 

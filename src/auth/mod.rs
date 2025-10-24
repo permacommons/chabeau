@@ -484,7 +484,7 @@ impl AuthManager {
         Ok(())
     }
 
-    pub fn get_all_providers_with_auth_status(&self) -> Vec<(String, String, bool)> {
+    pub fn get_all_providers_with_auth_status(&self) -> (Vec<(String, String, bool)>, Option<String>) {
         let mut providers = Vec::new();
         let mut seen_ids = HashSet::new();
 
@@ -508,7 +508,7 @@ impl AuthManager {
             }
         }
 
-        providers
+        (providers, self.config.default_provider.clone())
     }
 }
 

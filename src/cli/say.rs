@@ -13,7 +13,12 @@ use crate::core::providers::{resolve_session, ResolveSessionError};
 use crate::ui::layout::TableOverflowPolicy;
 use crate::ui::markdown::{self, MessageRenderConfig};
 use crate::ui::theme::Theme;
-use ratatui::crossterm::{cursor, terminal, QueueableCommand};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::Rect,
+    widgets::{Paragraph, Wrap},
+    Terminal,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_say(
@@ -101,62 +106,54 @@ pub async fn run_say(
     stream_service.spawn_stream(params);
 
     let mut full_response = String::new();
-    let mut last_line_count = 0;
     let use_markdown = config.markdown.unwrap_or(false);
-    let mut stdout = io::stdout();
 
-    loop {
+    // Use a temporary terminal for rendering, but without the alternate screen
+    let mut terminal = if use_markdown {
+        Some(Terminal::new(CrosstermBackend::new(io::stdout()))?)
+    } else {
+        None
+    };
+
+    let result: Result<(), Box<dyn Error>> = loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
                 full_response.push_str(&content);
-                if use_markdown {
-                    // Re-render only when there's a newline
-                    if content.contains('\n') {
-                        last_line_count = render_and_print_markdown(
-                            &full_response,
-                            last_line_count,
-                            &mut stdout,
-                        )?;
-                    }
+                if let Some(terminal) = &mut terminal {
+                    terminal.draw(|f| {
+                        let size = f.area();
+                        let paragraph = markdown_paragraph(&full_response, size);
+                        f.render_widget(paragraph, size);
+                    })?;
                 } else {
                     print!("{}", content);
-                    stdout.flush()?;
+                    io::stdout().flush()?;
                 }
             }
             Some((StreamMessage::Error(err), _)) => {
-                eprintln!("\n\n❌ Error: {}", err);
-                std::process::exit(1);
+                break Err(err.into());
             }
             Some((StreamMessage::End, _)) => {
-                if use_markdown {
-                    // Final render to display any remaining text
-                    render_and_print_markdown(&full_response, last_line_count, &mut stdout)?;
-                } else {
-                    println!();
-                }
-                break;
+                break Ok(());
             }
-            None => break,
+            None => break Ok(()),
             _ => {}
         }
+    };
+
+    // Ensure there's a newline at the end of the output
+    println!();
+
+    if let Err(e) = result {
+        eprintln!("❌ Error: {}", e);
+        std::process::exit(1);
     }
 
     Ok(())
 }
 
-fn render_and_print_markdown(
-    content: &str,
-    last_line_count: usize,
-    stdout: &mut io::Stdout,
-) -> Result<usize, Box<dyn Error>> {
-    // Clear the previously rendered output
-    if last_line_count > 0 {
-        stdout.queue(cursor::MoveUp(last_line_count as u16))?;
-        stdout.queue(terminal::Clear(terminal::ClearType::FromCursorDown))?;
-    }
-
+fn markdown_paragraph(content: &str, size: Rect) -> Paragraph<'_> {
     let monochrome_theme = Theme::monochrome();
-    let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
     let rendered = markdown::render_message_with_config(
         &Message {
             role: ROLE_ASSISTANT.to_string(),
@@ -164,14 +161,8 @@ fn render_and_print_markdown(
         },
         &monochrome_theme,
         MessageRenderConfig::markdown(true)
-            .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
+            .with_terminal_width(Some(size.width as usize), TableOverflowPolicy::WrapCells),
     );
 
-    for line in &rendered.lines {
-        println!("{}", line);
-    }
-
-    stdout.flush()?;
-
-    Ok(rendered.lines.len())
+    Paragraph::new(rendered.lines).wrap(Wrap { trim: false })
 }

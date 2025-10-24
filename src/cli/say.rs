@@ -2,7 +2,6 @@
 
 use std::error::Error;
 use std::io::{self, Write};
-use tokio::time::{sleep, Duration};
 
 use crate::auth::AuthManager;
 use crate::character::CharacterService;
@@ -14,7 +13,7 @@ use crate::core::providers::{resolve_session, ResolveSessionError};
 use crate::ui::layout::TableOverflowPolicy;
 use crate::ui::markdown::{self, MessageRenderConfig};
 use crate::ui::theme::Theme;
-use ratatui::crossterm::terminal;
+use ratatui::crossterm::{cursor, terminal, QueueableCommand};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_say(
@@ -102,13 +101,20 @@ pub async fn run_say(
     stream_service.spawn_stream(params);
 
     let mut full_response = String::new();
+    let mut last_line_count = 0;
+    let use_markdown = config.markdown.unwrap_or(false);
+    let mut stdout = io::stdout();
+
     loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
-                full_response.push_str(&content);
-                if !config.markdown.unwrap_or(false) {
+                if use_markdown {
+                    full_response.push_str(&content);
+                    last_line_count =
+                        render_and_print_markdown(&full_response, last_line_count, &mut stdout)?;
+                } else {
                     print!("{}", content);
-                    io::stdout().flush()?;
+                    stdout.flush()?;
                 }
             }
             Some((StreamMessage::Error(err), _)) => {
@@ -116,7 +122,7 @@ pub async fn run_say(
                 std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
-                if !config.markdown.unwrap_or(false) {
+                if !use_markdown {
                     println!();
                 }
                 break;
@@ -126,23 +132,37 @@ pub async fn run_say(
         }
     }
 
-    if config.markdown.unwrap_or(false) {
-        let monochrome_theme = Theme::monochrome();
-        let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
-        let rendered = markdown::render_message_with_config(
-            &Message {
-                role: ROLE_ASSISTANT.to_string(),
-                content: full_response,
-            },
-            &monochrome_theme,
-            MessageRenderConfig::markdown(true)
-                .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
-        );
-        for line in rendered.lines {
-            println!("{}", line);
-            sleep(Duration::from_millis(10)).await;
-        }
+    Ok(())
+}
+
+fn render_and_print_markdown(
+    content: &str,
+    last_line_count: usize,
+    stdout: &mut io::Stdout,
+) -> Result<usize, Box<dyn Error>> {
+    // Clear the previously rendered output
+    if last_line_count > 0 {
+        stdout.queue(cursor::MoveUp(last_line_count as u16))?;
+        stdout.queue(terminal::Clear(terminal::ClearType::FromCursorDown))?;
     }
 
-    Ok(())
+    let monochrome_theme = Theme::monochrome();
+    let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
+    let rendered = markdown::render_message_with_config(
+        &Message {
+            role: ROLE_ASSISTANT.to_string(),
+            content: content.to_string(),
+        },
+        &monochrome_theme,
+        MessageRenderConfig::markdown(true)
+            .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
+    );
+
+    for line in &rendered.lines {
+        println!("{}", line);
+    }
+
+    stdout.flush()?;
+
+    Ok(rendered.lines.len())
 }

@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use crate::auth::AuthManager;
 use crate::character::CharacterService;
@@ -104,14 +105,22 @@ pub async fn run_say(
     let mut last_line_count = 0;
     let use_markdown = config.markdown.unwrap_or(false);
     let mut stdout = io::stdout();
+    let mut last_render_time = Instant::now();
+    let render_interval = Duration::from_millis(50); // ~20 FPS
 
     loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
+                full_response.push_str(&content);
                 if use_markdown {
-                    full_response.push_str(&content);
-                    last_line_count =
-                        render_and_print_markdown(&full_response, last_line_count, &mut stdout)?;
+                    if last_render_time.elapsed() >= render_interval {
+                        last_line_count = render_and_print_markdown(
+                            &full_response,
+                            last_line_count,
+                            &mut stdout,
+                        )?;
+                        last_render_time = Instant::now();
+                    }
                 } else {
                     print!("{}", content);
                     stdout.flush()?;
@@ -122,7 +131,10 @@ pub async fn run_say(
                 std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
-                if !use_markdown {
+                if use_markdown {
+                    // Final render to ensure the full content is displayed
+                    render_and_print_markdown(&full_response, last_line_count, &mut stdout)?;
+                } else {
                     println!();
                 }
                 break;

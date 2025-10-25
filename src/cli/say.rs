@@ -13,13 +13,7 @@ use crate::core::providers::{resolve_session, ResolveSessionError};
 use crate::ui::layout::TableOverflowPolicy;
 use crate::ui::markdown::{self, MessageRenderConfig};
 use crate::ui::theme::Theme;
-use ratatui::{
-    backend::CrosstermBackend,
-    crossterm::cursor,
-    layout::Rect,
-    widgets::{Paragraph, Wrap},
-    Terminal,
-};
+use ratatui::crossterm::terminal;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_say(
@@ -108,84 +102,58 @@ pub async fn run_say(
 
     let mut full_response = String::new();
     let use_markdown = config.markdown.unwrap_or(false);
+    let mut stdout = io::stdout();
 
-    // Use a temporary terminal for rendering, but without the alternate screen
-    let mut terminal = if use_markdown {
-        Some(Terminal::new(CrosstermBackend::new(io::stdout()))?)
-    } else {
-        None
-    };
-
-    let initial_cursor = if use_markdown {
-        Some(cursor::position()?)
-    } else {
-        None
-    };
-
-    let result: Result<Option<Rect>, Box<dyn Error>> = loop {
+    loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
-                full_response.push_str(&content);
-
-                if let (Some(terminal), Some((start_x, start_y))) =
-                    (&mut terminal, initial_cursor)
-                {
-                    terminal.draw(|f| {
-                        let total_area = f.area();
-                        let render_area = Rect::new(
-                            start_x,
-                            start_y,
-                            total_area.width,
-                            total_area.height.saturating_sub(start_y),
-                        );
-                        let (paragraph, lines) = markdown_paragraph(&full_response, render_area);
-                        let mut paragraph = paragraph;
-                        if lines > render_area.height {
-                            paragraph = paragraph.scroll(((lines - render_area.height) as u16, 0));
-                        }
-                        f.render_widget(paragraph, render_area);
-                    })?;
+                if use_markdown {
+                    full_response.push_str(&content);
                 } else {
                     print!("{}", content);
-                    io::stdout().flush()?;
+                    stdout.flush()?;
                 }
             }
             Some((StreamMessage::Error(err), _)) => {
-                break Err(err.into());
+                // Buffer errors so they don't get overwritten by the markdown render
+                if !use_markdown {
+                    eprintln!();
+                }
+                eprintln!("❌ Error: {}", err);
+                std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
-                break Ok(None);
+                if use_markdown {
+                    render_markdown_final(&full_response)?;
+                } else {
+                    println!();
+                }
+                break;
             }
-            None => break Ok(None),
+            None => break,
             _ => {}
         }
-    };
-
-    // Ensure there's a newline at the end of the output
-    println!();
-
-    if let Err(e) = result {
-        eprintln!("❌ Error: {}", e);
-        std::process::exit(1);
     }
 
     Ok(())
 }
 
-fn markdown_paragraph(content: &str, size: Rect) -> (Paragraph<'_>, u16) {
+fn render_markdown_final(content: &str) -> Result<(), Box<dyn Error>> {
     let monochrome_theme = Theme::monochrome();
-    let render_config = MessageRenderConfig::markdown(false) // Disable syntax highlighting
-        .with_terminal_width(Some(size.width as usize), TableOverflowPolicy::WrapCells);
-
+    let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
     let rendered = markdown::render_message_with_config(
         &Message {
             role: ROLE_ASSISTANT.to_string(),
             content: content.to_string(),
         },
         &monochrome_theme,
-        render_config,
+        MessageRenderConfig::markdown(false)
+            .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
     );
 
-    let lines = rendered.lines.len() as u16;
-    (Paragraph::new(rendered.lines).wrap(Wrap { trim: false }), lines)
+    for line in &rendered.lines {
+        println!("{}", line);
+    }
+
+    Ok(())
 }

@@ -259,6 +259,56 @@ impl Theme {
         }
     }
 
+    pub fn monochrome() -> Self {
+        Theme {
+            background_color: Color::Reset,
+            user_prefix_style: Style::default().add_modifier(Modifier::BOLD),
+            user_text_style: Style::default(),
+            assistant_text_style: Style::default(),
+            system_text_style: Style::default(),
+            error_text_style: Style::default(),
+            app_messages: AppMessageStyles {
+                info: AppMessageStyle {
+                    prefix: "ℹ️  ".to_string(),
+                    prefix_style: Style::default(),
+                    text_style: Style::default(),
+                },
+                warning: AppMessageStyle {
+                    prefix: "⚠️  ".to_string(),
+                    prefix_style: Style::default(),
+                    text_style: Style::default(),
+                },
+                error: AppMessageStyle {
+                    prefix: "⛔  ".to_string(),
+                    prefix_style: Style::default(),
+                    text_style: Style::default(),
+                },
+            },
+            title_style: Style::default(),
+            streaming_indicator_style: Style::default(),
+            selection_highlight_style: Style::default().add_modifier(Modifier::REVERSED),
+            input_border_style: Style::default(),
+            input_title_style: Style::default(),
+            input_text_style: Style::default(),
+            input_cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            input_cursor_line_style: Style::default(),
+            md_h1: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_h2: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_h3: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_h4: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_h5: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_h6: Some(Style::default().add_modifier(Modifier::BOLD)),
+            md_paragraph: Some(Style::default()),
+            md_inline_code: Some(Style::default().add_modifier(Modifier::REVERSED)),
+            md_link: Some(Style::default().add_modifier(Modifier::UNDERLINED)),
+            md_rule: Some(Style::default()),
+            md_blockquote_text: Some(Style::default().add_modifier(Modifier::ITALIC)),
+            md_list_marker: Some(Style::default()),
+            md_codeblock_text: Some(Style::default()),
+            md_codeblock_bg: None,
+        }
+    }
+
     pub fn from_spec(spec: &ThemeSpec) -> Self {
         // Helper parsers
         fn parse_color(s: &str) -> Option<Color> {

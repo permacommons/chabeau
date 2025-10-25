@@ -103,30 +103,33 @@ pub async fn run_say(
     let mut full_response = String::new();
     let use_markdown = config.markdown.unwrap_or(false);
     let mut stdout = io::stdout();
+    let mut is_first_chunk = true;
 
     loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
+                // With markdown, we do a hybrid approach: stream the raw text for speed,
+                // then print the fully rendered markdown at the end.
                 if use_markdown {
+                    if is_first_chunk {
+                        println!("--- Raw Stream ---\n");
+                        is_first_chunk = false;
+                    }
                     full_response.push_str(&content);
-                } else {
-                    print!("{}", content);
-                    stdout.flush()?;
                 }
+                print!("{}", content);
+                stdout.flush()?;
             }
             Some((StreamMessage::Error(err), _)) => {
-                // Buffer errors so they don't get overwritten by the markdown render
-                if !use_markdown {
-                    eprintln!();
-                }
+                eprintln!();
                 eprintln!("❌ Error: {}", err);
                 std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
-                if use_markdown {
+                println!(); // Final newline for the raw stream
+                if use_markdown && !full_response.is_empty() {
+                    println!("\n--- Rendered Markdown ---");
                     render_markdown_final(&full_response)?;
-                } else {
-                    println!();
                 }
                 break;
             }

@@ -138,7 +138,11 @@ pub async fn run_say(
                             total_area.width,
                             total_area.height.saturating_sub(start_y),
                         );
-                        let paragraph = markdown_paragraph(&full_response, render_area);
+                        let (paragraph, lines) = markdown_paragraph(&full_response, render_area);
+                        let mut paragraph = paragraph;
+                        if lines > render_area.height {
+                            paragraph = paragraph.scroll(((lines - render_area.height) as u16, 0));
+                        }
                         f.render_widget(paragraph, render_area);
                     })?;
                 } else {
@@ -168,17 +172,20 @@ pub async fn run_say(
     Ok(())
 }
 
-fn markdown_paragraph(content: &str, size: Rect) -> Paragraph<'_> {
+fn markdown_paragraph(content: &str, size: Rect) -> (Paragraph<'_>, u16) {
     let monochrome_theme = Theme::monochrome();
+    let render_config = MessageRenderConfig::markdown(false) // Disable syntax highlighting
+        .with_terminal_width(Some(size.width as usize), TableOverflowPolicy::WrapCells);
+
     let rendered = markdown::render_message_with_config(
         &Message {
             role: ROLE_ASSISTANT.to_string(),
             content: content.to_string(),
         },
         &monochrome_theme,
-        MessageRenderConfig::markdown(true)
-            .with_terminal_width(Some(size.width as usize), TableOverflowPolicy::WrapCells),
+        render_config,
     );
 
-    Paragraph::new(rendered.lines).wrap(Wrap { trim: false })
+    let lines = rendered.lines.len() as u16;
+    (Paragraph::new(rendered.lines).wrap(Wrap { trim: false }), lines)
 }

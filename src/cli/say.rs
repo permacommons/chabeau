@@ -15,6 +15,7 @@ use crate::ui::markdown::{self, MessageRenderConfig};
 use crate::ui::theme::Theme;
 use ratatui::{
     backend::CrosstermBackend,
+    crossterm::cursor,
     layout::Rect,
     widgets::{Paragraph, Wrap},
     Terminal,
@@ -115,15 +116,30 @@ pub async fn run_say(
         None
     };
 
-    let result: Result<(), Box<dyn Error>> = loop {
+    let initial_cursor = if use_markdown {
+        Some(cursor::position()?)
+    } else {
+        None
+    };
+
+    let result: Result<Option<Rect>, Box<dyn Error>> = loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
                 full_response.push_str(&content);
-                if let Some(terminal) = &mut terminal {
+
+                if let (Some(terminal), Some((start_x, start_y))) =
+                    (&mut terminal, initial_cursor)
+                {
                     terminal.draw(|f| {
-                        let size = f.area();
-                        let paragraph = markdown_paragraph(&full_response, size);
-                        f.render_widget(paragraph, size);
+                        let total_area = f.area();
+                        let render_area = Rect::new(
+                            start_x,
+                            start_y,
+                            total_area.width,
+                            total_area.height.saturating_sub(start_y),
+                        );
+                        let paragraph = markdown_paragraph(&full_response, render_area);
+                        f.render_widget(paragraph, render_area);
                     })?;
                 } else {
                     print!("{}", content);
@@ -134,9 +150,9 @@ pub async fn run_say(
                 break Err(err.into());
             }
             Some((StreamMessage::End, _)) => {
-                break Ok(());
+                break Ok(None);
             }
-            None => break Ok(()),
+            None => break Ok(None),
             _ => {}
         }
     };

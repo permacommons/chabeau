@@ -484,7 +484,9 @@ impl AuthManager {
         Ok(())
     }
 
-    pub fn get_all_providers_with_auth_status(&self) -> (Vec<(String, String, bool)>, Option<String>) {
+    pub fn get_all_providers_with_auth_status(
+        &self,
+    ) -> (Vec<(String, String, String, bool)>, Option<String>) {
         let mut providers = Vec::new();
         let mut seen_ids = HashSet::new();
 
@@ -496,6 +498,7 @@ impl AuthManager {
             providers.push((
                 provider.name.clone(),
                 provider.display_name.clone(),
+                provider.base_url.clone(),
                 has_token,
             ));
             seen_ids.insert(provider.name.clone());
@@ -504,7 +507,12 @@ impl AuthManager {
         for custom in self.config.list_custom_providers() {
             if !seen_ids.contains(&custom.id) {
                 let has_token = self.get_token(&custom.id).unwrap_or(None).is_some();
-                providers.push((custom.id.clone(), custom.display_name.clone(), has_token));
+                providers.push((
+                    custom.id.clone(),
+                    custom.display_name.clone(),
+                    custom.base_url.clone(),
+                    has_token,
+                ));
             }
         }
 

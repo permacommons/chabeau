@@ -20,20 +20,33 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let mut table = String::new();
-    table.push_str("| Provider | Display Name | Authenticated | Default |\n");
-    table.push_str("|---|---|:---:|:---:|\n");
+    let mut content = String::from("Configured Providers:\n\n");
 
-    for (id, display_name, has_token) in providers {
+    let mut table = String::new();
+    table.push_str("| Provider | Display Name | URL | Authenticated |\n");
+    table.push_str("|---|---|---|:---:|\n");
+
+    for (id, display_name, base_url, has_token) in providers {
         let auth_status = if has_token { "✅" } else { "❌" };
-        let is_default = default_provider
+        let provider_id = if default_provider
             .as_ref()
-            .map_or(false, |d| d.eq_ignore_ascii_case(&id));
-        let default_status = if is_default { "✓" } else { "" };
+            .map_or(false, |d| d.eq_ignore_ascii_case(&id))
+        {
+            format!("{}*", id)
+        } else {
+            id
+        };
+
         table.push_str(&format!(
             "| {} | {} | {} | {} |\n",
-            id, display_name, auth_status, default_status
+            provider_id, display_name, base_url, auth_status
         ));
+    }
+
+    content.push_str(&table);
+
+    if default_provider.is_some() {
+        content.push_str("\n\\* = default provider");
     }
 
     let monochrome_theme = Theme::monochrome();
@@ -41,7 +54,7 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     let rendered = markdown::render_message_with_config(
         &Message {
             role: ROLE_ASSISTANT.to_string(),
-            content: table,
+            content,
         },
         &monochrome_theme,
         MessageRenderConfig::markdown(true)

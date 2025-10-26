@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Added `chabeau say` command for single-turn, TUI-less chat.
+- Added `/refine` command for refining the last response.
+- Added `/clear` command to clear the conversation transcript.
+- Added printing of a formatted, monochrome transcript on Ctrl+D exit.
+
+### Changed
+- Re-formatted the provider list table (`chabeau -p`) into a cleaner, more readable layout.
+- Updated the architecture overview in `README.md` to better reflect the current design.
+- Clarified the Ctrl+D exit behavior in the built-in help.
+- Improved performance by caching keyring lookups to reduce redundant authentication checks.
+
+### Fixed
+- Fixed an issue where `chabeau set` commands did not validate their inputs, allowing invalid values to be saved.
+- Optimized keyring lookups by deferring provider enumeration until necessary, improving startup time.
+- Removed unnecessary logging during keyring lookups to reduce noise in the logs.
+
 ## 0.5.1
 
 ### Added

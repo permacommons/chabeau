@@ -1,6 +1,6 @@
 use crate::core::config::data::Config;
 use crate::core::message::{AppMessageKind, Message, ROLE_USER};
-use crate::core::text_wrapping::{TextWrapper, WrapConfig};
+use crate::core::text_wrapping::{TextWrapper, WrapConfig, WrappedCursorLayout};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::prelude::Size;
@@ -504,6 +504,28 @@ impl UiState {
         }
     }
 
+    fn wrapped_cursor_context(
+        &self,
+        terminal_width: u16,
+    ) -> Option<(WrappedCursorLayout, usize, usize, usize, usize)> {
+        let wrap_width = self.input_wrap_width(terminal_width)?;
+
+        let config = WrapConfig::new(wrap_width);
+        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
+        let position_map = layout.position_map();
+        if position_map.is_empty() {
+            return Some((layout, 0, 0, 0, self.get_input_text().chars().count()));
+        }
+
+        let current_index = self
+            .input_cursor_position
+            .min(position_map.len().saturating_sub(1));
+        let (current_line, current_col) = position_map[current_index];
+        let char_count = self.get_input_text().chars().count();
+
+        Some((layout, current_index, current_line, current_col, char_count))
+    }
+
     pub fn move_cursor_in_wrapped_input(
         &mut self,
         terminal_width: u16,
@@ -514,7 +536,9 @@ impl UiState {
             return false;
         }
 
-        let Some(wrap_width) = self.input_wrap_width(terminal_width) else {
+        let Some((layout, current_index, current_line, current_col, char_count)) =
+            self.wrapped_cursor_context(terminal_width)
+        else {
             let before = self.textarea.cursor();
             match direction {
                 VerticalCursorDirection::Up => self.textarea.move_cursor(CursorMove::Up),
@@ -526,14 +550,6 @@ impl UiState {
             return before != after;
         };
 
-        let config = WrapConfig::new(wrap_width);
-        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
-        let position_map = layout.position_map();
-        let char_count = self.get_input_text().chars().count();
-        let current_index = self
-            .input_cursor_position
-            .min(position_map.len().saturating_sub(1));
-        let (current_line, current_col) = position_map[current_index];
         let desired_col = self.input_cursor_preferred_column.unwrap_or(current_col);
         let max_line = layout.line_count().saturating_sub(1);
 
@@ -567,6 +583,96 @@ impl UiState {
 
         self.jump_cursor_to_position(target_index);
         self.input_cursor_preferred_column = Some(desired_col);
+        true
+    }
+
+    pub fn move_cursor_page_in_wrapped_input(
+        &mut self,
+        terminal_width: u16,
+        direction: VerticalCursorDirection,
+        steps: usize,
+    ) -> bool {
+        if steps == 0 || self.get_input_text().is_empty() {
+            return false;
+        }
+
+        let mut moved = false;
+        for _ in 0..steps {
+            if self.move_cursor_in_wrapped_input(terminal_width, direction) {
+                moved = true;
+            } else {
+                break;
+            }
+        }
+
+        moved
+    }
+
+    pub fn move_cursor_to_visual_line_start(&mut self, terminal_width: u16) -> bool {
+        if self.get_input_text().is_empty() {
+            self.input_cursor_preferred_column = Some(0);
+            return false;
+        }
+
+        let Some((layout, current_index, current_line, _, char_count)) =
+            self.wrapped_cursor_context(terminal_width)
+        else {
+            let before = self.textarea.cursor();
+            self.textarea.move_cursor(CursorMove::Head);
+            let after = self.textarea.cursor();
+            self.sync_input_from_textarea();
+            self.input_cursor_preferred_column = Some(after.1);
+            return before != after;
+        };
+
+        let Some((start, _)) = layout.line_bounds(current_line) else {
+            self.input_cursor_preferred_column = Some(0);
+            return false;
+        };
+
+        let target_index = start.min(char_count);
+        if target_index == current_index {
+            self.input_cursor_preferred_column = Some(0);
+            return false;
+        }
+
+        self.jump_cursor_to_position(target_index);
+        self.input_cursor_preferred_column = Some(0);
+        true
+    }
+
+    pub fn move_cursor_to_visual_line_end(&mut self, terminal_width: u16) -> bool {
+        if self.get_input_text().is_empty() {
+            self.input_cursor_preferred_column = Some(0);
+            return false;
+        }
+
+        let Some((layout, current_index, current_line, _, char_count)) =
+            self.wrapped_cursor_context(terminal_width)
+        else {
+            let before = self.textarea.cursor();
+            self.textarea.move_cursor(CursorMove::End);
+            let after = self.textarea.cursor();
+            self.sync_input_from_textarea();
+            self.input_cursor_preferred_column = Some(after.1);
+            return before != after;
+        };
+
+        let Some((_, end)) = layout.line_bounds(current_line) else {
+            self.input_cursor_preferred_column = Some(0);
+            return false;
+        };
+
+        let target_index = end.min(char_count);
+        if target_index == current_index {
+            let (_, col) = layout.coordinates_for_index(current_index);
+            self.input_cursor_preferred_column = Some(col);
+            return false;
+        }
+
+        let (_, col) = layout.coordinates_for_index(target_index);
+        self.jump_cursor_to_position(target_index);
+        self.input_cursor_preferred_column = Some(col);
         true
     }
 

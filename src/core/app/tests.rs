@@ -536,6 +536,80 @@ fn test_shift_like_left_right_moves_one_char() {
 }
 
 #[test]
+fn paste_inserts_cursor_at_end_of_insert() {
+    let mut app = create_test_app();
+    let term_width = 80u16;
+    let text = "this is a long paragraph that should wrap softly when rendered";
+
+    app.insert_into_input(text, term_width);
+
+    assert_eq!(app.ui.get_input_text(), text);
+    assert_eq!(app.ui.input_cursor_position, text.chars().count());
+}
+
+#[test]
+fn visual_line_start_end_track_wrapped_columns() {
+    let mut app = create_test_app();
+    let text = "alpha beta gamma delta epsilon zeta eta".to_string();
+    let cursor_pos = text.find("gamma").unwrap() + 2; // inside "gamma"
+    let term_width = 20u16;
+    let wrap_width = term_width.saturating_sub(5) as usize;
+
+    app.ui.set_input_text_with_cursor(text.clone(), cursor_pos);
+
+    let layout = TextWrapper::cursor_layout(&text, &WrapConfig::new(wrap_width));
+    let line = layout.coordinates_for_index(app.ui.input_cursor_position).0;
+    let (line_start, line_end) = layout
+        .line_bounds(line)
+        .expect("line bounds available for wrapped line");
+
+    assert!(app.ui.move_cursor_to_visual_line_start(term_width));
+    assert_eq!(app.ui.input_cursor_position, line_start);
+
+    assert!(app.ui.move_cursor_to_visual_line_end(term_width));
+    assert_eq!(app.ui.input_cursor_position, line_end);
+}
+
+#[test]
+fn wrapped_cursor_crosses_paragraph_boundaries() {
+    let mut app = create_test_app();
+    let text = "one two three four five six seven eight nine ten\nalpha beta gamma delta epsilon zeta eta theta".to_string();
+    let newline_index = text.find('\n').unwrap();
+    let cursor_pos = newline_index + 4; // inside the second paragraph
+    let term_width = 22u16;
+
+    app.ui.set_input_text_with_cursor(text.clone(), cursor_pos);
+
+    assert!(app
+        .ui
+        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up));
+    assert!(app.ui.input_cursor_position <= newline_index);
+
+    assert!(app
+        .ui
+        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Down));
+    assert!(app.ui.input_cursor_position > newline_index);
+}
+
+#[test]
+fn page_cursor_movement_skips_multiple_wrapped_lines() {
+    let mut app = create_test_app();
+    let text = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua".to_string();
+    let term_width = 24u16;
+
+    app.ui
+        .set_input_text_with_cursor(text.clone(), text.chars().count());
+
+    let before = app.ui.input_cursor_position;
+    let moved =
+        app.ui
+            .move_cursor_page_in_wrapped_input(term_width, VerticalCursorDirection::Up, 3);
+
+    assert!(moved);
+    assert!(app.ui.input_cursor_position < before);
+}
+
+#[test]
 fn test_cursor_mapping_blankline_insert_no_desync() {
     let mut app = create_test_app();
     let text = "asdf\n\nasdf\n\nasdf";

@@ -336,6 +336,8 @@ See [the built-in help](src/builtins/help.md) for a full list of keyboard contro
 
 - Alt+Enter (or Ctrl+J) to start a new line; Enter sends. Arrow keys always act on the focused area.
 - Compose mode (F4) flips the newline/send defaults; focus behavior stays the same.
+- Home/End and Ctrl+A/Ctrl+E jump to the start or end of the visible line in the focused pane, even when text is soft-wrapped.
+- PgUp/PgDn scroll the focused area — the transcript or the multi-line input — by a page at a time.
 - Ctrl+N repeats your most recent `/refine` prompt on the latest assistant reply.
 - Tab switches focus between the transcript and input unless the current input starts with `/`. When it does, Tab autocompletes slash commands. The active region shows a `›`; the inactive one shows a `·`.
 - Ctrl+O opens the inspect view for picker items—providers include their ID, base URL, and auth mode; themes show their ID and every color override; character cards expand to the full v2 definition.

@@ -73,6 +73,27 @@ impl WrappedCursorLayout {
         self.position_map
     }
 
+    /// Returns the index range for the requested visual line if it exists.
+    /// The returned range is expressed in cursor indices (positions between characters)
+    /// and is inclusive on both ends.
+    pub fn line_bounds(&self, line: usize) -> Option<(usize, usize)> {
+        let mut start = None;
+        let mut end = None;
+
+        for (idx, (mapped_line, _)) in self.position_map.iter().enumerate() {
+            if *mapped_line == line {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+                end = Some(idx);
+            } else if *mapped_line > line {
+                break;
+            }
+        }
+
+        start.zip(end)
+    }
+
     /// Clamp the requested cursor index into the valid range and return its coordinates.
     pub fn coordinates_for_index(&self, idx: usize) -> (usize, usize) {
         let clamped = idx.min(self.position_map.len().saturating_sub(1));

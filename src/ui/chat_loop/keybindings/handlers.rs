@@ -256,38 +256,74 @@ impl KeyHandler for NavigationHandler {
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
-        _last_input_layout_update: Option<std::time::Instant>,
+        last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
+        let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
+
         app.update(|app| match key.code {
             KeyCode::Home => {
-                app.ui.scroll_to_top();
+                if app.ui.is_input_focused() {
+                    app.ui.move_cursor_to_visual_line_start(term_width);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                } else {
+                    app.ui.scroll_to_top();
+                }
                 KeyResult::Handled
             }
             KeyCode::End => {
-                let input_area_height = app.ui.calculate_input_area_height(term_width);
-                let available_height = {
-                    let conversation = app.conversation();
-                    conversation.calculate_available_height(term_height, input_area_height)
-                };
-                app.ui.scroll_to_bottom_view(available_height, term_width);
+                if app.ui.is_input_focused() {
+                    app.ui.move_cursor_to_visual_line_end(term_width);
+                    recompute_input_layout_if_due(app, term_width, &mut last_update);
+                } else {
+                    let input_area_height = app.ui.calculate_input_area_height(term_width);
+                    let available_height = {
+                        let conversation = app.conversation();
+                        conversation.calculate_available_height(term_height, input_area_height)
+                    };
+                    app.ui.scroll_to_bottom_view(available_height, term_width);
+                }
                 KeyResult::Handled
             }
             KeyCode::PageUp => {
-                let input_area_height = app.ui.calculate_input_area_height(term_width);
-                let available_height = {
-                    let conversation = app.conversation();
-                    conversation.calculate_available_height(term_height, input_area_height)
-                };
-                app.ui.page_up(available_height);
+                if app.ui.is_input_focused() {
+                    let page_height = app.ui.calculate_input_area_height(term_width);
+                    let steps = usize::from(page_height.saturating_sub(1).max(1));
+                    if app.ui.move_cursor_page_in_wrapped_input(
+                        term_width,
+                        VerticalCursorDirection::Up,
+                        steps,
+                    ) {
+                        recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    }
+                } else {
+                    let input_area_height = app.ui.calculate_input_area_height(term_width);
+                    let available_height = {
+                        let conversation = app.conversation();
+                        conversation.calculate_available_height(term_height, input_area_height)
+                    };
+                    app.ui.page_up(available_height);
+                }
                 KeyResult::Handled
             }
             KeyCode::PageDown => {
-                let input_area_height = app.ui.calculate_input_area_height(term_width);
-                let available_height = {
-                    let conversation = app.conversation();
-                    conversation.calculate_available_height(term_height, input_area_height)
-                };
-                app.ui.page_down(available_height, term_width);
+                if app.ui.is_input_focused() {
+                    let page_height = app.ui.calculate_input_area_height(term_width);
+                    let steps = usize::from(page_height.saturating_sub(1).max(1));
+                    if app.ui.move_cursor_page_in_wrapped_input(
+                        term_width,
+                        VerticalCursorDirection::Down,
+                        steps,
+                    ) {
+                        recompute_input_layout_if_due(app, term_width, &mut last_update);
+                    }
+                } else {
+                    let input_area_height = app.ui.calculate_input_area_height(term_width);
+                    let available_height = {
+                        let conversation = app.conversation();
+                        conversation.calculate_available_height(term_height, input_area_height)
+                    };
+                    app.ui.page_down(available_height, term_width);
+                }
                 KeyResult::Handled
             }
             _ => KeyResult::NotHandled,
@@ -395,9 +431,7 @@ impl KeyHandler for TextEditingHandler {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.update(|app| {
                     app.ui.focus_input();
-                    app.ui.apply_textarea_edit(|ta| {
-                        ta.input(TAInput::from(*key));
-                    });
+                    app.ui.move_cursor_to_visual_line_start(term_width);
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
                     KeyResult::Handled
                 })
@@ -406,9 +440,7 @@ impl KeyHandler for TextEditingHandler {
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.update(|app| {
                     app.ui.focus_input();
-                    app.ui.apply_textarea_edit(|ta| {
-                        ta.input(TAInput::from(*key));
-                    });
+                    app.ui.move_cursor_to_visual_line_end(term_width);
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
                     KeyResult::Handled
                 })

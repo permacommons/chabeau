@@ -40,6 +40,67 @@ impl WrapConfig {
 /// Text wrapping engine that handles word boundaries while preserving spacing
 pub struct TextWrapper;
 
+/// Layout information for wrapped text.
+#[derive(Debug, Clone)]
+pub struct WrappedCursorLayout {
+    position_map: Vec<(usize, usize)>,
+    line_count: usize,
+}
+
+impl WrappedCursorLayout {
+    /// Construct a layout from an existing cursor position map and the last line index
+    /// that appeared during wrapping.
+    fn new(position_map: Vec<(usize, usize)>, last_line: usize) -> Self {
+        let line_count = last_line.saturating_add(1).max(1);
+        Self {
+            position_map,
+            line_count,
+        }
+    }
+
+    /// Total number of visual lines in the wrapped text.
+    pub fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    /// Borrow the cursor position mapping.
+    pub fn position_map(&self) -> &[(usize, usize)] {
+        &self.position_map
+    }
+
+    /// Consume the layout and return the mapping vector.
+    pub fn into_position_map(self) -> Vec<(usize, usize)> {
+        self.position_map
+    }
+
+    /// Clamp the requested cursor index into the valid range and return its coordinates.
+    pub fn coordinates_for_index(&self, idx: usize) -> (usize, usize) {
+        let clamped = idx.min(self.position_map.len().saturating_sub(1));
+        self.position_map.get(clamped).copied().unwrap_or((0, 0))
+    }
+
+    /// Find the cursor index for the desired visual line and column, returning the closest
+    /// match when the line is shorter than the requested column.
+    pub fn find_index_on_line(&self, target_line: usize, desired_col: usize) -> Option<usize> {
+        let mut candidate = None;
+        let mut fallback = None;
+
+        for (idx, (line, col)) in self.position_map.iter().enumerate() {
+            if *line == target_line {
+                fallback = Some(idx);
+                if *col >= desired_col {
+                    candidate = Some(idx);
+                    break;
+                }
+            } else if *line > target_line {
+                break;
+            }
+        }
+
+        candidate.or(fallback)
+    }
+}
+
 impl TextWrapper {
     /// Wrap text at word boundaries while preserving all original spacing
     pub fn wrap_text(text: &str, config: &WrapConfig) -> String {
@@ -194,32 +255,23 @@ impl TextWrapper {
 
     /// Count the number of lines that text would wrap to
     pub fn count_wrapped_lines(text: &str, config: &WrapConfig) -> usize {
-        if text.is_empty() {
-            return 1;
-        }
-
-        let wrapped_text = Self::wrap_text(text, config);
-        let lines: Vec<&str> = wrapped_text.split('\n').collect();
-        lines.len().max(1)
+        Self::cursor_layout(text, config).line_count()
     }
 
     /// Calculate which line a cursor position would be on after wrapping
     pub fn calculate_cursor_line(text: &str, cursor_position: usize, config: &WrapConfig) -> usize {
-        let cursor_position = cursor_position.min(text.chars().count());
-
-        // Get text before cursor
-        let text_before_cursor: String = text.chars().take(cursor_position).collect();
-
-        // Get the wrapped version of text before cursor
-        let wrapped_before_cursor = Self::wrap_text(&text_before_cursor, config);
-
-        // Count lines in wrapped text
-        let lines: Vec<&str> = wrapped_before_cursor.split('\n').collect();
-        lines.len().saturating_sub(1)
+        Self::cursor_layout(text, config)
+            .coordinates_for_index(cursor_position)
+            .0
     }
 
     /// Build a mapping of cursor positions to wrapped line/column coordinates
     pub fn cursor_position_map(text: &str, config: &WrapConfig) -> Vec<(usize, usize)> {
+        Self::cursor_layout(text, config).into_position_map()
+    }
+
+    /// Compute the cursor layout for wrapped text, including the position map and total lines.
+    pub fn cursor_layout(text: &str, config: &WrapConfig) -> WrappedCursorLayout {
         // Build a mapping for cursor "positions" (between characters), not just characters.
         // There are N+1 positions for N characters.
         let original_chars: Vec<char> = text.chars().collect();
@@ -228,7 +280,7 @@ impl TextWrapper {
         let mut pos_map: Vec<(usize, usize)> = vec![(0, 0); original_chars.len() + 1];
 
         if original_chars.is_empty() {
-            return pos_map;
+            return WrappedCursorLayout::new(pos_map, 0);
         }
 
         // Wrap the full text once and collect coordinates for each visible (non-newline) character
@@ -277,7 +329,7 @@ impl TextWrapper {
             }
         }
 
-        pos_map
+        WrappedCursorLayout::new(pos_map, last_line)
     }
 
     /// Calculate cursor position within wrapped text using a character-by-character mapping
@@ -286,9 +338,7 @@ impl TextWrapper {
         cursor_position: usize,
         config: &WrapConfig,
     ) -> (usize, usize) {
-        let pos_map = Self::cursor_position_map(text, config);
-        let idx = cursor_position.min(pos_map.len().saturating_sub(1));
-        pos_map[idx]
+        Self::cursor_layout(text, config).coordinates_for_index(cursor_position)
     }
 }
 
@@ -406,6 +456,23 @@ mod tests {
             "start of wrapped line should be column zero"
         );
         assert_eq!(map[8], (1, 4), "cursor after final char stays on last line");
+    }
+
+    #[test]
+    fn cursor_layout_reports_line_count_and_line_search() {
+        let config = WrapConfig::new(10);
+        let text = "hi\nthere";
+        let layout = TextWrapper::cursor_layout(text, &config);
+
+        assert_eq!(layout.line_count(), 2);
+        assert_eq!(layout.find_index_on_line(0, 2), Some(2));
+
+        let newline_index = text.chars().position(|c| c == '\n').unwrap();
+        assert_eq!(layout.find_index_on_line(1, 0), Some(newline_index + 1));
+
+        let end_index = text.chars().count();
+        assert_eq!(layout.find_index_on_line(1, 10), Some(end_index));
+        assert_eq!(layout.coordinates_for_index(end_index), (1, 5));
     }
 
     #[test]

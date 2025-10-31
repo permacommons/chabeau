@@ -433,7 +433,7 @@ impl UiState {
         }
 
         let config = WrapConfig::new(width as usize);
-        TextWrapper::count_wrapped_lines(self.get_input_text(), &config)
+        TextWrapper::cursor_layout(self.get_input_text(), &config).line_count()
     }
 
     pub fn calculate_input_area_height(&self, width: u16) -> u16 {
@@ -451,23 +451,16 @@ impl UiState {
         }
     }
 
-    fn calculate_cursor_line_position(&self, available_width: usize) -> u16 {
-        let config = WrapConfig::new(available_width);
-        TextWrapper::calculate_cursor_line(
-            self.get_input_text(),
-            self.input_cursor_position,
-            &config,
-        ) as u16
-    }
-
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let available_width = width.saturating_sub(5);
-        let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
+        let available_width = width.saturating_sub(5) as usize;
+        let config = WrapConfig::new(available_width);
+        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
+        let total_input_lines = layout.line_count() as u16;
 
         if total_input_lines <= input_area_height {
             self.input_scroll_offset = 0;
         } else {
-            let cursor_line = self.calculate_cursor_line_position(available_width as usize);
+            let cursor_line = layout.coordinates_for_index(self.input_cursor_position).0 as u16;
 
             if cursor_line < self.input_scroll_offset {
                 self.input_scroll_offset = cursor_line;
@@ -534,20 +527,15 @@ impl UiState {
         };
 
         let config = WrapConfig::new(wrap_width);
-        let position_map = TextWrapper::cursor_position_map(self.get_input_text(), &config);
-        if position_map.is_empty() {
-            self.input_cursor_preferred_column = None;
-            return false;
-        }
-
+        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
+        let position_map = layout.position_map();
         let char_count = self.get_input_text().chars().count();
         let current_index = self
             .input_cursor_position
             .min(position_map.len().saturating_sub(1));
         let (current_line, current_col) = position_map[current_index];
         let desired_col = self.input_cursor_preferred_column.unwrap_or(current_col);
-        let total_lines = TextWrapper::count_wrapped_lines(self.get_input_text(), &config);
-        let max_line = total_lines.saturating_sub(1);
+        let max_line = layout.line_count().saturating_sub(1);
 
         let target_line = match direction {
             VerticalCursorDirection::Up => {
@@ -566,22 +554,7 @@ impl UiState {
             }
         };
 
-        let mut candidate_index = None;
-        let mut fallback_index = None;
-
-        for (idx, (line, col)) in position_map.iter().enumerate() {
-            if *line == target_line {
-                fallback_index = Some(idx);
-                if *col >= desired_col {
-                    candidate_index = Some(idx);
-                    break;
-                }
-            } else if *line > target_line {
-                break;
-            }
-        }
-
-        let Some(new_index) = candidate_index.or(fallback_index) else {
+        let Some(new_index) = layout.find_index_on_line(target_line, desired_col) else {
             self.input_cursor_preferred_column = Some(desired_col);
             return false;
         };

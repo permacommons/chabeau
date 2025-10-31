@@ -470,6 +470,54 @@ fn test_wrapped_vertical_navigation_clamps_to_shorter_line() {
 }
 
 #[test]
+fn test_wrapped_vertical_navigation_handles_multiple_paragraphs() {
+    let mut app = create_test_app();
+    let text = "aaaaa bbbbb ccccc ddddd\neeeee fffff ggggg hhhhh";
+    app.ui
+        .set_input_text_with_cursor(text.to_string(), text.chars().count());
+
+    let newline_idx = text.find('\n').unwrap();
+    let mut saw_above_newline = false;
+
+    loop {
+        let moved = app
+            .ui
+            .move_cursor_in_wrapped_input(15, VerticalCursorDirection::Up);
+        if !moved {
+            break;
+        }
+        if app.ui.input_cursor_position <= newline_idx {
+            saw_above_newline = true;
+        }
+    }
+
+    assert!(
+        saw_above_newline,
+        "cursor should cross the hard newline boundary"
+    );
+    let (row, _) = app.ui.textarea.cursor();
+    assert_eq!(row, 0);
+}
+
+#[test]
+fn test_wrapped_vertical_navigation_keeps_column_zero_on_descend() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 0);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 4);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 0);
+}
+
+#[test]
 fn test_shift_like_left_right_moves_one_char() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello".to_string());

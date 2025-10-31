@@ -225,8 +225,7 @@ impl TextWrapper {
         let original_chars: Vec<char> = text.chars().collect();
 
         // Always include the origin so the map has at least one entry
-        let mut pos_map: Vec<(usize, usize)> = Vec::with_capacity(original_chars.len() + 1);
-        pos_map.push((0, 0));
+        let mut pos_map: Vec<(usize, usize)> = vec![(0, 0); original_chars.len() + 1];
 
         if original_chars.is_empty() {
             return pos_map;
@@ -249,30 +248,32 @@ impl TextWrapper {
         }
 
         let mut wrapped_idx = 0usize; // index into wrapped_coords for non-newline chars
-        let mut current_line = 0usize;
+        let mut last_line = 0usize;
+        let mut line_starts: Vec<(usize, usize)> = vec![(0, 0)];
 
-        for ch in original_chars.iter() {
+        for (idx, ch) in original_chars.iter().enumerate() {
             if *ch == '\n' {
-                // After a newline, cursor moves to start of next line
-                current_line = current_line.saturating_add(1);
-                pos_map.push((current_line, 0));
+                let next_line = last_line.saturating_add(1);
+                pos_map[idx + 1] = (next_line, 0);
+                line_starts.push((next_line, idx + 1));
+                last_line = next_line;
             } else {
-                // Map to the coordinate immediately AFTER this character
-                if wrapped_idx < wrapped_coords.len() {
-                    let (l, c) = wrapped_coords[wrapped_idx];
-                    current_line = l;
-                    pos_map.push((current_line, c));
-                    wrapped_idx += 1;
-                } else if let Some(last_line) = wrapped_lines.last() {
-                    // Fallback to end of last line if somehow we ran out
-                    let last_width = (*last_line)
-                        .graphemes(true)
-                        .map(UnicodeWidthStr::width)
-                        .sum();
-                    pos_map.push((wrapped_lines.len().saturating_sub(1), last_width));
-                } else {
-                    pos_map.push((0, 0));
+                let (line, col) = wrapped_coords
+                    .get(wrapped_idx)
+                    .copied()
+                    .unwrap_or((last_line, 0));
+                pos_map[idx + 1] = (line, col);
+                if line > last_line {
+                    line_starts.push((line, idx));
                 }
+                last_line = line;
+                wrapped_idx += 1;
+            }
+        }
+
+        for (line, start_idx) in line_starts.into_iter() {
+            if start_idx < pos_map.len() {
+                pos_map[start_idx] = (line, 0);
             }
         }
 
@@ -345,7 +346,7 @@ mod tests {
         let config = WrapConfig::new(4);
         let text = "😀😀😀";
 
-        let expectations = [(0, (0usize, 0usize)), (1, (0, 2)), (2, (0, 4)), (3, (1, 2))];
+        let expectations = [(0, (0usize, 0usize)), (1, (0, 2)), (2, (1, 0)), (3, (1, 2))];
 
         for (cursor, expected) in expectations {
             let (line, col) =
@@ -360,9 +361,9 @@ mod tests {
         let text = "hello world";
         let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 5, &config);
 
-        // Cursor at position 5 (after "hello") is at end of first line
-        assert_eq!(line, 0);
-        assert_eq!(col, 5);
+        // Cursor at position 5 (before wrapping to "world") sits at the start of the next line
+        assert_eq!(line, 1);
+        assert_eq!(col, 0);
     }
 
     #[test]
@@ -390,6 +391,21 @@ mod tests {
             "cursor should move to next visual line after newline"
         );
         assert_eq!(c3, 0);
+    }
+
+    #[test]
+    fn test_cursor_position_map_soft_wrap_column_zero() {
+        let config = WrapConfig::new(4);
+        let text = "abcdefgh";
+        let map = TextWrapper::cursor_position_map(text, &config);
+
+        assert_eq!(map[0], (0, 0));
+        assert_eq!(
+            map[4],
+            (1, 0),
+            "start of wrapped line should be column zero"
+        );
+        assert_eq!(map[8], (1, 4), "cursor after final char stays on last line");
     }
 
     #[test]

@@ -528,7 +528,7 @@ pub async fn run_chat(
         app.update(|app| {
             let lines = app.ui.get_prewrapped_lines_cached(last_term_size.width);
             for line in lines {
-                println!("{}", line.to_string());
+                println!("{line}");
             }
         })
         .await;

@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use crate::{
-    auth::AuthManager,
+    auth::{AuthManager, ProviderAuthStatus},
     core::message::{Message, ROLE_ASSISTANT},
     ui::{
         layout::TableOverflowPolicy,
@@ -26,11 +26,17 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     table.push_str("| Provider | Display Name | URL | Authenticated |\n");
     table.push_str("|---|---|---|:---:|\n");
 
-    for (id, display_name, base_url, has_token) in providers {
+    for ProviderAuthStatus {
+        id,
+        display_name,
+        base_url,
+        has_token,
+    } in providers
+    {
         let auth_status = if has_token { "✅" } else { "❌" };
         let provider_id = if default_provider
             .as_ref()
-            .map_or(false, |d| d.eq_ignore_ascii_case(&id))
+            .is_some_and(|d| d.eq_ignore_ascii_case(&id))
         {
             format!("{}*", id)
         } else {

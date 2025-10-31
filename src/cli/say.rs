@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::io::{self, Write};
 
-use crate::auth::AuthManager;
+use crate::auth::{AuthManager, ProviderAuthStatus};
 use crate::character::CharacterService;
 use crate::core::app::{self};
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
@@ -37,8 +37,8 @@ pub async fn run_say(
         let (providers, _) = auth_manager.get_all_providers_with_auth_status();
         let configured_providers: Vec<_> = providers
             .into_iter()
-            .filter(|(_, _, _, has_token)| *has_token)
-            .map(|(id, _, _, _)| id)
+            .filter(|ProviderAuthStatus { has_token, .. }| *has_token)
+            .map(|ProviderAuthStatus { id, .. }| id)
             .collect();
         if configured_providers.len() > 1 {
             eprintln!(

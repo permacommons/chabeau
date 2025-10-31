@@ -109,7 +109,7 @@ For quick, one-off questions without launching the full TUI, use the `say` comma
 chabeau say "What is the capital of France?"
 ```
 
-This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings and uses a monochrome theme for clean, readable output.
+This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings, emits OSC8 hyperlinks when your terminal supports them, and uses a monochrome theme for clean, readable output.
 
 If you have multiple providers configured but no default set, Chabeau will prompt you to specify a provider with the `-p` flag. The `-p` and other global flags can be placed before or after the prompt.
 

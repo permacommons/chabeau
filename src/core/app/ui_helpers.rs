@@ -32,6 +32,7 @@ impl App {
     }
 
     pub fn insert_into_input(&mut self, text: &str, width: u16) {
+        self.ui.focus_input();
         self.ui.apply_textarea_edit_and_recompute(width, |ta| {
             ta.insert_str(text);
         });

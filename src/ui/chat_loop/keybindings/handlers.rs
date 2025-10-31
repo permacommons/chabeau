@@ -8,7 +8,6 @@
 //! - Complex operations (external editor, message submission)
 //! - Mode-specific handlers (picker, edit select, block select)
 
-use crate::commands;
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
@@ -224,6 +223,7 @@ impl KeyHandler for CtrlDHandler {
             KeyLoopAction::Break.into()
         } else {
             app.update(|app| {
+                app.ui.focus_input();
                 app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                     ta.input_without_shortcuts(TAInput {
                         key: TAKey::Delete,
@@ -313,9 +313,7 @@ impl KeyHandler for ArrowKeyHandler {
 
         app.update(|app| match key.code {
             KeyCode::Left => {
-                let compose = app.ui.compose_mode;
-                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-                if (compose && !shift) || (!compose && shift) {
+                if app.ui.is_input_focused() {
                     app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
@@ -326,9 +324,7 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyResult::Handled
             }
             KeyCode::Right => {
-                let compose = app.ui.compose_mode;
-                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-                if (compose && !shift) || (!compose && shift) {
+                if app.ui.is_input_focused() {
                     app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
@@ -339,10 +335,7 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyResult::Handled
             }
             KeyCode::Up => {
-                let compose = app.ui.compose_mode;
-                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
-                if (compose && !shift) || (!compose && shift) {
+                if app.ui.is_input_focused() {
                     app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
@@ -353,10 +346,7 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyResult::Handled
             }
             KeyCode::Down => {
-                let compose = app.ui.compose_mode;
-                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
-                if (compose && !shift) || (!compose && shift) {
+                if app.ui.is_input_focused() {
                     app.ui
                         .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
@@ -403,6 +393,7 @@ impl KeyHandler for TextEditingHandler {
         match key.code {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.update(|app| {
+                    app.ui.focus_input();
                     app.ui.apply_textarea_edit(|ta| {
                         ta.input(TAInput::from(*key));
                     });
@@ -413,6 +404,7 @@ impl KeyHandler for TextEditingHandler {
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.update(|app| {
+                    app.ui.focus_input();
                     app.ui.apply_textarea_edit(|ta| {
                         ta.input(TAInput::from(*key));
                     });
@@ -426,6 +418,7 @@ impl KeyHandler for TextEditingHandler {
                     return KeyResult::NotHandled;
                 }
                 app.update(|app| {
+                    app.ui.focus_input();
                     app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input(TAInput::from(*key));
                     });
@@ -435,6 +428,7 @@ impl KeyHandler for TextEditingHandler {
             }
             KeyCode::Delete => {
                 app.update(|app| {
+                    app.ui.focus_input();
                     app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
                         ta.input_without_shortcuts(TAInput {
                             key: TAKey::Delete,
@@ -450,6 +444,7 @@ impl KeyHandler for TextEditingHandler {
             KeyCode::Backspace => {
                 let input = TAInput::from(*key);
                 app.update(|app| {
+                    app.ui.focus_input();
                     app.ui.apply_textarea_edit(|ta| {
                         ta.input_without_shortcuts(input);
                     });
@@ -461,191 +456,6 @@ impl KeyHandler for TextEditingHandler {
             _ => KeyResult::NotHandled,
         }
     }
-}
-
-// ============================================================================
-// Slash Command Autocomplete Handler
-// ============================================================================
-
-type CommandMatchFn = dyn Fn(&str) -> Vec<String> + Send + Sync;
-
-pub struct CommandAutocompleteHandler {
-    matcher: Arc<CommandMatchFn>,
-}
-
-impl CommandAutocompleteHandler {
-    pub fn new() -> Self {
-        Self {
-            matcher: Arc::new(|prefix: &str| {
-                commands::matching_commands(prefix)
-                    .into_iter()
-                    .map(|command| command.name.to_string())
-                    .collect()
-            }),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_matcher(matcher: Arc<CommandMatchFn>) -> Self {
-        Self { matcher }
-    }
-}
-
-impl Default for CommandAutocompleteHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait::async_trait]
-impl KeyHandler for CommandAutocompleteHandler {
-    async fn handle(
-        &self,
-        app: &AppHandle,
-        _dispatcher: &AppActionDispatcher,
-        _key: &KeyEvent,
-        term_width: u16,
-        _term_height: u16,
-        _last_input_layout_update: Option<std::time::Instant>,
-    ) -> KeyResult {
-        app.update(|app| {
-            let input = app.ui.get_input_text().to_string();
-
-            if !input.starts_with('/') {
-                return KeyResult::NotHandled;
-            }
-
-            let cursor_char_index = app.ui.input_cursor_position;
-            let cursor_byte_index = char_index_to_byte_index(&input, cursor_char_index);
-
-            if cursor_byte_index == 0 {
-                return KeyResult::NotHandled;
-            }
-
-            let command_region_end = {
-                let after_slash = &input[1..];
-                after_slash
-                    .char_indices()
-                    .find(|(_, c)| c.is_whitespace())
-                    .map(|(idx, _)| idx + 1)
-                    .unwrap_or_else(|| input.len())
-            };
-
-            if cursor_byte_index > command_region_end {
-                return KeyResult::NotHandled;
-            }
-
-            let command_prefix = &input[1..cursor_byte_index];
-            let matches = (self.matcher)(command_prefix);
-
-            if matches.is_empty() {
-                let message = if command_prefix.is_empty() {
-                    "No commands available".to_string()
-                } else {
-                    format!("No commands matching \"/{}\"", command_prefix)
-                };
-                app.conversation().set_status(message);
-                return KeyResult::Handled;
-            }
-
-            let rest = &input[command_region_end..];
-
-            if matches.len() == 1 {
-                let command_name = &matches[0];
-                let mut new_text = String::with_capacity(1 + command_name.len() + rest.len() + 1);
-                new_text.push('/');
-                new_text.push_str(command_name);
-                if rest.is_empty() {
-                    new_text.push(' ');
-                } else {
-                    new_text.push_str(rest);
-                }
-
-                if new_text != input {
-                    let target_col_base = command_name.chars().count() + 1;
-                    let target_col = if rest.is_empty() {
-                        target_col_base + 1
-                    } else {
-                        target_col_base
-                    } as u16;
-
-                    app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
-                        ta.select_all();
-                        ta.cut();
-                        ta.insert_str(&new_text);
-                        ta.move_cursor(CursorMove::Jump(0, target_col));
-                    });
-                }
-
-                return KeyResult::Handled;
-            }
-
-            let prefix_char_len = command_prefix.chars().count();
-            let common_prefix_len = longest_common_prefix_len(&matches);
-            let target_prefix_len = common_prefix_len.max(prefix_char_len);
-            let canonical_prefix: String = matches[0].chars().take(target_prefix_len).collect();
-
-            let mut new_text = String::with_capacity(1 + canonical_prefix.len() + rest.len());
-            new_text.push('/');
-            new_text.push_str(&canonical_prefix);
-            new_text.push_str(rest);
-
-            if new_text != input {
-                let target_col = (canonical_prefix.chars().count() + 1) as u16;
-                app.ui.apply_textarea_edit_and_recompute(term_width, |ta| {
-                    ta.select_all();
-                    ta.cut();
-                    ta.insert_str(&new_text);
-                    ta.move_cursor(CursorMove::Jump(0, target_col));
-                });
-            }
-
-            let status = matches
-                .iter()
-                .map(|name| format!("/{}", name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            app.conversation()
-                .set_status(format!("Commands: {}", status));
-
-            KeyResult::Handled
-        })
-        .await
-    }
-}
-
-fn char_index_to_byte_index(s: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-    match s.char_indices().nth(char_index) {
-        Some((idx, _)) => idx,
-        None => s.len(),
-    }
-}
-
-fn longest_common_prefix_len(names: &[String]) -> usize {
-    if names.is_empty() {
-        return 0;
-    }
-
-    let mut prefix: Vec<char> = names[0].chars().collect();
-    for name in names.iter().skip(1) {
-        let mut new_len = 0;
-        for (a, b) in prefix.iter().zip(name.chars()) {
-            if a.eq_ignore_ascii_case(&b) {
-                new_len += 1;
-            } else {
-                break;
-            }
-        }
-        prefix.truncate(new_len);
-        if prefix.is_empty() {
-            break;
-        }
-    }
-
-    prefix.len()
 }
 
 // ============================================================================
@@ -1068,8 +878,8 @@ impl KeyHandler for PickerHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        wrap_next_index, wrap_previous_index, CommandAutocompleteHandler, CtrlLHandler,
-        CtrlNHandler, EscapeHandler, F4Handler, KeyHandler, KeyResult,
+        wrap_next_index, wrap_previous_index, ArrowKeyHandler, CtrlLHandler, CtrlNHandler,
+        EscapeHandler, F4Handler, KeyHandler, KeyResult,
     };
     use crate::core::app::actions::{
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
@@ -1207,80 +1017,58 @@ mod tests {
     }
 
     #[test]
-    fn tab_completion_single_match_completes_command() {
-        let suggestions = Arc::new(vec!["model".to_string()]);
-        let handler = CommandAutocompleteHandler::with_matcher({
-            let suggestions = Arc::clone(&suggestions);
-            Arc::new(move |prefix: &str| {
-                let lower = prefix.to_ascii_lowercase();
-                suggestions
-                    .iter()
-                    .filter(|name| name.starts_with(&lower))
-                    .cloned()
-                    .collect()
-            })
-        });
-
+    fn arrow_key_handler_moves_cursor_when_input_focused() {
+        let handler = ArrowKeyHandler;
         let mut app = create_test_app();
-        app.ui.set_input_text("/mo".to_string());
-        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        app.ui.set_input_text("hi".to_string());
+        app.ui.focus_input();
 
-        let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let (dispatcher, mut action_rx) = test_dispatcher();
+            let (dispatcher, _) = test_dispatcher();
             let result = handler
                 .handle(&app, &dispatcher, &key_event, 80, 24, None)
                 .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let input = app.read(|app| app.ui.get_input_text().to_string()).await;
-            assert_eq!(input, "/model ");
-            assert!(action_rx.try_recv().is_err());
+            let cursor = app.read(|app| app.ui.input_cursor_position).await;
+            assert_eq!(cursor, 1);
         });
     }
 
     #[test]
-    fn tab_completion_multiple_matches_extends_prefix_and_sets_status() {
-        let suggestions = Arc::new(vec!["theme".to_string(), "theory".to_string()]);
-        let handler = CommandAutocompleteHandler::with_matcher({
-            let suggestions = Arc::clone(&suggestions);
-            Arc::new(move |prefix: &str| {
-                let lower = prefix.to_ascii_lowercase();
-                suggestions
-                    .iter()
-                    .filter(|name| name.starts_with(&lower))
-                    .cloned()
-                    .collect()
-            })
-        });
-
+    fn arrow_key_handler_scrolls_when_transcript_focused() {
+        let handler = ArrowKeyHandler;
         let mut app = create_test_app();
-        app.ui.set_input_text("/t".to_string());
-        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        app.ui.set_input_text("hi".to_string());
+        // focus remains on transcript by default
+        app.ui.horizontal_scroll_offset = 0;
 
-        let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let (dispatcher, mut action_rx) = test_dispatcher();
+            let (dispatcher, _) = test_dispatcher();
             let result = handler
                 .handle(&app, &dispatcher, &key_event, 80, 24, None)
                 .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let (input, status) = app
+            let (cursor, hscroll) = app
                 .read(|app| {
                     (
-                        app.ui.get_input_text().to_string(),
-                        app.ui.status.as_deref().map(str::to_string),
+                        app.ui.input_cursor_position,
+                        app.ui.horizontal_scroll_offset,
                     )
                 })
                 .await;
-            assert_eq!(input, "/the");
-            assert_eq!(status.as_deref(), Some("Commands: /theme, /theory"));
-            assert!(action_rx.try_recv().is_err());
+            // Cursor stays at end while horizontal scroll increases
+            assert_eq!(cursor, 2);
+            assert_eq!(hscroll, 1);
         });
     }
 

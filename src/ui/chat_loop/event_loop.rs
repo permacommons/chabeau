@@ -178,8 +178,27 @@ async fn route_keyboard_event(
         })
         .await;
 
+    if key.code == event::KeyCode::Tab
+        && key.modifiers.is_empty()
+        && !matches!(context, KeyContext::Picker)
+    {
+        app.update(|app| {
+            if app.ui.is_transcript_focused() {
+                app.ui.focus_input();
+            } else {
+                app.ui.focus_transcript();
+            }
+        })
+        .await;
+        return Ok(KeyboardEventOutcome {
+            request_redraw: true,
+            exit_requested: false,
+        });
+    }
+
     if mode_registry.should_handle_as_text_input(&key, &context) {
         app.update(|app| {
+            app.ui.focus_input();
             app.ui
                 .apply_textarea_edit_and_recompute(term_size.width, |ta| {
                     ta.input(tui_textarea::Input::from(key));

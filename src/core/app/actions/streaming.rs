@@ -132,6 +132,7 @@ fn prepare_stream_params_for_message(
     message: String,
     ctx: AppActionContext,
 ) -> StreamParams {
+    app.ui.focus_transcript();
     let term_width = ctx.term_width.max(1);
     let term_height = ctx.term_height.max(1);
     app.enable_auto_scroll();
@@ -174,6 +175,7 @@ fn prepare_retry_stream(app: &mut App, ctx: AppActionContext) -> Option<AppComma
 
     if let Some((api_messages, cancel_token, stream_id)) = maybe_params {
         app.update_last_retry_time(now);
+        app.ui.focus_transcript();
         Some(AppCommand::SpawnStream(app.build_stream_params(
             api_messages,
             cancel_token,
@@ -208,6 +210,7 @@ fn prepare_refine_stream(
 
     if let Some((api_messages, cancel_token, stream_id)) = maybe_params {
         app.update_last_retry_time(Instant::now());
+        app.ui.focus_transcript();
         Some(AppCommand::SpawnStream(app.build_stream_params(
             api_messages,
             cancel_token,

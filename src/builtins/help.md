@@ -16,13 +16,12 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 - Ctrl+P: Edit previous messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message
-- Tab: Autocomplete slash commands
+- Tab: Switch focus between transcript and input (`›` marks the active area)
 - Ctrl+T: Open in external editor (requires `$EDITOR` to be set)
 - Esc: Interrupt streaming / cancel modes
-- Up/Down/Mouse: Scroll history
+- Arrow keys: Move within the focused area; Up/Down scroll when the transcript is focused
 - PageUp/PageDown: Scroll one page in history
 - Home/End: Jump to top/bottom of history
-- Shift+Cursor Keys: Move cursor in input
 
 ## Picker Navigation
 

@@ -277,36 +277,71 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let inner = input_block.inner(area);
     f.render_widget(input_block, area);
 
+    // Reserve a column for the focus indicator and render it
+    let mut text_area = inner;
+    if inner.width > 0 {
+        let indicator = if app.ui.is_input_focused() {
+            "›"
+        } else {
+            " "
+        };
+        let indicator_style = app
+            .ui
+            .theme
+            .system_text_style
+            .patch(Style::default().bg(app.ui.theme.background_color));
+        let indicator_line = Line::from(Span::styled(indicator.to_string(), indicator_style));
+        let indicator_paragraph = Paragraph::new(indicator_line)
+            .style(Style::default().bg(app.ui.theme.background_color));
+        let indicator_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: 1,
+            height: inner.height,
+        };
+        f.render_widget(indicator_paragraph, indicator_area);
+
+        text_area.x = text_area.x.saturating_add(1);
+        text_area.width = text_area.width.saturating_sub(1);
+    }
+
     // Render wrapped input text with a one-column right margin
     // Wrap one character earlier to avoid cursor touching the border
-    let available_width = inner.width.saturating_sub(1);
-    let config = WrapConfig::new(available_width as usize);
-    let wrapped_text = TextWrapper::wrap_text(app.ui.get_input_text(), &config);
-    let paragraph = Paragraph::new(wrapped_text)
-        .style(
-            app.ui
-                .theme
-                .input_text_style
-                .patch(Style::default().bg(app.ui.theme.background_color)),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((app.ui.input_scroll_offset, 0));
-    f.render_widget(paragraph, inner);
+    let available_width = text_area.width.saturating_sub(1);
+    if available_width > 0 && text_area.height > 0 {
+        let config = WrapConfig::new(available_width as usize);
+        let wrapped_text = TextWrapper::wrap_text(app.ui.get_input_text(), &config);
+        let paragraph = Paragraph::new(wrapped_text)
+            .style(
+                app.ui
+                    .theme
+                    .input_text_style
+                    .patch(Style::default().bg(app.ui.theme.background_color)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((app.ui.input_scroll_offset, 0));
+        f.render_widget(paragraph, text_area);
 
-    // Set cursor based on wrapped text and linear cursor position
-    // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
-    if app.ui.is_input_active() && available_width > 0 && app.picker_session().is_none() {
-        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
-            app.ui.get_input_text(),
-            app.ui.input_cursor_position,
-            &config,
-        );
-        let visible_line = (line as u16).saturating_sub(app.ui.input_scroll_offset);
-        if visible_line < inner.height {
-            let cursor_x = inner.x.saturating_add(col as u16);
-            let cursor_y = inner.y.saturating_add(visible_line);
-            f.set_cursor_position((cursor_x, cursor_y));
+        // Set cursor based on wrapped text and linear cursor position
+        // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
+        if app.ui.is_input_active() && app.ui.is_input_focused() && app.picker_session().is_none() {
+            let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
+                app.ui.get_input_text(),
+                app.ui.input_cursor_position,
+                &config,
+            );
+            let visible_line = (line as u16).saturating_sub(app.ui.input_scroll_offset);
+            if visible_line < text_area.height {
+                let cursor_x = text_area.x.saturating_add(col as u16);
+                let cursor_y = text_area.y.saturating_add(visible_line);
+                f.set_cursor_position((cursor_x, cursor_y));
+            }
         }
+    } else if text_area.width > 0 && text_area.height > 0 {
+        let blank = Paragraph::new("")
+            .style(Style::default().bg(app.ui.theme.background_color))
+            .wrap(Wrap { trim: false });
+        f.render_widget(blank, text_area);
     }
 
     // Render modal picker or inspect overlay if present

@@ -50,6 +50,34 @@ pub struct AppInitConfig {
     pub preset: Option<String>,
 }
 
+fn build_app(
+    session: SessionContext,
+    ui: UiState,
+    picker: PickerController,
+    character_service: CharacterService,
+    persona_manager: crate::core::persona::PersonaManager,
+    preset_manager: crate::core::preset::PresetManager,
+    config: Config,
+) -> App {
+    let mut app = App {
+        session,
+        ui,
+        picker,
+        character_service,
+        persona_manager,
+        preset_manager,
+        config,
+    };
+
+    app.ui.set_input_text(String::new());
+    app.configure_textarea_appearance();
+
+    let display_name = app.persona_manager.get_display_name();
+    app.ui.update_user_display_name(display_name);
+
+    app
+}
+
 pub async fn new_with_auth(
     init_config: AppInitConfig,
     config: &Config,
@@ -107,22 +135,18 @@ pub async fn new_with_auth(
         }
     }
 
-    let mut app = App {
+    let ui = UiState::from_config(theme, config);
+    let picker = PickerController::new();
+
+    let mut app = build_app(
         session,
-        ui: UiState::from_config(theme, config),
-        picker: PickerController::new(),
+        ui,
+        picker,
         character_service,
         persona_manager,
         preset_manager,
-        config: config.clone(),
-    };
-
-    app.ui.set_input_text(String::new());
-    app.configure_textarea_appearance();
-
-    // Update user display name based on active persona
-    let display_name = app.persona_manager.get_display_name();
-    app.ui.update_user_display_name(display_name);
+        config.clone(),
+    );
 
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;
@@ -149,31 +173,26 @@ pub async fn new_uninitialized(
         startup_requires_provider,
     } = session::prepare_uninitialized(log_file, &mut character_service).await?;
 
-    let mut picker = PickerController::new();
-    if startup_requires_provider {
-        picker.startup_requires_provider = true;
-    }
-
     // Initialize PersonaManager (no CLI persona for uninitialized app)
     let persona_manager = crate::core::persona::PersonaManager::load_personas(&config)?;
     let preset_manager = crate::core::preset::PresetManager::load_presets(&config)?;
 
-    let mut app = App {
+    let ui = UiState::from_config(theme, &config);
+    let picker = PickerController::new();
+
+    let mut app = build_app(
         session,
-        ui: UiState::from_config(theme, &config),
+        ui,
         picker,
         character_service,
         persona_manager,
         preset_manager,
-        config: config.clone(),
-    };
+        config.clone(),
+    );
 
-    app.ui.set_input_text(String::new());
-    app.configure_textarea_appearance();
-
-    // Update user display name based on active persona
-    let display_name = app.persona_manager.get_display_name();
-    app.ui.update_user_display_name(display_name);
+    if startup_requires_provider {
+        app.picker.startup_requires_provider = true;
+    }
 
     Ok(app)
 }

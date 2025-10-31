@@ -243,6 +243,11 @@ impl UiState {
 
     pub fn toggle_compose_mode(&mut self) {
         self.compose_mode = !self.compose_mode;
+
+        if self.last_term_size.width > 0 {
+            let width = self.last_term_size.width;
+            self.recompute_input_layout_after_edit(width);
+        }
     }
 
     pub fn begin_activity(&mut self, kind: ActivityKind) {
@@ -447,7 +452,14 @@ impl UiState {
         if wrapped_lines <= 1 && !self.get_input_text().contains('\n') {
             1
         } else {
-            (wrapped_lines as u16).clamp(2, 6)
+            let max_height = if self.compose_mode {
+                let half_height = self.last_term_size.height / 2;
+                half_height.saturating_sub(2).max(2)
+            } else {
+                6
+            };
+
+            (wrapped_lines as u16).clamp(2, max_height)
         }
     }
 

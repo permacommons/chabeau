@@ -188,7 +188,7 @@ pub fn build_main_title(app: &App, available_width: u16) -> String {
     let focus_prefix = if app.ui.focus == UiFocus::Transcript {
         "› "
     } else {
-        ""
+        "· "
     };
     let base_text = format!(
         "{}Chabeau v{} - {} ({})",

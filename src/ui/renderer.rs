@@ -279,11 +279,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Reserve a column for the focus indicator and render it
     let mut text_area = inner;
+    let mut consumed_columns = 0;
     if inner.width > 0 {
         let indicator = if app.ui.is_input_focused() {
             "›"
         } else {
-            " "
+            "·"
         };
         let indicator_style = app
             .ui
@@ -300,9 +301,26 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             height: inner.height,
         };
         f.render_widget(indicator_paragraph, indicator_area);
+        consumed_columns += 1;
 
-        text_area.x = text_area.x.saturating_add(1);
-        text_area.width = text_area.width.saturating_sub(1);
+        if inner.width > 1 {
+            let spacer_line = Line::from(Span::styled(" ".to_string(), indicator_style));
+            let spacer_paragraph = Paragraph::new(spacer_line)
+                .style(Style::default().bg(app.ui.theme.background_color));
+            let spacer_area = Rect {
+                x: inner.x.saturating_add(1),
+                y: inner.y,
+                width: 1,
+                height: inner.height,
+            };
+            f.render_widget(spacer_paragraph, spacer_area);
+            consumed_columns += 1;
+        }
+    }
+
+    if consumed_columns > 0 {
+        text_area.x = text_area.x.saturating_add(consumed_columns);
+        text_area.width = text_area.width.saturating_sub(consumed_columns);
     }
 
     // Render wrapped input text with a one-column right margin

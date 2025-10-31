@@ -7,7 +7,7 @@ use ratatui::prelude::Size;
 use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::time::Instant;
-use tui_textarea::TextArea;
+use tui_textarea::{CursorMove, TextArea};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
@@ -352,6 +352,43 @@ impl UiState {
         self.configure_textarea();
     }
 
+    pub fn set_input_text_with_cursor(&mut self, text: String, cursor_pos: usize) {
+        self.set_input_text(text);
+
+        let line_lengths: Vec<usize> = self
+            .textarea
+            .lines()
+            .iter()
+            .map(|line| line.chars().count())
+            .collect();
+
+        if line_lengths.is_empty() {
+            self.textarea.move_cursor(CursorMove::Jump(0, 0));
+            self.sync_input_from_textarea();
+            return;
+        }
+
+        let total_chars = self.input.chars().count();
+        let clamped = cursor_pos.min(total_chars);
+
+        let mut consumed = 0usize;
+        let mut target_row = line_lengths.len().saturating_sub(1);
+        let mut target_col = *line_lengths.last().unwrap_or(&0);
+
+        for (index, len) in line_lengths.iter().enumerate() {
+            if clamped <= consumed + len {
+                target_row = index;
+                target_col = clamped.saturating_sub(consumed);
+                break;
+            }
+            consumed += len + 1;
+        }
+
+        self.textarea
+            .move_cursor(CursorMove::Jump(target_row as u16, target_col as u16));
+        self.sync_input_from_textarea();
+    }
+
     pub fn clear_input(&mut self) {
         self.set_input_text(String::new());
     }
@@ -391,7 +428,7 @@ impl UiState {
             return 1;
         }
 
-        let available_width = width.saturating_sub(4);
+        let available_width = width.saturating_sub(5);
         let wrapped_lines = self.calculate_input_wrapped_lines(available_width);
 
         if wrapped_lines <= 1 && !self.get_input_text().contains('\n') {
@@ -411,7 +448,7 @@ impl UiState {
     }
 
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let available_width = width.saturating_sub(4);
+        let available_width = width.saturating_sub(5);
         let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {

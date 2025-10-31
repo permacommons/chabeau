@@ -496,6 +496,43 @@ fn test_recompute_input_layout_after_edit_updates_scroll() {
 }
 
 #[test]
+fn complete_slash_command_fills_unique_match() {
+    let mut app = create_test_app();
+    app.ui.set_input_text("/he".into());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/help ");
+    assert_eq!(app.ui.input_cursor_position, "/help ".chars().count());
+    assert!(app.ui.is_input_focused());
+}
+
+#[test]
+fn complete_slash_command_lists_multiple_matches() {
+    let mut app = create_test_app();
+    app.ui.set_input_text("/p".into());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/p");
+    assert_eq!(
+        app.ui.status.as_deref(),
+        Some("Commands: /provider, /persona, /preset")
+    );
+}
+
+#[test]
+fn complete_slash_command_reports_unknown_prefix() {
+    let mut app = create_test_app();
+    app.ui.set_input_text("/zzz".into());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/zzz");
+    assert_eq!(app.ui.status.as_deref(), Some("No command matches '/zzz'"));
+}
+
+#[test]
 fn test_last_and_first_user_message_index() {
     let mut app = create_test_app();
     // No messages

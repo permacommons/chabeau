@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
 use tokio::sync::mpsc;
 
@@ -177,6 +177,21 @@ async fn route_keyboard_event(
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
+
+    if key.code == event::KeyCode::Tab
+        && key.modifiers == KeyModifiers::SHIFT
+        && !matches!(context, KeyContext::Picker)
+    {
+        let handled = app
+            .update(|app| app.complete_slash_command(term_size.width))
+            .await;
+        if handled {
+            return Ok(KeyboardEventOutcome {
+                request_redraw: true,
+                exit_requested: false,
+            });
+        }
+    }
 
     if key.code == event::KeyCode::Tab
         && key.modifiers.is_empty()

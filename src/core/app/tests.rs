@@ -434,6 +434,42 @@ fn test_shift_like_up_down_moves_one_line_on_many_newlines() {
 }
 
 #[test]
+fn test_wrapped_vertical_navigation_preserves_visual_column() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 6);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 3);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 6);
+}
+
+#[test]
+fn test_wrapped_vertical_navigation_clamps_to_shorter_line() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 8);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 5);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 8);
+}
+
+#[test]
 fn test_shift_like_left_right_moves_one_char() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello".to_string());

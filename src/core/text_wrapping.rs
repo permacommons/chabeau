@@ -218,21 +218,18 @@ impl TextWrapper {
         lines.len().saturating_sub(1)
     }
 
-    /// Calculate cursor position within wrapped text using a character-by-character mapping
-    pub fn calculate_cursor_position_in_wrapped_text(
-        text: &str,
-        cursor_position: usize,
-        config: &WrapConfig,
-    ) -> (usize, usize) {
-        let cursor_position = cursor_position.min(text.chars().count());
-
+    /// Build a mapping of cursor positions to wrapped line/column coordinates
+    pub fn cursor_position_map(text: &str, config: &WrapConfig) -> Vec<(usize, usize)> {
         // Build a mapping for cursor "positions" (between characters), not just characters.
         // There are N+1 positions for N characters.
         let original_chars: Vec<char> = text.chars().collect();
 
-        // Early exit for empty text
+        // Always include the origin so the map has at least one entry
+        let mut pos_map: Vec<(usize, usize)> = Vec::with_capacity(original_chars.len() + 1);
+        pos_map.push((0, 0));
+
         if original_chars.is_empty() {
-            return (0, 0);
+            return pos_map;
         }
 
         // Wrap the full text once and collect coordinates for each visible (non-newline) character
@@ -250,11 +247,6 @@ impl TextWrapper {
                 }
             }
         }
-
-        // Build the position map of length original_chars.len() + 1
-        let mut pos_map: Vec<(usize, usize)> = Vec::with_capacity(original_chars.len() + 1);
-        // Position 0 is always the start
-        pos_map.push((0, 0));
 
         let mut wrapped_idx = 0usize; // index into wrapped_coords for non-newline chars
         let mut current_line = 0usize;
@@ -277,14 +269,23 @@ impl TextWrapper {
                         .graphemes(true)
                         .map(UnicodeWidthStr::width)
                         .sum();
-                    pos_map.push((wrapped_lines.len() - 1, last_width));
+                    pos_map.push((wrapped_lines.len().saturating_sub(1), last_width));
                 } else {
                     pos_map.push((0, 0));
                 }
             }
         }
 
-        // Clamp and return
+        pos_map
+    }
+
+    /// Calculate cursor position within wrapped text using a character-by-character mapping
+    pub fn calculate_cursor_position_in_wrapped_text(
+        text: &str,
+        cursor_position: usize,
+        config: &WrapConfig,
+    ) -> (usize, usize) {
+        let pos_map = Self::cursor_position_map(text, config);
         let idx = cursor_position.min(pos_map.len().saturating_sub(1));
         pos_map[idx]
     }

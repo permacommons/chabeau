@@ -36,7 +36,7 @@ pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstra
 #[allow(unused_imports)]
 pub use settings::{ProviderController, ThemeController};
 #[allow(unused_imports)]
-pub use ui_state::{ActivityKind, UiState};
+pub use ui_state::{ActivityKind, UiState, VerticalCursorDirection};
 
 /// Configuration parameters for initializing an App with authentication
 pub struct AppInitConfig {

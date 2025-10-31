@@ -71,6 +71,13 @@ pub struct UiState {
     pub compose_mode: bool,
     pub last_term_size: Size,
     pub focus: UiFocus,
+    pub input_cursor_preferred_column: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum VerticalCursorDirection {
+    Up,
+    Down,
 }
 
 impl UiState {
@@ -301,6 +308,7 @@ impl UiState {
             compose_mode: false,
             last_term_size: Size::default(),
             focus: UiFocus::Transcript,
+            input_cursor_preferred_column: None,
         }
     }
 
@@ -338,6 +346,7 @@ impl UiState {
         };
         self.textarea = TextArea::from(lines);
         self.input_cursor_position = self.input.chars().count();
+        self.input_cursor_preferred_column = None;
         if !self.input.is_empty() {
             let last_row = self.textarea.lines().len().saturating_sub(1) as u16;
             let last_col = self
@@ -354,7 +363,11 @@ impl UiState {
 
     pub fn set_input_text_with_cursor(&mut self, text: String, cursor_pos: usize) {
         self.set_input_text(text);
+        self.jump_cursor_to_position(cursor_pos);
+        self.input_cursor_preferred_column = None;
+    }
 
+    fn jump_cursor_to_position(&mut self, cursor_pos: usize) {
         let line_lengths: Vec<usize> = self
             .textarea
             .lines()
@@ -478,6 +491,7 @@ impl UiState {
     {
         f(&mut self.textarea);
         self.sync_input_from_textarea();
+        self.input_cursor_preferred_column = None;
     }
 
     pub fn apply_textarea_edit_and_recompute<F>(&mut self, terminal_width: u16, f: F)
@@ -486,6 +500,101 @@ impl UiState {
     {
         self.apply_textarea_edit(f);
         self.recompute_input_layout_after_edit(terminal_width);
+    }
+
+    fn input_wrap_width(&self, terminal_width: u16) -> Option<usize> {
+        let available_width = terminal_width.saturating_sub(5);
+        if available_width == 0 {
+            None
+        } else {
+            Some(available_width as usize)
+        }
+    }
+
+    pub fn move_cursor_in_wrapped_input(
+        &mut self,
+        terminal_width: u16,
+        direction: VerticalCursorDirection,
+    ) -> bool {
+        if self.get_input_text().is_empty() {
+            self.input_cursor_preferred_column = None;
+            return false;
+        }
+
+        let Some(wrap_width) = self.input_wrap_width(terminal_width) else {
+            let before = self.textarea.cursor();
+            match direction {
+                VerticalCursorDirection::Up => self.textarea.move_cursor(CursorMove::Up),
+                VerticalCursorDirection::Down => self.textarea.move_cursor(CursorMove::Down),
+            }
+            let after = self.textarea.cursor();
+            self.sync_input_from_textarea();
+            self.input_cursor_preferred_column = None;
+            return before != after;
+        };
+
+        let config = WrapConfig::new(wrap_width);
+        let position_map = TextWrapper::cursor_position_map(self.get_input_text(), &config);
+        if position_map.is_empty() {
+            self.input_cursor_preferred_column = None;
+            return false;
+        }
+
+        let char_count = self.get_input_text().chars().count();
+        let current_index = self
+            .input_cursor_position
+            .min(position_map.len().saturating_sub(1));
+        let (current_line, current_col) = position_map[current_index];
+        let desired_col = self.input_cursor_preferred_column.unwrap_or(current_col);
+        let total_lines = TextWrapper::count_wrapped_lines(self.get_input_text(), &config);
+        let max_line = total_lines.saturating_sub(1);
+
+        let target_line = match direction {
+            VerticalCursorDirection::Up => {
+                if current_line == 0 {
+                    self.input_cursor_preferred_column = Some(desired_col);
+                    return false;
+                }
+                current_line.saturating_sub(1)
+            }
+            VerticalCursorDirection::Down => {
+                if current_line >= max_line {
+                    self.input_cursor_preferred_column = Some(desired_col);
+                    return false;
+                }
+                current_line.saturating_add(1)
+            }
+        };
+
+        let mut candidate_index = None;
+        let mut fallback_index = None;
+
+        for (idx, (line, col)) in position_map.iter().enumerate() {
+            if *line == target_line {
+                fallback_index = Some(idx);
+                if *col >= desired_col {
+                    candidate_index = Some(idx);
+                    break;
+                }
+            } else if *line > target_line {
+                break;
+            }
+        }
+
+        let Some(new_index) = candidate_index.or(fallback_index) else {
+            self.input_cursor_preferred_column = Some(desired_col);
+            return false;
+        };
+
+        let target_index = new_index.min(char_count);
+        if target_index == current_index {
+            self.input_cursor_preferred_column = Some(desired_col);
+            return false;
+        }
+
+        self.jump_cursor_to_position(target_index);
+        self.input_cursor_preferred_column = Some(desired_col);
+        true
     }
 
     pub fn file_prompt(&self) -> Option<&FilePrompt> {

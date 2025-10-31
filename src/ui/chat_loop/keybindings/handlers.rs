@@ -8,6 +8,7 @@
 //! - Complex operations (external editor, message submission)
 //! - Mode-specific handlers (picker, edit select, block select)
 
+use crate::core::app::ui_state::VerticalCursorDirection;
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
@@ -337,7 +338,7 @@ impl KeyHandler for ArrowKeyHandler {
             KeyCode::Up => {
                 if app.ui.is_input_focused() {
                     app.ui
-                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
+                        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up);
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
                     app.ui.auto_scroll = false;
@@ -348,7 +349,7 @@ impl KeyHandler for ArrowKeyHandler {
             KeyCode::Down => {
                 if app.ui.is_input_focused() {
                     app.ui
-                        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
+                        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Down);
                     recompute_input_layout_if_due(app, term_width, &mut last_update);
                 } else {
                     app.ui.auto_scroll = false;

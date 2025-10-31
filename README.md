@@ -38,7 +38,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - Reusable preset instructions with picker and CLI toggles for quick context switching
 - Extensible theming system that degrades gracefully to terminals with limited color support
 - Secure API key storage in system keyring with config-based provider management
-- Multi-line input (IME-friendly) with compose mode for longer responses
+- Multi-line input (IME-friendly) with compose mode that can expand to half the terminal for longer responses
 - Message retry and message editing
 - On-demand refinements of the last assistant response with `/refine <prompt>`
 - Slash command registry with inline help for faster command discovery

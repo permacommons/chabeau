@@ -8,14 +8,10 @@ use crate::character::CharacterService;
 use crate::core::app::{self};
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::core::config::data::Config;
-use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::core::providers::{resolve_session, ResolveSessionError};
-use crate::ui::layout::TableOverflowPolicy;
-use crate::ui::markdown::{self, MessageRenderConfig};
-use crate::ui::theme::Theme;
-use ratatui::crossterm::{self, execute};
+use ratatui::crossterm::cursor::{MoveToColumn, MoveUp};
+use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
-use ratatui::text::Line;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_say(
@@ -44,7 +40,9 @@ pub async fn run_say(
             .map(|(id, _, _, _)| id)
             .collect();
         if configured_providers.len() > 1 {
-            eprintln!("Multiple providers are configured. Please specify a provider with the -p flag.");
+            eprintln!(
+                "Multiple providers are configured. Please specify a provider with the -p flag."
+            );
             eprintln!("Available providers: {}", configured_providers.join(", "));
             std::process::exit(1);
         }
@@ -54,26 +52,24 @@ pub async fn run_say(
 
     let session = match resolve_session(&auth_manager, &config, provider.as_deref()) {
         Ok(session) => session,
-        Err(err) => {
-            match err {
-                ResolveSessionError::Provider(provider_err) => {
-                    eprintln!("{}", provider_err);
-                    let fixes = provider_err.quick_fixes();
-                    if !fixes.is_empty() {
-                        eprintln!();
-                        eprintln!("💡 Quick fixes:");
-                        for fix in fixes {
-                            eprintln!("  • {fix}");
-                        }
+        Err(err) => match err {
+            ResolveSessionError::Provider(provider_err) => {
+                eprintln!("{}", provider_err);
+                let fixes = provider_err.quick_fixes();
+                if !fixes.is_empty() {
+                    eprintln!();
+                    eprintln!("💡 Quick fixes:");
+                    for fix in fixes {
+                        eprintln!("  • {fix}");
                     }
-                    std::process::exit(provider_err.exit_code());
                 }
-                ResolveSessionError::Source(source_err) => {
-                    eprintln!("❌ Error: {}", source_err);
-                    std::process::exit(1);
-                }
+                std::process::exit(provider_err.exit_code());
             }
-        }
+            ResolveSessionError::Source(source_err) => {
+                eprintln!("❌ Error: {}", source_err);
+                std::process::exit(1);
+            }
+        },
     };
 
     let mut app = app::new_with_auth(
@@ -92,49 +88,77 @@ pub async fn run_say(
     )
     .await?;
 
-    let messages = vec![Message {
-        role: ROLE_USER.to_string(),
-        content: prompt,
-    }];
+    let (term_width, _) = terminal::size().unwrap_or((80, 24));
 
-    let params = app.conversation().stream_parameters(messages, None);
+    let (cancel_token, stream_id, api_messages) = {
+        let mut conversation = app.conversation();
+        let (cancel_token, stream_id) = conversation.start_new_stream();
+        let api_messages = conversation.add_user_message(prompt.clone());
+        (cancel_token, stream_id, api_messages)
+    };
+
+    let prefix_lines: Vec<String> = {
+        let lines = app.get_prewrapped_lines_cached(term_width);
+        lines.iter().map(|line| line.to_string()).collect()
+    };
+    for line in &prefix_lines {
+        println!("{}", line);
+    }
+
+    let params = app.build_stream_params(api_messages, cancel_token, stream_id);
 
     let (stream_service, mut rx) = ChatStreamService::new();
     stream_service.spawn_stream(params);
 
-    let mut full_response = String::new();
-    let use_markdown = config.markdown.unwrap_or(false);
     let mut stdout = io::stdout();
-    let mut last_line_count = 0;
+    let mut previous_lines = prefix_lines.clone();
 
     loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {
-                if use_markdown {
-                    full_response.push_str(&content);
-                    let lines = render_markdown_chunk(&full_response)?;
-                    clear_last_lines(&mut stdout, last_line_count)?;
-                    for line in &lines {
-                        println!("{}", line);
-                    }
-                    last_line_count = lines.len();
-                } else {
-                    print!("{}", content);
-                    stdout.flush()?;
+                let (term_width, term_height) = terminal::size().unwrap_or((80, 24));
+                {
+                    let mut conversation = app.conversation();
+                    let available_height = conversation.calculate_available_height(term_height, 0);
+                    conversation.append_to_response(&content, available_height, term_width);
                 }
+
+                let new_lines: Vec<String> = app
+                    .get_prewrapped_lines_cached(term_width)
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect();
+
+                let mut common_prefix_len = 0usize;
+                let max_prefix = previous_lines.len().min(new_lines.len());
+                while common_prefix_len < max_prefix
+                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
+                {
+                    common_prefix_len += 1;
+                }
+
+                if previous_lines.len() > common_prefix_len {
+                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
+                    if lines_to_move_up > 0 {
+                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                    }
+                }
+
+                for line in new_lines.iter().skip(common_prefix_len) {
+                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                    println!("{}", line);
+                }
+
+                stdout.flush()?;
+                previous_lines = new_lines;
             }
             Some((StreamMessage::Error(err), _)) => {
-                // Buffer errors so they don't get overwritten by the markdown render
-                if !use_markdown {
-                    eprintln!();
-                }
                 eprintln!("❌ Error: {}", err);
                 std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
-                if !use_markdown {
-                    println!();
-                }
+                let mut conversation = app.conversation();
+                conversation.finalize_response();
                 break;
             }
             None => break,
@@ -142,32 +166,5 @@ pub async fn run_say(
         }
     }
 
-    Ok(())
-}
-
-fn render_markdown_chunk(content: &str) -> Result<Vec<Line<'static>>, Box<dyn Error>> {
-    let monochrome_theme = Theme::monochrome();
-    let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
-    let rendered = markdown::render_message_with_config(
-        &Message {
-            role: ROLE_ASSISTANT.to_string(),
-            content: content.to_string(),
-        },
-        &monochrome_theme,
-        MessageRenderConfig::markdown(false)
-            .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
-    );
-
-    Ok(rendered.lines)
-}
-
-fn clear_last_lines(stdout: &mut io::Stdout, line_count: usize) -> Result<(), Box<dyn Error>> {
-    if line_count > 0 {
-        execute!(
-            stdout,
-            crossterm::cursor::MoveUp(line_count as u16),
-            Clear(ClearType::FromCursorDown)
-        )?;
-    }
     Ok(())
 }

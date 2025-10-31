@@ -434,6 +434,90 @@ fn test_shift_like_up_down_moves_one_line_on_many_newlines() {
 }
 
 #[test]
+fn test_wrapped_vertical_navigation_preserves_visual_column() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 6);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 3);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 6);
+}
+
+#[test]
+fn test_wrapped_vertical_navigation_clamps_to_shorter_line() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 8);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 5);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 8);
+}
+
+#[test]
+fn test_wrapped_vertical_navigation_handles_multiple_paragraphs() {
+    let mut app = create_test_app();
+    let text = "aaaaa bbbbb ccccc ddddd\neeeee fffff ggggg hhhhh";
+    app.ui
+        .set_input_text_with_cursor(text.to_string(), text.chars().count());
+
+    let newline_idx = text.find('\n').unwrap();
+    let mut saw_above_newline = false;
+
+    loop {
+        let moved = app
+            .ui
+            .move_cursor_in_wrapped_input(15, VerticalCursorDirection::Up);
+        if !moved {
+            break;
+        }
+        if app.ui.input_cursor_position <= newline_idx {
+            saw_above_newline = true;
+        }
+    }
+
+    assert!(
+        saw_above_newline,
+        "cursor should cross the hard newline boundary"
+    );
+    let (row, _) = app.ui.textarea.cursor();
+    assert_eq!(row, 0);
+}
+
+#[test]
+fn test_wrapped_vertical_navigation_keeps_column_zero_on_descend() {
+    let mut app = create_test_app();
+    app.ui.set_input_text_with_cursor("abcdefgh".to_string(), 0);
+
+    let moved_down = app
+        .ui
+        .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Down);
+    assert!(moved_down);
+    assert_eq!(app.ui.input_cursor_position, 4);
+
+    let moved_up = app
+        .ui
+        .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Up);
+    assert!(moved_up);
+    assert_eq!(app.ui.input_cursor_position, 0);
+}
+
+#[test]
 fn test_shift_like_left_right_moves_one_char() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello".to_string());
@@ -449,6 +533,80 @@ fn test_shift_like_left_right_moves_one_char() {
     app.ui.sync_input_from_textarea();
     let forward_pos = app.ui.input_cursor_position;
     assert_eq!(forward_pos, end_pos);
+}
+
+#[test]
+fn paste_inserts_cursor_at_end_of_insert() {
+    let mut app = create_test_app();
+    let term_width = 80u16;
+    let text = "this is a long paragraph that should wrap softly when rendered";
+
+    app.insert_into_input(text, term_width);
+
+    assert_eq!(app.ui.get_input_text(), text);
+    assert_eq!(app.ui.input_cursor_position, text.chars().count());
+}
+
+#[test]
+fn visual_line_start_end_track_wrapped_columns() {
+    let mut app = create_test_app();
+    let text = "alpha beta gamma delta epsilon zeta eta".to_string();
+    let cursor_pos = text.find("gamma").unwrap() + 2; // inside "gamma"
+    let term_width = 20u16;
+    let wrap_width = term_width.saturating_sub(5) as usize;
+
+    app.ui.set_input_text_with_cursor(text.clone(), cursor_pos);
+
+    let layout = TextWrapper::cursor_layout(&text, &WrapConfig::new(wrap_width));
+    let line = layout.coordinates_for_index(app.ui.input_cursor_position).0;
+    let (line_start, line_end) = layout
+        .line_bounds(line)
+        .expect("line bounds available for wrapped line");
+
+    assert!(app.ui.move_cursor_to_visual_line_start(term_width));
+    assert_eq!(app.ui.input_cursor_position, line_start);
+
+    assert!(app.ui.move_cursor_to_visual_line_end(term_width));
+    assert_eq!(app.ui.input_cursor_position, line_end);
+}
+
+#[test]
+fn wrapped_cursor_crosses_paragraph_boundaries() {
+    let mut app = create_test_app();
+    let text = "one two three four five six seven eight nine ten\nalpha beta gamma delta epsilon zeta eta theta".to_string();
+    let newline_index = text.find('\n').unwrap();
+    let cursor_pos = newline_index + 4; // inside the second paragraph
+    let term_width = 22u16;
+
+    app.ui.set_input_text_with_cursor(text.clone(), cursor_pos);
+
+    assert!(app
+        .ui
+        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up));
+    assert!(app.ui.input_cursor_position <= newline_index);
+
+    assert!(app
+        .ui
+        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Down));
+    assert!(app.ui.input_cursor_position > newline_index);
+}
+
+#[test]
+fn page_cursor_movement_skips_multiple_wrapped_lines() {
+    let mut app = create_test_app();
+    let text = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua".to_string();
+    let term_width = 24u16;
+
+    app.ui
+        .set_input_text_with_cursor(text.clone(), text.chars().count());
+
+    let before = app.ui.input_cursor_position;
+    let moved =
+        app.ui
+            .move_cursor_page_in_wrapped_input(term_width, VerticalCursorDirection::Up, 3);
+
+    assert!(moved);
+    assert!(app.ui.input_cursor_position < before);
 }
 
 #[test]

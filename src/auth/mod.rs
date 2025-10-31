@@ -27,6 +27,14 @@ pub struct Provider {
 
 type ConfiguredProviderEntry = (String, String, bool);
 
+#[derive(Clone, Debug)]
+pub struct ProviderAuthStatus {
+    pub id: String,
+    pub display_name: String,
+    pub base_url: String,
+    pub has_token: bool,
+}
+
 fn map_ui_result<T>(result: Result<T, UiError>) -> Result<T, Box<dyn std::error::Error>> {
     result.map_err(|err| Box::new(err) as Box<dyn std::error::Error>)
 }
@@ -484,9 +492,7 @@ impl AuthManager {
         Ok(())
     }
 
-    pub fn get_all_providers_with_auth_status(
-        &self,
-    ) -> (Vec<(String, String, String, bool)>, Option<String>) {
+    pub fn get_all_providers_with_auth_status(&self) -> (Vec<ProviderAuthStatus>, Option<String>) {
         let mut providers = Vec::new();
         let mut seen_ids = HashSet::new();
 
@@ -495,24 +501,24 @@ impl AuthManager {
                 continue;
             }
             let has_token = self.get_token(&provider.name).unwrap_or(None).is_some();
-            providers.push((
-                provider.name.clone(),
-                provider.display_name.clone(),
-                provider.base_url.clone(),
+            providers.push(ProviderAuthStatus {
+                id: provider.name.clone(),
+                display_name: provider.display_name.clone(),
+                base_url: provider.base_url.clone(),
                 has_token,
-            ));
+            });
             seen_ids.insert(provider.name.clone());
         }
 
         for custom in self.config.list_custom_providers() {
             if !seen_ids.contains(&custom.id) {
                 let has_token = self.get_token(&custom.id).unwrap_or(None).is_some();
-                providers.push((
-                    custom.id.clone(),
-                    custom.display_name.clone(),
-                    custom.base_url.clone(),
+                providers.push(ProviderAuthStatus {
+                    id: custom.id.clone(),
+                    display_name: custom.display_name.clone(),
+                    base_url: custom.base_url.clone(),
                     has_token,
-                ));
+                });
             }
         }
 

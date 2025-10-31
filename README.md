@@ -41,7 +41,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - Multi-line input (IME-friendly) with compose mode for longer responses
 - Message retry and message editing
 - On-demand refinements of the last assistant response with `/refine <prompt>`
-- Slash command registry with Tab completion for faster command discovery
+- Slash command registry with inline help for faster command discovery
 - Conversation logging with pause/resume; quick `/dump` of contents to a file
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
@@ -334,10 +334,10 @@ Force a mode when needed with `CHABEAU_COLOR=truecolor|256|16`.
 
 See [the built-in help](src/builtins/help.md) for a full list of keyboard controls. A few highlights:
 
-- Alt+Enter (or Ctrl+J) to start a new line; Enter sends; Shift+arrow moves cursor in the input area.
-- Compose mode (F4) flips the defaults: Enter inserts a newline, Alt+Enter/Ctrl+J sends, arrow keys stay in the input, and Shift+arrow scrolls the transcript.
+- Alt+Enter (or Ctrl+J) to start a new line; Enter sends. Arrow keys always act on the focused area.
+- Compose mode (F4) flips the newline/send defaults; focus behavior stays the same.
 - Ctrl+N repeats your most recent `/refine` prompt on the latest assistant reply.
-- Tab autocompletes slash commands so you can discover options quickly.
+- Tab switches focus between the transcript and input unless the current input starts with `/`. When it does, Tab autocompletes slash commands. The active region shows a `›`; the inactive one shows a `·`.
 - Ctrl+O opens the inspect view for picker items—providers include their ID, base URL, and auth mode; themes show their ID and every color override; character cards expand to the full v2 definition.
 - Ctrl+D on an empty input prints the transcript and exits; Ctrl+C exits immediately.
 

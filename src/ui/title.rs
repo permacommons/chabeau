@@ -1,3 +1,4 @@
+use crate::core::app::ui_state::UiFocus;
 use crate::core::app::App;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -184,8 +185,14 @@ pub fn build_main_title(app: &App, available_width: u16) -> String {
         app.session.provider_display_name.clone()
     };
 
+    let focus_prefix = if app.ui.focus == UiFocus::Transcript {
+        "› "
+    } else {
+        "· "
+    };
     let base_text = format!(
-        "Chabeau v{} - {} ({})",
+        "{}Chabeau v{} - {} ({})",
+        focus_prefix,
         env!("CARGO_PKG_VERSION"),
         provider_display,
         model_display

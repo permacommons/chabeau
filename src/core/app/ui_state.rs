@@ -7,7 +7,7 @@ use ratatui::prelude::Size;
 use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::time::Instant;
-use tui_textarea::TextArea;
+use tui_textarea::{CursorMove, TextArea};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
@@ -34,6 +34,12 @@ pub enum UiMode {
     BlockSelect { block_index: usize },
     InPlaceEdit { index: usize },
     FilePrompt(FilePrompt),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiFocus {
+    Transcript,
+    Input,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +70,7 @@ pub struct UiState {
     pub print_transcript_on_exit: bool,
     pub compose_mode: bool,
     pub last_term_size: Size,
+    pub focus: UiFocus,
 }
 
 impl UiState {
@@ -72,6 +79,29 @@ impl UiState {
             self.mode,
             UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
         )
+    }
+
+    pub fn focus_transcript(&mut self) {
+        self.focus = UiFocus::Transcript;
+    }
+
+    pub fn focus_input(&mut self) {
+        self.focus = UiFocus::Input;
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            UiFocus::Transcript => UiFocus::Input,
+            UiFocus::Input => UiFocus::Transcript,
+        };
+    }
+
+    pub fn is_input_focused(&self) -> bool {
+        self.focus == UiFocus::Input
+    }
+
+    pub fn is_transcript_focused(&self) -> bool {
+        self.focus == UiFocus::Transcript
     }
 
     pub fn in_edit_select_mode(&self) -> bool {
@@ -152,6 +182,7 @@ impl UiState {
 
     pub fn enter_edit_select_mode(&mut self) {
         if let Some(idx) = self.last_user_message_index() {
+            self.focus_transcript();
             self.set_mode(UiMode::EditSelect {
                 selected_index: idx,
             });
@@ -165,6 +196,7 @@ impl UiState {
     }
 
     pub fn start_in_place_edit(&mut self, index: usize) {
+        self.focus_input();
         self.set_mode(UiMode::InPlaceEdit { index });
     }
 
@@ -175,6 +207,7 @@ impl UiState {
     }
 
     pub fn enter_block_select_mode(&mut self, index: usize) {
+        self.focus_transcript();
         self.set_mode(UiMode::BlockSelect { block_index: index });
     }
 
@@ -224,6 +257,7 @@ impl UiState {
         self.is_streaming = true;
         self.stream_interrupted = false;
         self.begin_activity(ActivityKind::ChatStream);
+        self.focus_transcript();
     }
 
     pub fn end_streaming(&mut self) {
@@ -266,6 +300,7 @@ impl UiState {
             print_transcript_on_exit: false,
             compose_mode: false,
             last_term_size: Size::default(),
+            focus: UiFocus::Transcript,
         }
     }
 
@@ -317,6 +352,43 @@ impl UiState {
         self.configure_textarea();
     }
 
+    pub fn set_input_text_with_cursor(&mut self, text: String, cursor_pos: usize) {
+        self.set_input_text(text);
+
+        let line_lengths: Vec<usize> = self
+            .textarea
+            .lines()
+            .iter()
+            .map(|line| line.chars().count())
+            .collect();
+
+        if line_lengths.is_empty() {
+            self.textarea.move_cursor(CursorMove::Jump(0, 0));
+            self.sync_input_from_textarea();
+            return;
+        }
+
+        let total_chars = self.input.chars().count();
+        let clamped = cursor_pos.min(total_chars);
+
+        let mut consumed = 0usize;
+        let mut target_row = line_lengths.len().saturating_sub(1);
+        let mut target_col = *line_lengths.last().unwrap_or(&0);
+
+        for (index, len) in line_lengths.iter().enumerate() {
+            if clamped <= consumed + len {
+                target_row = index;
+                target_col = clamped.saturating_sub(consumed);
+                break;
+            }
+            consumed += len + 1;
+        }
+
+        self.textarea
+            .move_cursor(CursorMove::Jump(target_row as u16, target_col as u16));
+        self.sync_input_from_textarea();
+    }
+
     pub fn clear_input(&mut self) {
         self.set_input_text(String::new());
     }
@@ -356,7 +428,7 @@ impl UiState {
             return 1;
         }
 
-        let available_width = width.saturating_sub(3);
+        let available_width = width.saturating_sub(5);
         let wrapped_lines = self.calculate_input_wrapped_lines(available_width);
 
         if wrapped_lines <= 1 && !self.get_input_text().contains('\n') {
@@ -376,7 +448,7 @@ impl UiState {
     }
 
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
-        let available_width = width.saturating_sub(3);
+        let available_width = width.saturating_sub(5);
         let total_input_lines = self.calculate_input_wrapped_lines(available_width) as u16;
 
         if total_input_lines <= input_area_height {
@@ -425,6 +497,7 @@ impl UiState {
     }
 
     pub fn start_file_prompt_dump(&mut self, filename: String) {
+        self.focus_input();
         self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::Dump,
             content: None,
@@ -433,6 +506,7 @@ impl UiState {
     }
 
     pub fn start_file_prompt_save_block(&mut self, filename: String, content: String) {
+        self.focus_input();
         self.set_mode(UiMode::FilePrompt(FilePrompt {
             kind: FilePromptKind::SaveCodeBlock,
             content: Some(content),
@@ -595,9 +669,34 @@ impl UiState {
 
 #[cfg(test)]
 mod tests {
-    use super::{UiMode, UiState};
+    use super::{UiFocus, UiMode, UiState};
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::create_test_message;
+
+    #[test]
+    fn default_focus_is_transcript() {
+        let ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+        assert_eq!(ui.focus, UiFocus::Transcript);
+    }
+
+    #[test]
+    fn focus_transitions_round_trip() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+        ui.focus_input();
+        assert!(ui.is_input_focused());
+        ui.focus_transcript();
+        assert!(ui.is_transcript_focused());
+        ui.toggle_focus();
+        assert!(ui.is_input_focused());
+    }
+
+    #[test]
+    fn begin_streaming_forces_transcript_focus() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+        ui.focus_input();
+        ui.begin_streaming();
+        assert!(ui.is_transcript_focused());
+    }
 
     #[test]
     fn enter_edit_select_mode_focuses_last_user_message() {

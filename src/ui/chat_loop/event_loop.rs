@@ -178,8 +178,34 @@ async fn route_keyboard_event(
         })
         .await;
 
+    if key.code == event::KeyCode::Tab
+        && !matches!(context, KeyContext::Picker)
+        && key.modifiers.is_empty()
+    {
+        let should_complete = app
+            .read(|app| app.ui.is_input_active() && app.ui.get_input_text().starts_with('/'))
+            .await;
+
+        if should_complete {
+            let handled = app
+                .update(|app| app.complete_slash_command(term_size.width))
+                .await;
+            return Ok(KeyboardEventOutcome {
+                request_redraw: handled,
+                exit_requested: false,
+            });
+        }
+
+        app.update(|app| app.ui.toggle_focus()).await;
+        return Ok(KeyboardEventOutcome {
+            request_redraw: true,
+            exit_requested: false,
+        });
+    }
+
     if mode_registry.should_handle_as_text_input(&key, &context) {
         app.update(|app| {
+            app.ui.focus_input();
             app.ui
                 .apply_textarea_edit_and_recompute(term_size.width, |ta| {
                     ta.input(tui_textarea::Input::from(key));
@@ -547,11 +573,24 @@ mod tests {
     use crate::core::app::App;
     use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT};
     use crate::ui::theme::Theme;
+    use crate::utils::test_utils::create_test_app;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::runtime::Runtime;
+    use tokio::sync::Mutex;
 
     const TERM_WIDTH: u16 = 80;
     const TERM_HEIGHT: u16 = 24;
+
+    fn new_dispatcher() -> AppActionDispatcher {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        AppActionDispatcher::new(tx)
+    }
+
+    fn new_app_handle() -> AppHandle {
+        AppHandle::new(Arc::new(Mutex::new(create_test_app())))
+    }
 
     fn setup_service() -> (
         ChatStreamService,
@@ -569,6 +608,82 @@ mod tests {
             term_width: TERM_WIDTH,
             term_height: TERM_HEIGHT,
         }
+    }
+
+    #[tokio::test]
+    async fn tab_autocompletes_slash_commands() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.set_input_text("/he".into());
+            app.ui.focus_input();
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(outcome.request_redraw);
+
+        let (input, focus_is_input) = app
+            .read(|app| {
+                (
+                    app.ui.get_input_text().to_string(),
+                    app.ui.is_input_focused(),
+                )
+            })
+            .await;
+        assert_eq!(input, "/help ");
+        assert!(focus_is_input);
+    }
+
+    #[tokio::test]
+    async fn tab_toggles_focus_without_slash_prefix() {
+        let app = new_app_handle();
+        app.update(|app| app.ui.focus_transcript()).await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(outcome.request_redraw);
+        assert!(app.read(|app| app.ui.is_input_focused()).await);
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(outcome.request_redraw);
+        assert!(app.read(|app| app.ui.is_transcript_focused()).await);
     }
 
     #[test]

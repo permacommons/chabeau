@@ -1,8 +1,13 @@
+use crate::ui::span::SpanKind;
+use ratatui::text::Line;
+use std::borrow::Cow;
+
 #[cfg(test)]
 mod tests {
     use super::{
         contains_disallowed_control, encode_hyperlink, encode_line_with_links,
-        encode_lines_with_links, OSC_PREFIX, OSC_SUFFIX,
+        encode_line_with_links_with_underline, encode_lines_with_links,
+        encode_lines_with_links_with_underline, OSC_PREFIX, OSC_SUFFIX,
     };
     use crate::ui::span::SpanKind;
     use ratatui::text::{Line, Span};
@@ -69,39 +74,55 @@ mod tests {
         let encoded = encode_line_with_links(&line, None);
         assert_eq!(encoded, "Rust");
     }
+
+    #[test]
+    fn underline_fallback_wraps_link_text_with_sgr_sequences() {
+        let line = Line::from(vec![Span::raw("Rust")]);
+        let metadata = vec![SpanKind::link("https://www.rust-lang.org")];
+        let encoded = encode_line_with_links_with_underline(&line, Some(&metadata));
+        assert!(encoded.contains("\x1b[4m"));
+        assert!(encoded.contains("\x1b[24m"));
+    }
+
+    #[test]
+    fn lines_with_underline_fallback_apply_to_each_link() {
+        let lines = vec![Line::from(vec![Span::raw("Rust")])];
+        let metadata = vec![vec![SpanKind::link("https://www.rust-lang.org")]];
+        let encoded = encode_lines_with_links_with_underline(&lines, &metadata);
+        assert_eq!(encoded.len(), 1);
+        assert!(encoded[0].contains("\x1b[4m"));
+        assert!(encoded[0].contains("\x1b[24m"));
+    }
 }
 
-#[cfg(test)]
-use crate::ui::span::SpanKind;
-#[cfg(test)]
-use ratatui::text::Line;
-#[cfg(test)]
-use std::borrow::Cow;
-
-#[cfg(test)]
 const OSC_PREFIX: &str = "\x1b]8;;";
-#[cfg(test)]
 const ST: &str = "\x1b\\";
-#[cfg(test)]
 const OSC_SUFFIX: &str = "\x1b]8;;\x1b\\";
+const UNDERLINE_ON: &str = "\x1b[4m";
+const UNDERLINE_OFF: &str = "\x1b[24m";
 
-#[cfg(test)]
+#[derive(Clone, Copy)]
+enum LinkRenderMode {
+    Plain,
+    UnderlineFallback,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OscHyperlink<'a> {
+struct OscHyperlink<'a> {
     prefix: String,
     text: Cow<'a, str>,
     suffix: &'static str,
 }
 
-#[cfg(test)]
 impl<'a> OscHyperlink<'a> {
-    pub fn push_to(&self, buf: &mut String) {
+    fn push_to(&self, buf: &mut String) {
         buf.push_str(&self.prefix);
         buf.push_str(self.text.as_ref());
         buf.push_str(self.suffix);
     }
 
-    pub fn as_encoded_string(&self) -> String {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn as_encoded_string(&self) -> String {
         let mut out =
             String::with_capacity(self.prefix.len() + self.text.len() + self.suffix.len());
         self.push_to(&mut out);
@@ -109,8 +130,7 @@ impl<'a> OscHyperlink<'a> {
     }
 }
 
-#[cfg(test)]
-pub fn encode_hyperlink<'a>(text: &'a str, href: &str) -> Option<OscHyperlink<'a>> {
+fn encode_hyperlink<'a>(text: &'a str, href: &str) -> Option<OscHyperlink<'a>> {
     if text.is_empty() || href.is_empty() {
         return None;
     }
@@ -131,19 +151,33 @@ pub fn encode_hyperlink<'a>(text: &'a str, href: &str) -> Option<OscHyperlink<'a
     })
 }
 
-#[cfg(test)]
-pub fn encode_line_with_links(line: &Line<'_>, kinds: Option<&[SpanKind]>) -> String {
+fn encode_line_with_links_in_mode(
+    line: &Line<'_>,
+    kinds: Option<&[SpanKind]>,
+    mode: LinkRenderMode,
+) -> String {
     let mut encoded = String::new();
+    let underline = matches!(mode, LinkRenderMode::UnderlineFallback);
 
     for (idx, span) in line.spans.iter().enumerate() {
         let text = span.content.as_ref();
-        let maybe_link = kinds
-            .and_then(|meta| meta.get(idx))
+        let meta = kinds.and_then(|meta| meta.get(idx));
+        let maybe_link = meta
             .and_then(|kind| kind.link_meta())
-            .and_then(|meta| encode_hyperlink(text, meta.href()));
+            .and_then(|link_meta| encode_hyperlink(text, link_meta.href()));
 
         if let Some(link) = maybe_link {
-            encoded.push_str(&link.as_encoded_string());
+            if underline {
+                encoded.push_str(UNDERLINE_ON);
+            }
+            link.push_to(&mut encoded);
+            if underline {
+                encoded.push_str(UNDERLINE_OFF);
+            }
+        } else if underline && meta.is_some_and(SpanKind::is_link) {
+            encoded.push_str(UNDERLINE_ON);
+            encoded.push_str(text);
+            encoded.push_str(UNDERLINE_OFF);
         } else {
             encoded.push_str(text);
         }
@@ -152,19 +186,43 @@ pub fn encode_line_with_links(line: &Line<'_>, kinds: Option<&[SpanKind]>) -> St
     encoded
 }
 
-#[cfg(test)]
-pub fn encode_lines_with_links(lines: &[Line<'static>], metadata: &[Vec<SpanKind>]) -> Vec<String> {
+pub fn encode_line_with_links(line: &Line<'_>, kinds: Option<&[SpanKind]>) -> String {
+    encode_line_with_links_in_mode(line, kinds, LinkRenderMode::Plain)
+}
+
+pub fn encode_line_with_links_with_underline(
+    line: &Line<'_>,
+    kinds: Option<&[SpanKind]>,
+) -> String {
+    encode_line_with_links_in_mode(line, kinds, LinkRenderMode::UnderlineFallback)
+}
+
+fn encode_lines_with_links_in_mode(
+    lines: &[Line<'_>],
+    metadata: &[Vec<SpanKind>],
+    mode: LinkRenderMode,
+) -> Vec<String> {
     lines
         .iter()
         .enumerate()
         .map(|(idx, line)| {
             let kinds = metadata.get(idx).map(|vec| vec.as_slice());
-            encode_line_with_links(line, kinds)
+            encode_line_with_links_in_mode(line, kinds, mode)
         })
         .collect()
 }
 
-#[cfg(test)]
+pub fn encode_lines_with_links(lines: &[Line<'_>], metadata: &[Vec<SpanKind>]) -> Vec<String> {
+    encode_lines_with_links_in_mode(lines, metadata, LinkRenderMode::Plain)
+}
+
+pub fn encode_lines_with_links_with_underline(
+    lines: &[Line<'_>],
+    metadata: &[Vec<SpanKind>],
+) -> Vec<String> {
+    encode_lines_with_links_in_mode(lines, metadata, LinkRenderMode::UnderlineFallback)
+}
+
 fn contains_disallowed_control(input: &str) -> bool {
     input
         .bytes()

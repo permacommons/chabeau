@@ -9,6 +9,7 @@ use crate::core::app::{self};
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::core::config::data::Config;
 use crate::core::providers::{resolve_session, ResolveSessionError};
+use crate::ui::osc;
 use ratatui::crossterm::cursor::{MoveToColumn, MoveUp};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
@@ -98,8 +99,9 @@ pub async fn run_say(
     };
 
     let prefix_lines: Vec<String> = {
-        let lines = app.get_prewrapped_lines_cached(term_width);
-        lines.iter().map(|line| line.to_string()).collect()
+        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+        osc::encode_lines_with_links_with_underline(&lines, &metadata)
     };
     for line in &prefix_lines {
         println!("{}", line);
@@ -123,11 +125,11 @@ pub async fn run_say(
                     conversation.append_to_response(&content, available_height, term_width);
                 }
 
-                let new_lines: Vec<String> = app
-                    .get_prewrapped_lines_cached(term_width)
-                    .iter()
-                    .map(|line| line.to_string())
-                    .collect();
+                let new_lines: Vec<String> = {
+                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                };
 
                 let mut common_prefix_len = 0usize;
                 let max_prefix = previous_lines.len().min(new_lines.len());

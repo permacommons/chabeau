@@ -73,6 +73,19 @@ impl<'a> ConversationController<'a> {
         }
     }
 
+    pub fn clear_transcript(&mut self) {
+        self.ui.messages.clear();
+        self.ui.current_response.clear();
+        self.ui.invalidate_prewrap_cache();
+
+        self.session.retrying_message_index = None;
+        self.session.is_refining = false;
+        self.session.original_refining_content = None;
+        self.session.last_refine_prompt = None;
+        self.session.has_received_assistant_message = false;
+        self.session.character_greeting_shown = false;
+    }
+
     pub fn remove_trailing_empty_assistant_messages(&mut self) {
         let mut removed = false;
 

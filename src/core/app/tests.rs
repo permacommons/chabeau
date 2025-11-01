@@ -112,6 +112,42 @@ fn calculate_available_height_matches_expected_layout_rules() {
 }
 
 #[test]
+fn clear_transcript_resets_transcript_state() {
+    let mut app = create_test_app();
+    app.ui
+        .messages
+        .push_back(create_test_message("user", "Hello"));
+    app.ui
+        .messages
+        .push_back(create_test_message("assistant", "Response"));
+    app.ui.current_response = "partial".to_string();
+    app.session.retrying_message_index = Some(1);
+    app.session.is_refining = true;
+    app.session.original_refining_content = Some("original".to_string());
+    app.session.last_refine_prompt = Some("prompt".to_string());
+    app.session.has_received_assistant_message = true;
+    app.session.character_greeting_shown = true;
+
+    app.get_prewrapped_lines_cached(80);
+    assert!(app.ui.prewrap_cache.is_some());
+
+    {
+        let mut conversation = app.conversation();
+        conversation.clear_transcript();
+    }
+
+    assert!(app.ui.messages.is_empty());
+    assert!(app.ui.current_response.is_empty());
+    assert!(app.ui.prewrap_cache.is_none());
+    assert!(app.session.retrying_message_index.is_none());
+    assert!(!app.session.is_refining);
+    assert!(app.session.original_refining_content.is_none());
+    assert!(app.session.last_refine_prompt.is_none());
+    assert!(!app.session.has_received_assistant_message);
+    assert!(!app.session.character_greeting_shown);
+}
+
+#[test]
 fn default_sort_mode_helper_behaviour() {
     let mut app = create_test_app();
     // Theme picker prefers alphabetical → Name

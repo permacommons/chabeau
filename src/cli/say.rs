@@ -5,10 +5,14 @@ use std::io::{self, Write};
 
 use crate::auth::{AuthManager, ProviderAuthStatus};
 use crate::character::CharacterService;
+use crate::core::app::session::{
+    exit_if_env_only_missing_env, exit_with_provider_resolution_error,
+};
 use crate::core::app::{self};
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::core::config::data::Config;
-use crate::core::providers::{resolve_session, ResolveSessionError};
+use crate::core::message::AppMessageKind;
+use crate::core::providers::ProviderResolutionError;
 use crate::ui::osc;
 use ratatui::crossterm::cursor::{MoveToColumn, MoveUp};
 use ratatui::crossterm::execute;
@@ -51,27 +55,7 @@ pub async fn run_say(
 
     let character_service = CharacterService::new();
 
-    let session = match resolve_session(&auth_manager, &config, provider.as_deref()) {
-        Ok(session) => session,
-        Err(err) => match err {
-            ResolveSessionError::Provider(provider_err) => {
-                eprintln!("{}", provider_err);
-                let fixes = provider_err.quick_fixes();
-                if !fixes.is_empty() {
-                    eprintln!();
-                    eprintln!("💡 Quick fixes:");
-                    for fix in fixes {
-                        eprintln!("  • {fix}");
-                    }
-                }
-                std::process::exit(provider_err.exit_code());
-            }
-            ResolveSessionError::Source(source_err) => {
-                eprintln!("❌ Error: {}", source_err);
-                std::process::exit(1);
-            }
-        },
-    };
+    exit_if_env_only_missing_env(env_only);
 
     let mut app = app::new_with_auth(
         app::AppInitConfig {
@@ -79,7 +63,7 @@ pub async fn run_say(
             log_file: None,
             provider,
             env_only,
-            pre_resolved_session: Some(session),
+            pre_resolved_session: None,
             character,
             persona,
             preset,
@@ -87,7 +71,12 @@ pub async fn run_say(
         &config,
         character_service,
     )
-    .await?;
+    .await
+    .inspect_err(|err| {
+        if let Some(provider_err) = err.downcast_ref::<ProviderResolutionError>() {
+            exit_with_provider_resolution_error(provider_err);
+        }
+    })?;
 
     let (term_width, _) = terminal::size().unwrap_or((80, 24));
 
@@ -155,7 +144,47 @@ pub async fn run_say(
                 previous_lines = new_lines;
             }
             Some((StreamMessage::Error(err), _)) => {
-                eprintln!("❌ Error: {}", err);
+                let trimmed = err.trim();
+                if trimmed.is_empty() {
+                    std::process::exit(1);
+                }
+
+                let (term_width, term_height) = terminal::size().unwrap_or((80, 24));
+                {
+                    let mut conversation = app.conversation();
+                    conversation.remove_trailing_empty_assistant_messages();
+                    conversation.add_app_message(AppMessageKind::Error, trimmed.to_string());
+                    let available_height = conversation.calculate_available_height(term_height, 0);
+                    conversation.update_scroll_position(available_height, term_width);
+                }
+
+                let new_lines: Vec<String> = {
+                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                };
+
+                let mut common_prefix_len = 0usize;
+                let max_prefix = previous_lines.len().min(new_lines.len());
+                while common_prefix_len < max_prefix
+                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
+                {
+                    common_prefix_len += 1;
+                }
+
+                if previous_lines.len() > common_prefix_len {
+                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
+                    if lines_to_move_up > 0 {
+                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                    }
+                }
+
+                for line in new_lines.iter().skip(common_prefix_len) {
+                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                    println!("{}", line);
+                }
+
+                stdout.flush()?;
                 std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {

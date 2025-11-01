@@ -10,7 +10,8 @@ use crate::core::config::data::Config;
 #[cfg(test)]
 use crate::core::config::data::{DEFAULT_REFINE_INSTRUCTIONS, DEFAULT_REFINE_PREFIX};
 use crate::core::providers::{
-    resolve_env_session, resolve_session, ProviderSession, ResolveSessionError,
+    resolve_env_session, resolve_session, ProviderResolutionError, ProviderSession,
+    ResolveSessionError,
 };
 use crate::ui::appearance::{detect_preferred_appearance, Appearance};
 use crate::ui::builtin_themes::{find_builtin_theme, theme_spec_from_custom};
@@ -105,6 +106,26 @@ impl SessionContext {
 pub(crate) struct CharacterLoadOutcome {
     pub character: Option<CharacterCard>,
     pub errors: Vec<String>,
+}
+
+pub fn exit_with_provider_resolution_error(err: &ProviderResolutionError) -> ! {
+    eprintln!("{}", err);
+    let fixes = err.quick_fixes();
+    if !fixes.is_empty() {
+        eprintln!();
+        eprintln!("💡 Quick fixes:");
+        for fix in fixes {
+            eprintln!("  • {fix}");
+        }
+    }
+    std::process::exit(err.exit_code());
+}
+
+pub fn exit_if_env_only_missing_env(env_only: bool) {
+    if env_only && std::env::var("OPENAI_API_KEY").is_err() {
+        eprintln!("❌ --env used but OPENAI_API_KEY is not set");
+        std::process::exit(2);
+    }
 }
 
 /// Load character card for session initialization
@@ -327,6 +348,7 @@ mod tests {
     use super::*;
     use crate::core::config::data::Config;
     use crate::core::providers::ProviderSession;
+    use crate::utils::test_utils::TestEnvVarGuard;
     use tempfile::tempdir;
 
     #[test]
@@ -399,6 +421,35 @@ mod tests {
         assert!(!bootstrap.session.startup_env_only);
         assert!(bootstrap.session.active_character.is_none());
         assert!(!bootstrap.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn prepare_with_auth_uses_env_session_when_env_only() {
+        let mut env_guard = TestEnvVarGuard::new();
+        env_guard.set_var("OPENAI_API_KEY", "sk-env");
+        env_guard.set_var("OPENAI_BASE_URL", "https://example.com/v1");
+
+        let config = Config::default();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let mut service = crate::character::CharacterService::new();
+
+        let bootstrap = runtime
+            .block_on(super::prepare_with_auth(
+                "default".to_string(),
+                None,
+                None,
+                true,
+                &config,
+                None,
+                None,
+                &mut service,
+            ))
+            .expect("prepare_with_auth");
+
+        assert_eq!(bootstrap.session.api_key, "sk-env");
+        assert_eq!(bootstrap.session.base_url, "https://example.com/v1");
+        assert_eq!(bootstrap.session.provider_name, "openai-compatible");
+        assert_eq!(bootstrap.session.provider_display_name, "OpenAI-compatible");
     }
 
     #[test]

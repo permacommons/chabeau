@@ -111,6 +111,7 @@ pub async fn handle_edit_select_mode_event(
                         );
                         app.ui.set_input_text(content);
                         app.ui.exit_edit_select_mode();
+                        app.ui.focus_input();
                         let input_area_height = app.ui.calculate_input_area_height(term_width);
                         {
                             let mut conversation = app.conversation();
@@ -570,6 +571,7 @@ mod tests {
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, AppCommand,
     };
     use crate::core::chat_stream::ChatStreamService;
+    use crate::core::message::Message;
     use crate::ui::theme::Theme;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
@@ -659,6 +661,41 @@ mod tests {
                 }
                 _ => panic!("unexpected action"),
             }
+        });
+    }
+
+    #[test]
+    fn edit_select_enter_refocuses_input() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = setup_app();
+            handle
+                .update(|app| {
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_USER.to_string(),
+                        content: "rewrite me".into(),
+                    });
+                    app.ui.enter_edit_select_mode();
+                })
+                .await;
+
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
+            assert!(handled);
+
+            let (input_text, focus_is_input, in_edit_select) = handle
+                .read(|app| {
+                    (
+                        app.ui.get_input_text().to_string(),
+                        app.ui.is_input_focused(),
+                        app.ui.in_edit_select_mode(),
+                    )
+                })
+                .await;
+
+            assert_eq!(input_text, "rewrite me");
+            assert!(focus_is_input);
+            assert!(!in_edit_select);
         });
     }
 }

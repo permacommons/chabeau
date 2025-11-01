@@ -102,7 +102,17 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::Home),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::simple(KeyCode::End),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::End),
             Box::new(NavigationHandler),
         )
@@ -112,7 +122,17 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::PageUp),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::simple(KeyCode::PageDown),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::PageDown),
             Box::new(NavigationHandler),
         )
@@ -123,7 +143,17 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::Up),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::simple(KeyCode::Down),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Down),
             Box::new(ArrowKeyHandler),
         )
@@ -133,7 +163,17 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::Left),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::simple(KeyCode::Right),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Right),
             Box::new(ArrowKeyHandler),
         )
@@ -143,7 +183,17 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Up, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -153,7 +203,17 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Left, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
+            KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )

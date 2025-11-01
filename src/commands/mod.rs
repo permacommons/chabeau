@@ -52,13 +52,12 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
 }
 
 pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {
-    app.ui.messages.clear();
-    app.session.retrying_message_index = None;
-    app.session.has_received_assistant_message = false;
-    app.session.character_greeting_shown = false;
-    app.conversation().show_character_greeting_if_needed();
-    app.conversation()
-        .set_status("Transcript cleared".to_string());
+    {
+        let mut conversation = app.conversation();
+        conversation.clear_transcript();
+        conversation.show_character_greeting_if_needed();
+        conversation.set_status("Transcript cleared".to_string());
+    }
     CommandResult::Continue
 }
 
@@ -429,7 +428,9 @@ fn handle_dump_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::card::{CharacterCard, CharacterData};
     use crate::core::config::data::{Config, Persona};
+    use crate::core::message::ROLE_ASSISTANT;
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
     use std::fs;
@@ -444,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_command_clears_messages() {
+    fn clear_command_resets_transcript_state() {
         let mut app = create_test_app();
         app.ui
             .messages
@@ -452,12 +453,74 @@ mod tests {
         app.ui
             .messages
             .push_back(create_test_message("assistant", "Hi there!"));
-        assert_eq!(app.ui.messages.len(), 2);
+        app.ui.current_response = "partial".to_string();
+        app.session.retrying_message_index = Some(1);
+        app.session.is_refining = true;
+        app.session.original_refining_content = Some("original".to_string());
+        app.session.last_refine_prompt = Some("prompt".to_string());
+        app.session.has_received_assistant_message = true;
+        app.session.character_greeting_shown = true;
+
+        app.get_prewrapped_lines_cached(80);
+        assert!(app.ui.prewrap_cache.is_some());
 
         let result = process_input(&mut app, "/clear");
         assert!(matches!(result, CommandResult::Continue));
         assert!(app.ui.messages.is_empty());
+        assert!(app.ui.current_response.is_empty());
         assert_eq!(app.ui.status.as_deref(), Some("Transcript cleared"));
+        assert!(app.ui.prewrap_cache.is_none());
+        assert!(app.session.retrying_message_index.is_none());
+        assert!(!app.session.is_refining);
+        assert!(app.session.original_refining_content.is_none());
+        assert!(app.session.last_refine_prompt.is_none());
+        assert!(!app.session.has_received_assistant_message);
+        assert!(!app.session.character_greeting_shown);
+    }
+
+    #[test]
+    fn clear_command_shows_character_greeting_when_available() {
+        let mut app = create_test_app();
+        let greeting_text = "Greetings from TestBot!".to_string();
+        let character = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: CharacterData {
+                name: "TestBot".to_string(),
+                description: String::new(),
+                personality: String::new(),
+                scenario: String::new(),
+                first_mes: greeting_text.clone(),
+                mes_example: String::new(),
+                creator_notes: None,
+                system_prompt: None,
+                post_history_instructions: None,
+                alternate_greetings: None,
+                tags: None,
+                creator: None,
+                character_version: None,
+            },
+        };
+
+        app.session.set_character(character);
+        app.session.character_greeting_shown = true;
+        app.session.has_received_assistant_message = true;
+        app.ui
+            .messages
+            .push_back(create_test_message(ROLE_ASSISTANT, &greeting_text));
+        app.ui
+            .messages
+            .push_back(create_test_message("user", "Hi!"));
+
+        let result = process_input(&mut app, "/clear");
+        assert!(matches!(result, CommandResult::Continue));
+        assert_eq!(app.ui.status.as_deref(), Some("Transcript cleared"));
+        assert_eq!(app.ui.messages.len(), 1);
+        let greeting = app.ui.messages.front().unwrap();
+        assert_eq!(greeting.role, ROLE_ASSISTANT);
+        assert_eq!(greeting.content, greeting_text);
+        assert!(app.session.character_greeting_shown);
+        assert!(!app.session.has_received_assistant_message);
     }
 
     #[test]

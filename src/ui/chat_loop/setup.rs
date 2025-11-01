@@ -9,6 +9,7 @@ use crate::{
     character::CharacterService,
     core::{
         app,
+        app::session::{exit_if_env_only_missing_env, exit_with_provider_resolution_error},
         builtin_providers::load_builtin_providers,
         config::data::Config,
         providers::{resolve_session, ProviderResolutionError, ResolveSessionError},
@@ -52,10 +53,7 @@ pub async fn bootstrap_app(
     }
 
     if selected_provider.is_none() {
-        if env_only && !has_env_openai {
-            eprintln!("❌ --env used but OPENAI_API_KEY is not set");
-            std::process::exit(2);
-        }
+        exit_if_env_only_missing_env(env_only);
 
         if !env_only {
             if let Some(default_p) = &config.default_provider {
@@ -124,16 +122,7 @@ pub async fn bootstrap_app(
             match resolve_session(&auth_manager, &config, provider_override.as_deref()) {
                 Ok(session) => Some(session),
                 Err(ResolveSessionError::Provider(err)) => {
-                    eprintln!("{}", err);
-                    let fixes = err.quick_fixes();
-                    if !fixes.is_empty() {
-                        eprintln!();
-                        eprintln!("💡 Quick fixes:");
-                        for fix in fixes {
-                            eprintln!("  • {fix}");
-                        }
-                    }
-                    std::process::exit(err.exit_code());
+                    exit_with_provider_resolution_error(&err);
                 }
                 Err(ResolveSessionError::Source(err)) => {
                     eprintln!("❌ Error: {err}");
@@ -165,16 +154,7 @@ pub async fn bootstrap_app(
             Ok(app) => app,
             Err(e) => {
                 if let Some(resolution_error) = e.downcast_ref::<ProviderResolutionError>() {
-                    eprintln!("{}", resolution_error);
-                    let fixes = resolution_error.quick_fixes();
-                    if !fixes.is_empty() {
-                        eprintln!();
-                        eprintln!("💡 Quick fixes:");
-                        for fix in fixes {
-                            eprintln!("  • {fix}");
-                        }
-                    }
-                    std::process::exit(resolution_error.exit_code());
+                    exit_with_provider_resolution_error(resolution_error);
                 } else {
                     eprintln!("❌ Error: {e}");
                     std::process::exit(1);

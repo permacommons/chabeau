@@ -159,53 +159,89 @@ impl TextWrapper {
     }
 }
 
+#[derive(Debug)]
+struct WordSegment {
+    chars: Vec<(char, usize, usize)>,
+    total_width: usize,
+}
+
+#[derive(Debug)]
+struct SpaceSegment {
+    chars: Vec<(char, usize, usize)>,
+    total_width: usize,
+}
+
+#[derive(Debug)]
+enum Segment {
+    Word(WordSegment),
+    Spaces(SpaceSegment),
+    Newline { idx: usize },
+}
+
 fn wrap_with_layout(text: &str, config: &WrapConfig) -> (String, WrappedCursorLayout) {
     let char_count = text.chars().count();
     let mut builder = LayoutBuilder::new(config.width, char_count);
-    let mut word_chars: Vec<(char, usize, usize)> = Vec::new();
-    let mut word_width = 0usize;
 
-    for (idx, ch) in text.chars().enumerate() {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut iter = text.chars().enumerate().peekable();
+
+    while let Some((idx, ch)) = iter.next() {
         if ch == '\n' {
-            flush_word(&mut builder, &mut word_chars, &mut word_width);
-            builder.handle_newline(idx);
-            continue;
-        }
-
-        if ch.is_whitespace() {
-            flush_word(&mut builder, &mut word_chars, &mut word_width);
-            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            builder.handle_whitespace(ch, idx, width);
+            segments.push(Segment::Newline { idx });
             continue;
         }
 
         let width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        word_width = word_width.saturating_add(width);
-        word_chars.push((ch, idx, width));
+
+        if ch.is_whitespace() {
+            let mut chars = vec![(ch, idx, width)];
+            while let Some(&(_, next_ch)) = iter.peek() {
+                if next_ch == '\n' || !next_ch.is_whitespace() {
+                    break;
+                }
+                let (next_idx, next_char) = iter.next().unwrap();
+                let next_width = UnicodeWidthChar::width(next_char).unwrap_or(0);
+                chars.push((next_char, next_idx, next_width));
+            }
+            let total_width = chars.iter().map(|(_, _, w)| *w).sum();
+            segments.push(Segment::Spaces(SpaceSegment { chars, total_width }));
+            continue;
+        }
+
+        let mut chars = vec![(ch, idx, width)];
+        while let Some(&(_, next_ch)) = iter.peek() {
+            if next_ch == '\n' || next_ch.is_whitespace() {
+                break;
+            }
+            let (next_idx, next_char) = iter.next().unwrap();
+            let next_width = UnicodeWidthChar::width(next_char).unwrap_or(0);
+            chars.push((next_char, next_idx, next_width));
+        }
+        let total_width = chars.iter().map(|(_, _, w)| *w).sum();
+        segments.push(Segment::Word(WordSegment { chars, total_width }));
     }
 
-    flush_word(&mut builder, &mut word_chars, &mut word_width);
+    for (i, segment) in segments.iter().enumerate() {
+        match segment {
+            Segment::Word(word) => {
+                if builder.allow_wrap && builder.width > 0 && word.total_width > builder.width {
+                    builder.handle_long_word(&word.chars);
+                } else {
+                    builder.handle_word(&word.chars, word.total_width);
+                }
+            }
+            Segment::Spaces(spaces) => {
+                let next_word_width = segments.get(i + 1).and_then(|next| match next {
+                    Segment::Word(word) => Some(word.total_width),
+                    _ => None,
+                });
+                builder.handle_space_segment(spaces, next_word_width);
+            }
+            Segment::Newline { idx } => builder.handle_newline(*idx),
+        }
+    }
 
     builder.finalize()
-}
-
-fn flush_word(
-    builder: &mut LayoutBuilder,
-    word_chars: &mut Vec<(char, usize, usize)>,
-    word_width: &mut usize,
-) {
-    if word_chars.is_empty() {
-        return;
-    }
-
-    if builder.allow_wrap && builder.width > 0 && *word_width > builder.width {
-        builder.handle_long_word(word_chars);
-    } else {
-        builder.handle_word(word_chars, *word_width);
-    }
-
-    word_chars.clear();
-    *word_width = 0;
 }
 
 #[derive(Debug)]
@@ -256,7 +292,30 @@ impl LayoutBuilder {
         }
     }
 
-    fn handle_whitespace(&mut self, ch: char, idx: usize, width: usize) {
+    fn handle_space_segment(&mut self, spaces: &SpaceSegment, next_word_width: Option<usize>) {
+        if self.allow_wrap && spaces.chars.len() == 1 && spaces.chars[0].0 == ' ' {
+            if let Some(next_width) = next_word_width {
+                if next_width > 0
+                    && self.current_col > 0
+                    && self
+                        .current_col
+                        .saturating_add(spaces.total_width)
+                        .saturating_add(next_width)
+                        > self.width
+                {
+                    let (_, idx, _) = spaces.chars[0];
+                    self.push_soft_break(idx + 1);
+                    return;
+                }
+            }
+        }
+
+        for &(ch, idx, width) in &spaces.chars {
+            self.handle_whitespace_char(ch, idx, width);
+        }
+    }
+
+    fn handle_whitespace_char(&mut self, ch: char, idx: usize, width: usize) {
         if self.allow_wrap && width > 0 && self.current_col.saturating_add(width) > self.width {
             self.push_soft_break(idx);
         }
@@ -333,6 +392,39 @@ mod tests {
     }
 
     #[test]
+    fn single_space_elided_when_wrap_occurs() {
+        let config = WrapConfig::new(5);
+        let text = "hello world";
+        let wrapped = TextWrapper::wrap_text(text, &config);
+
+        assert_eq!(wrapped, "hello\nworld");
+    }
+
+    #[test]
+    fn elided_space_maps_cursor_to_next_line_start() {
+        let config = WrapConfig::new(5);
+        let text = "hello world";
+        let space_index = text.chars().position(|c| c == ' ').unwrap();
+        let layout = TextWrapper::cursor_layout(text, &config);
+
+        assert_eq!(layout.coordinates_for_index(space_index), (0, 5));
+        assert_eq!(layout.coordinates_for_index(space_index + 1), (1, 0));
+    }
+
+    #[test]
+    fn multiple_spaces_preserved_across_wrap() {
+        let config = WrapConfig::new(4);
+        let text = "foo  bar";
+        let wrapped = TextWrapper::wrap_text(text, &config);
+
+        let original_spaces = text.chars().filter(|&c| c == ' ').count();
+        let wrapped_spaces = wrapped.chars().filter(|&c| c == ' ').count();
+
+        assert_eq!(wrapped_spaces, original_spaces);
+        assert!(wrapped.contains("\n "));
+    }
+
+    #[test]
     fn test_long_word_breaking() {
         let config = WrapConfig::new(5);
         let text = "superlongword";
@@ -374,11 +466,16 @@ mod tests {
     fn test_cursor_position_calculation() {
         let config = WrapConfig::new(5);
         let text = "hello world";
-        let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(text, 5, &config);
+        let space_index = text.chars().position(|c| c == ' ').unwrap();
+        let before_space =
+            TextWrapper::calculate_cursor_position_in_wrapped_text(text, space_index, &config);
+        assert_eq!(before_space, (0, 5));
 
-        // Cursor at position 5 (before wrapping to "world") sits at the start of the next line
-        assert_eq!(line, 1);
-        assert_eq!(col, 0);
+        let after_space =
+            TextWrapper::calculate_cursor_position_in_wrapped_text(text, space_index + 1, &config);
+
+        // After consuming the separator the cursor lands at the start of the next visual line.
+        assert_eq!(after_space, (1, 0));
     }
 
     #[test]
@@ -492,9 +589,9 @@ mod tests {
         let original_spaces = text.chars().filter(|&c| c == ' ').count();
         let wrapped_spaces = wrapped.chars().filter(|&c| c == ' ').count();
 
-        // The wrapped text should not have MORE spaces than the original
-        assert_eq!(
-            wrapped_spaces, original_spaces,
+        // The wrapped text should not introduce additional spaces compared to the source
+        assert!(
+            wrapped_spaces <= original_spaces,
             "Wrapped text has extra spaces!"
         );
     }

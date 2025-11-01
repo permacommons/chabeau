@@ -21,6 +21,13 @@
 - Update cursor movement helpers to fetch the cached layout via a new `ensure_wrapped_cursor_layout(width)` method instead of recomputing. Preserve `input_cursor_preferred_column` when movement fails so repeated attempts stay aligned.
 - After paste operations (and any edit that inserts text) ensure we set the cursor to the end and refresh the layout cache.
 
+## Space-wrapping strategy
+- Adopt the **single-space-eliding** policy when a soft wrap happens immediately after a single ASCII space. The newline we insert for the wrap takes the visual spot of that separator so wrapped lines never start with a stray space, yet the underlying input buffer remains untouched.
+- Keep groups of multiple spaces intact. When a wrap occurs after the first space in a run we elide exactly one space (turning it into the newline) and render the remaining spaces on the following line so the user still sees the full count they typed.
+- Preserve all other whitespace verbatim. Tabs and wider Unicode whitespace continue to be emitted in the wrapped buffer; only a lone ASCII space directly triggering a word wrap is eligible for elision.
+- Update the layout builder to look ahead to the next word before deciding whether to elide a single space. That guarantees we only elide the separator when the upcoming word genuinely forces a wrap and prevents double wrapping when words already fit on the current line.
+- Extend regression tests around the wrapping engine to lock the behaviors above, including single-space elision, multi-space preservation, and cursor-coordinate mapping for the elided space index.
+
 ## Testing strategy
 - Extend unit tests in `core/app/tests.rs` to cover:
   - Moving up/down across double newlines with varying wrap widths.

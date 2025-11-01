@@ -592,6 +592,57 @@ fn wrapped_cursor_crosses_paragraph_boundaries() {
 }
 
 #[test]
+fn wrapped_cursor_moves_through_blank_lines() {
+    let mut app = create_test_app();
+    let text = "line one\n\n\nline two content that wraps across multiple words".to_string();
+    let term_width = 32u16;
+    app.ui
+        .set_input_text_with_cursor(text.clone(), text.chars().count());
+
+    let top_boundary = text.find('\n').unwrap();
+    let mut crossed = false;
+    for _ in 0..6 {
+        if !app
+            .ui
+            .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up)
+        {
+            break;
+        }
+        if app.ui.input_cursor_position <= top_boundary {
+            crossed = true;
+            break;
+        }
+    }
+
+    assert!(crossed, "cursor should move across consecutive blank lines");
+}
+
+#[test]
+fn visual_line_controls_handle_blank_lines() {
+    let mut app = create_test_app();
+    let text = "alpha beta gamma\n\nsecond paragraph".to_string();
+    let term_width = 28u16;
+    app.ui
+        .set_input_text_with_cursor(text.clone(), text.chars().count());
+
+    // Move cursor onto the blank line between paragraphs.
+    assert!(app
+        .ui
+        .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up));
+    let blank_line_start = text.find('\n').unwrap() + 1;
+    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+
+    // Home should stay on the blank line (no-op but returns false because already there).
+    assert!(!app.ui.move_cursor_to_visual_line_start(term_width));
+    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+
+    // End should also be a no-op but leave the preferred column at zero.
+    assert!(!app.ui.move_cursor_to_visual_line_end(term_width));
+    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+    assert_eq!(app.ui.input_cursor_preferred_column, Some(0));
+}
+
+#[test]
 fn page_cursor_movement_skips_multiple_wrapped_lines() {
     let mut app = create_test_app();
     let text = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua".to_string();

@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
 use tokio::sync::mpsc;
 
@@ -182,6 +182,13 @@ async fn route_keyboard_event(
         && !matches!(context, KeyContext::Picker)
         && key.modifiers.is_empty()
     {
+        if matches!(context, KeyContext::EditSelect | KeyContext::BlockSelect) {
+            return Ok(KeyboardEventOutcome {
+                request_redraw: false,
+                exit_requested: false,
+            });
+        }
+
         let should_complete = app
             .read(|app| app.ui.is_input_active() && app.ui.get_input_text().starts_with('/'))
             .await;
@@ -203,7 +210,19 @@ async fn route_keyboard_event(
         });
     }
 
-    if mode_registry.should_handle_as_text_input(&key, &context) {
+    let mut handle_as_text_input = mode_registry.should_handle_as_text_input(&key, &context);
+
+    if handle_as_text_input && matches!(context, KeyContext::FilePrompt) {
+        let input_focused = app.read(|app| app.ui.is_input_focused()).await;
+        let is_plain_character = matches!(key.code, event::KeyCode::Char(_))
+            && !key.modifiers.contains(KeyModifiers::CONTROL);
+
+        if !input_focused && !is_plain_character {
+            handle_as_text_input = false;
+        }
+    }
+
+    if handle_as_text_input {
         app.update(|app| {
             app.ui.focus_input();
             app.ui
@@ -571,7 +590,7 @@ mod tests {
         AppCommand,
     };
     use crate::core::app::App;
-    use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT};
+    use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -684,6 +703,143 @@ mod tests {
 
         assert!(outcome.request_redraw);
         assert!(app.read(|app| app.ui.is_transcript_focused()).await);
+    }
+
+    #[tokio::test]
+    async fn tab_does_not_switch_focus_in_edit_select_mode() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.messages.push_back(Message {
+                role: ROLE_USER.to_string(),
+                content: "hello".into(),
+            });
+            app.ui.enter_edit_select_mode();
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(!outcome.request_redraw);
+        let (focus_is_transcript, in_edit_select) = app
+            .read(|app| (app.ui.is_transcript_focused(), app.ui.in_edit_select_mode()))
+            .await;
+        assert!(focus_is_transcript);
+        assert!(in_edit_select);
+    }
+
+    #[tokio::test]
+    async fn tab_does_not_switch_focus_in_block_select_mode() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.enter_block_select_mode(0);
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(!outcome.request_redraw);
+        let (focus_is_transcript, in_block_select) = app
+            .read(|app| {
+                (
+                    app.ui.is_transcript_focused(),
+                    app.ui.in_block_select_mode(),
+                )
+            })
+            .await;
+        assert!(focus_is_transcript);
+        assert!(in_block_select);
+    }
+
+    #[tokio::test]
+    async fn arrow_key_in_file_prompt_keeps_transcript_focus() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.start_file_prompt_dump("dump.txt".into());
+            app.ui.focus_transcript();
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("arrow handling should succeed");
+
+        assert!(!outcome.request_redraw);
+        let focus_is_transcript = app.read(|app| app.ui.is_transcript_focused()).await;
+        assert!(focus_is_transcript);
+    }
+
+    #[tokio::test]
+    async fn typing_in_file_prompt_refocuses_input() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.start_file_prompt_dump("dump".into());
+            app.ui.focus_transcript();
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("typing should succeed");
+
+        assert!(outcome.request_redraw);
+        let (text, focus_is_input) = app
+            .read(|app| {
+                (
+                    app.ui.get_input_text().to_string(),
+                    app.ui.is_input_focused(),
+                )
+            })
+            .await;
+        assert_eq!(text, "dumpz");
+        assert!(focus_is_input);
     }
 
     #[test]

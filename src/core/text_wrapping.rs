@@ -21,8 +21,7 @@
 //! positions, then renders it with ratatui's `Paragraph` without wrapping enabled.
 //! This ensures perfect alignment between our cursor calculations and the rendered text.
 
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 /// Configuration for text wrapping behavior
 #[derive(Debug, Clone)]
@@ -123,155 +122,9 @@ impl WrappedCursorLayout {
 }
 
 impl TextWrapper {
-    /// Wrap text at word boundaries while preserving all original spacing
+    /// Wrap text at word boundaries while preserving all original spacing.
     pub fn wrap_text(text: &str, config: &WrapConfig) -> String {
-        if config.width == 0 {
-            return text.to_string();
-        }
-
-        let mut result = String::new();
-        let mut current_line_width = 0;
-
-        // Split text by explicit newlines first
-        for (line_idx, line) in text.split('\n').enumerate() {
-            if line_idx > 0 {
-                result.push('\n');
-                current_line_width = 0;
-            }
-
-            let mut current_word = String::new();
-            let mut current_word_width = 0;
-
-            for grapheme in line.graphemes(true) {
-                let is_whitespace = grapheme.chars().all(|c| c.is_whitespace());
-                let grapheme_width = UnicodeWidthStr::width(grapheme);
-
-                if is_whitespace {
-                    if !current_word.is_empty() {
-                        Self::flush_word(
-                            &mut result,
-                            &mut current_line_width,
-                            &current_word,
-                            current_word_width,
-                            config.width,
-                        );
-                        current_word.clear();
-                        current_word_width = 0;
-                    }
-
-                    if current_line_width + grapheme_width > config.width {
-                        result.push('\n');
-                        current_line_width = 0;
-                    } else {
-                        result.push_str(grapheme);
-                        current_line_width += grapheme_width;
-                    }
-                } else {
-                    current_word.push_str(grapheme);
-                    current_word_width += grapheme_width;
-                }
-            }
-
-            if !current_word.is_empty() {
-                Self::flush_word(
-                    &mut result,
-                    &mut current_line_width,
-                    &current_word,
-                    current_word_width,
-                    config.width,
-                );
-            }
-        }
-
-        result
-    }
-
-    fn flush_word(
-        result: &mut String,
-        current_line_width: &mut usize,
-        word: &str,
-        word_width: usize,
-        width: usize,
-    ) {
-        if *current_line_width > 0 && *current_line_width + word_width > width {
-            result.push('\n');
-            *current_line_width = 0;
-        }
-
-        if word_width > width {
-            Self::handle_long_word(result, word, current_line_width, width);
-        } else {
-            result.push_str(word);
-            *current_line_width += word_width;
-        }
-    }
-
-    /// Handle words that are longer than the line width by breaking them
-    fn handle_long_word(
-        result: &mut String,
-        word: &str,
-        current_line_width: &mut usize,
-        width: usize,
-    ) {
-        let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(word, true).collect();
-        let mut idx = 0;
-
-        while idx < graphemes.len() {
-            if *current_line_width >= width {
-                result.push('\n');
-                *current_line_width = 0;
-            }
-
-            let mut chunk = String::new();
-            let mut advanced = false;
-
-            while idx < graphemes.len() {
-                let grapheme = graphemes[idx];
-                let grapheme_width = UnicodeWidthStr::width(grapheme);
-
-                if grapheme_width > width {
-                    if *current_line_width != 0 {
-                        result.push('\n');
-                        *current_line_width = 0;
-                    }
-
-                    result.push_str(grapheme);
-                    *current_line_width = grapheme_width;
-                    idx += 1;
-                    advanced = true;
-                    break;
-                }
-
-                if *current_line_width + grapheme_width > width {
-                    if chunk.is_empty() {
-                        result.push('\n');
-                        *current_line_width = 0;
-                        continue;
-                    }
-                    break;
-                }
-
-                chunk.push_str(grapheme);
-                *current_line_width += grapheme_width;
-                idx += 1;
-                advanced = true;
-
-                if *current_line_width == width {
-                    break;
-                }
-            }
-
-            if !chunk.is_empty() {
-                result.push_str(&chunk);
-            }
-
-            if idx < graphemes.len() {
-                result.push('\n');
-                *current_line_width = 0;
-            } else if !advanced {
-                break;
-            }
-        }
+        wrap_with_layout(text, config).0
     }
 
     /// Count the number of lines that text would wrap to
@@ -293,64 +146,7 @@ impl TextWrapper {
 
     /// Compute the cursor layout for wrapped text, including the position map and total lines.
     pub fn cursor_layout(text: &str, config: &WrapConfig) -> WrappedCursorLayout {
-        // Build a mapping for cursor "positions" (between characters), not just characters.
-        // There are N+1 positions for N characters.
-        let original_chars: Vec<char> = text.chars().collect();
-
-        // Always include the origin so the map has at least one entry
-        let mut pos_map: Vec<(usize, usize)> = vec![(0, 0); original_chars.len() + 1];
-
-        if original_chars.is_empty() {
-            return WrappedCursorLayout::new(pos_map, 0);
-        }
-
-        // Wrap the full text once and collect coordinates for each visible (non-newline) character
-        let wrapped_text = Self::wrap_text(text, config);
-        let wrapped_lines: Vec<&str> = wrapped_text.split('\n').collect();
-        let mut wrapped_coords: Vec<(usize, usize)> = Vec::new();
-        for (line_idx, line) in wrapped_lines.iter().enumerate() {
-            let mut col = 0usize;
-            for grapheme in line.graphemes(true) {
-                let grapheme_width = UnicodeWidthStr::width(grapheme);
-                col += grapheme_width;
-                let grapheme_char_count = grapheme.chars().count();
-                for _ in 0..grapheme_char_count {
-                    wrapped_coords.push((line_idx, col));
-                }
-            }
-        }
-
-        let mut wrapped_idx = 0usize; // index into wrapped_coords for non-newline chars
-        let mut last_line = 0usize;
-        let mut line_starts: Vec<(usize, usize)> = vec![(0, 0)];
-
-        for (idx, ch) in original_chars.iter().enumerate() {
-            if *ch == '\n' {
-                let next_line = last_line.saturating_add(1);
-                pos_map[idx + 1] = (next_line, 0);
-                line_starts.push((next_line, idx + 1));
-                last_line = next_line;
-            } else {
-                let (line, col) = wrapped_coords
-                    .get(wrapped_idx)
-                    .copied()
-                    .unwrap_or((last_line, 0));
-                pos_map[idx + 1] = (line, col);
-                if line > last_line {
-                    line_starts.push((line, idx));
-                }
-                last_line = line;
-                wrapped_idx += 1;
-            }
-        }
-
-        for (line, start_idx) in line_starts.into_iter() {
-            if start_idx < pos_map.len() {
-                pos_map[start_idx] = (line, 0);
-            }
-        }
-
-        WrappedCursorLayout::new(pos_map, last_line)
+        wrap_with_layout(text, config).1
     }
 
     /// Calculate cursor position within wrapped text using a character-by-character mapping
@@ -363,9 +159,157 @@ impl TextWrapper {
     }
 }
 
+fn wrap_with_layout(text: &str, config: &WrapConfig) -> (String, WrappedCursorLayout) {
+    let char_count = text.chars().count();
+    let mut builder = LayoutBuilder::new(config.width, char_count);
+    let mut word_chars: Vec<(char, usize, usize)> = Vec::new();
+    let mut word_width = 0usize;
+
+    for (idx, ch) in text.chars().enumerate() {
+        if ch == '\n' {
+            flush_word(&mut builder, &mut word_chars, &mut word_width);
+            builder.handle_newline(idx);
+            continue;
+        }
+
+        if ch.is_whitespace() {
+            flush_word(&mut builder, &mut word_chars, &mut word_width);
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            builder.handle_whitespace(ch, idx, width);
+            continue;
+        }
+
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        word_width = word_width.saturating_add(width);
+        word_chars.push((ch, idx, width));
+    }
+
+    flush_word(&mut builder, &mut word_chars, &mut word_width);
+
+    builder.finalize()
+}
+
+fn flush_word(
+    builder: &mut LayoutBuilder,
+    word_chars: &mut Vec<(char, usize, usize)>,
+    word_width: &mut usize,
+) {
+    if word_chars.is_empty() {
+        return;
+    }
+
+    if builder.allow_wrap && builder.width > 0 && *word_width > builder.width {
+        builder.handle_long_word(word_chars);
+    } else {
+        builder.handle_word(word_chars, *word_width);
+    }
+
+    word_chars.clear();
+    *word_width = 0;
+}
+
+#[derive(Debug)]
+struct LayoutBuilder {
+    width: usize,
+    allow_wrap: bool,
+    wrapped: String,
+    position_map: Vec<(usize, usize)>,
+    current_line: usize,
+    current_col: usize,
+}
+
+impl LayoutBuilder {
+    fn new(width: usize, char_count: usize) -> Self {
+        let allow_wrap = width > 0;
+        let mut position_map = vec![(0, 0); char_count + 1];
+        if char_count == 0 {
+            position_map[0] = (0, 0);
+        }
+        Self {
+            width,
+            allow_wrap,
+            wrapped: String::new(),
+            position_map,
+            current_line: 0,
+            current_col: 0,
+        }
+    }
+
+    fn handle_word(&mut self, word: &[(char, usize, usize)], total_width: usize) {
+        if self.should_wrap_word(total_width) {
+            if let Some(&(_, next_idx, _)) = word.first() {
+                self.push_soft_break(next_idx);
+            }
+        }
+
+        for &(ch, idx, width) in word {
+            self.push_text_char(ch, idx, width);
+        }
+    }
+
+    fn handle_long_word(&mut self, word: &[(char, usize, usize)]) {
+        for &(ch, idx, width) in word {
+            if self.should_wrap_char(width) {
+                self.push_soft_break(idx);
+            }
+            self.push_text_char(ch, idx, width);
+        }
+    }
+
+    fn handle_whitespace(&mut self, ch: char, idx: usize, width: usize) {
+        if self.allow_wrap && width > 0 && self.current_col.saturating_add(width) > self.width {
+            self.push_soft_break(idx);
+        }
+        self.push_text_char(ch, idx, width);
+    }
+
+    fn handle_newline(&mut self, idx: usize) {
+        self.wrapped.push('\n');
+        self.current_line = self.current_line.saturating_add(1);
+        self.current_col = 0;
+        self.position_map[idx + 1] = (self.current_line, 0);
+    }
+
+    fn push_text_char(&mut self, ch: char, idx: usize, width: usize) {
+        self.wrapped.push(ch);
+        self.current_col = self.current_col.saturating_add(width);
+        self.position_map[idx + 1] = (self.current_line, self.current_col);
+    }
+
+    fn push_soft_break(&mut self, next_index: usize) {
+        self.wrapped.push('\n');
+        self.current_line = self.current_line.saturating_add(1);
+        self.current_col = 0;
+        if next_index < self.position_map.len() {
+            self.position_map[next_index] = (self.current_line, 0);
+        }
+    }
+
+    fn should_wrap_word(&self, word_width: usize) -> bool {
+        self.allow_wrap
+            && word_width > 0
+            && self.current_col > 0
+            && self.current_col.saturating_add(word_width) > self.width
+    }
+
+    fn should_wrap_char(&self, char_width: usize) -> bool {
+        self.allow_wrap
+            && char_width > 0
+            && self.current_col > 0
+            && self.current_col.saturating_add(char_width) > self.width
+    }
+
+    fn finalize(self) -> (String, WrappedCursorLayout) {
+        let last_line = self.current_line;
+        let layout = WrappedCursorLayout::new(self.position_map, last_line);
+        (self.wrapped, layout)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn test_basic_wrapping() {
@@ -477,6 +421,47 @@ mod tests {
             "start of wrapped line should be column zero"
         );
         assert_eq!(map[8], (1, 4), "cursor after final char stays on last line");
+    }
+
+    #[test]
+    fn cursor_layout_tracks_consecutive_blank_lines() {
+        let config = WrapConfig::new(20);
+        let text = "first line\n\nsecond line";
+        let (_, layout) = super::wrap_with_layout(text, &config);
+
+        assert_eq!(layout.line_count(), 3);
+
+        let first_newline = text.find('\n').unwrap();
+        let blank_line_start = first_newline + 1;
+        assert_eq!(layout.coordinates_for_index(blank_line_start), (1, 0));
+
+        let (start, end) = layout
+            .line_bounds(1)
+            .expect("blank line should have bounds");
+        assert_eq!(start, blank_line_start);
+        assert_eq!(end, blank_line_start);
+
+        // After the second newline we move to the third line at column zero.
+        assert_eq!(layout.coordinates_for_index(blank_line_start + 1), (2, 0));
+    }
+
+    #[test]
+    fn position_map_lines_are_monotonic() {
+        let config = WrapConfig::new(8);
+        let text = "alpha beta\n\n\nlonger paragraph that wraps across multiple words";
+        let layout = TextWrapper::cursor_layout(text, &config);
+
+        let mut last_line = 0usize;
+        for &(line, _) in layout.position_map() {
+            assert!(
+                line >= last_line,
+                "visual lines should not decrease ({} -> {})",
+                last_line,
+                line
+            );
+            last_line = line;
+        }
+        assert!(layout.line_count() >= 4);
     }
 
     #[test]

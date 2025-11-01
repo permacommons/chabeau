@@ -6,6 +6,7 @@ use crate::ui::theme::Theme;
 use ratatui::prelude::Size;
 use ratatui::text::Line;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 use tui_textarea::{CursorMove, TextArea};
 
@@ -43,6 +44,13 @@ pub enum UiFocus {
 }
 
 #[derive(Debug, Clone)]
+struct InputLayoutCache {
+    width: usize,
+    revision: u64,
+    layout: Arc<WrappedCursorLayout>,
+}
+
+#[derive(Debug, Clone)]
 pub struct UiState {
     pub messages: VecDeque<Message>,
     pub input: String,
@@ -72,6 +80,8 @@ pub struct UiState {
     pub last_term_size: Size,
     pub focus: UiFocus,
     pub input_cursor_preferred_column: Option<usize>,
+    input_layout_cache: Option<InputLayoutCache>,
+    input_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +119,11 @@ impl UiState {
 
     pub fn is_transcript_focused(&self) -> bool {
         self.focus == UiFocus::Transcript
+    }
+
+    fn bump_input_revision(&mut self) {
+        self.input_revision = self.input_revision.wrapping_add(1);
+        self.input_layout_cache = None;
     }
 
     pub fn in_edit_select_mode(&self) -> bool {
@@ -314,6 +329,8 @@ impl UiState {
             last_term_size: Size::default(),
             focus: UiFocus::Transcript,
             input_cursor_preferred_column: None,
+            input_layout_cache: None,
+            input_revision: 0,
         }
     }
 
@@ -364,6 +381,7 @@ impl UiState {
                 .move_cursor(tui_textarea::CursorMove::Jump(last_row, last_col));
         }
         self.configure_textarea();
+        self.bump_input_revision();
     }
 
     pub fn set_input_text_with_cursor(&mut self, text: String, cursor_pos: usize) {
@@ -413,7 +431,7 @@ impl UiState {
 
     pub fn sync_input_from_textarea(&mut self) {
         let lines = self.textarea.lines();
-        self.input = lines.join("\n");
+        let new_input = lines.join("\n");
         let (row, col) = self.textarea.cursor();
         let mut pos = 0usize;
         for (i, line) in lines.iter().enumerate() {
@@ -426,10 +444,16 @@ impl UiState {
                 break;
             }
         }
+        let total_chars = new_input.chars().count();
         if row >= lines.len() {
-            pos = self.input.chars().count();
+            pos = total_chars;
         }
+        let text_changed = new_input != self.input;
+        self.input = new_input;
         self.input_cursor_position = pos;
+        if text_changed {
+            self.bump_input_revision();
+        }
     }
 
     pub fn calculate_input_wrapped_lines(&self, width: u16) -> usize {
@@ -465,8 +489,14 @@ impl UiState {
 
     pub fn update_input_scroll(&mut self, input_area_height: u16, width: u16) {
         let available_width = width.saturating_sub(5) as usize;
-        let config = WrapConfig::new(available_width);
-        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
+        let layout = if let Some(layout) = self.ensure_wrapped_cursor_layout(width) {
+            layout
+        } else {
+            Arc::new(TextWrapper::cursor_layout(
+                self.get_input_text(),
+                &WrapConfig::new(available_width),
+            ))
+        };
         let total_input_lines = layout.line_count() as u16;
 
         if total_input_lines <= input_area_height {
@@ -516,24 +546,46 @@ impl UiState {
         }
     }
 
-    fn wrapped_cursor_context(
-        &self,
+    fn ensure_wrapped_cursor_layout(
+        &mut self,
         terminal_width: u16,
-    ) -> Option<(WrappedCursorLayout, usize, usize, usize, usize)> {
+    ) -> Option<Arc<WrappedCursorLayout>> {
         let wrap_width = self.input_wrap_width(terminal_width)?;
 
-        let config = WrapConfig::new(wrap_width);
-        let layout = TextWrapper::cursor_layout(self.get_input_text(), &config);
-        let position_map = layout.position_map();
-        if position_map.is_empty() {
-            return Some((layout, 0, 0, 0, self.get_input_text().chars().count()));
+        let needs_refresh = match &self.input_layout_cache {
+            Some(cache) => cache.width != wrap_width || cache.revision != self.input_revision,
+            None => true,
+        };
+
+        if needs_refresh {
+            let layout =
+                TextWrapper::cursor_layout(self.get_input_text(), &WrapConfig::new(wrap_width));
+            self.input_layout_cache = Some(InputLayoutCache {
+                width: wrap_width,
+                revision: self.input_revision,
+                layout: Arc::new(layout),
+            });
         }
 
-        let current_index = self
-            .input_cursor_position
-            .min(position_map.len().saturating_sub(1));
-        let (current_line, current_col) = position_map[current_index];
+        self.input_layout_cache
+            .as_ref()
+            .map(|cache| Arc::clone(&cache.layout))
+    }
+
+    fn wrapped_cursor_context(
+        &mut self,
+        terminal_width: u16,
+    ) -> Option<(Arc<WrappedCursorLayout>, usize, usize, usize, usize)> {
         let char_count = self.get_input_text().chars().count();
+        let current_position = self.input_cursor_position;
+        let layout = self.ensure_wrapped_cursor_layout(terminal_width)?;
+        let position_map = layout.position_map();
+        if position_map.is_empty() {
+            return Some((layout, 0, 0, 0, char_count));
+        }
+
+        let current_index = current_position.min(position_map.len().saturating_sub(1));
+        let (current_line, current_col) = position_map[current_index];
 
         Some((layout, current_index, current_line, current_col, char_count))
     }

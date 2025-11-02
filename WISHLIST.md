@@ -10,7 +10,6 @@ Items are removed when completed.
   - Deduplicate/compress repeated status lines — [OPEN]
 - Support common "character cards" — [PARTIAL]
   - Lorebook/world info support from character cards — [OPEN]
-- Make assistant messages editable (may require further rethinking of input area) — [OPEN]
 - Basic "push a file into context" support — [OPEN]
 - Microphone/speaker support? — [OPEN]
 - Extend span metadata to code blocks (e.g., `SpanKind::CodeBlock`) to unlock richer TUI interactions — [OPEN]

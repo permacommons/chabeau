@@ -589,6 +589,7 @@ mod tests {
         apply_action, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
         AppCommand,
     };
+    use crate::core::app::ui_state::EditSelectTarget;
     use crate::core::app::App;
     use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::theme::Theme;
@@ -713,7 +714,7 @@ mod tests {
                 role: ROLE_USER.to_string(),
                 content: "hello".into(),
             });
-            app.ui.enter_edit_select_mode();
+            app.ui.enter_edit_select_mode(EditSelectTarget::User);
         })
         .await;
 
@@ -738,6 +739,48 @@ mod tests {
             .await;
         assert!(focus_is_transcript);
         assert!(in_edit_select);
+    }
+
+    #[tokio::test]
+    async fn tab_does_not_switch_focus_in_assistant_edit_select_mode() {
+        let app = new_app_handle();
+        app.update(|app| {
+            app.ui.messages.push_back(Message {
+                role: ROLE_ASSISTANT.to_string(),
+                content: "response".into(),
+            });
+            app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+        })
+        .await;
+
+        let dispatcher = new_dispatcher();
+        let mode_registry = ModeAwareRegistry::new();
+        let mut last_update = Instant::now();
+
+        let outcome = route_keyboard_event(
+            &app,
+            &mode_registry,
+            &dispatcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            Size::new(TERM_WIDTH, TERM_HEIGHT),
+            &mut last_update,
+        )
+        .await
+        .expect("tab handling should succeed");
+
+        assert!(!outcome.request_redraw);
+        let (focus_is_transcript, in_edit_select, target_is_assistant) = app
+            .read(|app| {
+                (
+                    app.ui.is_transcript_focused(),
+                    app.ui.in_edit_select_mode(),
+                    app.ui.edit_select_target() == Some(EditSelectTarget::Assistant),
+                )
+            })
+            .await;
+        assert!(focus_is_transcript);
+        assert!(in_edit_select);
+        assert!(target_is_assistant);
     }
 
     #[tokio::test]

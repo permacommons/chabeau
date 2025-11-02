@@ -1,3 +1,4 @@
+use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
@@ -41,7 +42,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
             &app.ui.messages,
             &app.ui.theme,
-            app.ui.selected_user_message_index(),
+            app.ui.selected_edit_message_index(),
             highlight,
             app.ui.markdown_enabled,
             app.ui.syntax_enabled,
@@ -134,7 +135,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     };
 
     let base_title = if app.ui.in_edit_select_mode() {
-        "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+        match app.ui.edit_select_target() {
+            Some(EditSelectTarget::Assistant) => {
+                "Select assistant message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+            }
+            _ => {
+                "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+            }
+        }
     } else if app.ui.in_block_select_mode() {
         "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
     } else if app.picker_session().is_some() {
@@ -164,6 +172,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
     } else if app.ui.in_place_edit_index().is_some() {
         "Edit in place: Enter=Apply • Esc=Cancel (no send)"
+    } else if app.ui.is_editing_assistant_message() {
+        "Edit message"
     } else if app.ui.compose_mode {
         "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
     } else if app.ui.is_streaming {

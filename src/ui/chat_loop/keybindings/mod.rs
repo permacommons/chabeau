@@ -259,6 +259,16 @@ pub fn build_mode_aware_registry(
             KeyPattern::ctrl(KeyCode::Char('p')),
             Box::new(CtrlPHandler),
         )
+        .register_for_context(
+            KeyContext::Typing,
+            KeyPattern::ctrl(KeyCode::Char('x')),
+            Box::new(CtrlXHandler),
+        )
+        .register_for_context(
+            KeyContext::EditSelect,
+            KeyPattern::ctrl(KeyCode::Char('x')),
+            Box::new(CtrlXHandler),
+        )
         // Complex handlers that need dependencies
         .register_for_context(
             KeyContext::Typing,

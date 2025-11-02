@@ -83,6 +83,9 @@ pub enum AppAction {
         index: usize,
         new_text: String,
     },
+    CompleteAssistantEdit {
+        content: String,
+    },
     ModelPickerLoaded {
         default_model_for_provider: Option<String>,
         models_response: ModelsResponse,
@@ -163,7 +166,8 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::ClearInput
         | AppAction::InsertIntoInput { .. }
         | AppAction::ProcessCommand { .. }
-        | AppAction::CompleteInPlaceEdit { .. } => input::handle_input_action(app, action, ctx),
+        | AppAction::CompleteInPlaceEdit { .. }
+        | AppAction::CompleteAssistantEdit { .. } => input::handle_input_action(app, action, ctx),
 
         AppAction::PickerEscape
         | AppAction::PickerMoveUp

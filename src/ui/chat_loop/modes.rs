@@ -5,10 +5,10 @@ use std::time::Instant;
 use ratatui::crossterm::event::{self, KeyCode};
 use ratatui::Terminal;
 
-use crate::core::app::ui_state::FilePromptKind;
+use crate::core::app::ui_state::{EditSelectTarget, FilePromptKind};
 use crate::core::app::{AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
-use crate::core::message::ROLE_USER;
+use crate::core::message::{ROLE_ASSISTANT, ROLE_USER};
 use crate::ui::osc_backend::OscBackend;
 use crate::utils::editor::{launch_external_editor, ExternalEditorOutcome};
 
@@ -54,107 +54,212 @@ pub async fn handle_edit_select_mode_event(
             return false;
         }
 
+        let Some(target) = app.ui.edit_select_target() else {
+            return false;
+        };
+
         match key.code {
             KeyCode::Esc => {
                 app.ui.exit_edit_select_mode();
                 true
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(current) = app.ui.selected_user_message_index() {
-                    let prev = {
-                        let ui = &app.ui;
-                        ui.prev_user_message_index(current)
-                            .or_else(|| ui.last_user_message_index())
-                    };
-                    if let Some(prev) = prev {
-                        app.ui.set_selected_user_message_index(prev);
-                        app.conversation()
-                            .scroll_index_into_view(prev, term_width, term_height);
+                match target {
+                    EditSelectTarget::User => {
+                        if let Some(current) = app.ui.selected_user_message_index() {
+                            let prev = {
+                                let ui = &app.ui;
+                                ui.prev_user_message_index(current)
+                                    .or_else(|| ui.last_user_message_index())
+                            };
+                            if let Some(prev) = prev {
+                                app.ui.set_selected_user_message_index(prev);
+                                app.conversation().scroll_index_into_view(
+                                    prev,
+                                    term_width,
+                                    term_height,
+                                );
+                            }
+                        } else if let Some(last) = app.ui.last_user_message_index() {
+                            app.ui.set_selected_user_message_index(last);
+                        }
                     }
-                } else if let Some(last) = app.ui.last_user_message_index() {
-                    app.ui.set_selected_user_message_index(last);
+                    EditSelectTarget::Assistant => {
+                        if let Some(current) = app.ui.selected_assistant_message_index() {
+                            let prev = {
+                                let ui = &app.ui;
+                                ui.prev_assistant_message_index(current)
+                                    .or_else(|| ui.last_assistant_message_index())
+                            };
+                            if let Some(prev) = prev {
+                                app.ui.set_selected_assistant_message_index(prev);
+                                app.conversation().scroll_index_into_view(
+                                    prev,
+                                    term_width,
+                                    term_height,
+                                );
+                            }
+                        } else if let Some(last) = app.ui.last_assistant_message_index() {
+                            app.ui.set_selected_assistant_message_index(last);
+                        }
+                    }
                 }
                 true
             }
 
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(current) = app.ui.selected_user_message_index() {
-                    let next = {
-                        let ui = &app.ui;
-                        ui.next_user_message_index(current)
-                            .or_else(|| ui.first_user_message_index())
-                    };
-                    if let Some(next) = next {
-                        app.ui.set_selected_user_message_index(next);
-                        app.conversation()
-                            .scroll_index_into_view(next, term_width, term_height);
+                match target {
+                    EditSelectTarget::User => {
+                        if let Some(current) = app.ui.selected_user_message_index() {
+                            let next = {
+                                let ui = &app.ui;
+                                ui.next_user_message_index(current)
+                                    .or_else(|| ui.first_user_message_index())
+                            };
+                            if let Some(next) = next {
+                                app.ui.set_selected_user_message_index(next);
+                                app.conversation().scroll_index_into_view(
+                                    next,
+                                    term_width,
+                                    term_height,
+                                );
+                            }
+                        } else if let Some(last) = app.ui.last_user_message_index() {
+                            app.ui.set_selected_user_message_index(last);
+                        }
                     }
-                } else if let Some(last) = app.ui.last_user_message_index() {
-                    app.ui.set_selected_user_message_index(last);
+                    EditSelectTarget::Assistant => {
+                        if let Some(current) = app.ui.selected_assistant_message_index() {
+                            let next = {
+                                let ui = &app.ui;
+                                ui.next_assistant_message_index(current)
+                                    .or_else(|| ui.first_assistant_message_index())
+                            };
+                            if let Some(next) = next {
+                                app.ui.set_selected_assistant_message_index(next);
+                                app.conversation().scroll_index_into_view(
+                                    next,
+                                    term_width,
+                                    term_height,
+                                );
+                            }
+                        } else if let Some(last) = app.ui.last_assistant_message_index() {
+                            app.ui.set_selected_assistant_message_index(last);
+                        }
+                    }
                 }
                 true
             }
             KeyCode::Enter => {
-                if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
-                        let content = app.ui.messages[idx].content.clone();
-                        {
-                            let mut conversation = app.conversation();
-                            conversation.cancel_current_stream();
-                        }
-                        app.ui.messages.truncate(idx);
-                        app.invalidate_prewrap_cache();
-                        let user_display_name = app.persona_manager.get_display_name();
-                        let _ = app.session.logging.rewrite_log_without_last_response(
-                            &app.ui.messages,
-                            &user_display_name,
-                        );
-                        app.ui.set_input_text(content);
-                        app.ui.exit_edit_select_mode();
-                        app.ui.focus_input();
-                        let input_area_height = app.ui.calculate_input_area_height(term_width);
-                        {
-                            let mut conversation = app.conversation();
-                            let available_height = conversation
-                                .calculate_available_height(term_height, input_area_height);
-                            conversation.update_scroll_position(available_height, term_width);
+                let idx_opt = match target {
+                    EditSelectTarget::User => app.ui.selected_user_message_index(),
+                    EditSelectTarget::Assistant => app.ui.selected_assistant_message_index(),
+                };
+
+                if let Some(idx) = idx_opt {
+                    if idx < app.ui.messages.len() {
+                        let role_matches = match target {
+                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
+                            EditSelectTarget::Assistant => {
+                                app.ui.messages[idx].role == ROLE_ASSISTANT
+                            }
+                        };
+
+                        if role_matches {
+                            let content = app.ui.messages[idx].content.clone();
+                            {
+                                let mut conversation = app.conversation();
+                                conversation.cancel_current_stream();
+                            }
+                            app.ui.messages.truncate(idx);
+                            app.invalidate_prewrap_cache();
+                            let user_display_name = app.persona_manager.get_display_name();
+                            let _ = app.session.logging.rewrite_log_without_last_response(
+                                &app.ui.messages,
+                                &user_display_name,
+                            );
+                            match target {
+                                EditSelectTarget::User => {
+                                    app.ui.set_input_text(content);
+                                }
+                                EditSelectTarget::Assistant => {
+                                    app.ui.set_input_text_for_assistant_edit(content);
+                                }
+                            }
+                            app.ui.exit_edit_select_mode();
+                            app.ui.focus_input();
+                            let input_area_height = app.ui.calculate_input_area_height(term_width);
+                            {
+                                let mut conversation = app.conversation();
+                                let available_height = conversation
+                                    .calculate_available_height(term_height, input_area_height);
+                                conversation.update_scroll_position(available_height, term_width);
+                            }
                         }
                     }
                 }
                 true
             }
             KeyCode::Char('E') | KeyCode::Char('e') => {
-                if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
-                        let content = app.ui.messages[idx].content.clone();
-                        app.ui.set_input_text(content);
-                        app.ui.start_in_place_edit(idx);
-                        app.ui.exit_edit_select_mode();
+                let idx_opt = match target {
+                    EditSelectTarget::User => app.ui.selected_user_message_index(),
+                    EditSelectTarget::Assistant => app.ui.selected_assistant_message_index(),
+                };
+
+                if let Some(idx) = idx_opt {
+                    if idx < app.ui.messages.len() {
+                        let role_matches = match target {
+                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
+                            EditSelectTarget::Assistant => {
+                                app.ui.messages[idx].role == ROLE_ASSISTANT
+                            }
+                        };
+
+                        if role_matches {
+                            let content = app.ui.messages[idx].content.clone();
+                            app.ui.set_input_text(content);
+                            app.ui.start_in_place_edit(idx);
+                            app.ui.exit_edit_select_mode();
+                        }
                     }
                 }
                 true
             }
             KeyCode::Delete => {
-                if let Some(idx) = app.ui.selected_user_message_index() {
-                    if idx < app.ui.messages.len() && app.ui.messages[idx].role == ROLE_USER {
-                        {
-                            let mut conversation = app.conversation();
-                            conversation.cancel_current_stream();
-                        }
-                        app.ui.messages.truncate(idx);
-                        app.invalidate_prewrap_cache();
-                        let user_display_name = app.persona_manager.get_display_name();
-                        let _ = app.session.logging.rewrite_log_without_last_response(
-                            &app.ui.messages,
-                            &user_display_name,
-                        );
-                        app.ui.exit_edit_select_mode();
-                        let input_area_height = app.ui.calculate_input_area_height(term_width);
-                        {
-                            let mut conversation = app.conversation();
-                            let available_height = conversation
-                                .calculate_available_height(term_height, input_area_height);
-                            conversation.update_scroll_position(available_height, term_width);
+                let idx_opt = match target {
+                    EditSelectTarget::User => app.ui.selected_user_message_index(),
+                    EditSelectTarget::Assistant => app.ui.selected_assistant_message_index(),
+                };
+
+                if let Some(idx) = idx_opt {
+                    if idx < app.ui.messages.len() {
+                        let role_matches = match target {
+                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
+                            EditSelectTarget::Assistant => {
+                                app.ui.messages[idx].role == ROLE_ASSISTANT
+                            }
+                        };
+
+                        if role_matches {
+                            {
+                                let mut conversation = app.conversation();
+                                conversation.cancel_current_stream();
+                            }
+                            app.ui.messages.truncate(idx);
+                            app.invalidate_prewrap_cache();
+                            let user_display_name = app.persona_manager.get_display_name();
+                            let _ = app.session.logging.rewrite_log_without_last_response(
+                                &app.ui.messages,
+                                &user_display_name,
+                            );
+                            app.ui.exit_edit_select_mode();
+                            let input_area_height = app.ui.calculate_input_area_height(term_width);
+                            {
+                                let mut conversation = app.conversation();
+                                let available_height = conversation
+                                    .calculate_available_height(term_height, input_area_height);
+                                conversation.update_scroll_position(available_height, term_width);
+                            }
                         }
                     }
                 }
@@ -401,13 +506,14 @@ pub async fn process_input_submission(
     term_width: u16,
     term_height: u16,
 ) {
-    let input_text = app
+    let (input_text, editing_assistant) = app
         .read(|app| {
             let text = app.ui.get_input_text().to_string();
+            let editing = app.ui.is_editing_assistant_message();
             if text.trim().is_empty() {
-                None
+                (None, editing)
             } else {
-                Some(text)
+                (Some(text), editing)
             }
         })
         .await;
@@ -416,15 +522,30 @@ pub async fn process_input_submission(
         return;
     };
 
+    let ctx = AppActionContext {
+        term_width,
+        term_height,
+    };
+
+    if editing_assistant {
+        dispatcher.dispatch_many(
+            [
+                AppAction::CompleteAssistantEdit {
+                    content: input_text,
+                },
+                AppAction::ClearInput,
+            ],
+            ctx,
+        );
+        return;
+    }
+
     dispatcher.dispatch_many(
         [
             AppAction::ClearInput,
             AppAction::ProcessCommand { input: input_text },
         ],
-        AppActionContext {
-            term_width,
-            term_height,
-        },
+        ctx,
     );
 }
 
@@ -571,7 +692,7 @@ mod tests {
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, AppCommand,
     };
     use crate::core::chat_stream::ChatStreamService;
-    use crate::core::message::Message;
+    use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::theme::Theme;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
@@ -675,7 +796,7 @@ mod tests {
                         role: ROLE_USER.to_string(),
                         content: "rewrite me".into(),
                     });
-                    app.ui.enter_edit_select_mode();
+                    app.ui.enter_edit_select_mode(EditSelectTarget::User);
                 })
                 .await;
 
@@ -696,6 +817,141 @@ mod tests {
             assert_eq!(input_text, "rewrite me");
             assert!(focus_is_input);
             assert!(!in_edit_select);
+        });
+    }
+
+    #[test]
+    fn assistant_edit_select_enter_loads_message_into_input() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = setup_app();
+            handle
+                .update(|app| {
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_USER.to_string(),
+                        content: "keep".into(),
+                    });
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_ASSISTANT.to_string(),
+                        content: "adjust me".into(),
+                    });
+                    app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+                })
+                .await;
+
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
+            assert!(handled);
+
+            let (input_text, edit_flag, remaining_messages) = handle
+                .read(|app| {
+                    (
+                        app.ui.get_input_text().to_string(),
+                        app.ui.is_editing_assistant_message(),
+                        app.ui.messages.len(),
+                    )
+                })
+                .await;
+
+            assert_eq!(input_text, "adjust me");
+            assert!(edit_flag);
+            assert_eq!(remaining_messages, 1);
+        });
+    }
+
+    #[test]
+    fn assistant_edit_select_delete_truncates_without_flag() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = setup_app();
+            handle
+                .update(|app| {
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_ASSISTANT.to_string(),
+                        content: "to remove".into(),
+                    });
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_USER.to_string(),
+                        content: "later".into(),
+                    });
+                    app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+                })
+                .await;
+
+            let key = KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE);
+            let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
+            assert!(handled);
+
+            let (message_count, edit_flag) = handle
+                .read(|app| (app.ui.messages.len(), app.ui.is_editing_assistant_message()))
+                .await;
+
+            assert_eq!(message_count, 0);
+            assert!(!edit_flag);
+        });
+    }
+
+    #[test]
+    fn assistant_edit_submission_appends_message_without_resend() {
+        let runtime = Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let handle = setup_app();
+            handle
+                .update(|app| {
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_USER.to_string(),
+                        content: "keep".into(),
+                    });
+                    app.ui.messages.push_back(Message {
+                        role: ROLE_ASSISTANT.to_string(),
+                        content: "to edit".into(),
+                    });
+                    app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+                })
+                .await;
+
+            let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
+            assert!(handled);
+
+            handle
+                .update(|app| {
+                    app.ui.set_input_text_for_assistant_edit("revised".into());
+                })
+                .await;
+
+            let (dispatcher, mut rx) = dispatcher();
+            process_input_submission(&dispatcher, &handle, 80, 24).await;
+
+            let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(envelopes.len(), 2);
+            match &envelopes[0].action {
+                AppAction::CompleteAssistantEdit { content } => {
+                    assert_eq!(content, "revised");
+                }
+                _ => panic!("unexpected action"),
+            }
+            assert!(matches!(envelopes[1].action, AppAction::ClearInput));
+
+            let commands = handle.update(|app| apply_actions(app, envelopes)).await;
+            assert!(commands.is_empty());
+
+            let (message_count, last_role, last_content, editing_flag) = handle
+                .read(|app| {
+                    let last = app.ui.messages.back().cloned();
+                    (
+                        app.ui.messages.len(),
+                        last.as_ref().map(|m| m.role.clone()),
+                        last.map(|m| m.content.clone()),
+                        app.ui.is_editing_assistant_message(),
+                    )
+                })
+                .await;
+
+            assert_eq!(message_count, 2);
+            assert_eq!(last_role.as_deref(), Some(ROLE_ASSISTANT));
+            assert_eq!(last_content.as_deref(), Some("revised"));
+            assert!(!editing_flag);
         });
     }
 }

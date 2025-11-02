@@ -1,5 +1,6 @@
 use super::App;
 use crate::commands::matching_commands;
+use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::ui::span::SpanKind;
 use ratatui::text::Line;
 
@@ -112,7 +113,12 @@ impl App {
             return;
         }
 
-        if actual_index >= self.ui.messages.len() || self.ui.messages[actual_index].role != "user" {
+        if actual_index >= self.ui.messages.len() {
+            return;
+        }
+
+        let role = self.ui.messages[actual_index].role.as_str();
+        if role != ROLE_USER && role != ROLE_ASSISTANT {
             return;
         }
 
@@ -123,6 +129,25 @@ impl App {
             .session
             .logging
             .rewrite_log_without_last_response(&self.ui.messages, &user_display_name);
+        self.ui.clear_assistant_editing();
+    }
+
+    pub fn complete_assistant_edit(&mut self, new_text: String) {
+        if !self.ui.is_editing_assistant_message() {
+            return;
+        }
+
+        self.ui.messages.push_back(Message {
+            role: ROLE_ASSISTANT.to_string(),
+            content: new_text,
+        });
+        self.invalidate_prewrap_cache();
+        let user_display_name = self.persona_manager.get_display_name();
+        let _ = self
+            .session
+            .logging
+            .rewrite_log_without_last_response(&self.ui.messages, &user_display_name);
+        self.ui.clear_assistant_editing();
     }
 
     pub fn request_exit(&mut self) {

@@ -8,7 +8,7 @@
 //! - Complex operations (external editor, message submission)
 //! - Mode-specific handlers (picker, edit select, block select)
 
-use crate::core::app::ui_state::VerticalCursorDirection;
+use crate::core::app::ui_state::{EditSelectTarget, VerticalCursorDirection};
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
@@ -571,7 +571,9 @@ impl KeyHandler for CtrlPHandler {
                 return KeyResult::Handled;
             }
 
-            if app.ui.in_edit_select_mode() {
+            if app.ui.in_edit_select_mode()
+                && app.ui.edit_select_target() == Some(EditSelectTarget::User)
+            {
                 if let Some(current) = app.ui.selected_user_message_index() {
                     let prev = {
                         let ui = &app.ui;
@@ -585,13 +587,66 @@ impl KeyHandler for CtrlPHandler {
                     app.ui.set_selected_user_message_index(last);
                 }
             } else {
-                app.ui.enter_edit_select_mode();
+                app.ui.enter_edit_select_mode(EditSelectTarget::User);
                 if let Some(last) = app.ui.last_user_message_index() {
                     app.ui.set_selected_user_message_index(last);
                 }
             }
 
             if let Some(idx) = app.ui.selected_user_message_index() {
+                app.conversation()
+                    .scroll_index_into_view(idx, term_width, term_height);
+            }
+
+            KeyResult::Handled
+        })
+        .await
+    }
+}
+
+/// Handler for Ctrl+X (assistant edit select mode)
+pub struct CtrlXHandler;
+
+#[async_trait::async_trait]
+impl KeyHandler for CtrlXHandler {
+    async fn handle(
+        &self,
+        app: &AppHandle,
+        _dispatcher: &AppActionDispatcher,
+        _key: &KeyEvent,
+        term_width: u16,
+        term_height: u16,
+        _last_input_layout_update: Option<std::time::Instant>,
+    ) -> KeyResult {
+        app.update(|app| {
+            if app.ui.last_assistant_message_index().is_none() {
+                app.conversation().set_status("No assistant messages");
+                return KeyResult::Handled;
+            }
+
+            if app.ui.in_edit_select_mode()
+                && app.ui.edit_select_target() == Some(EditSelectTarget::Assistant)
+            {
+                if let Some(current) = app.ui.selected_assistant_message_index() {
+                    let prev = {
+                        let ui = &app.ui;
+                        ui.prev_assistant_message_index(current)
+                            .or_else(|| ui.last_assistant_message_index())
+                    };
+                    if let Some(prev) = prev {
+                        app.ui.set_selected_assistant_message_index(prev);
+                    }
+                } else if let Some(last) = app.ui.last_assistant_message_index() {
+                    app.ui.set_selected_assistant_message_index(last);
+                }
+            } else {
+                app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+                if let Some(last) = app.ui.last_assistant_message_index() {
+                    app.ui.set_selected_assistant_message_index(last);
+                }
+            }
+
+            if let Some(idx) = app.ui.selected_assistant_message_index() {
                 app.conversation()
                     .scroll_index_into_view(idx, term_width, term_height);
             }

@@ -1,4 +1,4 @@
-use crate::core::message::{Message, ROLE_USER};
+use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::span::SpanKind;
@@ -391,7 +391,7 @@ impl ScrollCalculator {
 
         if let Some(sel) = selected_index {
             if let Some(msg) = messages.get(sel) {
-                if msg.role == ROLE_USER {
+                if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
                     if let Some(span) = layout.message_spans.get(sel) {
                         let highlight_style = theme.selection_highlight_style.patch(highlight);
                         for (offset, (line, kinds)) in layout
@@ -1301,6 +1301,55 @@ mod tests {
             );
 
         assert_eq!(normal.len(), highlighted.len());
+    }
+
+    #[test]
+    fn assistant_selection_highlight_changes_rendered_lines() {
+        let mut messages = VecDeque::new();
+        messages.push_back(create_test_message("user", "Hello"));
+        messages.push_back(create_test_message("assistant", "Line 1\nLine 2"));
+        let theme = Theme::dark_default();
+        let highlight = Style::default();
+
+        let base_layout =
+            ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
+                &messages,
+                &theme,
+                None,
+                highlight,
+                true,
+                true,
+                Some(80),
+                None,
+            );
+
+        let highlighted_layout =
+            ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
+                &messages,
+                &theme,
+                Some(1),
+                highlight,
+                true,
+                true,
+                Some(80),
+                None,
+            );
+
+        let span = highlighted_layout
+            .message_spans
+            .get(1)
+            .expect("assistant span");
+
+        let mut changed = false;
+        for offset in 0..span.len {
+            let idx = span.start + offset;
+            if base_layout.lines[idx] != highlighted_layout.lines[idx] {
+                changed = true;
+                break;
+            }
+        }
+
+        assert!(changed, "assistant highlight should alter rendered lines");
     }
 
     #[test]

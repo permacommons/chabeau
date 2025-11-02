@@ -45,6 +45,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - Conversation logging with pause/resume; quick `/dump` of contents to a file
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
+- Assistant message editing (Ctrl+X) to revise or truncate assistant responses without resending
 - Prettified API error output with Markdown summaries for easier troubleshooting
 
 For features under consideration, see [WISHLIST.md](WISHLIST.md).

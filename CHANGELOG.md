@@ -7,6 +7,7 @@
 - Added `/refine` command for refining the last response.
 - Added `/clear` command to clear the conversation transcript.
 - Added printing of a formatted, monochrome transcript on Ctrl+D exit.
+- Added assistant message editing (Ctrl+X) to revise or truncate responses without resending.
 
 ### Changed
 - Re-formatted the provider list table (`chabeau -p`) into a cleaner, more readable layout.

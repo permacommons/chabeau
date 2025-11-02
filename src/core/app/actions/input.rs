@@ -48,6 +48,10 @@ pub(super) fn handle_input_action(
             app.complete_in_place_edit(index, new_text);
             None
         }
+        AppAction::CompleteAssistantEdit { content } => {
+            app.complete_assistant_edit(content);
+            None
+        }
         _ => unreachable!("non-input action routed to input handler"),
     }
 }

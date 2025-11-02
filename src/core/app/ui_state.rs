@@ -1,5 +1,5 @@
 use crate::core::config::data::Config;
-use crate::core::message::{AppMessageKind, Message, ROLE_USER};
+use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig, WrappedCursorLayout};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
@@ -28,12 +28,25 @@ pub struct FilePrompt {
     pub content: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditSelectTarget {
+    User,
+    Assistant,
+}
+
 #[derive(Debug, Clone)]
 pub enum UiMode {
     Typing,
-    EditSelect { selected_index: usize },
-    BlockSelect { block_index: usize },
-    InPlaceEdit { index: usize },
+    EditSelect {
+        selected_index: usize,
+        target: EditSelectTarget,
+    },
+    BlockSelect {
+        block_index: usize,
+    },
+    InPlaceEdit {
+        index: usize,
+    },
     FilePrompt(FilePrompt),
 }
 
@@ -80,6 +93,7 @@ pub struct UiState {
     pub last_term_size: Size,
     pub focus: UiFocus,
     pub input_cursor_preferred_column: Option<usize>,
+    editing_assistant_message: bool,
     input_layout_cache: Option<InputLayoutCache>,
     input_revision: u64,
 }
@@ -130,16 +144,64 @@ impl UiState {
         matches!(self.mode, UiMode::EditSelect { .. })
     }
 
-    pub fn selected_user_message_index(&self) -> Option<usize> {
-        if let UiMode::EditSelect { selected_index } = self.mode {
+    pub fn edit_select_target(&self) -> Option<EditSelectTarget> {
+        if let UiMode::EditSelect { target, .. } = self.mode {
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    pub fn selected_edit_message_index(&self) -> Option<usize> {
+        if let UiMode::EditSelect { selected_index, .. } = self.mode {
             Some(selected_index)
         } else {
             None
         }
     }
 
+    pub fn set_selected_edit_message_index(&mut self, index: usize) {
+        if let UiMode::EditSelect { selected_index, .. } = &mut self.mode {
+            *selected_index = index;
+        }
+    }
+
+    pub fn selected_user_message_index(&self) -> Option<usize> {
+        match self.mode {
+            UiMode::EditSelect {
+                selected_index,
+                target: EditSelectTarget::User,
+            } => Some(selected_index),
+            _ => None,
+        }
+    }
+
     pub fn set_selected_user_message_index(&mut self, index: usize) {
-        if let UiMode::EditSelect { selected_index } = &mut self.mode {
+        if let UiMode::EditSelect {
+            selected_index,
+            target: EditSelectTarget::User,
+        } = &mut self.mode
+        {
+            *selected_index = index;
+        }
+    }
+
+    pub fn selected_assistant_message_index(&self) -> Option<usize> {
+        match self.mode {
+            UiMode::EditSelect {
+                selected_index,
+                target: EditSelectTarget::Assistant,
+            } => Some(selected_index),
+            _ => None,
+        }
+    }
+
+    pub fn set_selected_assistant_message_index(&mut self, index: usize) {
+        if let UiMode::EditSelect {
+            selected_index,
+            target: EditSelectTarget::Assistant,
+        } = &mut self.mode
+        {
             *selected_index = index;
         }
     }
@@ -162,16 +224,16 @@ impl UiState {
         }
     }
 
-    pub fn last_user_message_index(&self) -> Option<usize> {
+    fn last_message_index_with_role(&self, role: &str) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, m)| m.role == ROLE_USER)
+            .find(|(_, m)| m.role == role)
             .map(|(i, _)| i)
     }
 
-    pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
+    fn prev_message_index_with_role(&self, role: &str, from_index: usize) -> Option<usize> {
         if from_index == 0 {
             return None;
         }
@@ -181,32 +243,71 @@ impl UiState {
             .enumerate()
             .take(from_index)
             .rev()
-            .find(|(_, m)| m.role == ROLE_USER)
+            .find(|(_, m)| m.role == role)
             .map(|(i, _)| i)
     }
 
-    pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
+    fn next_message_index_with_role(&self, role: &str, from_index: usize) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
             .skip(from_index + 1)
-            .find(|(_, m)| m.role == ROLE_USER)
+            .find(|(_, m)| m.role == role)
             .map(|(i, _)| i)
     }
 
-    pub fn first_user_message_index(&self) -> Option<usize> {
+    fn first_message_index_with_role(&self, role: &str) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
-            .find(|(_, m)| m.role == ROLE_USER)
+            .find(|(_, m)| m.role == role)
             .map(|(i, _)| i)
     }
 
-    pub fn enter_edit_select_mode(&mut self) {
-        if let Some(idx) = self.last_user_message_index() {
+    pub fn last_user_message_index(&self) -> Option<usize> {
+        self.last_message_index_with_role(ROLE_USER)
+    }
+
+    pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
+        self.prev_message_index_with_role(ROLE_USER, from_index)
+    }
+
+    pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
+        self.next_message_index_with_role(ROLE_USER, from_index)
+    }
+
+    pub fn first_user_message_index(&self) -> Option<usize> {
+        self.first_message_index_with_role(ROLE_USER)
+    }
+
+    pub fn last_assistant_message_index(&self) -> Option<usize> {
+        self.last_message_index_with_role(ROLE_ASSISTANT)
+    }
+
+    pub fn prev_assistant_message_index(&self, from_index: usize) -> Option<usize> {
+        self.prev_message_index_with_role(ROLE_ASSISTANT, from_index)
+    }
+
+    pub fn next_assistant_message_index(&self, from_index: usize) -> Option<usize> {
+        self.next_message_index_with_role(ROLE_ASSISTANT, from_index)
+    }
+
+    pub fn first_assistant_message_index(&self) -> Option<usize> {
+        self.first_message_index_with_role(ROLE_ASSISTANT)
+    }
+
+    pub fn enter_edit_select_mode(&mut self, target: EditSelectTarget) {
+        self.clear_assistant_editing();
+        let start_index = match target {
+            EditSelectTarget::User => self.last_user_message_index(),
+            EditSelectTarget::Assistant => self.last_assistant_message_index(),
+        };
+
+        if let Some(idx) = start_index {
             self.focus_transcript();
             self.set_mode(UiMode::EditSelect {
                 selected_index: idx,
+                target,
             });
         }
     }
@@ -219,12 +320,14 @@ impl UiState {
 
     pub fn start_in_place_edit(&mut self, index: usize) {
         self.focus_input();
+        self.clear_assistant_editing();
         self.set_mode(UiMode::InPlaceEdit { index });
     }
 
     pub fn cancel_in_place_edit(&mut self) {
         if self.in_place_edit_index().is_some() {
             self.set_mode(UiMode::Typing);
+            self.clear_assistant_editing();
         }
     }
 
@@ -329,6 +432,7 @@ impl UiState {
             last_term_size: Size::default(),
             focus: UiFocus::Transcript,
             input_cursor_preferred_column: None,
+            editing_assistant_message: false,
             input_layout_cache: None,
             input_revision: 0,
         }
@@ -360,6 +464,7 @@ impl UiState {
     }
 
     pub fn set_input_text(&mut self, text: String) {
+        self.editing_assistant_message = false;
         self.input = text;
         let lines: Vec<String> = if self.input.is_empty() {
             Vec::new()
@@ -427,6 +532,19 @@ impl UiState {
 
     pub fn clear_input(&mut self) {
         self.set_input_text(String::new());
+    }
+
+    pub fn set_input_text_for_assistant_edit(&mut self, text: String) {
+        self.set_input_text(text);
+        self.editing_assistant_message = true;
+    }
+
+    pub fn is_editing_assistant_message(&self) -> bool {
+        self.editing_assistant_message
+    }
+
+    pub fn clear_assistant_editing(&mut self) {
+        self.editing_assistant_message = false;
     }
 
     pub fn sync_input_from_textarea(&mut self) {
@@ -921,7 +1039,7 @@ impl UiState {
 
 #[cfg(test)]
 mod tests {
-    use super::{UiFocus, UiMode, UiState};
+    use super::{EditSelectTarget, UiFocus, UiMode, UiState};
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::create_test_message;
 
@@ -960,10 +1078,13 @@ mod tests {
             .push_back(create_test_message("assistant", "still ignore"));
         ui.messages.push_back(create_test_message("user", "last"));
 
-        ui.enter_edit_select_mode();
+        ui.enter_edit_select_mode(EditSelectTarget::User);
 
         match ui.mode {
-            UiMode::EditSelect { selected_index } => assert_eq!(selected_index, 3),
+            UiMode::EditSelect {
+                selected_index,
+                target: EditSelectTarget::User,
+            } => assert_eq!(selected_index, 3),
             other => panic!("unexpected mode: {other:?}"),
         }
     }
@@ -971,7 +1092,10 @@ mod tests {
     #[test]
     fn exit_edit_select_mode_returns_to_typing() {
         let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
-        ui.set_mode(UiMode::EditSelect { selected_index: 0 });
+        ui.set_mode(UiMode::EditSelect {
+            selected_index: 0,
+            target: EditSelectTarget::User,
+        });
 
         ui.exit_edit_select_mode();
 
@@ -1001,6 +1125,18 @@ mod tests {
 
         ui.cancel_in_place_edit();
         assert!(matches!(ui.mode, UiMode::Typing));
+    }
+
+    #[test]
+    fn assistant_edit_flag_tracks_input_usage() {
+        let mut ui = UiState::new_basic(Theme::dark_default(), true, true, None);
+
+        assert!(!ui.is_editing_assistant_message());
+        ui.set_input_text_for_assistant_edit("revise".into());
+        assert!(ui.is_editing_assistant_message());
+
+        ui.clear_input();
+        assert!(!ui.is_editing_assistant_message());
     }
 }
 

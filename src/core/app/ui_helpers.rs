@@ -53,7 +53,7 @@ impl App {
         }
 
         let chars: Vec<char> = input.chars().collect();
-        let cursor = self.ui.input_cursor_position.min(chars.len());
+        let cursor = self.ui.get_input_cursor_position().min(chars.len());
 
         if cursor == 0 {
             return false;

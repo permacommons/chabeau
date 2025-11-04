@@ -66,8 +66,8 @@ struct InputLayoutCache {
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub messages: VecDeque<Message>,
-    pub input: String,
-    pub input_cursor_position: usize,
+    input: String,
+    input_cursor_position: usize,
     pub mode: UiMode,
     pub current_response: String,
     pub scroll_offset: u16,
@@ -78,7 +78,7 @@ pub struct UiState {
     pub pulse_start: Instant,
     pub stream_interrupted: bool,
     pub input_scroll_offset: u16,
-    pub textarea: TextArea<'static>,
+    textarea: TextArea<'static>,
     pub theme: Theme,
     pub current_theme_id: Option<String>,
     pub markdown_enabled: bool,
@@ -461,6 +461,31 @@ impl UiState {
 
     pub fn get_input_text(&self) -> &str {
         &self.input
+    }
+
+    pub fn get_input_cursor_position(&self) -> usize {
+        self.input_cursor_position
+    }
+
+    pub fn get_textarea_cursor(&self) -> (usize, usize) {
+        self.textarea.cursor()
+    }
+
+    pub fn get_textarea_line_count(&self) -> usize {
+        self.textarea.lines().len()
+    }
+
+    pub fn get_textarea_line_len(&self, row: usize) -> usize {
+        self.textarea
+            .lines()
+            .get(row)
+            .map(|l| l.chars().count())
+            .unwrap_or(0)
+    }
+
+    pub fn set_cursor_position(&mut self, pos: usize) {
+        self.jump_cursor_to_position(pos);
+        self.input_cursor_preferred_column = None;
     }
 
     pub fn set_input_text(&mut self, text: String) {

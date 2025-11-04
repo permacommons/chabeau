@@ -355,7 +355,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         if app.ui.is_input_active() && app.ui.is_input_focused() && app.picker_session().is_none() {
             let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
                 app.ui.get_input_text(),
-                app.ui.input_cursor_position,
+                app.ui.get_input_cursor_position(),
                 &config,
             );
             let visible_line = (line as u16).saturating_sub(app.ui.input_scroll_offset);

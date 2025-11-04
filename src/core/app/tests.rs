@@ -356,17 +356,17 @@ fn test_sync_cursor_mapping_single_and_multi_line() {
 
     // Single line: move to end
     app.ui.set_input_text("hello world".to_string());
-    app.ui.textarea.move_cursor(CursorMove::End);
-    app.ui.sync_input_from_textarea();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::End));
     assert_eq!(app.ui.get_input_text(), "hello world");
-    assert_eq!(app.ui.input_cursor_position, 11);
+    assert_eq!(app.ui.get_input_cursor_position(), 11);
 
     // Multi-line: jump to (row=1, col=3) => after "wor" on second line
     app.ui.set_input_text("hello\nworld".to_string());
-    app.ui.textarea.move_cursor(CursorMove::Jump(1, 3));
-    app.ui.sync_input_from_textarea();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Jump(1, 3)));
     // 5 (hello) + 1 (\n) + 3 = 9
-    assert_eq!(app.ui.input_cursor_position, 9);
+    assert_eq!(app.ui.get_input_cursor_position(), 9);
 }
 
 #[test]
@@ -374,17 +374,19 @@ fn test_backspace_at_start_noop() {
     let mut app = create_test_app();
     app.ui.set_input_text("abc".to_string());
     // Move to head of line
-    app.ui.textarea.move_cursor(CursorMove::Head);
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Head));
     // Simulate backspace (always single-char via input_without_shortcuts)
-    app.ui.textarea.input_without_shortcuts(Input {
-        key: Key::Backspace,
-        ctrl: false,
-        alt: false,
-        shift: false,
+    app.ui.apply_textarea_edit(|ta| {
+        ta.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
     });
-    app.ui.sync_input_from_textarea();
     assert_eq!(app.ui.get_input_text(), "abc");
-    assert_eq!(app.ui.input_cursor_position, 0);
+    assert_eq!(app.ui.get_input_cursor_position(), 0);
 }
 
 #[test]
@@ -392,35 +394,42 @@ fn test_backspace_at_line_start_joins_lines() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello\nworld".to_string());
     // Move to start of second line
-    app.ui.textarea.move_cursor(CursorMove::Jump(1, 0));
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Jump(1, 0)));
     // Backspace should join lines; use input_without_shortcuts to ensure single-char delete
-    app.ui.textarea.input_without_shortcuts(Input {
-        key: Key::Backspace,
-        ctrl: false,
-        alt: false,
-        shift: false,
+    app.ui.apply_textarea_edit(|ta| {
+        ta.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
     });
-    app.ui.sync_input_from_textarea();
     assert_eq!(app.ui.get_input_text(), "helloworld");
     // Cursor should be at end of former first line (index 5)
-    assert_eq!(app.ui.input_cursor_position, 5);
+    assert_eq!(app.ui.get_input_cursor_position(), 5);
 }
 
 #[test]
 fn test_backspace_with_alt_modifier_deletes_single_char() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello world".to_string());
-    app.ui.textarea.move_cursor(CursorMove::End);
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::End));
     // Simulate Alt+Backspace; with input_without_shortcuts it should still delete one char
-    app.ui.textarea.input_without_shortcuts(Input {
-        key: Key::Backspace,
-        ctrl: false,
-        alt: true,
-        shift: false,
+    app.ui.apply_textarea_edit(|ta| {
+        ta.input_without_shortcuts(Input {
+            key: Key::Backspace,
+            ctrl: false,
+            alt: true,
+            shift: false,
+        });
     });
-    app.ui.sync_input_from_textarea();
     assert_eq!(app.ui.get_input_text(), "hello worl");
-    assert_eq!(app.ui.input_cursor_position, "hello worl".chars().count());
+    assert_eq!(
+        app.ui.get_input_cursor_position(),
+        "hello worl".chars().count()
+    );
 }
 
 #[test]
@@ -433,7 +442,8 @@ fn test_update_input_scroll_keeps_cursor_visible() {
     let width: u16 = 10; // small terminal width to force wrapping (inner ~4)
     let input_area_height: u16 = 2; // only 2 lines visible
                                     // Place cursor near end
-    app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
+    app.ui
+        .set_cursor_position(text.chars().count().saturating_sub(1));
     app.ui.update_input_scroll(input_area_height, width);
     // With cursor near end, scroll offset should be > 0 to bring cursor into view
     assert!(app.ui.input_scroll_offset > 0);
@@ -446,26 +456,26 @@ fn test_shift_like_up_down_moves_one_line_on_many_newlines() {
     let text = "top\n\n\n\n\n\n\n\n\n\nbottom";
     app.ui.set_input_text(text.to_string());
     // Jump to bottom line, col=3 (after 'bot')
-    let bottom_row_usize = app.ui.textarea.lines().len().saturating_sub(1);
+    let bottom_row_usize = app.ui.get_textarea_line_count().saturating_sub(1);
     let bottom_row = bottom_row_usize as u16;
-    app.ui.textarea.move_cursor(CursorMove::Jump(bottom_row, 3));
-    app.ui.sync_input_from_textarea();
-    let (row_before, col_before) = app.ui.textarea.cursor();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Jump(bottom_row, 3)));
+    let (row_before, col_before) = app.ui.get_textarea_cursor();
     assert_eq!(row_before, bottom_row as usize);
-    assert!(col_before <= app.ui.textarea.lines()[bottom_row_usize].chars().count());
+    assert!(col_before <= app.ui.get_textarea_line_len(bottom_row_usize));
 
     // Move up exactly one line
-    app.ui.textarea.move_cursor(CursorMove::Up);
-    app.ui.sync_input_from_textarea();
-    let (row_after_up, col_after_up) = app.ui.textarea.cursor();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Up));
+    let (row_after_up, col_after_up) = app.ui.get_textarea_cursor();
     assert_eq!(row_after_up, bottom_row_usize.saturating_sub(1));
     // Column should clamp reasonably; we just assert it's within line bounds
-    assert!(col_after_up <= app.ui.textarea.lines()[8].chars().count());
+    assert!(col_after_up <= app.ui.get_textarea_line_len(8));
 
     // Move down exactly one line
-    app.ui.textarea.move_cursor(CursorMove::Down);
-    app.ui.sync_input_from_textarea();
-    let (row_after_down, _col_after_down) = app.ui.textarea.cursor();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Down));
+    let (row_after_down, _col_after_down) = app.ui.get_textarea_cursor();
     assert_eq!(row_after_down, bottom_row_usize);
 }
 
@@ -478,13 +488,13 @@ fn test_wrapped_vertical_navigation_preserves_visual_column() {
         .ui
         .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
     assert!(moved_up);
-    assert_eq!(app.ui.input_cursor_position, 3);
+    assert_eq!(app.ui.get_input_cursor_position(), 3);
 
     let moved_down = app
         .ui
         .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
     assert!(moved_down);
-    assert_eq!(app.ui.input_cursor_position, 6);
+    assert_eq!(app.ui.get_input_cursor_position(), 6);
 }
 
 #[test]
@@ -496,13 +506,13 @@ fn test_wrapped_vertical_navigation_clamps_to_shorter_line() {
         .ui
         .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Up);
     assert!(moved_up);
-    assert_eq!(app.ui.input_cursor_position, 5);
+    assert_eq!(app.ui.get_input_cursor_position(), 5);
 
     let moved_down = app
         .ui
         .move_cursor_in_wrapped_input(8, VerticalCursorDirection::Down);
     assert!(moved_down);
-    assert_eq!(app.ui.input_cursor_position, 8);
+    assert_eq!(app.ui.get_input_cursor_position(), 8);
 }
 
 #[test]
@@ -522,7 +532,7 @@ fn test_wrapped_vertical_navigation_handles_multiple_paragraphs() {
         if !moved {
             break;
         }
-        if app.ui.input_cursor_position <= newline_idx {
+        if app.ui.get_input_cursor_position() <= newline_idx {
             saw_above_newline = true;
         }
     }
@@ -531,7 +541,7 @@ fn test_wrapped_vertical_navigation_handles_multiple_paragraphs() {
         saw_above_newline,
         "cursor should cross the hard newline boundary"
     );
-    let (row, _) = app.ui.textarea.cursor();
+    let (row, _) = app.ui.get_textarea_cursor();
     assert_eq!(row, 0);
 }
 
@@ -544,13 +554,13 @@ fn test_wrapped_vertical_navigation_keeps_column_zero_on_descend() {
         .ui
         .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Down);
     assert!(moved_down);
-    assert_eq!(app.ui.input_cursor_position, 4);
+    assert_eq!(app.ui.get_input_cursor_position(), 4);
 
     let moved_up = app
         .ui
         .move_cursor_in_wrapped_input(9, VerticalCursorDirection::Up);
     assert!(moved_up);
-    assert_eq!(app.ui.input_cursor_position, 0);
+    assert_eq!(app.ui.get_input_cursor_position(), 0);
 }
 
 #[test]
@@ -558,16 +568,16 @@ fn test_shift_like_left_right_moves_one_char() {
     let mut app = create_test_app();
     app.ui.set_input_text("hello".to_string());
     // Move to end, then back by one, then forward by one
-    app.ui.textarea.move_cursor(CursorMove::End);
-    app.ui.sync_input_from_textarea();
-    let end_pos = app.ui.input_cursor_position;
-    app.ui.textarea.move_cursor(CursorMove::Back);
-    app.ui.sync_input_from_textarea();
-    let back_pos = app.ui.input_cursor_position;
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::End));
+    let end_pos = app.ui.get_input_cursor_position();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Back));
+    let back_pos = app.ui.get_input_cursor_position();
     assert_eq!(back_pos, end_pos.saturating_sub(1));
-    app.ui.textarea.move_cursor(CursorMove::Forward);
-    app.ui.sync_input_from_textarea();
-    let forward_pos = app.ui.input_cursor_position;
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Forward));
+    let forward_pos = app.ui.get_input_cursor_position();
     assert_eq!(forward_pos, end_pos);
 }
 
@@ -580,7 +590,7 @@ fn paste_inserts_cursor_at_end_of_insert() {
     app.insert_into_input(text, term_width);
 
     assert_eq!(app.ui.get_input_text(), text);
-    assert_eq!(app.ui.input_cursor_position, text.chars().count());
+    assert_eq!(app.ui.get_input_cursor_position(), text.chars().count());
 }
 
 #[test]
@@ -594,16 +604,18 @@ fn visual_line_start_end_track_wrapped_columns() {
     app.ui.set_input_text_with_cursor(text.clone(), cursor_pos);
 
     let layout = TextWrapper::cursor_layout(&text, &WrapConfig::new(wrap_width));
-    let line = layout.coordinates_for_index(app.ui.input_cursor_position).0;
+    let line = layout
+        .coordinates_for_index(app.ui.get_input_cursor_position())
+        .0;
     let (line_start, line_end) = layout
         .line_bounds(line)
         .expect("line bounds available for wrapped line");
 
     assert!(app.ui.move_cursor_to_visual_line_start(term_width));
-    assert_eq!(app.ui.input_cursor_position, line_start);
+    assert_eq!(app.ui.get_input_cursor_position(), line_start);
 
     assert!(app.ui.move_cursor_to_visual_line_end(term_width));
-    assert_eq!(app.ui.input_cursor_position, line_end);
+    assert_eq!(app.ui.get_input_cursor_position(), line_end);
 }
 
 #[test]
@@ -619,12 +631,12 @@ fn wrapped_cursor_crosses_paragraph_boundaries() {
     assert!(app
         .ui
         .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up));
-    assert!(app.ui.input_cursor_position <= newline_index);
+    assert!(app.ui.get_input_cursor_position() <= newline_index);
 
     assert!(app
         .ui
         .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Down));
-    assert!(app.ui.input_cursor_position > newline_index);
+    assert!(app.ui.get_input_cursor_position() > newline_index);
 }
 
 #[test]
@@ -644,7 +656,7 @@ fn wrapped_cursor_moves_through_blank_lines() {
         {
             break;
         }
-        if app.ui.input_cursor_position <= top_boundary {
+        if app.ui.get_input_cursor_position() <= top_boundary {
             crossed = true;
             break;
         }
@@ -666,15 +678,15 @@ fn visual_line_controls_handle_blank_lines() {
         .ui
         .move_cursor_in_wrapped_input(term_width, VerticalCursorDirection::Up));
     let blank_line_start = text.find('\n').unwrap() + 1;
-    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+    assert_eq!(app.ui.get_input_cursor_position(), blank_line_start);
 
     // Home should stay on the blank line (no-op but returns false because already there).
     assert!(!app.ui.move_cursor_to_visual_line_start(term_width));
-    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+    assert_eq!(app.ui.get_input_cursor_position(), blank_line_start);
 
     // End should also be a no-op but leave the preferred column at zero.
     assert!(!app.ui.move_cursor_to_visual_line_end(term_width));
-    assert_eq!(app.ui.input_cursor_position, blank_line_start);
+    assert_eq!(app.ui.get_input_cursor_position(), blank_line_start);
     assert_eq!(app.ui.input_cursor_preferred_column, Some(0));
 }
 
@@ -687,13 +699,13 @@ fn page_cursor_movement_skips_multiple_wrapped_lines() {
     app.ui
         .set_input_text_with_cursor(text.clone(), text.chars().count());
 
-    let before = app.ui.input_cursor_position;
+    let before = app.ui.get_input_cursor_position();
     let moved =
         app.ui
             .move_cursor_page_in_wrapped_input(term_width, VerticalCursorDirection::Up, 3);
 
     assert!(moved);
-    assert!(app.ui.input_cursor_position < before);
+    assert!(app.ui.get_input_cursor_position() < before);
 }
 
 #[test]
@@ -702,21 +714,22 @@ fn test_cursor_mapping_blankline_insert_no_desync() {
     let text = "asdf\n\nasdf\n\nasdf";
     app.ui.set_input_text(text.to_string());
     // Jump to blank line 2 (0-based row 3), column 0
-    app.ui.textarea.move_cursor(CursorMove::Jump(3, 0));
-    app.ui.sync_input_from_textarea();
+    app.ui
+        .apply_textarea_edit(|ta| ta.move_cursor(CursorMove::Jump(3, 0)));
     // Insert a character on the blank line
-    app.ui.textarea.insert_str("x");
-    app.ui.sync_input_from_textarea();
+    app.ui.apply_textarea_edit(|ta| {
+        ta.insert_str("x");
+    });
 
     // Compute wrapped position using same wrapper logic (no wrapping with wide width)
     let config = WrapConfig::new(120);
     let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
         app.ui.get_input_text(),
-        app.ui.input_cursor_position,
+        app.ui.get_input_cursor_position(),
         &config,
     );
     // Compare to textarea's cursor row/col
-    let (row, c) = app.ui.textarea.cursor();
+    let (row, c) = app.ui.get_textarea_cursor();
     assert_eq!(line, row);
     assert_eq!(col, c);
 }
@@ -728,14 +741,15 @@ fn test_recompute_input_layout_after_edit_updates_scroll() {
     let text = "one two three four five six seven eight nine ten";
     app.ui.set_input_text(text.to_string());
     // Place cursor near end
-    app.ui.input_cursor_position = text.chars().count().saturating_sub(1);
+    app.ui
+        .set_cursor_position(text.chars().count().saturating_sub(1));
     // Very small terminal width to force heavy wrapping; method accounts for borders and margin
     let width: u16 = 6;
     app.ui.recompute_input_layout_after_edit(width);
     // With cursor near end on a heavily wrapped input, expect some scroll
     assert!(app.ui.input_scroll_offset > 0);
     // Changing cursor position to start should reduce or reset scroll
-    app.ui.input_cursor_position = 0;
+    app.ui.set_cursor_position(0);
     app.ui.recompute_input_layout_after_edit(width);
     assert_eq!(app.ui.input_scroll_offset, 0);
 }
@@ -748,7 +762,7 @@ fn complete_slash_command_fills_unique_match() {
     let handled = app.complete_slash_command(80);
     assert!(handled);
     assert_eq!(app.ui.get_input_text(), "/help ");
-    assert_eq!(app.ui.input_cursor_position, "/help ".chars().count());
+    assert_eq!(app.ui.get_input_cursor_position(), "/help ".chars().count());
     assert!(app.ui.is_input_focused());
 }
 
@@ -1120,12 +1134,12 @@ fn test_set_input_text_places_cursor_at_end() {
     let text = String::from("line1\nline2");
     app.ui.set_input_text(text.clone());
     // Linear cursor at end
-    assert_eq!(app.ui.input_cursor_position, text.chars().count());
+    assert_eq!(app.ui.get_input_cursor_position(), text.chars().count());
     // Textarea cursor at end (last row/col)
-    let (row, col) = app.ui.textarea.cursor();
-    let lines = app.ui.textarea.lines();
-    assert_eq!(row, lines.len() - 1);
-    assert_eq!(col, lines.last().unwrap().chars().count());
+    let (row, col) = app.ui.get_textarea_cursor();
+    let lines_len = app.ui.get_textarea_line_count();
+    assert_eq!(row, lines_len - 1);
+    assert_eq!(col, app.ui.get_textarea_line_len(lines_len - 1));
 }
 
 #[test]

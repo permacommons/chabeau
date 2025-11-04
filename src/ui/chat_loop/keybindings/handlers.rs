@@ -1122,7 +1122,7 @@ mod tests {
                 .await;
             assert_eq!(result, KeyResult::Handled);
 
-            let cursor = app.read(|app| app.ui.input_cursor_position).await;
+            let cursor = app.read(|app| app.ui.get_input_cursor_position()).await;
             assert_eq!(cursor, 1);
         });
     }
@@ -1149,7 +1149,7 @@ mod tests {
             let (cursor, hscroll) = app
                 .read(|app| {
                     (
-                        app.ui.input_cursor_position,
+                        app.ui.get_input_cursor_position(),
                         app.ui.horizontal_scroll_offset,
                     )
                 })

@@ -31,6 +31,81 @@ impl ScrollCalculator {
         }
     }
 
+    // Helper to merge adjacent runs with same style and kind, reducing allocations
+    fn append_run(
+        collector_spans: &mut Vec<Span<'static>>,
+        collector_kinds: &mut Vec<SpanKind>,
+        style: Style,
+        kind: SpanKind,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(last_kind) = collector_kinds.last() {
+            if *last_kind == kind {
+                if let Some(last_span) = collector_spans.last_mut() {
+                    if last_span.style == style {
+                        last_span.content.to_mut().push_str(text);
+                        return;
+                    }
+                }
+            }
+        }
+        collector_spans.push(Span::styled(text.to_string(), style));
+        collector_kinds.push(kind);
+    }
+
+    // Optimized word placement that avoids borrowing issues by taking explicit mutable refs
+    #[allow(clippy::too_many_arguments)]
+    fn process_word(
+        word: &str,
+        style: Style,
+        kind: &SpanKind,
+        cur_spans: &mut Vec<Span<'static>>,
+        cur_kinds: &mut Vec<SpanKind>,
+        out_lines: &mut Vec<Line<'static>>,
+        out_metadata: &mut Vec<Vec<SpanKind>>,
+        cur_len: &mut usize,
+        emitted_any: &mut bool,
+        width: usize,
+    ) {
+        if word.is_empty() {
+            return;
+        }
+        let w = UnicodeWidthStr::width(word);
+        if *cur_len > 0 && *cur_len + w > width {
+            ScrollCalculator::push_emitted_line(cur_spans, cur_kinds, out_lines, out_metadata);
+            *emitted_any = true;
+            *cur_len = 0;
+        }
+
+        if w <= width {
+            ScrollCalculator::append_run(cur_spans, cur_kinds, style, kind.clone(), word);
+            *cur_len += w;
+        } else {
+            // Fallback: split oversized word into graphemes only when needed
+            for g in UnicodeSegmentation::graphemes(word, true) {
+                let gw = UnicodeWidthStr::width(g);
+                if gw == 0 {
+                    continue;
+                }
+                if *cur_len > 0 && *cur_len + gw > width {
+                    ScrollCalculator::push_emitted_line(
+                        cur_spans,
+                        cur_kinds,
+                        out_lines,
+                        out_metadata,
+                    );
+                    *emitted_any = true;
+                    *cur_len = 0;
+                }
+                ScrollCalculator::append_run(cur_spans, cur_kinds, style, kind.clone(), g);
+                *cur_len += gw;
+            }
+        }
+    }
+
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
@@ -50,6 +125,7 @@ impl ScrollCalculator {
         let mut out_lines: Vec<Line<'static>> = Vec::with_capacity(lines.len());
         let mut out_metadata: Vec<Vec<SpanKind>> = Vec::with_capacity(lines.len());
 
+        // Fast path for zero width: clone spans and metadata without wrapping
         if width == 0 {
             for (line_idx, line) in lines.iter().enumerate() {
                 if line.spans.is_empty() {
@@ -86,97 +162,9 @@ impl ScrollCalculator {
             let mut cur_len: usize = 0;
             let mut emitted_any = false;
 
-            // Current word accumulated as styled segments
-            let mut word_segs: Vec<(String, usize, ratatui::style::Style, SpanKind)> =
-                Vec::with_capacity(line.spans.len() + 4);
-            let mut word_len: usize = 0;
+            // Using helper: ScrollCalculator::append_run to merge adjacent runs
 
-            let append_run = |collector_spans: &mut Vec<Span<'static>>,
-                              collector_kinds: &mut Vec<SpanKind>,
-                              style: Style,
-                              kind: SpanKind,
-                              text: &str| {
-                if text.is_empty() {
-                    return;
-                }
-                if let Some(last_kind) = collector_kinds.last() {
-                    if *last_kind == kind {
-                        if let Some(last_span) = collector_spans.last_mut() {
-                            if last_span.style == style {
-                                last_span.content.to_mut().push_str(text);
-                                return;
-                            }
-                        }
-                    }
-                }
-                collector_spans.push(Span::styled(text.to_string(), style));
-                collector_kinds.push(kind);
-            };
-
-            let flush_word = |collector_spans: &mut Vec<Span<'static>>,
-                              collector_kinds: &mut Vec<SpanKind>,
-                              out_lines: &mut Vec<Line<'static>>,
-                              out_metadata: &mut Vec<Vec<SpanKind>>,
-                              out_len: &mut usize,
-                              emitted_any: &mut bool,
-                              word_segs: &mut Vec<(String, usize, Style, SpanKind)>,
-                              word_len: &mut usize| {
-                if word_segs.is_empty() {
-                    return;
-                }
-                if *out_len > 0 && *out_len + *word_len > width {
-                    Self::push_emitted_line(
-                        collector_spans,
-                        collector_kinds,
-                        out_lines,
-                        out_metadata,
-                    );
-                    *emitted_any = true;
-                    *out_len = 0;
-                }
-
-                let total = word_segs.len();
-                for (idx, (seg_text, seg_width, seg_style, seg_kind)) in
-                    word_segs.iter().enumerate()
-                {
-                    if *out_len > 0 && *seg_width > 0 && *out_len + *seg_width > width {
-                        Self::push_emitted_line(
-                            collector_spans,
-                            collector_kinds,
-                            out_lines,
-                            out_metadata,
-                        );
-                        *emitted_any = true;
-                        *out_len = 0;
-                    }
-
-                    if !seg_text.is_empty() {
-                        append_run(
-                            collector_spans,
-                            collector_kinds,
-                            *seg_style,
-                            seg_kind.clone(),
-                            seg_text,
-                        );
-                    }
-                    if *seg_width > 0 {
-                        *out_len += *seg_width;
-                    }
-
-                    if idx + 1 < total && *out_len >= width {
-                        Self::push_emitted_line(
-                            collector_spans,
-                            collector_kinds,
-                            out_lines,
-                            out_metadata,
-                        );
-                        *emitted_any = true;
-                        *out_len = 0;
-                    }
-                }
-                word_segs.clear();
-                *word_len = 0;
-            };
+            // Using helper: ScrollCalculator::process_word to place words without borrow conflicts
 
             for (span_idx, s) in line.spans.iter().enumerate() {
                 let span_kind = span_metadata
@@ -185,80 +173,89 @@ impl ScrollCalculator {
                     .cloned()
                     .unwrap_or(SpanKind::Text);
 
-                for grapheme in s.content.graphemes(true) {
-                    let is_plain_space = grapheme == " ";
-                    let is_whitespace_grapheme = grapheme.chars().all(|c| c.is_whitespace());
-                    let is_link_break_space =
-                        span_kind.is_link() && is_whitespace_grapheme && !is_plain_space;
+                let content = s.content.as_ref();
+                let mut start = 0;
 
-                    if is_plain_space || is_link_break_space {
-                        flush_word(
+                // Scan by char boundaries, treating plain spaces as breaks; for links, treat any
+                // Unicode whitespace as break positions to preserve link word grouping.
+                for (i, ch) in content.char_indices() {
+                    let is_plain_space = ch == ' ';
+                    let is_break_ws = if span_kind.is_link() {
+                        ch.is_whitespace()
+                    } else {
+                        is_plain_space
+                    };
+
+                    if is_break_ws {
+                        // Place the accumulated word before the whitespace
+                        let word = &content[start..i];
+                        ScrollCalculator::process_word(
+                            word,
+                            s.style,
+                            &span_kind,
                             &mut cur_spans,
                             &mut cur_kinds,
                             &mut out_lines,
                             &mut out_metadata,
                             &mut cur_len,
                             &mut emitted_any,
-                            &mut word_segs,
-                            &mut word_len,
+                            width,
                         );
 
-                        let space_width = UnicodeWidthStr::width(grapheme);
-                        if space_width == 0 {
-                            continue;
+                        // Place the whitespace itself, width-aware
+                        let grapheme = ch.to_string();
+                        let space_width = UnicodeWidthStr::width(grapheme.as_str());
+                        if space_width > 0 {
+                            if cur_len + space_width <= width {
+                                let kind_for_space = if span_kind.is_link() {
+                                    span_kind.clone()
+                                } else {
+                                    SpanKind::Text
+                                };
+                                ScrollCalculator::append_run(
+                                    &mut cur_spans,
+                                    &mut cur_kinds,
+                                    s.style,
+                                    kind_for_space,
+                                    grapheme.as_str(),
+                                );
+                                cur_len += space_width;
+                            } else {
+                                ScrollCalculator::push_emitted_line(
+                                    &mut cur_spans,
+                                    &mut cur_kinds,
+                                    &mut out_lines,
+                                    &mut out_metadata,
+                                );
+                                emitted_any = true;
+                                cur_len = 0;
+                            }
                         }
 
-                        if cur_len + space_width <= width {
-                            let kind_for_space = if span_kind.is_link() {
-                                span_kind.clone()
-                            } else {
-                                SpanKind::Text
-                            };
-                            append_run(
-                                &mut cur_spans,
-                                &mut cur_kinds,
-                                s.style,
-                                kind_for_space,
-                                grapheme,
-                            );
-                            cur_len += space_width;
-                        } else {
-                            Self::push_emitted_line(
-                                &mut cur_spans,
-                                &mut cur_kinds,
-                                &mut out_lines,
-                                &mut out_metadata,
-                            );
-                            emitted_any = true;
-                            cur_len = 0;
-                        }
-                        continue;
-                    } else {
-                        let grapheme_width = UnicodeWidthStr::width(grapheme);
-                        word_segs.push((
-                            grapheme.to_string(),
-                            grapheme_width,
-                            s.style,
-                            span_kind.clone(),
-                        ));
-                        word_len += grapheme_width;
+                        start = i + ch.len_utf8();
                     }
+                }
+
+                // Trailing word at end of span
+                if start < content.len() {
+                    let word = &content[start..];
+                    ScrollCalculator::process_word(
+                        word,
+                        s.style,
+                        &span_kind,
+                        &mut cur_spans,
+                        &mut cur_kinds,
+                        &mut out_lines,
+                        &mut out_metadata,
+                        &mut cur_len,
+                        &mut emitted_any,
+                        width,
+                    );
                 }
             }
 
-            flush_word(
-                &mut cur_spans,
-                &mut cur_kinds,
-                &mut out_lines,
-                &mut out_metadata,
-                &mut cur_len,
-                &mut emitted_any,
-                &mut word_segs,
-                &mut word_len,
-            );
-
             if !cur_spans.is_empty() {
-                Self::push_emitted_line(
+                ScrollCalculator::push_emitted_line(
                     &mut cur_spans,
                     &mut cur_kinds,
                     &mut out_lines,

@@ -536,33 +536,24 @@ impl ScrollCalculator {
         max_index: usize,
         terminal_width: Option<usize>,
     ) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        for (i, msg) in messages.iter().enumerate() {
-            if i > max_index {
-                break;
-            }
-            let rendered = if markdown_enabled {
-                let cfg = crate::ui::markdown::MessageRenderConfig::markdown(syntax_enabled)
-                    .with_terminal_width(
-                        terminal_width,
-                        crate::ui::layout::TableOverflowPolicy::WrapCells,
-                    );
-                crate::ui::markdown::render_message_with_config(msg, theme, cfg).into_rendered()
-            } else {
-                // Route plain text through the layout engine to apply width-aware wrapping
-                let layout = crate::ui::layout::LayoutEngine::layout_plain_text(
-                    &VecDeque::from([msg.clone()]),
-                    theme,
-                    terminal_width,
-                    syntax_enabled,
-                );
-                crate::ui::markdown::RenderedMessage {
-                    lines: layout.lines,
-                }
-            };
-            lines.extend(rendered.lines);
+        if messages.is_empty() {
+            return Vec::new();
         }
-        lines
+
+        let inclusive_end = max_index.min(messages.len().saturating_sub(1));
+        let mut subset = VecDeque::with_capacity(inclusive_end + 1);
+        for msg in messages.iter().take(inclusive_end + 1) {
+            subset.push_back(msg.clone());
+        }
+
+        let cfg = crate::ui::layout::LayoutConfig {
+            width: terminal_width,
+            markdown_enabled,
+            syntax_enabled,
+            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+            user_display_name: None,
+        };
+        crate::ui::layout::LayoutEngine::layout_messages(&subset, theme, &cfg).lines
     }
 
     /// Calculate how many wrapped lines the given lines will take
@@ -1246,10 +1237,11 @@ mod tests {
         let scroll_line_count = display_lines.len();
 
         // Now render using markdown with the same terminal width
-        let cfg = crate::ui::markdown::MessageRenderConfig::markdown(true).with_terminal_width(
-            Some(terminal_width as usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-        );
+        let cfg = crate::ui::markdown::MessageRenderConfig::markdown(true, true)
+            .with_terminal_width(
+                Some(terminal_width as usize),
+                crate::ui::layout::TableOverflowPolicy::WrapCells,
+            );
         let rendered = crate::ui::markdown::render_message_with_config(&messages[0], &theme, cfg)
             .into_rendered();
         let rendered_line_count = rendered.lines.len();

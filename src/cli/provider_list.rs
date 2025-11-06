@@ -63,7 +63,7 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
             content,
         },
         &monochrome_theme,
-        MessageRenderConfig::markdown(true)
+        MessageRenderConfig::markdown(true, true)
             .with_terminal_width(terminal_width, TableOverflowPolicy::WrapCells),
     );
 

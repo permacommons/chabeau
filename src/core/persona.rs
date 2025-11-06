@@ -469,14 +469,14 @@ fn test_message_rendering_with_persona_display_name() {
     };
 
     // Test with default "You:"
-    let config_default = MessageRenderConfig::plain();
+    let config_default = MessageRenderConfig::markdown(false, false);
     let rendered_default = render_message_with_config(&message, &theme, config_default);
     let first_line_default = rendered_default.lines.first().unwrap().to_string();
     assert!(first_line_default.starts_with("You: "));
 
     // Test with persona display name
-    let config_persona =
-        MessageRenderConfig::plain().with_user_display_name(Some("Alice".to_string()));
+    let config_persona = MessageRenderConfig::markdown(false, false)
+        .with_user_display_name(Some("Alice".to_string()));
     let rendered_persona = render_message_with_config(&message, &theme, config_persona);
     let first_line_persona = rendered_persona.lines.first().unwrap().to_string();
     assert!(first_line_persona.starts_with("Alice: "));

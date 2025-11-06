@@ -1,6 +1,5 @@
 #![allow(clippy::items_after_test_module)]
 use crate::core::message::{self, AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
-use crate::ui::layout::MessageLineSpan;
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -54,7 +53,7 @@ pub fn render_message_markdown_details_with_policy_and_user_name(
     policy: crate::ui::layout::TableOverflowPolicy,
     user_display_name: Option<&str>,
 ) -> RenderedMessageDetails {
-    let cfg = MessageRenderConfig::markdown(syntax_enabled)
+    let cfg = MessageRenderConfig::markdown(true, syntax_enabled)
         .with_span_metadata()
         .with_terminal_width(terminal_width, policy)
         .with_user_display_name(user_display_name.map(|s| s.to_string()));
@@ -102,25 +101,25 @@ pub struct MessageRenderConfig {
 }
 
 impl MessageRenderConfig {
-    pub fn markdown(syntax_highlighting: bool) -> Self {
-        Self {
-            markdown: true,
-            collect_span_metadata: false,
-            syntax_highlighting,
-            terminal_width: None,
-            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
-            user_display_name: None,
-        }
-    }
-
-    pub fn plain() -> Self {
-        Self {
-            markdown: false,
-            collect_span_metadata: false,
-            syntax_highlighting: false,
-            terminal_width: None,
-            table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
-            user_display_name: None,
+    pub fn markdown(markdown_enabled: bool, syntax_highlighting: bool) -> Self {
+        if markdown_enabled {
+            Self {
+                markdown: true,
+                collect_span_metadata: false,
+                syntax_highlighting,
+                terminal_width: None,
+                table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+                user_display_name: None,
+            }
+        } else {
+            Self {
+                markdown: false,
+                collect_span_metadata: false,
+                syntax_highlighting: false,
+                terminal_width: None,
+                table_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
+                user_display_name: None,
+            }
         }
     }
 
@@ -167,7 +166,7 @@ pub fn render_message_with_config(
     config: MessageRenderConfig,
 ) -> RenderedMessageDetails {
     let role = RoleKind::from_message(msg);
-    let (lines, ranges, metadata) = if config.markdown {
+    let (mut lines, ranges, mut metadata) = if config.markdown {
         let renderer_config = MarkdownRendererConfig {
             collect_span_metadata: config.collect_span_metadata,
             syntax_highlighting: config.syntax_highlighting,
@@ -187,6 +186,27 @@ pub fn render_message_with_config(
             config.user_display_name.as_deref(),
         )
     };
+    if !config.markdown {
+        if let Some(width) = config.terminal_width {
+            let width = width.min(u16::MAX as usize) as u16;
+            let (wrapped_lines, wrapped_metadata) =
+                crate::utils::scroll::ScrollCalculator::prewrap_lines_with_metadata(
+                    &lines,
+                    if config.collect_span_metadata {
+                        Some(&metadata)
+                    } else {
+                        None
+                    },
+                    width,
+                );
+            lines = wrapped_lines;
+            if config.collect_span_metadata {
+                metadata = wrapped_metadata;
+            } else {
+                metadata = Vec::new();
+            }
+        }
+    }
     RenderedMessageDetails {
         lines,
         codeblock_ranges: ranges,
@@ -955,7 +975,7 @@ mod tests {
         syntax_enabled: bool,
         width: Option<usize>,
     ) -> super::RenderedMessage {
-        let cfg = MessageRenderConfig::markdown(syntax_enabled)
+        let cfg = MessageRenderConfig::markdown(true, syntax_enabled)
             .with_terminal_width(width, crate::ui::layout::TableOverflowPolicy::WrapCells);
         render_message_with_config(message, theme, cfg).into_rendered()
     }
@@ -2801,25 +2821,10 @@ pub fn build_markdown_display_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for msg in messages {
-        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::markdown(true))
-            .into_rendered();
+        let rendered =
+            render_message_with_config(msg, theme, MessageRenderConfig::markdown(true, true))
+                .into_rendered();
         lines.extend(rendered.lines);
     }
     lines
-}
-
-pub fn build_plain_display_lines_with_spans(
-    messages: &VecDeque<Message>,
-    theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<MessageLineSpan>) {
-    let mut lines = Vec::new();
-    let mut spans = Vec::with_capacity(messages.len());
-    for msg in messages {
-        let start = lines.len();
-        let rendered = render_message_with_config(msg, theme, MessageRenderConfig::plain());
-        let len = rendered.lines.len();
-        lines.extend(rendered.lines);
-        spans.push(MessageLineSpan { start, len });
-    }
-    (lines, spans)
 }

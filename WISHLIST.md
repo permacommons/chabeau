@@ -28,22 +28,6 @@ Items are removed when completed.
 
 ### Medium priority
 
-1. Height/scroll DRYing across renderer and chat loop [PARTIAL]
-- Rationale:
-  - Impact: Eliminates duplicated height/scroll math, reducing off-by-one errors and stabilizing navigation across views.
-  - Effort: Moderate. Centralizing calculation and reusing helpers requires coordinated refactors but limited surface changes.
-  - Risk: Moderate. Behavior shifts in clamping and scroll positioning; mitigate with targeted tests around boundary cases.
-- Actions:
-  - Standardize available-height computation by delegating renderer logic currently at [ui()](src/ui/renderer.rs:71), [ui()](src/ui/renderer.rs:75), [ui()](src/ui/renderer.rs:81) to [ConversationController.calculate_available_height()](src/core/app/conversation.rs:307), removing local calculations.
-  - Replace ad hoc scroll math with helpers across layers, preferring [ConversationController.update_scroll_position()](src/core/app/conversation.rs:272), [ConversationController.scroll_index_into_view()](src/core/app/conversation.rs:300), and [ScrollCalculator.scroll_offset_to_line_start()](src/utils/scroll.rs:493) plus [ScrollCalculator.calculate_wrapped_line_count()](src/utils/scroll.rs:568).
-  - Continue standardizing on the conversation controller helpers across renderer and chat loop [OPEN].
-- References:
-  - [ui()](src/ui/renderer.rs:71), [ui()](src/ui/renderer.rs:75), [ui()](src/ui/renderer.rs:81)
-  - [ConversationController.update_scroll_position()](src/core/app/conversation.rs:272)
-  - [ConversationController.calculate_scroll_to_message()](src/core/app/conversation.rs:283)
-  - [ConversationController.scroll_index_into_view()](src/core/app/conversation.rs:300)
-  - [ConversationController.calculate_available_height()](src/core/app/conversation.rs:307)
-  - [ScrollCalculator.scroll_offset_to_line_start()](src/utils/scroll.rs:493), [ScrollCalculator.calculate_wrapped_line_count()](src/utils/scroll.rs:568), [ScrollCalculator.calculate_scroll_to_message_with_flags()](src/utils/scroll.rs:667)
 
 2. Consolidate plain vs markdown rendering path selection [PARTIAL]
 - Rationale:

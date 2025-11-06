@@ -68,15 +68,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     };
 
     // Calculate scroll position using the prewrapped lines (exact render)
-    let available_height = chunks[0].height.saturating_sub(1); // Account for title
-    let total_wrapped_lines = lines.len() as u16;
-
-    // Always use the app's scroll_offset, but ensure it's within bounds
-    let max_offset = if total_wrapped_lines > available_height {
-        total_wrapped_lines.saturating_sub(available_height)
-    } else {
-        0
+    let available_height = {
+        // Delegate available-height computation to the conversation controller
+        let conversation = app.conversation();
+        conversation.calculate_available_height(f.area().height, input_area_height)
     };
+
+    // Compute maximum scroll via UiState helper
+    let max_offset = app
+        .ui
+        .calculate_max_scroll_offset(available_height, chunks[0].width);
+
     // Clamp the user-controlled scroll offset
     let scroll_offset = app.ui.scroll_offset.min(max_offset);
 

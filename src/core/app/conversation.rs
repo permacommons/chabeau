@@ -255,18 +255,8 @@ impl<'a> ConversationController<'a> {
             self.session.has_received_assistant_message = true;
         }
 
-        let total_wrapped_lines = {
-            let lines = self.ui.get_prewrapped_lines_cached(terminal_width);
-            lines.len() as u16
-        };
-
-        if self.ui.auto_scroll {
-            if total_wrapped_lines > available_height {
-                self.ui.scroll_offset = total_wrapped_lines.saturating_sub(available_height);
-            } else {
-                self.ui.scroll_offset = 0;
-            }
-        }
+        // Delegate scroll math to the centralized helper
+        self.update_scroll_position(available_height, terminal_width);
     }
 
     pub fn update_scroll_position(&mut self, available_height: u16, terminal_width: u16) {

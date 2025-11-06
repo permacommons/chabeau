@@ -82,92 +82,47 @@ impl LayoutEngine {
         theme: &Theme,
         cfg: &LayoutConfig,
     ) -> Layout {
-        if cfg.markdown_enabled {
-            // Route through the existing markdown renderer with explicit width when provided.
-            let mut lines = Vec::new();
-            let mut span_metadata = Vec::new();
-            let mut message_spans = Vec::with_capacity(messages.len());
-            let mut codeblock_ranges = Vec::new();
-            for msg in messages {
-                let start = lines.len();
-                let rendered =
-                    crate::ui::markdown::render_message_markdown_details_with_policy_and_user_name(
-                        msg,
-                        theme,
-                        cfg.syntax_enabled,
-                        cfg.width,
-                        cfg.table_overflow_policy,
-                        cfg.user_display_name.as_deref(),
-                    );
-                let crate::ui::markdown::RenderedMessageDetails {
-                    lines: mut msg_lines,
-                    codeblock_ranges: msg_ranges,
-                    span_metadata: msg_meta,
-                } = rendered;
-                let msg_metadata = msg_meta.unwrap_or_else(|| {
-                    msg_lines
-                        .iter()
-                        .map(|line| vec![SpanKind::Text; line.spans.len()])
-                        .collect()
-                });
-                let len = msg_lines.len();
-                span_metadata.extend(msg_metadata);
-                lines.append(&mut msg_lines);
-                message_spans.push(MessageLineSpan { start, len });
-                if !message::is_app_message_role(&msg.role) {
-                    for (offset, cb_len, content) in msg_ranges {
-                        codeblock_ranges.push((start + offset, cb_len, content));
-                    }
+        let mut lines = Vec::new();
+        let mut span_metadata = Vec::new();
+        let mut message_spans = Vec::with_capacity(messages.len());
+        let mut codeblock_ranges = Vec::new();
+
+        for msg in messages {
+            let start = lines.len();
+            let render_cfg = crate::ui::markdown::MessageRenderConfig::markdown(
+                cfg.markdown_enabled,
+                cfg.syntax_enabled,
+            )
+            .with_span_metadata()
+            .with_terminal_width(cfg.width, cfg.table_overflow_policy)
+            .with_user_display_name(cfg.user_display_name.clone());
+            let crate::ui::markdown::RenderedMessageDetails {
+                lines: mut msg_lines,
+                codeblock_ranges: msg_ranges,
+                span_metadata: msg_meta,
+            } = crate::ui::markdown::render_message_with_config(msg, theme, render_cfg);
+            let msg_metadata = msg_meta.unwrap_or_else(|| {
+                msg_lines
+                    .iter()
+                    .map(|line| vec![SpanKind::Text; line.spans.len()])
+                    .collect()
+            });
+            let len = msg_lines.len();
+            span_metadata.extend(msg_metadata);
+            lines.append(&mut msg_lines);
+            message_spans.push(MessageLineSpan { start, len });
+            if cfg.markdown_enabled && !message::is_app_message_role(&msg.role) {
+                for (offset, cb_len, content) in msg_ranges {
+                    codeblock_ranges.push((start + offset, cb_len, content));
                 }
             }
-            Layout {
-                lines,
-                span_metadata,
-                message_spans,
-                codeblock_ranges,
-            }
-        } else {
-            // Plain text fallback (no markdown). Build base lines/spans, then apply optional
-            // width-aware wrapping per message so the layout stays aligned with rendering.
-            let (base_lines, base_spans) =
-                crate::ui::markdown::build_plain_display_lines_with_spans(messages, theme);
-            let base_metadata: Vec<Vec<SpanKind>> = base_lines
-                .iter()
-                .map(|line| vec![SpanKind::Text; line.spans.len()])
-                .collect();
-            if let Some(w) = cfg.width {
-                let mut lines: Vec<Line<'static>> = Vec::new();
-                let mut span_metadata: Vec<Vec<SpanKind>> = Vec::new();
-                let mut spans: Vec<MessageLineSpan> = Vec::with_capacity(base_spans.len());
-                for span in &base_spans {
-                    let slice = &base_lines[span.start..span.start + span.len];
-                    let slice_meta = &base_metadata[span.start..span.start + span.len];
-                    let (wrapped_lines, wrapped_meta) =
-                        crate::utils::scroll::ScrollCalculator::prewrap_lines_with_metadata(
-                            slice,
-                            Some(slice_meta),
-                            w as u16,
-                        );
-                    let start = lines.len();
-                    let len = wrapped_lines.len();
-                    lines.extend(wrapped_lines);
-                    span_metadata.extend(wrapped_meta);
-                    spans.push(MessageLineSpan { start, len });
-                }
-                Layout {
-                    lines,
-                    span_metadata,
-                    message_spans: spans,
-                    codeblock_ranges: Vec::new(),
-                }
-            } else {
-                Layout {
-                    lines: base_lines,
-                    span_metadata: base_metadata,
-                    message_spans: base_spans,
-                    codeblock_ranges: Vec::new(),
-                }
-            }
+        }
+
+        Layout {
+            lines,
+            span_metadata,
+            message_spans,
+            codeblock_ranges,
         }
     }
 }
@@ -210,9 +165,16 @@ mod tests {
         let layout = LayoutEngine::layout_plain_text(&messages, &theme, Some(10), false);
 
         assert_eq!(layout.lines.len(), layout.span_metadata.len());
+        let mut saw_prefix = false;
         for kinds in &layout.span_metadata {
-            assert!(kinds.iter().all(|k| k.is_text()));
+            for kind in kinds {
+                assert!(kind.is_text() || kind.is_prefix());
+                if kind.is_prefix() {
+                    saw_prefix = true;
+                }
+            }
         }
+        assert!(saw_prefix, "expected at least one prefix span kind");
     }
 
     #[test]

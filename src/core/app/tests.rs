@@ -298,10 +298,17 @@ fn prewrap_cache_updates_metadata_for_plain_text_last_message() {
     let updated_lines = app.get_prewrapped_lines_cached(width).clone();
     let updated_meta = app.get_prewrapped_span_metadata_cached(width).clone();
     assert_eq!(updated_lines.len(), updated_meta.len());
-    assert!(updated_meta
-        .iter()
-        .flat_map(|kinds| kinds.iter())
-        .all(|kind| kind.is_text()));
+    let mut saw_prefix = false;
+    for kind in updated_meta.iter().flat_map(|kinds| kinds.iter()) {
+        assert!(kind.is_text() || kind.is_prefix());
+        if kind.is_prefix() {
+            saw_prefix = true;
+        }
+    }
+    assert!(
+        saw_prefix,
+        "expected plain text metadata to include a prefix span"
+    );
 }
 
 #[test]

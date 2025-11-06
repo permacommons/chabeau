@@ -71,6 +71,11 @@ pub fn build_mode_aware_registry(
             Box::new(F4Handler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::F(4)),
+            Box::new(F4Handler),
+        )
+        .register_for_context(
             KeyContext::EditSelect,
             KeyPattern::simple(KeyCode::F(4)),
             Box::new(F4Handler),
@@ -278,6 +283,13 @@ pub fn build_mode_aware_registry(
             }),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::ctrl(KeyCode::Char('j')),
+            Box::new(CtrlJHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
@@ -310,6 +322,13 @@ pub fn build_mode_aware_registry(
             KeyContext::InPlaceEdit,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
+            Box::new(AltEnterHandler {
                 stream_service: stream_service.clone(),
             }),
         )

@@ -1,5 +1,6 @@
 use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
+use crate::core::message::ROLE_ASSISTANT;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
 use crate::ui::span::SpanKind;
@@ -11,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use std::borrow::Cow;
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     // Paint full-frame background based on theme to ensure readable contrast
@@ -136,52 +138,68 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ""
     };
 
-    let base_title = if app.ui.in_edit_select_mode() {
+    let base_title: Cow<'_, str> = if app.ui.in_edit_select_mode() {
         match app.ui.edit_select_target() {
             Some(EditSelectTarget::Assistant) => {
-                "Select assistant message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+                Cow::Borrowed(
+                    "Select assistant message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)",
+                )
             }
             _ => {
-                "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)"
+                Cow::Borrowed(
+                    "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)",
+                )
             }
         }
     } else if app.ui.in_block_select_mode() {
-        "Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)"
+        Cow::Borrowed("Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)")
     } else if app.picker_session().is_some() {
         // Show specific prompt for picker mode with global shortcuts
         match app.current_picker_mode() {
             Some(crate::core::app::PickerMode::Model) => {
-                "Select a model (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a model (Esc=cancel • Ctrl+C=quit)")
             }
             Some(crate::core::app::PickerMode::Provider) => {
-                "Select a provider (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a provider (Esc=cancel • Ctrl+C=quit)")
             }
             Some(crate::core::app::PickerMode::Theme) => {
-                "Select a theme (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a theme (Esc=cancel • Ctrl+C=quit)")
             }
             Some(crate::core::app::PickerMode::Character) => {
-                "Select a character (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a character (Esc=cancel • Ctrl+C=quit)")
             }
             Some(crate::core::app::PickerMode::Persona) => {
-                "Select a persona (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a persona (Esc=cancel • Ctrl+C=quit)")
             }
             Some(crate::core::app::PickerMode::Preset) => {
-                "Select a preset (Esc=cancel • Ctrl+C=quit)"
+                Cow::Borrowed("Select a preset (Esc=cancel • Ctrl+C=quit)")
             }
-            _ => "Make a selection (Esc=cancel • Ctrl+C=quit)",
+            _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
         }
     } else if app.ui.file_prompt().is_some() {
-        "Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)"
-    } else if app.ui.in_place_edit_index().is_some() {
-        "Edit in place: Enter=Apply • Esc=Cancel (no send)"
+        Cow::Borrowed("Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)")
+    } else if let Some(index) = app.ui.in_place_edit_index() {
+        let mut title = String::from("Edit in place: Enter=Apply • Esc=Cancel (no send)");
+        if app.ui.compose_mode {
+            if let Some(message) = app.ui.messages.get(index) {
+                if message.role == ROLE_ASSISTANT {
+                    title.push_str(" • F4: toggle compose mode");
+                }
+            }
+        }
+        Cow::Owned(title)
     } else if app.ui.is_editing_assistant_message() {
-        "Edit message"
+        if app.ui.compose_mode {
+            Cow::Owned(String::from("Edit message (F4: toggle compose mode)"))
+        } else {
+            Cow::Borrowed("Edit message")
+        }
     } else if app.ui.compose_mode {
-        "Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)"
+        Cow::Borrowed("Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)")
     } else if app.ui.is_streaming {
-        "Type a new message (Esc=interrupt • Ctrl+R=retry)"
+        Cow::Borrowed("Type a new message (Esc=interrupt • Ctrl+R=retry)")
     } else {
-        "Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)"
+        Cow::Borrowed("Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)")
     };
     // Build a styled title with theme styling on base title and indicator
     let input_title: Line = if indicator.is_empty() {

@@ -50,6 +50,7 @@ pub(super) fn handle_input_action(
         }
         AppAction::CompleteAssistantEdit { content } => {
             app.complete_assistant_edit(content);
+            update_scroll_after_command(app, ctx);
             None
         }
         _ => unreachable!("non-input action routed to input handler"),

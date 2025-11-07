@@ -71,6 +71,11 @@ pub fn build_mode_aware_registry(
             Box::new(F4Handler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::F(4)),
+            Box::new(F4Handler),
+        )
+        .register_for_context(
             KeyContext::EditSelect,
             KeyPattern::simple(KeyCode::F(4)),
             Box::new(F4Handler),
@@ -102,6 +107,11 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::Home),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Home),
             Box::new(NavigationHandler),
@@ -112,6 +122,11 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::End),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::End),
             Box::new(NavigationHandler),
@@ -122,12 +137,22 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::PageUp),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::PageUp),
             Box::new(NavigationHandler),
         )
         .register_for_context(
             KeyContext::Typing,
+            KeyPattern::simple(KeyCode::PageDown),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
+            KeyContext::InPlaceEdit,
             KeyPattern::simple(KeyCode::PageDown),
             Box::new(NavigationHandler),
         )
@@ -143,6 +168,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::Up),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Up),
             Box::new(ArrowKeyHandler),
@@ -153,6 +183,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::Down),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Down),
             Box::new(ArrowKeyHandler),
@@ -163,6 +198,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::Left),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Left),
             Box::new(ArrowKeyHandler),
@@ -173,6 +213,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::simple(KeyCode::Right),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::simple(KeyCode::Right),
             Box::new(ArrowKeyHandler),
@@ -183,6 +228,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::with_modifiers(KeyCode::Up, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Up, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
@@ -193,6 +243,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
@@ -203,12 +258,22 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::with_modifiers(KeyCode::Left, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
             KeyPattern::with_modifiers(KeyCode::Left, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
             KeyContext::Typing,
+            KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::InPlaceEdit,
             KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -278,6 +343,13 @@ pub fn build_mode_aware_registry(
             }),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::ctrl(KeyCode::Char('j')),
+            Box::new(CtrlJHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
@@ -310,6 +382,13 @@ pub fn build_mode_aware_registry(
             KeyContext::InPlaceEdit,
             KeyPattern::simple(KeyCode::Enter),
             Box::new(EnterHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
+            Box::new(AltEnterHandler {
                 stream_service: stream_service.clone(),
             }),
         )

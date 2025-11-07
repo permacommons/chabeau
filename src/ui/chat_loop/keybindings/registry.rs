@@ -198,25 +198,46 @@ impl ModeAwareRegistry {
                 }
                 false
             }
-            KeyContext::FilePrompt | KeyContext::InPlaceEdit => {
-                // In these modes, use blacklist approach - let tui-textarea handle most keys
-                // Only block keys that need special mode-specific handling
+            KeyContext::InPlaceEdit => {
+                // In in-place edit mode, keep navigation keys routed through handlers
                 match key.code {
-                    // Keys that must go through registry for special handling
-                    KeyCode::Esc => false,   // Cancel prompt/edit
-                    KeyCode::Enter => false, // Submit (needs special handling)
+                    // Navigation keys need custom wrapping logic
+                    KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown => false,
+                    KeyCode::Esc => false,
+                    KeyCode::Enter => false,
                     KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Block mode-switching shortcuts, allow text editing shortcuts
                         !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'x')
                     }
-                    KeyCode::F(4) => false, // F4 toggle compose mode
-                    // Alt+Enter needs special handling in FilePrompt for overwrite
+                    KeyCode::F(4) => false,
                     _ if key.modifiers.contains(KeyModifiers::ALT)
                         && key.code == KeyCode::Enter =>
                     {
                         false
                     }
-                    // Everything else goes to tui-textarea (including all text editing keys)
+                    _ => true,
+                }
+            }
+            KeyContext::FilePrompt => {
+                // In file prompt mode, let tui-textarea handle most keys
+                match key.code {
+                    KeyCode::Esc => false,
+                    KeyCode::Enter => false,
+                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'x')
+                    }
+                    KeyCode::F(4) => false,
+                    _ if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.code == KeyCode::Enter =>
+                    {
+                        false
+                    }
                     _ => true,
                 }
             }

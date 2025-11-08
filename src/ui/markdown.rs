@@ -522,33 +522,7 @@ impl<'a> MarkdownRenderer<'a> {
                         self.pending_list_indent = None;
                     }
                     TagEnd::CodeBlock => {
-                        let list_indent = self.current_list_indent_width();
-                        if self.config.collect_span_metadata {
-                            flush_code_block_buffer(
-                                &mut self.code_block_lines,
-                                self.config.syntax_highlighting,
-                                self.in_code_block.as_deref(),
-                                self.theme,
-                                &mut self.lines,
-                                Some(&mut self.span_metadata),
-                                &mut self.ranges,
-                                list_indent,
-                            );
-                        } else {
-                            flush_code_block_buffer(
-                                &mut self.code_block_lines,
-                                self.config.syntax_highlighting,
-                                self.in_code_block.as_deref(),
-                                self.theme,
-                                &mut self.lines,
-                                None,
-                                &mut self.ranges,
-                                list_indent,
-                            );
-                        }
-                        self.push_empty_line();
-                        self.in_code_block = None;
-                        self.pending_list_indent = (list_indent > 0).then_some(list_indent);
+                        self.finalize_code_block();
                     }
                     TagEnd::Emphasis
                     | TagEnd::Strong
@@ -765,6 +739,28 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn push_empty_line(&mut self) {
         self.push_line(Vec::new(), Vec::new());
+    }
+
+    fn finalize_code_block(&mut self) {
+        let list_indent = self.current_list_indent_width();
+        let metadata = if self.config.collect_span_metadata {
+            Some(&mut self.span_metadata)
+        } else {
+            None
+        };
+        flush_code_block_buffer(
+            &mut self.code_block_lines,
+            self.config.syntax_highlighting,
+            self.in_code_block.as_deref(),
+            self.theme,
+            &mut self.lines,
+            metadata,
+            &mut self.ranges,
+            list_indent,
+        );
+        self.push_empty_line();
+        self.in_code_block = None;
+        self.pending_list_indent = (list_indent > 0).then_some(list_indent);
     }
 
     fn current_list_indent_width(&self) -> usize {

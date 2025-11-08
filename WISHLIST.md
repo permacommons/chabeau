@@ -29,22 +29,6 @@ Items are removed when completed.
 ### Medium priority
 
 
-3. Reduce duplication in src/ui/markdown.rs for code block flushing [OPEN]
-- Rationale:
-  - Impact: Single source of truth for code-block termination prevents subtle newline/trailing span inconsistencies and highlight glitches.
-  - Effort: Low–Moderate. Replace multiple flush points and route through a shared function.
-  - Risk: Low. Localized change; verify against known codeblock edge cases.
-- Actions:
-  - Route all code-block terminations through [flush_code_block_buffer()](src/ui/markdown.rs:2661), pruning local flush logic in [Tag::CodeBlock](src/ui/markdown.rs:401), [TagEnd::CodeBlock](src/ui/markdown.rs:504), and [TagEnd::CodeBlock](src/ui/markdown.rs:518).
-  - Align readers/builders to consume unified flush semantics by reviewing range/content derivations in [compute_codeblock_ranges()](src/ui/markdown.rs:759), [compute_codeblock_ranges_with_width_and_policy()](src/ui/markdown.rs:829), and [compute_codeblock_contents_with_lang()](src/ui/markdown.rs:884).
-- References:
-  - [Tag::CodeBlock](src/ui/markdown.rs:401)
-  - [TagEnd::CodeBlock](src/ui/markdown.rs:504), [TagEnd::CodeBlock](src/ui/markdown.rs:518)
-  - [flush_code_block_buffer()](src/ui/markdown.rs:2661)
-  - [compute_codeblock_ranges()](src/ui/markdown.rs:759)
-  - [compute_codeblock_ranges_with_width_and_policy()](src/ui/markdown.rs:829)
-  - [compute_codeblock_contents_with_lang()](src/ui/markdown.rs:884)
-
 ### Low priority
 
 - Centralize help text — [OPEN]

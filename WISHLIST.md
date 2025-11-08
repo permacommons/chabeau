@@ -26,9 +26,6 @@ Items are removed when completed.
   - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
   - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
 
-### Medium priority
-
-
 ### Low priority
 
 - Centralize help text — [OPEN]

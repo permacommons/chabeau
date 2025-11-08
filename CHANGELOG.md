@@ -4,21 +4,21 @@
 
 ### Added
 - Added `chabeau say` command for single-turn, TUI-less chat.
+- Added assistant message editing (Ctrl+X) to revise or truncate responses without resending.
 - Added `/refine` command for refining the last response.
 - Added `/clear` command to clear the conversation transcript.
 - Added printing of a formatted, monochrome transcript on Ctrl+D exit.
-- Added assistant message editing (Ctrl+X) to revise or truncate responses without resending.
+- Added focus-driven navigation with visible focus cues so Tab/Shift+Tab can cycle between input, transcript, and completions.
+- Enabled compose-mode shortcuts while editing existing messages to keep long-form drafting controls consistent.
 
 ### Changed
 - Re-formatted the provider list table (`chabeau -p`) into a cleaner, more readable layout.
-- Updated the architecture overview in `README.md` to better reflect the current design.
-- Clarified the Ctrl+D exit behavior in the built-in help.
-- Improved performance by caching keyring lookups to reduce redundant authentication checks.
+- Expanded compose mode's input area to provide more vertical space and better layout persistence during drafting.
 
 ### Fixed
 - Fixed an issue where `chabeau set` commands did not validate their inputs, allowing invalid values to be saved.
 - Optimized keyring lookups by deferring provider enumeration until necessary, improving startup time.
-- Removed unnecessary logging during keyring lookups to reduce noise in the logs.
+- Resolved multiple soft-wrap navigation bugs so wrapped lines, cursor tracking, and in-place edits behave consistently.
 
 ## 0.5.1
 

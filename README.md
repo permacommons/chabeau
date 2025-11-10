@@ -361,6 +361,8 @@ Once set, press Ctrl+T in the TUI to launch the external editor.
 
 ## Architecture Overview
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a high-level walkthrough aligned with commit 5d81609a33ce1abeef3ccb976b5387c474221511.
+
 Chabeau uses a modular design with focused components:
 
 - `main.rs` – Entry point

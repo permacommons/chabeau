@@ -455,6 +455,24 @@ Chabeau uses a modular design with focused components:
 
 ## Development
 
+### Building from Source
+
+To build chabeau from source, you'll need the following system dependencies installed:
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt-get install -y libdbus-1-dev pkg-config
+```
+
+These dependencies are required for:
+- `libdbus-1-dev` - DBus integration for secure keyring storage
+- `pkg-config` - Finding system libraries during the build process
+
+Once dependencies are installed, build with:
+```bash
+cargo build
+```
+
 ### Running Tests
 ```bash
 cargo test                    # All tests

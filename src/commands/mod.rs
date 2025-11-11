@@ -12,6 +12,7 @@ use std::io::{BufWriter, Write};
 
 pub enum CommandResult {
     Continue,
+    ContinueWithTranscriptFocus,
     ProcessAsMessage(String),
     OpenModelPicker,
     OpenProviderPicker,
@@ -48,7 +49,7 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
     }
     app.conversation()
         .add_app_message(AppMessageKind::Info, help_md);
-    CommandResult::Continue
+    CommandResult::ContinueWithTranscriptFocus
 }
 
 pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {
@@ -535,7 +536,7 @@ mod tests {
     fn help_command_includes_registry_metadata() {
         let mut app = create_test_app();
         let result = process_input(&mut app, "/help");
-        assert!(matches!(result, CommandResult::Continue));
+        assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
         let last_message = app.ui.messages.back().expect("help message");
         assert!(last_message
             .content

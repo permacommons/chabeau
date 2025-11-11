@@ -12,6 +12,7 @@ use std::io::{BufWriter, Write};
 
 pub enum CommandResult {
     Continue,
+    ContinueWithTranscriptFocus,
     ProcessAsMessage(String),
     OpenModelPicker,
     OpenProviderPicker,
@@ -48,7 +49,7 @@ pub(super) fn handle_help(app: &mut App, _invocation: CommandInvocation<'_>) -> 
     }
     app.conversation()
         .add_app_message(AppMessageKind::Info, help_md);
-    CommandResult::Continue
+    CommandResult::ContinueWithTranscriptFocus
 }
 
 pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) -> CommandResult {

@@ -72,6 +72,12 @@ fn handle_process_command(
             update_scroll_after_command(app, ctx);
             None
         }
+        CommandResult::ContinueWithTranscriptFocus => {
+            app.conversation().show_character_greeting_if_needed();
+            app.ui.focus_transcript();
+            update_scroll_after_command(app, ctx);
+            None
+        }
         CommandResult::ProcessAsMessage(message) => {
             Some(streaming::spawn_stream_for_message(app, message, ctx))
         }

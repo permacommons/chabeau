@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.6.0
 
 ### Added
 - Added `chabeau say` command for single-turn, TUI-less chat.

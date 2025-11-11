@@ -182,4 +182,22 @@ mod tests {
 
         assert!(app.picker_session().is_some());
     }
+
+    #[test]
+    fn help_command_focuses_transcript() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.ui.focus_input();
+
+        let cmd = handle_input_action(
+            &mut app,
+            AppAction::ProcessCommand {
+                input: "/help".into(),
+            },
+            ctx,
+        );
+
+        assert!(cmd.is_none());
+        assert!(app.ui.is_transcript_focused());
+    }
 }

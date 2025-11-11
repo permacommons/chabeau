@@ -536,7 +536,7 @@ mod tests {
     fn help_command_includes_registry_metadata() {
         let mut app = create_test_app();
         let result = process_input(&mut app, "/help");
-        assert!(matches!(result, CommandResult::Continue));
+        assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
         let last_message = app.ui.messages.back().expect("help message");
         assert!(last_message
             .content

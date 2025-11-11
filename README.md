@@ -4,13 +4,10 @@
 
 Chabeau is a full-screen terminal chat interface that connects to various AI APIs for real-time conversations. Chabeau brings the convenience of modern chat UIs to the terminal with a focus on speed, ergonomics, and sensible defaults. It is not a coding agent.
 
-**See several of Chabeau's features in action in [this short video](https://permacommons.org/videos/chabeau-0.4.0.mp4).**
-
 ![Our friendly mascot](chabeau-mascot-small.png)
 
 ## Table of Contents
-- [Overview](#overview)
-- [Feature Highlights](#feature-highlights)
+- [Features](#features)
 - [Getting Started](#getting-started)
   - [Install](#install)
   - [Authenticate](#authenticate)
@@ -26,7 +23,22 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - [Development](#development)
 - [License](#license)
 
-## Feature Highlights
+## Features
+
+### See it in action
+
+- [Message retry](https://permacommons.org/videos/chabeau-0.6.0/retry.mp4)
+- [Presets](https://permacommons.org/videos/chabeau-0.6.0/preset-short.mp4)
+- [Themes](https://permacommons.org/videos/chabeau-0.6.0/themes.mp4)
+- [User message editing](https://permacommons.org/videos/chabeau-0.6.0/user-edit.mp4)
+- [Assistant response editing](https://permacommons.org/videos/chabeau-0.6.0/assistant-edit.mp4)
+- [Character cards](https://permacommons.org/videos/chabeau-0.6.0/character.mp4)
+- [In-place refinement](https://permacommons.org/videos/chabeau-0.6.0/refine.mp4)
+- [Syntax highlighting](https://permacommons.org/videos/chabeau-0.6.0/syntax.mp4)
+- [Code block selection](https://permacommons.org/videos/chabeau-0.6.0/codeblock.mp4)
+- [Complex tables](https://permacommons.org/videos/chabeau-0.6.0/table.mp4)
+
+### Full feature list
 
 - Full-screen terminal UI with real-time streaming responses
 - Markdown rendering in the chat area (headings, lists, quotes, tables, callouts, superscript/subscript, inline/fenced code) with clickable OSC 8 hyperlinks

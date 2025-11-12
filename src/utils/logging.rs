@@ -1,4 +1,4 @@
-use crate::core::message::{self, Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
 use chrono::Utc;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -128,12 +128,6 @@ impl LoggingState {
                     writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
-            } else if message::is_app_message_role(&msg.role) {
-                // Write app messages as-is
-                for line in msg.content.lines() {
-                    writeln!(file, "{line}")?;
-                }
-                writeln!(file)?; // Empty line for spacing
             } else if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
                 // Write assistant messages as-is (no prefix)
                 for line in msg.content.lines() {
@@ -141,6 +135,7 @@ impl LoggingState {
                 }
                 writeln!(file)?; // Empty line for spacing
             }
+            // App messages are intentionally skipped to maintain consistency with dumps
         }
 
         file.flush()?;

@@ -932,6 +932,73 @@ mod tests {
     }
 
     #[test]
+    fn log_rewrite_excludes_app_messages() {
+        let mut app = create_test_app();
+
+        let temp_dir = tempdir().expect("failed to create temp dir for log");
+        let log_path = temp_dir.path().join("conversation.log");
+        let log_path_string = log_path.to_string_lossy().into_owned();
+        app.session
+            .logging
+            .set_log_file(log_path_string)
+            .expect("failed to enable logging");
+
+        // Add messages including an app message
+        {
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
+            conversation.add_user_message("Hello".to_string());
+        }
+
+        app.ui
+            .messages
+            .push_back(create_test_message(ROLE_ASSISTANT, "Hi there!"));
+
+        // Add an app message
+        {
+            let mut conversation = ConversationController::new(
+                &mut app.session,
+                &mut app.ui,
+                &app.persona_manager,
+                &app.preset_manager,
+            );
+            conversation.add_app_message(
+                AppMessageKind::Warning,
+                "This is a warning message".to_string(),
+            );
+        }
+
+        // Trigger a log rewrite (simulating an edit/retry)
+        let user_display_name = app.persona_manager.get_display_name();
+        app.session
+            .logging
+            .rewrite_log_without_last_response(&app.ui.messages, &user_display_name)
+            .expect("failed to rewrite log");
+
+        let contents = fs::read_to_string(&log_path).expect("failed to read log file");
+
+        // Verify conversation messages are in the log
+        assert!(
+            contents.contains("You: Hello"),
+            "Log should contain user message, contents: {contents}"
+        );
+        assert!(
+            contents.contains("Hi there!"),
+            "Log should contain assistant message, contents: {contents}"
+        );
+
+        // Verify app message is NOT in the log
+        assert!(
+            !contents.contains("This is a warning message"),
+            "Log should NOT contain app messages, contents: {contents}"
+        );
+    }
+
+    #[test]
     fn test_add_user_message_with_character_no_post_history() {
         use crate::character::card::{CharacterCard, CharacterData};
 

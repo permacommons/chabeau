@@ -1223,5 +1223,6 @@ fn compute_theme_signature(theme: &crate::ui::theme::Theme) -> u64 {
     format!("{:?}", theme.app_message_style(AppMessageKind::Info)).hash(&mut h);
     format!("{:?}", theme.app_message_style(AppMessageKind::Warning)).hash(&mut h);
     format!("{:?}", theme.app_message_style(AppMessageKind::Error)).hash(&mut h);
+    format!("{:?}", theme.app_message_style(AppMessageKind::Log)).hash(&mut h);
     h.finish()
 }

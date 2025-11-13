@@ -464,7 +464,8 @@ mod tests {
             .expect("log message");
 
         let contents = std::fs::read_to_string(&log_path).expect("read log file");
-        assert!(contents.contains("## Logging started"));
+        // Note: "## Logging started" is now an app message added by the command handler,
+        // not written directly by initialize_logging
         assert!(contents.contains("Hello from startup"));
     }
 

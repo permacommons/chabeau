@@ -1,5 +1,4 @@
-use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
-use chrono::Utc;
+use crate::core::message::{Message, ROLE_APP_LOG, ROLE_ASSISTANT, ROLE_USER};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -26,10 +25,6 @@ impl LoggingState {
         self.file_path = Some(path.clone());
         self.is_active = true;
 
-        // Log timestamp when starting
-        let timestamp = Utc::now().to_rfc3339();
-        self.log_message(&format!("## Logging started at {}", timestamp))?;
-
         Ok(format!("Logging enabled to: {path}"))
     }
 
@@ -38,14 +33,8 @@ impl LoggingState {
             Some(path) => {
                 self.is_active = !self.is_active;
                 if self.is_active {
-                    // Log timestamp when resuming
-                    let timestamp = Utc::now().to_rfc3339();
-                    self.write_to_log(&format!("## Logging resumed at {}", timestamp))?;
                     Ok(format!("Logging resumed to: {path}"))
                 } else {
-                    // Log timestamp when pausing
-                    let timestamp = Utc::now().to_rfc3339();
-                    self.write_to_log(&format!("## Logging paused at {}", timestamp))?;
                     Ok(format!("Logging paused (file: {path})"))
                 }
             }
@@ -80,6 +69,10 @@ impl LoggingState {
 
         file.flush()?;
         Ok(())
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.is_active
     }
 
     pub fn get_status_string(&self) -> String {
@@ -134,8 +127,14 @@ impl LoggingState {
                     writeln!(file, "{line}")?;
                 }
                 writeln!(file)?; // Empty line for spacing
+            } else if msg.role == ROLE_APP_LOG {
+                // Write log-type app messages with ## prefix
+                for line in format!("## {}", msg.content).lines() {
+                    writeln!(file, "{line}")?;
+                }
+                writeln!(file)?; // Empty line for spacing
             }
-            // App messages are intentionally skipped to maintain consistency with dumps
+            // Other app messages (info, warning, error) are intentionally skipped to maintain consistency with dumps
         }
 
         file.flush()?;

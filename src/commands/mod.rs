@@ -66,6 +66,18 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
     match invocation.args_len() {
         0 => match app.session.logging.toggle_logging() {
             Ok(message) => {
+                // Add a log message to the transcript showing logging paused/resumed
+                let timestamp = chrono::Utc::now().to_rfc3339();
+                let is_active = app.session.logging.is_active();
+                let log_message = if is_active {
+                    format!("Logging resumed at {}", timestamp)
+                } else {
+                    format!("Logging paused at {}", timestamp)
+                };
+                app.conversation().add_app_message(
+                    crate::core::message::AppMessageKind::Log,
+                    log_message
+                );
                 app.conversation().set_status(message);
                 CommandResult::Continue
             }
@@ -78,6 +90,13 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
             let filename = invocation.arg(0).unwrap();
             match app.session.logging.set_log_file(filename.to_string()) {
                 Ok(message) => {
+                    // Add a log message to the transcript showing logging started
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+                    let log_message = format!("Logging started at {}", timestamp);
+                    app.conversation().add_app_message(
+                        crate::core::message::AppMessageKind::Log,
+                        log_message
+                    );
                     app.conversation().set_status(message);
                     CommandResult::Continue
                 }

@@ -209,6 +209,13 @@ impl<'a> ConversationController<'a> {
     }
 
     pub fn add_app_message(&mut self, kind: AppMessageKind, content: String) {
+        // Log app/log messages to the file
+        if kind == AppMessageKind::Log {
+            if let Err(e) = self.session.logging.log_message(&format!("## {}", content)) {
+                eprintln!("Failed to log app message: {e}");
+            }
+        }
+
         let message = Message::app(kind, content);
         self.ui.messages.push_back(message);
     }

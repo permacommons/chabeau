@@ -64,20 +64,42 @@ pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) ->
 
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
     match invocation.args_len() {
-        0 => match app.session.logging.toggle_logging() {
-            Ok(message) => {
-                app.conversation().set_status(message);
-                CommandResult::Continue
-            }
-            Err(e) => {
-                app.conversation().set_status(format!("Log error: {}", e));
-                CommandResult::Continue
+        0 => {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+            let was_active = app.session.logging.is_active();
+            let log_message = if was_active {
+                format!("Logging paused at {}", timestamp)
+            } else {
+                format!("Logging resumed at {}", timestamp)
+            };
+
+            match app.session.logging.toggle_logging(&log_message) {
+                Ok(message) => {
+                    // Add log message to transcript
+                    app.conversation().add_app_message(
+                        crate::core::message::AppMessageKind::Log,
+                        log_message
+                    );
+                    app.conversation().set_status(message);
+                    CommandResult::Continue
+                }
+                Err(e) => {
+                    app.conversation().set_status(format!("Log error: {}", e));
+                    CommandResult::Continue
+                }
             }
         },
         1 => {
             let filename = invocation.arg(0).unwrap();
             match app.session.logging.set_log_file(filename.to_string()) {
                 Ok(message) => {
+                    // Add log message to transcript
+                    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+                    let log_message = format!("Logging started at {}", timestamp);
+                    app.conversation().add_app_message(
+                        crate::core::message::AppMessageKind::Log,
+                        log_message
+                    );
                     app.conversation().set_status(message);
                     CommandResult::Continue
                 }
@@ -366,12 +388,14 @@ pub fn dump_conversation_with_overwrite(
     filename: &str,
     overwrite: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Filter out app messages and check if conversation is empty
+    // Filter out non-log app messages (keep user, assistant, and log messages)
     let conversation_messages: Vec<_> = app
         .ui
         .messages
         .iter()
-        .filter(|msg| !message::is_app_message_role(&msg.role))
+        .filter(|msg| {
+            !message::is_app_message_role(&msg.role) || msg.role == message::ROLE_APP_LOG
+        })
         .collect();
 
     if conversation_messages.is_empty() {
@@ -395,6 +419,7 @@ pub fn dump_conversation_with_overwrite(
     for msg in conversation_messages {
         match msg.role.as_str() {
             "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
+            message::ROLE_APP_LOG => writeln!(writer, "## {}", msg.content)?,
             _ => writeln!(writer, "{}", msg.content)?, // For assistant messages
         }
         writeln!(writer)?; // Empty line for spacing

@@ -11,6 +11,7 @@ pub const ROLE_ASSISTANT: &str = "assistant";
 pub const ROLE_APP_INFO: &str = "app/info";
 pub const ROLE_APP_WARNING: &str = "app/warning";
 pub const ROLE_APP_ERROR: &str = "app/error";
+pub const ROLE_APP_LOG: &str = "app/log";
 
 /// Severity for app-authored messages rendered in the transcript but never
 /// transmitted to the remote API.
@@ -19,6 +20,7 @@ pub enum AppMessageKind {
     Info,
     Warning,
     Error,
+    Log,
 }
 
 impl AppMessageKind {
@@ -27,6 +29,7 @@ impl AppMessageKind {
             AppMessageKind::Info => ROLE_APP_INFO,
             AppMessageKind::Warning => ROLE_APP_WARNING,
             AppMessageKind::Error => ROLE_APP_ERROR,
+            AppMessageKind::Log => ROLE_APP_LOG,
         }
     }
 
@@ -34,6 +37,7 @@ impl AppMessageKind {
         match suffix {
             "warning" => AppMessageKind::Warning,
             "error" => AppMessageKind::Error,
+            "log" => AppMessageKind::Log,
             _ => AppMessageKind::Info,
         }
     }
@@ -46,6 +50,7 @@ impl Message {
             AppMessageKind::Info => Self::app_info(content),
             AppMessageKind::Warning => Self::app_warning(content),
             AppMessageKind::Error => Self::app_error(content),
+            AppMessageKind::Log => Self::app_log(content),
         }
     }
 
@@ -69,12 +74,20 @@ impl Message {
             content: content.into(),
         }
     }
+
+    pub fn app_log(content: impl Into<String>) -> Self {
+        Self {
+            role: AppMessageKind::Log.as_role().to_string(),
+            content: content.into(),
+        }
+    }
 }
 
 pub fn is_app_message_role(role: &str) -> bool {
     role == ROLE_APP_INFO
         || role == ROLE_APP_WARNING
         || role == ROLE_APP_ERROR
+        || role == ROLE_APP_LOG
         || role.starts_with("app/")
 }
 

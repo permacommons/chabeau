@@ -14,6 +14,7 @@ pub struct AppMessageStyles {
     pub info: AppMessageStyle,
     pub warning: AppMessageStyle,
     pub error: AppMessageStyle,
+    pub log: AppMessageStyle,
 }
 
 impl AppMessageStyles {
@@ -34,6 +35,11 @@ impl AppMessageStyles {
                 prefix_style: Style::default().fg(Color::LightRed),
                 text_style: Style::default().fg(Color::LightRed),
             },
+            log: AppMessageStyle {
+                prefix: "📝  ".to_string(),
+                prefix_style: Style::default().fg(Color::Rgb(156, 163, 175)),
+                text_style: Style::default().fg(Color::Rgb(209, 213, 219)),
+            },
         }
     }
 
@@ -42,6 +48,7 @@ impl AppMessageStyles {
             AppMessageKind::Info => &self.info,
             AppMessageKind::Warning => &self.warning,
             AppMessageKind::Error => &self.error,
+            AppMessageKind::Log => &self.log,
         }
     }
 }
@@ -162,6 +169,11 @@ impl Theme {
                     prefix_style: Style::default().fg(Color::Red),
                     text_style: Style::default().fg(Color::Red),
                 },
+                log: AppMessageStyle {
+                    prefix: "📝  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(75, 85, 99)),
+                    text_style: Style::default().fg(Color::Rgb(55, 65, 81)),
+                },
             },
 
             title_style: Style::default().fg(Color::DarkGray),
@@ -220,6 +232,11 @@ impl Theme {
                     prefix: "⛔  ".to_string(),
                     prefix_style: Style::default().fg(Color::Rgb(255, 85, 85)),
                     text_style: Style::default().fg(Color::Rgb(255, 121, 121)),
+                },
+                log: AppMessageStyle {
+                    prefix: "📝  ".to_string(),
+                    prefix_style: Style::default().fg(Color::Rgb(189, 147, 249)),
+                    text_style: Style::default().fg(Color::Rgb(139, 233, 253)),
                 },
             },
 
@@ -280,6 +297,11 @@ impl Theme {
                 },
                 error: AppMessageStyle {
                     prefix: "⛔  ".to_string(),
+                    prefix_style: Style::default(),
+                    text_style: Style::default(),
+                },
+                log: AppMessageStyle {
+                    prefix: "📝  ".to_string(),
                     prefix_style: Style::default(),
                     text_style: Style::default(),
                 },
@@ -455,6 +477,15 @@ impl Theme {
         }
         if let Some(style) = &spec.app_error_text {
             app_messages.error.text_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(prefix) = &spec.app_log_prefix {
+            app_messages.log.prefix = prefix.clone();
+        }
+        if let Some(style) = &spec.app_log_prefix_style {
+            app_messages.log.prefix_style = parse_style(&Some(style.clone()));
+        }
+        if let Some(style) = &spec.app_log_text {
+            app_messages.log.text_style = parse_style(&Some(style.clone()));
         }
 
         let mut theme = Theme {

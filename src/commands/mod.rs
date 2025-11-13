@@ -385,12 +385,14 @@ pub fn dump_conversation_with_overwrite(
     filename: &str,
     overwrite: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Filter out app messages and check if conversation is empty
+    // Filter out non-log app messages (keep user, assistant, and log messages)
     let conversation_messages: Vec<_> = app
         .ui
         .messages
         .iter()
-        .filter(|msg| !message::is_app_message_role(&msg.role))
+        .filter(|msg| {
+            !message::is_app_message_role(&msg.role) || msg.role == message::ROLE_APP_LOG
+        })
         .collect();
 
     if conversation_messages.is_empty() {
@@ -414,6 +416,7 @@ pub fn dump_conversation_with_overwrite(
     for msg in conversation_messages {
         match msg.role.as_str() {
             "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
+            message::ROLE_APP_LOG => writeln!(writer, "## {}", msg.content)?,
             _ => writeln!(writer, "{}", msg.content)?, // For assistant messages
         }
         writeln!(writer)?; // Empty line for spacing

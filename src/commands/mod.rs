@@ -67,7 +67,7 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
         0 => match app.session.logging.toggle_logging() {
             Ok(message) => {
                 // Add a log message to the transcript showing logging paused/resumed
-                let timestamp = chrono::Utc::now().to_rfc3339();
+                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
                 let is_active = app.session.logging.is_active();
                 let log_message = if is_active {
                     format!("Logging resumed at {}", timestamp)
@@ -91,7 +91,7 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
             match app.session.logging.set_log_file(filename.to_string()) {
                 Ok(message) => {
                     // Add a log message to the transcript showing logging started
-                    let timestamp = chrono::Utc::now().to_rfc3339();
+                    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
                     let log_message = format!("Logging started at {}", timestamp);
                     app.conversation().add_app_message(
                         crate::core::message::AppMessageKind::Log,

@@ -28,14 +28,20 @@ impl LoggingState {
         Ok(format!("Logging enabled to: {path}"))
     }
 
-    pub fn toggle_logging(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn toggle_logging(
+        &mut self,
+        pause_message: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         match &self.file_path {
             Some(path) => {
-                self.is_active = !self.is_active;
                 if self.is_active {
-                    Ok(format!("Logging resumed to: {path}"))
-                } else {
+                    // Write pause message to log BEFORE pausing
+                    self.log_message(&format!("## {}", pause_message))?;
+                    self.is_active = false;
                     Ok(format!("Logging paused (file: {path})"))
+                } else {
+                    self.is_active = true;
+                    Ok(format!("Logging resumed to: {path}"))
                 }
             }
             None => {

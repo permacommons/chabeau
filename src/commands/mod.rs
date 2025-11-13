@@ -64,26 +64,29 @@ pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) ->
 
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
     match invocation.args_len() {
-        0 => match app.session.logging.toggle_logging() {
-            Ok(message) => {
-                // Add a log message to the transcript showing logging paused/resumed
-                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
-                let is_active = app.session.logging.is_active();
-                let log_message = if is_active {
-                    format!("Logging resumed at {}", timestamp)
-                } else {
-                    format!("Logging paused at {}", timestamp)
-                };
-                app.conversation().add_app_message(
-                    crate::core::message::AppMessageKind::Log,
-                    log_message
-                );
-                app.conversation().set_status(message);
-                CommandResult::Continue
-            }
-            Err(e) => {
-                app.conversation().set_status(format!("Log error: {}", e));
-                CommandResult::Continue
+        0 => {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+            let was_active = app.session.logging.is_active();
+            let log_message = if was_active {
+                format!("Logging paused at {}", timestamp)
+            } else {
+                format!("Logging resumed at {}", timestamp)
+            };
+
+            match app.session.logging.toggle_logging(&log_message) {
+                Ok(message) => {
+                    // Add a log message to the transcript
+                    app.conversation().add_app_message(
+                        crate::core::message::AppMessageKind::Log,
+                        log_message
+                    );
+                    app.conversation().set_status(message);
+                    CommandResult::Continue
+                }
+                Err(e) => {
+                    app.conversation().set_status(format!("Log error: {}", e));
+                    CommandResult::Continue
+                }
             }
         },
         1 => {

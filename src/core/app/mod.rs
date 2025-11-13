@@ -148,6 +148,16 @@ pub async fn new_with_auth(
         config.clone(),
     );
 
+    // Add log startup message if logging was initialized
+    if app.session.logging.is_active() {
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+        let log_message = format!("Logging started at {}", timestamp);
+        app.conversation().add_app_message(
+            AppMessageKind::Log,
+            log_message
+        );
+    }
+
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;
     }

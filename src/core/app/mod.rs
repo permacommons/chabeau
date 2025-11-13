@@ -150,12 +150,12 @@ pub async fn new_with_auth(
 
     // Add log startup message if logging is active
     if app.session.logging.is_active() {
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+        let timestamp = chrono::Local::now()
+            .format("%Y-%m-%d %H:%M:%S %Z")
+            .to_string();
         let log_message = format!("Logging started at {}", timestamp);
-        app.conversation().add_app_message(
-            AppMessageKind::Log,
-            log_message
-        );
+        app.conversation()
+            .add_app_message(AppMessageKind::Log, log_message);
     }
 
     if startup_requires_provider {

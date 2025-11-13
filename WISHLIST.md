@@ -18,9 +18,6 @@ Items are removed when completed.
 
 ### High priority
 
-- Logging durability — [OPEN]
-  - Make log rewrites (after truncate/in-place edit) atomic via temp file + rename — [OPEN]
-  - Optionally append a log marker indicating manual history edits — [OPEN]
 - Tests — [OPEN]
   - Add integration-style tests for event handling if feasible (simulate key events) — [OPEN]
   - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]

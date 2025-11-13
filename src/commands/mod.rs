@@ -75,7 +75,7 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
 
             match app.session.logging.toggle_logging(&log_message) {
                 Ok(message) => {
-                    // Add a log message to the transcript
+                    // Add log message to transcript
                     app.conversation().add_app_message(
                         crate::core::message::AppMessageKind::Log,
                         log_message
@@ -93,7 +93,7 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
             let filename = invocation.arg(0).unwrap();
             match app.session.logging.set_log_file(filename.to_string()) {
                 Ok(message) => {
-                    // Add a log message to the transcript showing logging started
+                    // Add log message to transcript
                     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
                     let log_message = format!("Logging started at {}", timestamp);
                     app.conversation().add_app_message(

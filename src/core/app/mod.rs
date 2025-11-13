@@ -148,7 +148,7 @@ pub async fn new_with_auth(
         config.clone(),
     );
 
-    // Add log startup message if logging was initialized
+    // Add log startup message if logging is active
     if app.session.logging.is_active() {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
         let log_message = format!("Logging started at {}", timestamp);

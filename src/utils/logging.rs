@@ -1,6 +1,6 @@
 use crate::core::message::{Message, ROLE_APP_LOG, ROLE_ASSISTANT, ROLE_USER};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -61,20 +61,27 @@ impl LoggingState {
 
     fn write_to_log(&self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
         let file_path = self.file_path.as_ref().unwrap();
-        let mut file = OpenOptions::new()
+
+        // Open file in append mode
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(file_path)?;
 
+        // Use BufWriter with 64KB buffer for better I/O performance
+        // This reduces syscalls and handles partial writes more efficiently
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+
         // Write each line of content, preserving the exact formatting
         for line in content.lines() {
-            writeln!(file, "{line}")?;
+            writeln!(writer, "{line}")?;
         }
 
         // Add an empty line after each message for spacing (matching screen display)
-        writeln!(file)?;
+        writeln!(writer)?;
 
-        file.flush()?;
+        // Ensure all buffered data is written to disk
+        writer.flush()?;
         Ok(())
     }
 

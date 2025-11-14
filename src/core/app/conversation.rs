@@ -189,7 +189,13 @@ impl<'a> ConversationController<'a> {
             .logging
             .log_message(&format!("{user_display_name}: {content}"))
         {
-            eprintln!("Failed to log message: {e}");
+            self.add_app_message(
+                AppMessageKind::Warning,
+                format!(
+                    "Logging error: {}. Conversation will continue but may not be saved.",
+                    e
+                ),
+            );
         }
 
         self.ui.messages.push_back(user_message);
@@ -212,7 +218,12 @@ impl<'a> ConversationController<'a> {
         // Log app/log messages to the file
         if kind == AppMessageKind::Log {
             if let Err(e) = self.session.logging.log_message(&format!("## {}", content)) {
-                eprintln!("Failed to log app message: {e}");
+                // Can't call add_app_message recursively for Log type, so add warning directly
+                let warning = Message::app(
+                    AppMessageKind::Warning,
+                    format!("Logging error: {}. Log file may be incomplete.", e),
+                );
+                self.ui.messages.push_back(warning);
             }
         }
 
@@ -309,8 +320,28 @@ impl<'a> ConversationController<'a> {
 
     pub fn finalize_response(&mut self) {
         if !self.ui.current_response.is_empty() {
+            // If this was a retry/refine, rewrite log excluding the message being retried
+            // This happens lazily (only after successful API response) to avoid data loss
+            if let Some(retry_index) = self.session.retrying_message_index {
+                let user_display_name = self.persona_manager.get_display_name();
+                if let Err(e) = self.session.logging.rewrite_log_skip_index(
+                    &self.ui.messages,
+                    &user_display_name,
+                    Some(retry_index),
+                ) {
+                    self.add_app_message(
+                        AppMessageKind::Warning,
+                        format!("Logging error: {}. Log file may be incomplete.", e),
+                    );
+                }
+            }
+
+            // Then log the new response
             if let Err(e) = self.session.logging.log_message(&self.ui.current_response) {
-                eprintln!("Failed to log response: {e}");
+                self.add_app_message(
+                    AppMessageKind::Warning,
+                    format!("Logging error: {}. Response may not be saved to log.", e),
+                );
             }
         }
 
@@ -410,15 +441,6 @@ impl<'a> ConversationController<'a> {
                 if let Some(msg) = self.ui.messages.get_mut(index) {
                     msg.content.clear();
                     self.ui.current_response.clear();
-                }
-
-                let user_display_name = self.persona_manager.get_display_name();
-                if let Err(e) = self
-                    .session
-                    .logging
-                    .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
-                {
-                    eprintln!("Failed to rewrite log file: {e}");
                 }
             } else {
                 return None;

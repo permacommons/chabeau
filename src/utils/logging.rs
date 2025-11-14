@@ -2,6 +2,7 @@ use crate::core::message::{Message, ROLE_APP_LOG, ROLE_ASSISTANT, ROLE_USER};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use tempfile::NamedTempFile;
 
 pub struct LoggingState {
     file_path: Option<String>,
@@ -106,44 +107,61 @@ impl LoggingState {
         messages: &std::collections::VecDeque<Message>,
         user_display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.rewrite_log_skip_index(messages, user_display_name, None)
+    }
+
+    pub fn rewrite_log_skip_index(
+        &self,
+        messages: &std::collections::VecDeque<Message>,
+        user_display_name: &str,
+        skip_index: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.is_active || self.file_path.is_none() {
             return Ok(());
         }
 
         let file_path = self.file_path.as_ref().unwrap();
+        let target_path = Path::new(file_path);
+        let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
 
-        // Recreate the log file with only the current messages
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(file_path)?;
+        // Create temp file in same directory (ensures atomic rename)
+        let mut temp_file = NamedTempFile::new_in(parent)?;
 
         // Write all messages in the same format as log_message
-        for msg in messages {
+        for (i, msg) in messages.iter().enumerate() {
+            // Skip message at specified index (for retry/refine)
+            if Some(i) == skip_index {
+                continue;
+            }
             if msg.role == ROLE_USER {
                 // Write user messages with the current user display name prefix
                 for line in format!("{}: {}", user_display_name, msg.content).lines() {
-                    writeln!(file, "{line}")?;
+                    writeln!(temp_file, "{line}")?;
                 }
-                writeln!(file)?; // Empty line for spacing
+                writeln!(temp_file)?; // Empty line for spacing
             } else if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
                 // Write assistant messages as-is (no prefix)
                 for line in msg.content.lines() {
-                    writeln!(file, "{line}")?;
+                    writeln!(temp_file, "{line}")?;
                 }
-                writeln!(file)?; // Empty line for spacing
+                writeln!(temp_file)?; // Empty line for spacing
             } else if msg.role == ROLE_APP_LOG {
                 // Write log-type app messages with ## prefix
                 for line in format!("## {}", msg.content).lines() {
-                    writeln!(file, "{line}")?;
+                    writeln!(temp_file, "{line}")?;
                 }
-                writeln!(file)?; // Empty line for spacing
+                writeln!(temp_file)?; // Empty line for spacing
             }
             // Other app messages (info, warning, error) are intentionally skipped to maintain consistency with dumps
         }
 
-        file.flush()?;
+        // Ensure data is written to disk
+        temp_file.flush()?;
+        temp_file.as_file().sync_all()?;
+
+        // Atomic rename - original file only replaced after complete write
+        temp_file.persist(file_path)?;
+
         Ok(())
     }
 

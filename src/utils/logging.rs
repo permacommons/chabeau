@@ -107,6 +107,15 @@ impl LoggingState {
         messages: &std::collections::VecDeque<Message>,
         user_display_name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.rewrite_log_skip_index(messages, user_display_name, None)
+    }
+
+    pub fn rewrite_log_skip_index(
+        &self,
+        messages: &std::collections::VecDeque<Message>,
+        user_display_name: &str,
+        skip_index: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.is_active || self.file_path.is_none() {
             return Ok(());
         }
@@ -119,7 +128,11 @@ impl LoggingState {
         let mut temp_file = NamedTempFile::new_in(parent)?;
 
         // Write all messages in the same format as log_message
-        for msg in messages {
+        for (i, msg) in messages.iter().enumerate() {
+            // Skip message at specified index (for retry/refine)
+            if Some(i) == skip_index {
+                continue;
+            }
             if msg.role == ROLE_USER {
                 // Write user messages with the current user display name prefix
                 for line in format!("{}: {}", user_display_name, msg.content).lines() {

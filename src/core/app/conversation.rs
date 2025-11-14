@@ -320,6 +320,23 @@ impl<'a> ConversationController<'a> {
 
     pub fn finalize_response(&mut self) {
         if !self.ui.current_response.is_empty() {
+            // If this was a retry/refine, rewrite log excluding the message being retried
+            // This happens lazily (only after successful API response) to avoid data loss
+            if let Some(retry_index) = self.session.retrying_message_index {
+                let user_display_name = self.persona_manager.get_display_name();
+                if let Err(e) = self.session.logging.rewrite_log_skip_index(
+                    &self.ui.messages,
+                    &user_display_name,
+                    Some(retry_index),
+                ) {
+                    self.add_app_message(
+                        AppMessageKind::Warning,
+                        format!("Logging error: {}. Log file may be incomplete.", e),
+                    );
+                }
+            }
+
+            // Then log the new response
             if let Err(e) = self.session.logging.log_message(&self.ui.current_response) {
                 self.add_app_message(
                     AppMessageKind::Warning,
@@ -424,18 +441,6 @@ impl<'a> ConversationController<'a> {
                 if let Some(msg) = self.ui.messages.get_mut(index) {
                     msg.content.clear();
                     self.ui.current_response.clear();
-                }
-
-                let user_display_name = self.persona_manager.get_display_name();
-                if let Err(e) = self
-                    .session
-                    .logging
-                    .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
-                {
-                    self.add_app_message(
-                        AppMessageKind::Warning,
-                        format!("Logging error: {}. Log file may be incomplete.", e),
-                    );
                 }
             } else {
                 return None;
@@ -568,29 +573,6 @@ impl<'a> ConversationController<'a> {
                     self.session.original_refining_content = Some(msg.content.clone());
                 }
             }
-        }
-
-        // Clear the assistant message content before rewriting log
-        if let Some(retry_index) = self.session.retrying_message_index {
-            if let Some(msg) = self.ui.messages.get_mut(retry_index) {
-                if msg.role == ROLE_ASSISTANT {
-                    msg.content.clear();
-                    self.ui.current_response.clear();
-                }
-            }
-        }
-
-        // Rewrite log to remove the assistant response that will be replaced
-        let user_display_name = self.persona_manager.get_display_name();
-        if let Err(e) = self
-            .session
-            .logging
-            .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
-        {
-            self.add_app_message(
-                AppMessageKind::Warning,
-                format!("Logging error: {}. Log file may be incomplete.", e),
-            );
         }
 
         if let Some(retry_index) = self.session.retrying_message_index {

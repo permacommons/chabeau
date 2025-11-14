@@ -570,6 +570,16 @@ impl<'a> ConversationController<'a> {
             }
         }
 
+        // Clear the assistant message content before rewriting log
+        if let Some(retry_index) = self.session.retrying_message_index {
+            if let Some(msg) = self.ui.messages.get_mut(retry_index) {
+                if msg.role == ROLE_ASSISTANT {
+                    msg.content.clear();
+                    self.ui.current_response.clear();
+                }
+            }
+        }
+
         // Rewrite log to remove the assistant response that will be replaced
         let user_display_name = self.persona_manager.get_display_name();
         if let Err(e) = self

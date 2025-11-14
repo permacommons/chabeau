@@ -553,6 +553,16 @@ impl<'a> ConversationController<'a> {
             }
         }
 
+        // Rewrite log to remove the assistant response that will be replaced
+        let user_display_name = self.persona_manager.get_display_name();
+        if let Err(e) = self
+            .session
+            .logging
+            .rewrite_log_without_last_response(&self.ui.messages, &user_display_name)
+        {
+            eprintln!("Failed to rewrite log file: {e}");
+        }
+
         if let Some(retry_index) = self.session.retrying_message_index {
             if retry_index > 0 {
                 let user_message_index = retry_index - 1;

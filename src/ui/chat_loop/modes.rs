@@ -994,9 +994,9 @@ mod tests {
             .update(|app| {
                 let metadata = app.get_prewrapped_span_metadata_cached(80);
                 let blocks = crate::ui::span::extract_code_blocks(metadata);
-                let first = blocks.first().map(|b| {
-                    (b.block_index, b.start_line, b.end_line, b.language.clone())
-                });
+                let first = blocks
+                    .first()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()));
                 (blocks.len(), first)
             })
             .await;
@@ -1016,34 +1016,26 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
 
-        let selected = app_handle
-            .read(|app| app.ui.selected_block_index())
-            .await;
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
         assert_eq!(selected, Some(1), "Should move to block 1");
 
         // Press Down again - should go to block 2
         handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
 
-        let selected = app_handle
-            .read(|app| app.ui.selected_block_index())
-            .await;
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
         assert_eq!(selected, Some(2), "Should move to block 2");
 
         // Press Down again - should wrap to block 0
         handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
 
-        let selected = app_handle
-            .read(|app| app.ui.selected_block_index())
-            .await;
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
         assert_eq!(selected, Some(0), "Should wrap to block 0");
 
         // Press Up - should wrap to block 2
         let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         handle_block_select_mode_event(&app_handle, &key_up, 80, 24).await;
 
-        let selected = app_handle
-            .read(|app| app.ui.selected_block_index())
-            .await;
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
         assert_eq!(selected, Some(2), "Should wrap backwards to block 2");
     }
 

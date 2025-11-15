@@ -2,7 +2,9 @@
 
 **Created**: 2025-11-15
 **Status**: Draft
-**Effort Estimate**: 12-16 hours (can be parallelized across modules)
+**Effort Estimate**: XL (can be parallelized across modules)
+
+> **T-Shirt Sizing**: XS = Tiny task, S = Small task, M = Medium task, L = Large task, XL = Extra large task
 
 ## Executive Summary
 
@@ -162,11 +164,11 @@ Rustdoc uses CommonMark with extensions:
 
 ## Sprint Work Breakdown
 
-### Phase 1: Quick Wins (4-5 hours)
+### Phase 1: Quick Wins (Size: L)
 
 **Goal**: Establish baseline documentation for all modules and critical enums
 
-#### Task 1.1: Module-Level Documentation (2-3 hours)
+#### Task 1.1: Module-Level Documentation (Size: M)
 
 Add `//!` comments to all public modules. Template:
 
@@ -197,9 +199,7 @@ Add `//!` comments to all public modules. Template:
 - [ ] `src/ui/chat_loop/event_loop.rs` - Event handling
 - [ ] `src/ui/renderer.rs` - Terminal UI rendering
 
-**Estimated**: ~15-20 minutes per module = 2-3 hours total
-
-#### Task 1.2: Document All Public Enums (1-2 hours)
+#### Task 1.2: Document All Public Enums (Size: S)
 
 Add documentation to all enum variants with purpose and usage.
 
@@ -228,15 +228,13 @@ pub enum CommandResult {
 }
 ```
 
-**Estimated**: 1-2 hours
-
 ---
 
-### Phase 2: Core Public API Documentation (5-6 hours)
+### Phase 2: Core Public API Documentation (Size: L)
 
 **Goal**: Document all public structs, functions, and methods on critical modules
 
-#### Task 2.1: Core Application Module (1.5 hours)
+#### Task 2.1: Core Application Module (Size: S)
 
 File: `src/core/app/mod.rs`
 
@@ -271,7 +269,7 @@ Example:
 pub fn new_with_auth(config: AppInitConfig) -> Result<Self, Box<dyn std::error::Error>>
 ```
 
-#### Task 2.2: Character Service (1.5 hours)
+#### Task 2.2: Character Service (Size: S)
 
 File: `src/character/service.rs`
 
@@ -283,7 +281,7 @@ File: `src/character/service.rs`
 - [ ] `load_default_for_session()` - document fallback behavior
 - [ ] `CharacterServiceError` variants
 
-#### Task 2.3: Chat Streaming Service (1.5 hours)
+#### Task 2.3: Chat Streaming Service (Size: S)
 
 File: `src/core/chat_stream.rs`
 
@@ -294,7 +292,7 @@ File: `src/core/chat_stream.rs`
 - [ ] `start_stream()` - document async behavior, cancellation
 - [ ] SSE framing traits and implementations
 
-#### Task 2.4: Authentication Manager (1 hour)
+#### Task 2.4: Authentication Manager (Size: S)
 
 File: `src/auth/mod.rs`
 
@@ -303,7 +301,7 @@ File: `src/auth/mod.rs`
 - [ ] Methods without docs: `new()`, `store_token()`, `get_token()`, etc.
 - [ ] Expand `resolve_authentication()` example (already has good docs)
 
-#### Task 2.5: Commands Module (0.5 hours)
+#### Task 2.5: Commands Module (Size: XS)
 
 File: `src/commands/mod.rs`
 
@@ -313,11 +311,11 @@ File: `src/commands/mod.rs`
 
 ---
 
-### Phase 3: Examples and Advanced Documentation (3-4 hours)
+### Phase 3: Examples and Advanced Documentation (Size: M)
 
 **Goal**: Add executable examples and cross-references
 
-#### Task 3.1: Add Examples to Core Public APIs (2-3 hours)
+#### Task 3.1: Add Examples to Core Public APIs (Size: M)
 
 Add `# Examples` sections to:
 - [ ] `App::new_with_auth()`
@@ -331,7 +329,7 @@ Ensure examples:
 - Show realistic usage patterns
 - Are copyable and runnable
 
-#### Task 3.2: Add Cross-Documentation Links (1 hour)
+#### Task 3.2: Add Cross-Documentation Links (Size: XS)
 
 Link related items using `` [`Type`] `` syntax:
 - [ ] Link `App` to `SessionContext`
@@ -350,9 +348,9 @@ Example:
 
 ---
 
-### Phase 4: Polish and Verify (1 hour)
+### Phase 4: Polish and Verify (Size: S)
 
-#### Task 4.1: Run Documentation Tests (15 min)
+#### Task 4.1: Run Documentation Tests (Size: XS)
 
 ```bash
 cargo test --doc
@@ -360,7 +358,7 @@ cargo test --doc
 
 Fix any failing examples.
 
-#### Task 4.2: Generate and Review HTML Docs (30 min)
+#### Task 4.2: Generate and Review HTML Docs (Size: XS)
 
 ```bash
 cargo doc --no-deps --open
@@ -372,7 +370,7 @@ Review generated documentation for:
 - Missing information
 - Clarity and completeness
 
-#### Task 4.3: Spot-Check Coverage (15 min)
+#### Task 4.3: Spot-Check Coverage (Size: XS)
 
 Run quick grep to identify remaining gaps:
 
@@ -637,4 +635,4 @@ pub struct CharacterService {  // ← No documentation
 
 This sprint will elevate Chabeau's documentation from **~30% coverage** to **70%+ coverage**, making the codebase more accessible to contributors and users while following Rust ecosystem best practices. The phased approach allows for incremental progress with early wins in Phase 1, comprehensive coverage in Phase 2, and polish in Phase 3-4.
 
-**Total Estimated Effort**: 12-16 hours (parallelizable across 3-5 contributors for ~3-5 hours per person)
+**Total Estimated Effort**: XL (parallelizable across modules)

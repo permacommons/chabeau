@@ -94,7 +94,15 @@ enum OutputMode {
     Plain { state: PlainStreamState },
 }
 
-// Re-computes the OSC encoded lines and redraws any changed content while
+// Produces OSC-encoded terminal lines for the app's current content at the
+// specified terminal width.
+fn encoded_terminal_lines(app: &mut app::App, term_width: u16) -> Vec<String> {
+    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+    let lines = app.get_prewrapped_lines_cached(term_width).clone();
+    osc::encode_lines_with_links_with_underline(&lines, &metadata)
+}
+
+// Re-computes the OSC-encoded lines and redraws any changed content while
 // minimizing cursor movement.
 fn redraw_terminal_lines(
     app: &mut app::App,
@@ -103,11 +111,7 @@ fn redraw_terminal_lines(
     previous_lines: &mut Vec<String>,
     persist: bool,
 ) -> io::Result<()> {
-    let new_lines: Vec<String> = {
-        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-        osc::encode_lines_with_links_with_underline(&lines, &metadata)
-    };
+    let new_lines = encoded_terminal_lines(app, term_width);
 
     let mut common_prefix_len = 0usize;
     let max_prefix = previous_lines.len().min(new_lines.len());
@@ -160,9 +164,7 @@ impl OutputMode {
     ) -> io::Result<()> {
         match self {
             OutputMode::Terminal { previous_lines } => {
-                let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                let encoded = osc::encode_lines_with_links_with_underline(&lines, &metadata);
+                let encoded = encoded_terminal_lines(app, term_width);
                 for line in &encoded {
                     println!("{}", line);
                 }

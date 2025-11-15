@@ -72,6 +72,51 @@ pub enum CommandResult {
 /// # Returns
 ///
 /// Returns a [`CommandResult`] indicating how the UI should respond.
+///
+/// # Examples
+///
+/// ```no_run
+/// use chabeau::commands::{process_input, CommandResult};
+/// # use chabeau::core::app::App;
+/// # use chabeau::character::service::CharacterService;
+/// # use chabeau::core::app::AppInitConfig;
+/// # use chabeau::core::config::data::Config;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let config = Config::load()?;
+/// # let character_service = CharacterService::new();
+/// # let init_config = AppInitConfig {
+/// #     model: "gpt-4".to_string(),
+/// #     log_file: None,
+/// #     provider: Some("openai".to_string()),
+/// #     env_only: false,
+/// #     pre_resolved_session: None,
+/// #     character: None,
+/// #     persona: None,
+/// #     preset: None,
+/// # };
+/// # let mut app = chabeau::core::app::new_with_auth(init_config, &config, character_service).await?;
+/// // Process a command
+/// let result = process_input(&mut app, "/help");
+/// match result {
+///     CommandResult::ContinueWithTranscriptFocus => {
+///         // Help was displayed, focus on transcript
+///     }
+///     _ => {}
+/// }
+///
+/// // Process a regular message
+/// let result = process_input(&mut app, "What is Rust?");
+/// match result {
+///     CommandResult::ProcessAsMessage(msg) => {
+///         // Send the message to the chat model
+///         assert_eq!(msg, "What is Rust?");
+///     }
+///     _ => {}
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     match registry::registry().dispatch(input) {
         DispatchOutcome::NotACommand | DispatchOutcome::UnknownCommand => {

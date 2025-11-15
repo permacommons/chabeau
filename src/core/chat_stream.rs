@@ -363,6 +363,50 @@ impl ChatStreamService {
     /// # Panics
     ///
     /// Does not panic. Errors are sent as [`StreamMessage::Error`] events.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use chabeau::core::chat_stream::{ChatStreamService, StreamParams, StreamMessage};
+    /// # use chabeau::api::ChatMessage;
+    /// # use tokio_util::sync::CancellationToken;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let (service, mut rx) = ChatStreamService::new();
+    /// let client = reqwest::Client::new();
+    /// let cancel_token = CancellationToken::new();
+    ///
+    /// let params = StreamParams {
+    ///     client,
+    ///     base_url: "https://api.openai.com/v1".to_string(),
+    ///     api_key: "your-api-key".to_string(),
+    ///     provider_name: "openai".to_string(),
+    ///     model: "gpt-4".to_string(),
+    ///     api_messages: vec![
+    ///         ChatMessage {
+    ///             role: "user".to_string(),
+    ///             content: "Hello!".to_string(),
+    ///         },
+    ///     ],
+    ///     cancel_token: cancel_token.clone(),
+    ///     stream_id: 1,
+    /// };
+    ///
+    /// service.spawn_stream(params);
+    ///
+    /// // Poll for messages
+    /// while let Some((message, stream_id)) = rx.recv().await {
+    ///     match message {
+    ///         StreamMessage::Chunk(content) => println!("{}", content),
+    ///         StreamMessage::End => break,
+    ///         StreamMessage::Error(err) => eprintln!("Error: {}", err),
+    ///         StreamMessage::App { kind, content } => {
+    ///             eprintln!("[{:?}] {}", kind, content);
+    ///         }
+    ///     }
+    /// }
+    /// # }
+    /// ```
     pub fn spawn_stream(&self, params: StreamParams) {
         let tx_clone = self.tx.clone();
         tokio::spawn(async move {

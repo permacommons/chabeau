@@ -192,6 +192,28 @@ impl AuthManager {
     /// 4. Using environment variables as last resort
     ///
     /// Returns: (api_key, base_url, provider_name, provider_display_name)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use chabeau::auth::AuthManager;
+    /// # use chabeau::core::config::data::Config;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let manager = AuthManager::new()?;
+    /// let config = Config::load()?;
+    ///
+    /// // Resolve auth for a specific provider
+    /// let (api_key, base_url, provider, display_name) =
+    ///     manager.resolve_authentication(Some("openai"), &config)?;
+    ///
+    /// println!("Using provider: {} at {}", display_name, base_url);
+    ///
+    /// // Or let it auto-select from available credentials
+    /// let (api_key, base_url, provider, display_name) =
+    ///     manager.resolve_authentication(None, &config)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn resolve_authentication(
         &self,
         provider: Option<&str>,

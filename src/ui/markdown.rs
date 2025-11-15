@@ -1404,6 +1404,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn width_aware_ranges_align_with_render_wrapping() {
         let theme = crate::ui::theme::Theme::dark_default();
         let mut messages = VecDeque::new();
@@ -1503,6 +1504,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn width_aware_ranges_account_for_preceding_table() {
         let theme = crate::ui::theme::Theme::dark_default();
         let mut messages = VecDeque::new();

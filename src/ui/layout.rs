@@ -215,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn layout_codeblock_ranges_skip_app_messages() {
         let theme = Theme::dark_default();
         let mut messages = VecDeque::new();

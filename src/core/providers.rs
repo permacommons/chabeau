@@ -1,3 +1,13 @@
+//! Provider metadata and session resolution.
+//!
+//! This module handles provider metadata including built-in and custom providers,
+//! session resolution that merges configuration with authentication state, and
+//! environment-based fallback flows.
+//!
+//! Provider resolution logic determines which API endpoint and credentials to
+//! use for a chat session, with rich error types that communicate next steps
+//! to users.
+
 use crate::core::config::data::Config;
 use crate::core::keyring::{KeyringAccessError, SharedKeyringAccessError};
 use std::error::Error;

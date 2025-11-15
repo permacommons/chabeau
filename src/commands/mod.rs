@@ -1,3 +1,13 @@
+//! Slash command processing and routing.
+//!
+//! This module provides a registry-based system for handling slash commands
+//! in the chat interface. Commands are dispatched to handlers that can modify
+//! application state, open pickers, save/load conversations, or pass input
+//! through to the model.
+//!
+//! The [`process_input`] function is the main entry point, returning a
+//! [`CommandResult`] that indicates how the UI should respond.
+
 mod refine;
 mod registry;
 

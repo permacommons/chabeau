@@ -1,3 +1,14 @@
+//! Authentication and provider credential management.
+//!
+//! This module handles provider authentication using the system keyring,
+//! user configuration, and environment variables. It provides interactive
+//! flows for adding/removing credentials and resolves authentication for
+//! chat sessions.
+//!
+//! The [`AuthManager`] is the primary interface for authentication operations,
+//! supporting keyring storage, environment-based auth, and custom provider
+//! configuration.
+
 use crate::core::builtin_providers::load_builtin_providers;
 use crate::core::config::data::{suggest_provider_id, Config, CustomProvider};
 use crate::core::keyring::{KeyringAccessError, SharedKeyringAccessError};

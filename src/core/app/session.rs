@@ -1,3 +1,12 @@
+//! Session context and metadata tracking.
+//!
+//! This module defines [`SessionContext`], which captures runtime state for
+//! an active chat session including the selected provider, model, HTTP client,
+//! theme, logging configuration, and streaming cancellation tokens.
+//!
+//! Session metadata allows downstream components to act without re-querying
+//! configuration or authentication state during the conversation lifecycle.
+
 use std::time::Instant;
 
 use reqwest::Client;

@@ -1,3 +1,13 @@
+//! Configuration data structures and persistence.
+//!
+//! This module defines TOML-backed configuration structures for providers,
+//! models, characters, personas, presets, themes, and text refinement settings.
+//! The [`Config`] struct is the main entry point for loading and accessing
+//! user preferences.
+//!
+//! Configuration helpers also provide ergonomic display strings for paths
+//! and resolve defaults when user settings are absent.
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;

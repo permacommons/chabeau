@@ -1,3 +1,13 @@
+//! Core application state and lifecycle management.
+//!
+//! This module contains the [`App`] struct, which is the heart of the runtime.
+//! It packages the current session, conversation, UI state, pickers, and services
+//! into a single owner that can be mutated atomically within the async event loop.
+//!
+//! Initialization involves loading configuration, resolving authentication,
+//! activating personas and presets, and preparing character greetings. The
+//! module also provides action dispatching for UI events and background commands.
+
 use crate::character::service::CharacterService;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;

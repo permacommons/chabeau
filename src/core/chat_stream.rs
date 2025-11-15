@@ -1,3 +1,12 @@
+//! SSE streaming pipeline for chat completions.
+//!
+//! This module provides [`ChatStreamService`], which handles outgoing API
+//! requests and processes Server-Sent Events (SSE) streams. Each stream runs
+//! in a Tokio task, posts frames into an unbounded channel, normalizes
+//! malformed input, and reports API errors with helpful summaries.
+//!
+//! Cancellation tokens allow user interrupts to stop streaming promptly.
+
 use futures_util::StreamExt;
 use memchr::memchr;
 use tokio::sync::mpsc;

@@ -1,3 +1,12 @@
+//! Character card loading and caching service.
+//!
+//! This module provides the [`CharacterService`] which manages character cards,
+//! including loading from disk, caching for performance, and resolving characters
+//! by name or path. The service invalidates cached entries when the underlying
+//! card directory changes to ensure fresh data.
+//!
+//! Character cards define AI personas and greetings for chat sessions.
+
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

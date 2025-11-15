@@ -17,6 +17,85 @@ use crate::ui::osc;
 use ratatui::crossterm::cursor::{MoveToColumn, MoveUp};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
+use ratatui::text::Line;
+
+#[derive(Default)]
+struct PlainStreamState {
+    started: bool,
+    last_chunk_ended_with_newline: bool,
+}
+
+impl PlainStreamState {
+    fn new() -> Self {
+        Self {
+            started: false,
+            last_chunk_ended_with_newline: true,
+        }
+    }
+
+    fn write_prefix<W: Write>(&mut self, writer: &mut W, lines: &[String]) -> io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        if lines.len() == 1 {
+            writer.write_all(lines[0].as_bytes())?;
+        } else {
+            for line in lines.iter().take(lines.len() - 1) {
+                writeln!(writer, "{}", line)?;
+            }
+            writer.write_all(lines.last().unwrap().as_bytes())?;
+        }
+
+        writer.flush()?;
+        self.started = true;
+        self.last_chunk_ended_with_newline = false;
+        Ok(())
+    }
+
+    fn write_chunk<W: Write>(&mut self, writer: &mut W, content: &str) -> io::Result<()> {
+        writer.write_all(content.as_bytes())?;
+        writer.flush()?;
+        if !content.is_empty() {
+            self.started = true;
+            self.last_chunk_ended_with_newline = content.ends_with('\n');
+        }
+        Ok(())
+    }
+
+    fn write_line<W: Write>(&mut self, writer: &mut W, content: &str) -> io::Result<()> {
+        if self.started && !self.last_chunk_ended_with_newline {
+            writer.write_all(b"\n")?;
+        }
+        writeln!(writer, "{}", content)?;
+        writer.flush()?;
+        self.started = true;
+        self.last_chunk_ended_with_newline = true;
+        Ok(())
+    }
+
+    fn ensure_trailing_newline<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        if self.started && !self.last_chunk_ended_with_newline {
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            self.last_chunk_ended_with_newline = true;
+        }
+        Ok(())
+    }
+}
+
+fn plain_text_lines(lines: &[Line<'_>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let mut buf = String::new();
+            for span in &line.spans {
+                buf.push_str(span.content.as_ref());
+            }
+            buf
+        })
+        .collect()
+}
 
 fn resolve_prompt_from_args(
     mut prompt: String,
@@ -112,22 +191,28 @@ pub async fn run_say(
         (cancel_token, stream_id, api_messages)
     };
 
-    let prefix_lines: Vec<String> = {
-        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-        osc::encode_lines_with_links_with_underline(&lines, &metadata)
-    };
-    for line in &prefix_lines {
-        println!("{}", line);
-    }
-
     let params = app.build_stream_params(api_messages, cancel_token, stream_id);
 
     let (stream_service, mut rx) = ChatStreamService::new();
     stream_service.spawn_stream(params);
 
     let mut stdout = io::stdout();
-    let mut previous_lines = prefix_lines.clone();
+    let stdout_is_terminal = stdout.is_terminal();
+    let mut plain_stream_state = PlainStreamState::new();
+    let mut previous_lines = if stdout_is_terminal {
+        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+        let encoded = osc::encode_lines_with_links_with_underline(&lines, &metadata);
+        for line in &encoded {
+            println!("{}", line);
+        }
+        Some(encoded)
+    } else {
+        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+        let plain_lines = plain_text_lines(&lines);
+        plain_stream_state.write_prefix(&mut stdout, &plain_lines)?;
+        None
+    };
 
     loop {
         match rx.recv().await {
@@ -139,34 +224,40 @@ pub async fn run_say(
                     conversation.append_to_response(&content, available_height, term_width);
                 }
 
-                let new_lines: Vec<String> = {
-                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                };
+                if stdout_is_terminal {
+                    let new_lines: Vec<String> = {
+                        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                        osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                    };
 
-                let mut common_prefix_len = 0usize;
-                let max_prefix = previous_lines.len().min(new_lines.len());
-                while common_prefix_len < max_prefix
-                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
-                {
-                    common_prefix_len += 1;
-                }
+                    if let Some(prev_lines) = previous_lines.as_mut() {
+                        let mut common_prefix_len = 0usize;
+                        let max_prefix = prev_lines.len().min(new_lines.len());
+                        while common_prefix_len < max_prefix
+                            && prev_lines[common_prefix_len] == new_lines[common_prefix_len]
+                        {
+                            common_prefix_len += 1;
+                        }
 
-                if previous_lines.len() > common_prefix_len {
-                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
-                    if lines_to_move_up > 0 {
-                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                        if prev_lines.len() > common_prefix_len {
+                            let lines_to_move_up = (prev_lines.len() - common_prefix_len) as u16;
+                            if lines_to_move_up > 0 {
+                                execute!(stdout, MoveUp(lines_to_move_up))?;
+                            }
+                        }
+
+                        for line in new_lines.iter().skip(common_prefix_len) {
+                            execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                            println!("{}", line);
+                        }
+
+                        stdout.flush()?;
+                        *prev_lines = new_lines;
                     }
+                } else {
+                    plain_stream_state.write_chunk(&mut stdout, &content)?;
                 }
-
-                for line in new_lines.iter().skip(common_prefix_len) {
-                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                    println!("{}", line);
-                }
-
-                stdout.flush()?;
-                previous_lines = new_lines;
             }
             Some((StreamMessage::Error(err), _)) => {
                 let trimmed = err.trim();
@@ -183,38 +274,48 @@ pub async fn run_say(
                     conversation.update_scroll_position(available_height, term_width);
                 }
 
-                let new_lines: Vec<String> = {
-                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                };
+                if stdout_is_terminal {
+                    let new_lines: Vec<String> = {
+                        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                        osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                    };
 
-                let mut common_prefix_len = 0usize;
-                let max_prefix = previous_lines.len().min(new_lines.len());
-                while common_prefix_len < max_prefix
-                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
-                {
-                    common_prefix_len += 1;
-                }
+                    if let Some(prev_lines) = previous_lines.as_mut() {
+                        let mut common_prefix_len = 0usize;
+                        let max_prefix = prev_lines.len().min(new_lines.len());
+                        while common_prefix_len < max_prefix
+                            && prev_lines[common_prefix_len] == new_lines[common_prefix_len]
+                        {
+                            common_prefix_len += 1;
+                        }
 
-                if previous_lines.len() > common_prefix_len {
-                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
-                    if lines_to_move_up > 0 {
-                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                        if prev_lines.len() > common_prefix_len {
+                            let lines_to_move_up = (prev_lines.len() - common_prefix_len) as u16;
+                            if lines_to_move_up > 0 {
+                                execute!(stdout, MoveUp(lines_to_move_up))?;
+                            }
+                        }
+
+                        for line in new_lines.iter().skip(common_prefix_len) {
+                            execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                            println!("{}", line);
+                        }
+
+                        stdout.flush()?;
                     }
+                    std::process::exit(1);
+                } else {
+                    plain_stream_state.write_line(&mut stdout, trimmed)?;
+                    std::process::exit(1);
                 }
-
-                for line in new_lines.iter().skip(common_prefix_len) {
-                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                    println!("{}", line);
-                }
-
-                stdout.flush()?;
-                std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
                 let mut conversation = app.conversation();
                 conversation.finalize_response();
+                if !stdout_is_terminal {
+                    plain_stream_state.ensure_trailing_newline(&mut stdout)?;
+                }
                 break;
             }
             None => break,
@@ -227,7 +328,10 @@ pub async fn run_say(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_prompt_from_args;
+    use super::{plain_text_lines, resolve_prompt_from_args, PlainStreamState};
+    use crate::ui::osc;
+    use crate::ui::span::SpanKind;
+    use ratatui::text::{Line, Span};
     use std::io::Cursor;
 
     #[test]
@@ -252,5 +356,50 @@ mod tests {
         let prompt = resolve_prompt_from_args(String::new(), &mut stdin, false)
             .expect("prompt should resolve");
         assert!(prompt.is_none());
+    }
+
+    #[test]
+    fn plain_prefix_rendering_stays_escape_free_when_redirected() {
+        let lines = vec![Line::from(vec![Span::raw("Docs"), Span::raw(" link")])];
+        let metadata = vec![vec![SpanKind::link("https://example.com"), SpanKind::Text]];
+        let encoded = osc::encode_lines_with_links_with_underline(&lines, &metadata);
+        assert!(encoded[0].contains('\x1b'));
+
+        let plain_lines = plain_text_lines(&lines);
+        let mut buffer = Vec::new();
+        let mut state = PlainStreamState::new();
+        state
+            .write_prefix(&mut buffer, &plain_lines)
+            .expect("should write prefix");
+        let captured = String::from_utf8(buffer).expect("valid utf8");
+        assert!(!captured.contains('\x1b'));
+    }
+
+    #[test]
+    fn plain_stream_state_inserts_newline_for_redirected_streams() {
+        let mut state = PlainStreamState::new();
+        let mut buffer = Vec::new();
+        state
+            .write_chunk(&mut buffer, "partial response")
+            .expect("chunk should write");
+        state
+            .ensure_trailing_newline(&mut buffer)
+            .expect("should insert newline");
+        let captured = String::from_utf8(buffer).expect("valid utf8");
+        assert_eq!(captured, "partial response\n");
+    }
+
+    #[test]
+    fn plain_stream_state_writes_errors_on_new_lines() {
+        let mut state = PlainStreamState::new();
+        let mut buffer = Vec::new();
+        state
+            .write_chunk(&mut buffer, "partial response")
+            .expect("chunk should write");
+        state
+            .write_line(&mut buffer, "oops")
+            .expect("line should write");
+        let captured = String::from_utf8(buffer).expect("valid utf8");
+        assert_eq!(captured, "partial response\noops\n");
     }
 }

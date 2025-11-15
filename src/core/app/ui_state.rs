@@ -1251,8 +1251,7 @@ fn splice_last_message_layout(
         }
     }
 
-    let mut new_meta: Vec<Vec<SpanKind>> =
-        Vec::with_capacity(start + new_message_metadata.len());
+    let mut new_meta: Vec<Vec<SpanKind>> = Vec::with_capacity(start + new_message_metadata.len());
     new_meta.extend_from_slice(&cache.span_metadata[..start]);
     new_meta.extend_from_slice(&new_message_metadata);
     cache.span_metadata = new_meta;

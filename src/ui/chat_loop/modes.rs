@@ -1150,14 +1150,7 @@ mod tests {
                 let blocks = crate::ui::span::extract_code_blocks(metadata);
                 blocks
                     .iter()
-                    .map(|b| {
-                        (
-                            b.block_index,
-                            b.start_line,
-                            b.end_line,
-                            b.language.clone(),
-                        )
-                    })
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
                     .collect::<Vec<_>>()
             })
             .await;
@@ -1221,8 +1214,7 @@ mod tests {
                 });
                 app.ui.messages.push_back(Message {
                     role: ROLE_ASSISTANT.to_string(),
-                    content: "Here you go:\n```python\ndef second():\n    pass\n```"
-                        .to_string(),
+                    content: "Here you go:\n```python\ndef second():\n    pass\n```".to_string(),
                 });
             })
             .await;
@@ -1233,14 +1225,7 @@ mod tests {
                 let blocks = crate::ui::span::extract_code_blocks(metadata);
                 let info = blocks
                     .iter()
-                    .map(|b| {
-                        (
-                            b.block_index,
-                            b.start_line,
-                            b.end_line,
-                            b.language.clone(),
-                        )
-                    })
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
                     .collect::<Vec<_>>();
 
                 // Also collect ALL metadata to debug

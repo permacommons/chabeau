@@ -138,7 +138,7 @@ fn build_app(
 /// # use chabeau::core::config::data::Config;
 /// # use chabeau::character::service::CharacterService;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let config = Config::load_from_default_location()?;
+/// let config = Config::load()?;
 /// let character_service = CharacterService::new();
 /// let init_config = AppInitConfig {
 ///     model: "gpt-4".to_string(),

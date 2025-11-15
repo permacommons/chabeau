@@ -124,6 +124,10 @@ chabeau say "What is the capital of France?"
 
 This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings, emits OSC8 hyperlinks when your terminal supports them, and uses a monochrome theme for clean, readable output.
 
+When you omit the prompt argument, `chabeau say` will read from piped or redirected stdin (trimming trailing whitespace) before showing the usage message, so `cat prompt.txt | chabeau say` works as expected.
+
+When stdout is redirected to a file or piped into another program, Chabeau automatically falls back to a plain-text streaming mode. This mode skips OSC8 hyperlinks and cursor control so captured output stays free of escape codes.
+
 If you have multiple providers configured but no default set, Chabeau will prompt you to specify a provider with the `-p` flag. The `-p` and other global flags can be placed before or after the prompt.
 
 Environment variable values can make their way into shell histories or other places they shouldn't, so using the keyring is generally advisable.

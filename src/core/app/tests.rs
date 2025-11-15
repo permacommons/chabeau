@@ -1232,7 +1232,8 @@ fn block_selection_uses_cached_metadata() {
     let ptr_before = app.get_prewrapped_span_metadata_cached(width) as *const _;
 
     // Count code block spans in cache
-    let cached_blocks = count_code_blocks_in_metadata(app.get_prewrapped_span_metadata_cached(width));
+    let cached_blocks =
+        count_code_blocks_in_metadata(app.get_prewrapped_span_metadata_cached(width));
     assert_eq!(cached_blocks, 3, "Should cache 3 code blocks");
 
     // Enter block select mode
@@ -1310,7 +1311,10 @@ fn cache_invalidates_on_width_change() {
         .flat_map(|line| line.iter())
         .any(|k| k.is_code_block());
 
-    assert!(has_code1_again, "Width1 again should still have code blocks");
+    assert!(
+        has_code1_again,
+        "Width1 again should still have code blocks"
+    );
 }
 
 #[test]
@@ -1350,5 +1354,8 @@ fn metadata_contains_code_blocks_after_cache() {
         .flat_map(|line| line.iter())
         .any(|k| k.is_code_block());
 
-    assert!(has_code_blocks, "Cached metadata should include code blocks");
+    assert!(
+        has_code_blocks,
+        "Cached metadata should include code blocks"
+    );
 }

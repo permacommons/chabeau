@@ -1,3 +1,47 @@
+//! Semantic span metadata for rendered content.
+//!
+//! This module defines [`SpanKind`] which classifies rendered text spans
+//! for downstream consumers like scroll calculation, selection logic, and
+//! accessibility features.
+//!
+//! Interactive elements (links, code blocks) carry rich metadata enabling
+//! cached identification and efficient navigation without re-rendering.
+//!
+//! # Examples
+//!
+//! Creating and querying code block metadata:
+//!
+//! ```
+//! use chabeau::ui::span::{SpanKind, CodeBlockMeta};
+//!
+//! // Create code block metadata
+//! let kind = SpanKind::code_block(Some("rust"), 0);
+//!
+//! // Query metadata
+//! if let Some(meta) = kind.code_block_meta() {
+//!     assert_eq!(meta.language(), Some("rust"));
+//!     assert_eq!(meta.block_index(), 0);
+//! }
+//! ```
+//!
+//! Extracting code blocks from rendered output:
+//!
+//! ```
+//! use chabeau::ui::span::{extract_code_blocks, SpanKind};
+//!
+//! let metadata = vec![
+//!     vec![SpanKind::Text],
+//!     vec![SpanKind::code_block(Some("python"), 0)],
+//!     vec![SpanKind::code_block(Some("python"), 0)],
+//!     vec![SpanKind::Text],
+//! ];
+//!
+//! let blocks = extract_code_blocks(&metadata);
+//! assert_eq!(blocks.len(), 1);
+//! assert_eq!(blocks[0].start_line, 1);
+//! assert_eq!(blocks[0].end_line, 2);
+//! ```
+
 use std::sync::Arc;
 
 /// Semantic classification for rendered spans. Enables downstream
@@ -326,10 +370,10 @@ mod tests {
     #[test]
     fn extract_code_blocks_finds_all_blocks() {
         let metadata = vec![
-            vec![SpanKind::Text], // Line 0: not a code block
-            vec![SpanKind::code_block(Some("rust"), 0)], // Line 1: block 0
-            vec![SpanKind::code_block(Some("rust"), 0)], // Line 2: block 0
-            vec![SpanKind::Text], // Line 3: not a code block
+            vec![SpanKind::Text],                          // Line 0: not a code block
+            vec![SpanKind::code_block(Some("rust"), 0)],   // Line 1: block 0
+            vec![SpanKind::code_block(Some("rust"), 0)],   // Line 2: block 0
+            vec![SpanKind::Text],                          // Line 3: not a code block
             vec![SpanKind::code_block(Some("python"), 1)], // Line 4: block 1
             vec![SpanKind::code_block(None::<String>, 2)], // Line 5: block 2
         ];

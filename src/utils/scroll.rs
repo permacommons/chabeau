@@ -424,6 +424,15 @@ impl ScrollCalculator {
     }
 
     /// Build display lines with codeblock highlighting and terminal width for table balancing
+    ///
+    /// # Deprecated
+    ///
+    /// Use cached lines with `crate::ui::renderer::apply_code_block_highlight` instead.
+    /// This function re-renders all markdown on every call, which is inefficient.
+    #[deprecated(
+        since = "0.6.1",
+        note = "Use cached lines with apply_code_block_highlight instead"
+    )]
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub fn build_display_lines_with_codeblock_highlight_and_flags_and_width(
@@ -449,6 +458,16 @@ impl ScrollCalculator {
         .lines
     }
 
+    /// Build layout with codeblock highlighting and terminal width for table balancing
+    ///
+    /// # Deprecated
+    ///
+    /// Use cached lines with `crate::ui::renderer::apply_code_block_highlight` instead.
+    /// This function re-renders all markdown on every call, which is inefficient.
+    #[deprecated(
+        since = "0.6.1",
+        note = "Use cached lines with apply_code_block_highlight instead"
+    )]
     #[allow(clippy::too_many_arguments)]
     pub fn build_layout_with_codeblock_highlight_and_flags_and_width(
         messages: &VecDeque<Message>,

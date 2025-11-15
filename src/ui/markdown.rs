@@ -849,6 +849,15 @@ fn render_message_with_ranges_with_width_and_policy(
 }
 
 /// Compute code block ranges aligned to width-aware rendering and table layout.
+///
+/// # Deprecated
+///
+/// Use [`crate::ui::span::extract_code_blocks`] with cached metadata instead.
+/// This function re-renders all markdown on every call, which is inefficient.
+#[deprecated(
+    since = "0.6.1",
+    note = "Use crate::ui::span::extract_code_blocks with cached metadata instead"
+)]
 pub fn compute_codeblock_ranges_with_width_and_policy(
     messages: &VecDeque<crate::core::message::Message>,
     theme: &Theme,
@@ -904,6 +913,15 @@ pub fn compute_codeblock_ranges_with_width_and_policy(
     out
 }
 /// Provides only content and optional language hint for each code block, in order of appearance.
+///
+/// # Deprecated
+///
+/// Use [`crate::ui::span::extract_code_block_content`] with cached metadata instead.
+/// This function re-parses all markdown on every call, which is inefficient.
+#[deprecated(
+    since = "0.6.1",
+    note = "Use crate::ui::span::extract_code_block_content with cached metadata instead"
+)]
 pub fn compute_codeblock_contents_with_lang(
     messages: &VecDeque<crate::core::message::Message>,
 ) -> Vec<(String, Option<String>)> {
@@ -2680,7 +2698,10 @@ End of table."###
             .filter(|kind| kind.is_code_block())
             .collect();
 
-        assert!(!code_spans.is_empty(), "Code block should have CodeBlock metadata");
+        assert!(
+            !code_spans.is_empty(),
+            "Code block should have CodeBlock metadata"
+        );
 
         // Verify metadata contains language and block index
         if let Some(meta) = code_spans[0].code_block_meta() {
@@ -2718,11 +2739,7 @@ End of table."###
             }
         }
 
-        assert_eq!(
-            indices.len(),
-            3,
-            "Should have 3 unique code block indices"
-        );
+        assert_eq!(indices.len(), 3, "Should have 3 unique code block indices");
         assert!(indices.contains(&0));
         assert!(indices.contains(&1));
         assert!(indices.contains(&2));
@@ -2874,7 +2891,10 @@ End of table."###
             .flat_map(|line| line.iter())
             .any(|k| k.is_code_block());
 
-        assert!(has_code_blocks, "User messages should have code block metadata");
+        assert!(
+            has_code_blocks,
+            "User messages should have code block metadata"
+        );
     }
 
     #[test]
@@ -2935,7 +2955,10 @@ End of table."###
             .collect();
 
         // Should find bash, javascript, json, txt
-        assert!(languages.len() >= 4, "Should preserve different language tags");
+        assert!(
+            languages.len() >= 4,
+            "Should preserve different language tags"
+        );
     }
 }
 

@@ -238,6 +238,7 @@ struct MarkdownRenderer<'a> {
     pending_list_indent: Option<usize>,
     in_code_block: Option<String>,
     code_block_lines: Vec<String>,
+    code_block_count: usize,
     table_renderer: Option<TableRenderer>,
     did_prefix: bool,
     app_prefix_indent: Option<String>,
@@ -274,6 +275,7 @@ impl<'a> MarkdownRenderer<'a> {
             pending_list_indent: None,
             in_code_block: None,
             code_block_lines: Vec::new(),
+            code_block_count: 0,
             table_renderer: None,
             did_prefix: !matches!(role, RoleKind::User | RoleKind::App(_)),
             app_prefix_indent,
@@ -760,7 +762,9 @@ impl<'a> MarkdownRenderer<'a> {
             metadata,
             &mut self.ranges,
             list_indent,
+            self.code_block_count,
         );
+        self.code_block_count += 1;
         self.push_empty_line();
         self.in_code_block = None;
         self.pending_list_indent = (list_indent > 0).then_some(list_indent);
@@ -2971,12 +2975,16 @@ fn flush_code_block_buffer(
     span_metadata: Option<&mut Vec<Vec<SpanKind>>>,
     ranges: &mut Vec<(usize, usize, String)>,
     list_indent: usize,
+    block_index: usize,
 ) {
+    let start = lines.len();
+
     if code_block_lines.is_empty() {
+        // Track empty blocks in ranges for navigation purposes
+        ranges.push((start, 0, String::new()));
         return;
     }
 
-    let start = lines.len();
     let joined = code_block_lines.join("\n");
     let produced_lines = if syntax_enabled {
         crate::utils::syntax::highlight_code_block(language_hint.unwrap_or(""), &joined, theme)
@@ -2996,7 +3004,10 @@ fn flush_code_block_buffer(
             if let Some(indent) = indent.as_ref() {
                 line.spans.insert(0, Span::raw(indent.clone()));
             }
-            metadata.push(vec![SpanKind::Text; line.spans.len()]);
+            // Convert empty language string to None
+            let lang = language_hint.and_then(|s| if s.is_empty() { None } else { Some(s) });
+            let code_block_kind = SpanKind::code_block(lang, block_index);
+            metadata.push(vec![code_block_kind; line.spans.len()]);
             lines.push(line);
         }
     } else {

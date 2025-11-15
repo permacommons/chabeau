@@ -13,6 +13,8 @@ pub enum SpanKind {
     AppPrefix,
     /// A hyperlink span emitted by the markdown renderer.
     Link(LinkMeta),
+    /// A code block span rendered from a fenced code block.
+    CodeBlock(CodeBlockMeta),
 }
 
 impl SpanKind {
@@ -64,38 +66,58 @@ impl SpanKind {
         SpanKind::Link(LinkMeta::new(href))
     }
 
-    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    /// Returns true if this span is part of a code block.
     #[inline]
-    #[allow(dead_code)]
     pub fn is_code_block(&self) -> bool {
-        false // Stub: always returns false until Phase 1
+        matches!(self, SpanKind::CodeBlock(_))
     }
 
-    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    /// Returns code block metadata if this span is a code block.
     #[inline]
-    #[allow(dead_code)]
     pub fn code_block_meta(&self) -> Option<&CodeBlockMeta> {
-        None // Stub: always returns None until Phase 1
+        match self {
+            SpanKind::CodeBlock(meta) => Some(meta),
+            _ => None,
+        }
+    }
+
+    /// Creates a code block span kind with the given metadata.
+    #[inline]
+    pub fn code_block(language: Option<impl Into<String>>, block_index: usize) -> Self {
+        SpanKind::CodeBlock(CodeBlockMeta::new(language, block_index))
     }
 }
 
-/// Placeholder type for Phase 0 tests. Will be implemented in Phase 1.
+/// Metadata for a code block span.
+///
+/// Identifies a span as part of a fenced code block, tracking its
+/// language tag and position within the rendered output.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub struct CodeBlockMeta {
     language: Option<Arc<str>>,
     block_index: usize,
 }
 
 impl CodeBlockMeta {
-    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
-    #[allow(dead_code)]
+    /// Creates metadata for a code block span.
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - Optional language tag from fence (e.g., "rust")
+    /// * `block_index` - Zero-based position of block in message
+    pub fn new(language: Option<impl Into<String>>, block_index: usize) -> Self {
+        Self {
+            language: language.map(|s| Arc::<str>::from(s.into())),
+            block_index,
+        }
+    }
+
+    /// Returns the language tag if specified in the code fence.
     pub fn language(&self) -> Option<&str> {
         self.language.as_deref()
     }
 
-    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
-    #[allow(dead_code)]
+    /// Returns the zero-based index of this block within the message.
     pub fn block_index(&self) -> usize {
         self.block_index
     }
@@ -116,5 +138,42 @@ impl LinkMeta {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn href(&self) -> &str {
         &self.href
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_block_meta_stores_language() {
+        let meta = CodeBlockMeta::new(Some("rust"), 0);
+        assert_eq!(meta.language(), Some("rust"));
+        assert_eq!(meta.block_index(), 0);
+    }
+
+    #[test]
+    fn code_block_meta_handles_no_language() {
+        let meta = CodeBlockMeta::new(None::<String>, 1);
+        assert_eq!(meta.language(), None);
+        assert_eq!(meta.block_index(), 1);
+    }
+
+    #[test]
+    fn span_kind_recognizes_code_blocks() {
+        let span = SpanKind::code_block(Some("python"), 0);
+        assert!(span.is_code_block());
+        assert!(!span.is_link());
+
+        let meta = span.code_block_meta().unwrap();
+        assert_eq!(meta.language(), Some("python"));
+        assert_eq!(meta.block_index(), 0);
+    }
+
+    #[test]
+    fn text_spans_are_not_code_blocks() {
+        let span = SpanKind::Text;
+        assert!(!span.is_code_block());
+        assert!(span.code_block_meta().is_none());
     }
 }

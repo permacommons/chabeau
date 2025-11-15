@@ -1219,7 +1219,7 @@ fn count_code_blocks_in_metadata(metadata: &[Vec<crate::ui::span::SpanKind>]) ->
 }
 
 #[test]
-#[ignore] // Will pass after Phase 2
+
 fn block_selection_uses_cached_metadata() {
     use crate::ui::markdown::test_fixtures;
 
@@ -1248,7 +1248,7 @@ fn block_selection_uses_cached_metadata() {
 }
 
 #[test]
-#[ignore] // Will pass after Phase 2
+
 fn cache_invalidates_on_message_change() {
     use crate::ui::markdown::test_fixtures;
 
@@ -1276,7 +1276,7 @@ fn cache_invalidates_on_message_change() {
 }
 
 #[test]
-#[ignore] // Will pass after Phase 2
+
 fn cache_invalidates_on_width_change() {
     use crate::ui::markdown::test_fixtures;
 
@@ -1318,7 +1318,7 @@ fn cache_invalidates_on_width_change() {
 }
 
 #[test]
-#[ignore] // Will pass after Phase 2
+
 fn cache_reused_for_same_width() {
     use crate::ui::markdown::test_fixtures;
 
@@ -1338,7 +1338,7 @@ fn cache_reused_for_same_width() {
 }
 
 #[test]
-#[ignore] // Will pass after Phase 2
+
 fn metadata_contains_code_blocks_after_cache() {
     use crate::ui::markdown::test_fixtures;
 

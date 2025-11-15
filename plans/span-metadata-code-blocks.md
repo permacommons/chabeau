@@ -1,10 +1,14 @@
 # Span Metadata Extension for Code Blocks
 
 **Created**: 2025-11-15
-**Status**: 🔄 In Progress
+**Status**: ✅ Complete
 **Effort Estimate**: L (sequential phases with test-first approach)
 
 > **T-Shirt Sizing**: XS = Tiny task, S = Small task, M = Medium task, L = Large task, XL = Extra large task
+
+## Implementation Complete
+
+All phases completed successfully. See [Post-Implementation Notes](#post-implementation-notes) for details on bugs discovered and fixed during rollout.
 
 ## Executive Summary
 
@@ -1310,3 +1314,70 @@ All of these can query `SpanKind::CodeBlock` metadata without renderer changes.
 ---
 
 **End of Plan**
+
+---
+
+## Post-Implementation Notes
+
+### Bugs Discovered and Fixed
+
+#### Bug 1: Per-Message Block Indices (Not Globally Unique)
+
+**Discovered**: During initial user testing after Phase 3 completion  
+**Symptom**: Navigation cycled through code blocks but multiple blocks were highlighted simultaneously  
+
+**Root Cause**: Block indices were assigned per-message, not globally:
+- Each message's `MarkdownRenderer` started counting from 0
+- Message 1 had blocks [0, 1, 2], Message 2 had blocks [0, 1, 2]
+- `extract_code_blocks()` used `HashMap<usize, CodeBlockPosition>` keyed by block_index
+- Duplicate indices overwrote each other in the HashMap
+- Result: Only one block per index survived, and selecting index 0 highlighted ALL blocks with index 0
+
+**Fix**: Added global block index renumbering in `LayoutEngine::layout_messages()` (commit `daf910d`)
+- Track `global_block_index` across all messages
+- After rendering each message, detect its code blocks
+- Renumber them from per-message indices to sequential global indices
+- Sort local indices before mapping to ensure deterministic ordering
+
+**Test Coverage**: `test_blocks_across_messages_have_unique_indices`
+
+#### Bug 2: Incremental Cache Updates Bypassed Global Renumbering
+
+**Discovered**: During further testing with real conversation flow  
+**Symptom**: After receiving assistant response with code, pressing Ctrl+B highlighted BOTH the old and new code blocks
+
+**Root Cause**: Two code paths for building cache:
+1. **Full rebuild** (`LayoutEngine::layout_messages()`) - correctly applied global renumbering ✅
+2. **Incremental update** (`splice_last_message_layout()`) - bypassed renumbering ❌
+
+When only the last message changed:
+- Incremental path rendered ONLY that message with per-message indices (starting at 0)
+- Spliced it directly into cache without renumbering
+- Created duplicate indices: cache had [0, 1, 0] instead of [0, 1, 2]
+- Selecting index 0 highlighted both blocks with that index
+
+**Fix**: Updated `splice_last_message_layout()` to preserve global uniqueness (commit `9d6ba26`)
+- Find maximum existing block index in the cache before splice
+- Renumber new message's block indices with offset `max + 1`
+- Guarantees global uniqueness even in incremental updates
+
+**Test Coverage**: `test_incremental_cache_update_preserves_global_indices`
+
+### Why Tests Didn't Catch These Bugs Initially
+
+**Phase 0 tests** used fixtures like `multiple_blocks()` - a **single message** with multiple blocks:
+- Triggered full rebuild path only
+- Never tested incremental updates
+- Never tested blocks across separate messages
+
+**Lessons Learned**:
+- Test both code paths: full rebuild AND incremental update
+- Test realistic conversation flows: multiple back-and-forth exchanges
+- Test edge cases: blocks in non-adjacent messages, interleaved with non-code messages
+
+### Final State
+
+- All 581 tests passing (includes 14 previously-ignored Phase 0 tests)
+- Block navigation works correctly across any conversation structure
+- Global block indices maintained correctly in both rebuild and incremental update paths
+- No performance regressions - caching works as designed

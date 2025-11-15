@@ -2677,7 +2677,7 @@ End of table."###
     // Phase 0 tests: Code block span metadata (currently failing, will pass in Phase 1)
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn code_block_spans_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::single_block();
@@ -2715,7 +2715,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn multiple_code_blocks_have_unique_indices() {
         use super::test_fixtures;
         let msg = test_fixtures::multiple_blocks();
@@ -2748,7 +2748,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn empty_code_block_has_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::empty_block();
@@ -2780,7 +2780,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn wrapped_code_preserves_metadata_across_lines() {
         use super::test_fixtures;
         let msg = test_fixtures::wrapped_code();
@@ -2811,7 +2811,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn code_block_without_language_has_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::no_language_tag();
@@ -2842,7 +2842,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn nested_code_blocks_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::nested_in_list();
@@ -2872,7 +2872,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn user_message_code_blocks_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::user_message_with_code();
@@ -2900,7 +2900,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn code_and_link_metadata_coexist() {
         use super::test_fixtures;
         let msg = test_fixtures::code_and_links();
@@ -2931,7 +2931,7 @@ End of table."###
     }
 
     #[test]
-    #[ignore] // Will pass after Phase 1
+    
     fn various_language_tags_preserved() {
         use super::test_fixtures;
         let msg = test_fixtures::various_languages();

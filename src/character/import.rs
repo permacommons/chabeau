@@ -43,7 +43,7 @@ impl std::error::Error for ImportError {}
 /// The cards directory defaults to the config location returned by [`get_cards_dir`] and may
 /// be overridden by setting the `CHABEAU_CARDS_DIR` environment variable. Tests rely on that
 /// override so they can exercise the real import workflow without touching the user's files.
-/// The actual import work happens in [`import_card_into`], which keeps filesystem details in
+/// The actual import work happens in `import_card_into`, which keeps filesystem details in
 /// one place while leaving this public API focused on its high-level behavior.
 ///
 /// # Arguments

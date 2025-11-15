@@ -24,7 +24,7 @@ pub struct Command {
     pub handler: CommandHandler,
 }
 
-/// Parsed view of a command input string, produced by [`CommandRegistry::dispatch`].
+/// Parsed view of a command input string, produced by `CommandRegistry::dispatch`.
 ///
 /// An invocation carries the original input (sans leading slash), the arguments as
 /// contiguous text, and a cached token list for handlers that prefer positional

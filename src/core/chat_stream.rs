@@ -293,7 +293,7 @@ pub struct StreamParams {
     /// HTTP client for making the streaming request.
     pub client: reqwest::Client,
 
-    /// Base URL of the API endpoint (e.g., "https://api.openai.com/v1").
+    /// Base URL of the API endpoint (e.g., `https://api.openai.com/v1`).
     pub base_url: String,
 
     /// API key for authentication.

@@ -38,7 +38,7 @@ pub struct Provider {
     /// Provider identifier (e.g., "openai", "anthropic").
     pub name: String,
 
-    /// Base URL for API requests (e.g., "https://api.openai.com/v1").
+    /// Base URL for API requests (e.g., `https://api.openai.com/v1`).
     pub base_url: String,
 
     /// Human-readable provider name for display.

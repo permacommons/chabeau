@@ -19,6 +19,9 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
 use ratatui::text::Line;
 
+// Tracks newline bookkeeping for plain (non-terminal) output. This allows the
+// redirected mode to mimic terminal rendering without relying on ANSI control
+// codes.
 #[derive(Default)]
 struct PlainStreamState {
     started: bool,
@@ -84,9 +87,54 @@ impl PlainStreamState {
     }
 }
 
+// Switches between terminal redraw mode (OSC encoded, multi-line diffing) and a
+// simple newline based stream suitable for redirected stdout.
 enum OutputMode {
     Terminal { previous_lines: Vec<String> },
     Plain { state: PlainStreamState },
+}
+
+// Re-computes the OSC encoded lines and redraws any changed content while
+// minimizing cursor movement.
+fn redraw_terminal_lines(
+    app: &mut app::App,
+    term_width: u16,
+    stdout: &mut io::Stdout,
+    previous_lines: &mut Vec<String>,
+    persist: bool,
+) -> io::Result<()> {
+    let new_lines: Vec<String> = {
+        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+        let lines = app.get_prewrapped_lines_cached(term_width).clone();
+        osc::encode_lines_with_links_with_underline(&lines, &metadata)
+    };
+
+    let mut common_prefix_len = 0usize;
+    let max_prefix = previous_lines.len().min(new_lines.len());
+    while common_prefix_len < max_prefix
+        && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
+    {
+        common_prefix_len += 1;
+    }
+
+    if previous_lines.len() > common_prefix_len {
+        let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
+        if lines_to_move_up > 0 {
+            execute!(stdout, MoveUp(lines_to_move_up))?;
+        }
+    }
+
+    for line in new_lines.iter().skip(common_prefix_len) {
+        execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+        println!("{}", line);
+    }
+
+    stdout.flush()?;
+    if persist {
+        *previous_lines = new_lines;
+    }
+
+    Ok(())
 }
 
 impl OutputMode {
@@ -102,6 +150,8 @@ impl OutputMode {
         }
     }
 
+    // Print the conversation prefix before streaming begins so both terminal
+    // and plain modes start from the same baseline.
     fn render_prefix(
         &mut self,
         app: &mut app::App,
@@ -128,6 +178,7 @@ impl OutputMode {
         }
     }
 
+    // Stream assistant tokens as they arrive.
     fn on_chunk(
         &mut self,
         content: &str,
@@ -137,40 +188,14 @@ impl OutputMode {
     ) -> io::Result<()> {
         match self {
             OutputMode::Terminal { previous_lines } => {
-                let new_lines: Vec<String> = {
-                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                };
-
-                let mut common_prefix_len = 0usize;
-                let max_prefix = previous_lines.len().min(new_lines.len());
-                while common_prefix_len < max_prefix
-                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
-                {
-                    common_prefix_len += 1;
-                }
-
-                if previous_lines.len() > common_prefix_len {
-                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
-                    if lines_to_move_up > 0 {
-                        execute!(stdout, MoveUp(lines_to_move_up))?;
-                    }
-                }
-
-                for line in new_lines.iter().skip(common_prefix_len) {
-                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                    println!("{}", line);
-                }
-
-                stdout.flush()?;
-                *previous_lines = new_lines;
-                Ok(())
+                redraw_terminal_lines(app, term_width, stdout, previous_lines, true)
             }
             OutputMode::Plain { state } => state.write_chunk(stdout, content),
         }
     }
 
+    // Render API errors inline, ensuring terminal mode preserves previous
+    // successful output.
     fn on_error(
         &mut self,
         error: &str,
@@ -180,34 +205,7 @@ impl OutputMode {
     ) -> io::Result<()> {
         match self {
             OutputMode::Terminal { previous_lines } => {
-                let new_lines: Vec<String> = {
-                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                };
-
-                let mut common_prefix_len = 0usize;
-                let max_prefix = previous_lines.len().min(new_lines.len());
-                while common_prefix_len < max_prefix
-                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
-                {
-                    common_prefix_len += 1;
-                }
-
-                if previous_lines.len() > common_prefix_len {
-                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
-                    if lines_to_move_up > 0 {
-                        execute!(stdout, MoveUp(lines_to_move_up))?;
-                    }
-                }
-
-                for line in new_lines.iter().skip(common_prefix_len) {
-                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                    println!("{}", line);
-                }
-
-                stdout.flush()?;
-                Ok(())
+                redraw_terminal_lines(app, term_width, stdout, previous_lines, false)
             }
             OutputMode::Plain { state } => state.write_line(stdout, error),
         }
@@ -275,6 +273,7 @@ pub async fn run_say(
         }
     };
 
+    // Configuration and auth need to be loaded before we can send any request.
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
 
@@ -319,6 +318,7 @@ pub async fn run_say(
         }
     })?;
 
+    // The first render needs an initial width to prewrap conversation lines.
     let (term_width, _) = terminal::size().unwrap_or((80, 24));
 
     let (cancel_token, stream_id, api_messages) = {
@@ -330,6 +330,8 @@ pub async fn run_say(
 
     let params = app.build_stream_params(api_messages, cancel_token, stream_id);
 
+    // Begin streaming completions on a background task and listen for chunks
+    // over the channel receiver.
     let (stream_service, mut rx) = ChatStreamService::new();
     stream_service.spawn_stream(params);
 
@@ -338,6 +340,8 @@ pub async fn run_say(
     let mut output_mode = OutputMode::new(stdout_is_terminal);
     output_mode.render_prefix(&mut app, term_width, &mut stdout)?;
 
+    // Drive the stream until completion, flushing chunks to stdout as they
+    // arrive.
     loop {
         match rx.recv().await {
             Some((StreamMessage::Chunk(content), _)) => {

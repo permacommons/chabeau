@@ -29,20 +29,40 @@ use self::ui::{
 // Constants for repeated strings
 const KEYRING_SERVICE: &str = "chabeau";
 
+/// Provider metadata for authentication.
+///
+/// Contains the essential information needed to authenticate with and
+/// connect to a chat API provider.
 #[derive(Debug, Clone)]
 pub struct Provider {
+    /// Provider identifier (e.g., "openai", "anthropic").
     pub name: String,
+
+    /// Base URL for API requests (e.g., "https://api.openai.com/v1").
     pub base_url: String,
+
+    /// Human-readable provider name for display.
     pub display_name: String,
 }
 
 type ConfiguredProviderEntry = (String, String, bool);
 
+/// Authentication status for a provider.
+///
+/// Used to report which providers have stored credentials and are
+/// available for use.
 #[derive(Clone, Debug)]
 pub struct ProviderAuthStatus {
+    /// Provider identifier.
     pub id: String,
+
+    /// Human-readable provider name.
     pub display_name: String,
+
+    /// Base URL for API requests.
     pub base_url: String,
+
+    /// Whether a token is stored for this provider.
     pub has_token: bool,
 }
 
@@ -57,6 +77,7 @@ struct CustomProviderSummary {
 }
 
 impl Provider {
+    /// Creates a new provider with the given metadata.
     pub fn new(
         name: String,
         base_url: String,
@@ -71,6 +92,15 @@ impl Provider {
     }
 }
 
+/// Authentication manager for handling provider credentials.
+///
+/// This manager combines multiple authentication sources (keyring, config,
+/// environment variables) and provides both programmatic and interactive
+/// APIs for managing credentials. It supports built-in providers (OpenAI,
+/// Anthropic, etc.) and custom user-defined providers.
+///
+/// The manager can optionally disable keyring access for testing or when
+/// the system keyring is unavailable.
 pub struct AuthManager {
     providers: Vec<Provider>,
     config: Config,
@@ -85,11 +115,31 @@ enum KeyringCacheEntry {
 }
 
 impl AuthManager {
+    /// Creates a new authentication manager with keyring enabled.
+    ///
+    /// This loads the user configuration and initializes the list of
+    /// available providers (both built-in and custom).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration loading fails.
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_keyring(true)
     }
 
-    /// Construct an AuthManager, optionally disabling keyring access (useful for tests)
+    /// Creates an authentication manager with optional keyring support.
+    ///
+    /// When `use_keyring` is false, credentials are only read from
+    /// environment variables. This is useful for testing or when the
+    /// system keyring is unavailable.
+    ///
+    /// # Arguments
+    ///
+    /// * `use_keyring` - Whether to use the system keyring for credentials
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration loading fails.
     pub fn new_with_keyring(use_keyring: bool) -> Result<Self, Box<dyn std::error::Error>> {
         // Load config first
         let config = Config::load()?;
@@ -118,6 +168,15 @@ impl AuthManager {
         })
     }
 
+    /// Finds a provider by name (case-insensitive).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Provider identifier to search for
+    ///
+    /// # Returns
+    ///
+    /// Returns the provider if found, or `None` if no matching provider exists.
     pub fn find_provider_by_name(&self, name: &str) -> Option<&Provider> {
         self.providers
             .iter()
@@ -145,6 +204,18 @@ impl AuthManager {
         }
     }
 
+    /// Stores an API token for a provider in the system keyring.
+    ///
+    /// If keyring is disabled (e.g., in tests), this is a no-op.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - Provider identifier
+    /// * `token` - API key to store
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if keyring access fails.
     pub fn store_token(
         &self,
         provider_name: &str,
@@ -159,6 +230,19 @@ impl AuthManager {
         Ok(())
     }
 
+    /// Retrieves an API token for a provider from the system keyring.
+    ///
+    /// Results are cached to avoid repeated keyring access. Returns `None`
+    /// if no token is stored or if keyring is disabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - Provider identifier
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(token))` if found, `Ok(None)` if not stored, or
+    /// an error if keyring access fails.
     pub fn get_token(
         &self,
         provider_name: &str,

@@ -57,6 +57,21 @@ pub enum CommandResult {
     Refine(String),
 }
 
+/// Processes user input and dispatches commands.
+///
+/// This is the main entry point for command handling. If the input matches
+/// a registered slash command (e.g., `/help`, `/clear`), it dispatches to
+/// the appropriate handler. Otherwise, the input is treated as a message
+/// to send to the chat model.
+///
+/// # Arguments
+///
+/// * `app` - Application state
+/// * `input` - User input string (may or may not be a command)
+///
+/// # Returns
+///
+/// Returns a [`CommandResult`] indicating how the UI should respond.
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     match registry::registry().dispatch(input) {
         DispatchOutcome::NotACommand | DispatchOutcome::UnknownCommand => {
@@ -417,6 +432,24 @@ where
     CommandResult::Continue
 }
 
+/// Dumps the conversation to a markdown file.
+///
+/// This function exports the chat transcript to a markdown file, including
+/// user messages, assistant responses, and log entries. App-level messages
+/// (info, warnings, errors) are excluded from the export.
+///
+/// # Arguments
+///
+/// * `app` - Application state containing the conversation
+/// * `filename` - Output file path
+/// * `overwrite` - Whether to overwrite if the file already exists
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The conversation is empty
+/// - The file exists and `overwrite` is false
+/// - File creation or writing fails
 pub fn dump_conversation_with_overwrite(
     app: &App,
     filename: &str,

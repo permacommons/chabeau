@@ -1,7 +1,7 @@
 //! TUI-less "say" command
 
 use std::error::Error;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Read, Write};
 
 use crate::auth::{AuthManager, ProviderAuthStatus};
 use crate::character::CharacterService;
@@ -18,6 +18,27 @@ use ratatui::crossterm::cursor::{MoveToColumn, MoveUp};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
 
+fn resolve_prompt_from_args(
+    mut prompt: String,
+    stdin: &mut dyn Read,
+    stdin_is_terminal: bool,
+) -> io::Result<Option<String>> {
+    if prompt.trim().is_empty() && !stdin_is_terminal {
+        let mut buffer = String::new();
+        stdin.read_to_string(&mut buffer)?;
+        let trimmed = buffer.trim_end().to_string();
+        if !trimmed.is_empty() {
+            prompt = trimmed;
+        }
+    }
+
+    if prompt.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(prompt))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_say(
     prompt: Vec<String>,
@@ -28,11 +49,15 @@ pub async fn run_say(
     persona: Option<String>,
     preset: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let prompt = prompt.join(" ");
-    if prompt.is_empty() {
-        eprintln!("Usage: chabeau say <prompt>");
-        std::process::exit(1);
-    }
+    let mut stdin = io::stdin();
+    let stdin_is_terminal = stdin.is_terminal();
+    let prompt = match resolve_prompt_from_args(prompt.join(" "), &mut stdin, stdin_is_terminal)? {
+        Some(prompt) => prompt,
+        None => {
+            eprintln!("Usage: chabeau say <prompt>");
+            std::process::exit(1);
+        }
+    };
 
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
@@ -198,4 +223,34 @@ pub async fn run_say(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_prompt_from_args;
+    use std::io::Cursor;
+
+    #[test]
+    fn resolve_prompt_prefers_cli_args() {
+        let mut stdin = Cursor::new("ignored");
+        let prompt = resolve_prompt_from_args("hello world".into(), &mut stdin, false)
+            .expect("prompt should resolve");
+        assert_eq!(prompt, Some("hello world".into()));
+    }
+
+    #[test]
+    fn resolve_prompt_reads_from_piped_stdin() {
+        let mut stdin = Cursor::new("hello from pipe\n\n");
+        let prompt = resolve_prompt_from_args(String::new(), &mut stdin, false)
+            .expect("prompt should resolve");
+        assert_eq!(prompt, Some("hello from pipe".into()));
+    }
+
+    #[test]
+    fn resolve_prompt_handles_empty_sources() {
+        let mut stdin = Cursor::new("");
+        let prompt = resolve_prompt_from_args(String::new(), &mut stdin, false)
+            .expect("prompt should resolve");
+        assert!(prompt.is_none());
+    }
 }

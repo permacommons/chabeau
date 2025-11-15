@@ -1201,3 +1201,129 @@ fn test_turn_off_character_mode_from_picker() {
     assert!(app.session.active_character.is_none());
     assert_eq!(app.ui.status.as_deref(), Some("Character mode disabled"));
 }
+
+// Phase 0 tests: Code block cache behavior (currently ignored, will pass in Phase 2)
+
+/// Helper to count code blocks in span metadata.
+#[allow(dead_code)]
+fn count_code_blocks_in_metadata(metadata: &[Vec<crate::ui::span::SpanKind>]) -> usize {
+    let mut indices = std::collections::HashSet::new();
+    for line_meta in metadata {
+        for kind in line_meta {
+            if let Some(meta) = kind.code_block_meta() {
+                indices.insert(meta.block_index());
+            }
+        }
+    }
+    indices.len()
+}
+
+#[test]
+#[ignore] // Will pass after Phase 2
+fn block_selection_uses_cached_metadata() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::multiple_blocks());
+
+    // First render caches metadata
+    let width = 80u16;
+    let _lines = app.get_prewrapped_lines_cached(width);
+    let ptr_before = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // Count code block spans in cache
+    let cached_blocks = count_code_blocks_in_metadata(app.get_prewrapped_span_metadata_cached(width));
+    assert_eq!(cached_blocks, 3, "Should cache 3 code blocks");
+
+    // Enter block select mode
+    app.ui.enter_block_select_mode(0);
+
+    // Navigation should not invalidate cache
+    let ptr_after = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    assert_eq!(
+        ptr_before, ptr_after,
+        "Block navigation should reuse cached metadata"
+    );
+}
+
+#[test]
+#[ignore] // Will pass after Phase 2
+fn cache_invalidates_on_message_change() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width = 80u16;
+    let ptr_before = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // Modify messages
+    app.ui.messages.push_back(test_fixtures::single_block());
+    app.invalidate_prewrap_cache();
+
+    let ptr_after = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // Cache should be invalidated (different pointer)
+    assert!(
+        ptr_before != ptr_after,
+        "Cache should invalidate on message change"
+    );
+}
+
+#[test]
+#[ignore] // Will pass after Phase 2
+fn cache_invalidates_on_width_change() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::wrapped_code());
+
+    let width1 = 80u16;
+    let width2 = 40u16;
+
+    let ptr1 = app.get_prewrapped_span_metadata_cached(width1) as *const _;
+    let ptr2 = app.get_prewrapped_span_metadata_cached(width2) as *const _;
+
+    // Different widths should produce different cache entries
+    assert!(ptr1 != ptr2, "Cache should be width-specific");
+}
+
+#[test]
+#[ignore] // Will pass after Phase 2
+fn cache_reused_for_same_width() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width = 80u16;
+
+    // Multiple accesses at same width
+    let ptr1 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    let ptr2 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    let ptr3 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // All should return the same pointer
+    assert_eq!(ptr1, ptr2);
+    assert_eq!(ptr2, ptr3);
+}
+
+#[test]
+#[ignore] // Will pass after Phase 2
+fn metadata_contains_code_blocks_after_cache() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::multiple_blocks());
+
+    let width = 80u16;
+    let metadata = app.get_prewrapped_span_metadata_cached(width);
+
+    // Cached metadata should include code block metadata
+    let has_code_blocks = metadata
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    assert!(has_code_blocks, "Cached metadata should include code blocks");
+}

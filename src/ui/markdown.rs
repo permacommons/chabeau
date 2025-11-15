@@ -14,6 +14,9 @@ use wrap::wrap_spans_to_width_generic_shared;
 mod table;
 use table::TableRenderer;
 
+#[cfg(test)]
+pub mod test_fixtures;
+
 #[derive(Clone, Debug)]
 enum ListKind {
     Unordered,
@@ -2645,6 +2648,290 @@ End of table."###
             let row_width = UnicodeWidthStr::width(row.as_str());
             assert!(row_width <= 100, "Row {} should not be excessively wide due to proper wrapping: width={}, content: '{}'", i, row_width, row);
         }
+    }
+
+    // Phase 0 tests: Code block span metadata (currently failing, will pass in Phase 1)
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn code_block_spans_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::single_block();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Find spans that should be code blocks
+        let code_spans: Vec<_> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter(|kind| kind.is_code_block())
+            .collect();
+
+        assert!(!code_spans.is_empty(), "Code block should have CodeBlock metadata");
+
+        // Verify metadata contains language and block index
+        if let Some(meta) = code_spans[0].code_block_meta() {
+            assert_eq!(meta.language(), Some("rust"));
+            assert_eq!(meta.block_index(), 0);
+        } else {
+            panic!("Expected CodeBlock metadata");
+        }
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn multiple_code_blocks_have_unique_indices() {
+        use super::test_fixtures;
+        let msg = test_fixtures::multiple_blocks();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Extract unique block indices
+        let mut indices = std::collections::HashSet::new();
+        for line_meta in metadata.iter() {
+            for kind in line_meta.iter() {
+                if let Some(meta) = kind.code_block_meta() {
+                    indices.insert(meta.block_index());
+                }
+            }
+        }
+
+        assert_eq!(
+            indices.len(),
+            3,
+            "Should have 3 unique code block indices"
+        );
+        assert!(indices.contains(&0));
+        assert!(indices.contains(&1));
+        assert!(indices.contains(&2));
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn empty_code_block_has_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::empty_block();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Empty blocks should still be tracked (even if they produce no content spans)
+        // This ensures block navigation can identify all blocks
+        let has_code_meta = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        // Note: Implementation detail - empty blocks may or may not create spans.
+        // What matters is that they're tracked in the block count for navigation.
+        assert!(
+            has_code_meta || details.codeblock_ranges.iter().any(|(_, len, _)| *len == 0),
+            "Empty blocks should be tracked"
+        );
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn wrapped_code_preserves_metadata_across_lines() {
+        use super::test_fixtures;
+        let msg = test_fixtures::wrapped_code();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            Some(40), // Narrow width to force wrapping
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // All code spans should have block_index 0
+        let block_indices: Vec<usize> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta().map(|m| m.block_index()))
+            .collect();
+
+        assert!(!block_indices.is_empty(), "Should have code block metadata");
+        assert!(
+            block_indices.iter().all(|&idx| idx == 0),
+            "All wrapped lines should have same block_index"
+        );
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn code_block_without_language_has_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::no_language_tag();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let code_metas: Vec<_> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta())
+            .collect();
+
+        assert!(!code_metas.is_empty(), "Should have code block metadata");
+        assert_eq!(
+            code_metas[0].language(),
+            None,
+            "Block without language should have None language"
+        );
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn nested_code_blocks_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::nested_in_list();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Should have two code blocks (indices 0 and 1)
+        let mut indices = std::collections::HashSet::new();
+        for line_meta in metadata.iter() {
+            for kind in line_meta.iter() {
+                if let Some(meta) = kind.code_block_meta() {
+                    indices.insert(meta.block_index());
+                }
+            }
+        }
+
+        assert_eq!(indices.len(), 2, "Should have 2 code blocks in list");
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn user_message_code_blocks_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::user_message_with_code();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            Some("User"),
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let has_code_blocks = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        assert!(has_code_blocks, "User messages should have code block metadata");
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn code_and_link_metadata_coexist() {
+        use super::test_fixtures;
+        let msg = test_fixtures::code_and_links();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let has_code_blocks = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        let has_links = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_link());
+
+        assert!(has_code_blocks, "Should have code block metadata");
+        assert!(has_links, "Should have link metadata");
+    }
+
+    #[test]
+    #[ignore] // Will pass after Phase 1
+    fn various_language_tags_preserved() {
+        use super::test_fixtures;
+        let msg = test_fixtures::various_languages();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let languages: Vec<Option<&str>> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta())
+            .map(|m| m.language())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Should find bash, javascript, json, txt
+        assert!(languages.len() >= 4, "Should preserve different language tags");
     }
 }
 

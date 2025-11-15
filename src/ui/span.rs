@@ -63,6 +63,42 @@ impl SpanKind {
     pub fn link(href: impl Into<String>) -> Self {
         SpanKind::Link(LinkMeta::new(href))
     }
+
+    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn is_code_block(&self) -> bool {
+        false // Stub: always returns false until Phase 1
+    }
+
+    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn code_block_meta(&self) -> Option<&CodeBlockMeta> {
+        None // Stub: always returns None until Phase 1
+    }
+}
+
+/// Placeholder type for Phase 0 tests. Will be implemented in Phase 1.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
+pub struct CodeBlockMeta {
+    language: Option<Arc<str>>,
+    block_index: usize,
+}
+
+impl CodeBlockMeta {
+    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    #[allow(dead_code)]
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// Placeholder stub for Phase 0 tests. Will be implemented in Phase 1.
+    #[allow(dead_code)]
+    pub fn block_index(&self) -> usize {
+        self.block_index
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

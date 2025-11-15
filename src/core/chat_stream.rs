@@ -1,3 +1,14 @@
+//! SSE streaming pipeline for chat completions.
+//!
+//! This module provides [`ChatStreamService`], which handles outgoing API
+//! requests and processes Server-Sent Events (SSE) streams. Each stream runs
+//! in a Tokio task, posts [`StreamMessage`] frames into an unbounded channel,
+//! normalizes malformed input, and reports API errors with helpful summaries.
+//!
+//! Cancellation tokens allow user interrupts to stop streaming promptly.
+//!
+//! See also: [`spawn_stream`](ChatStreamService::spawn_stream), [`StreamParams`]
+
 use futures_util::StreamExt;
 use memchr::memchr;
 use tokio::sync::mpsc;
@@ -6,14 +17,30 @@ use crate::api::{ChatMessage, ChatRequest, ChatResponse};
 use crate::core::message::AppMessageKind;
 use crate::utils::url::construct_api_url;
 
+/// Messages emitted by the SSE streaming service.
+///
+/// These messages are sent through the channel returned by
+/// [`ChatStreamService::new`] and represent different events
+/// during the streaming lifecycle.
 #[derive(Clone, Debug)]
 pub enum StreamMessage {
+    /// A content chunk received from the streaming API response.
     Chunk(String),
+
+    /// An error occurred during streaming (e.g., API error, network failure).
     Error(String),
+
+    /// An application-level message with metadata for display in the UI.
+    ///
+    /// See [`AppMessageKind`] for message severity levels.
     App {
+        /// The kind of application message (info, warning, error).
         kind: AppMessageKind,
+        /// The message content to display.
         content: String,
     },
+
+    /// The stream has ended (received `[DONE]` signal from API).
     End,
 }
 
@@ -79,20 +106,45 @@ fn route_sse_frame(
     }
 }
 
+/// Frames parsed from Server-Sent Events stream.
+///
+/// SSE data can represent either chat content or application-level messages
+/// (e.g., warnings about malformed UTF-8).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SseFrame {
+    /// A line of data from the SSE stream (typically "data: ..." prefixed).
     Data(String),
+
+    /// An application message generated during stream processing.
     AppMessage {
+        /// Message severity level.
         kind: AppMessageKind,
+        /// Message content.
         content: String,
     },
 }
 
+/// Trait for parsing byte chunks into SSE frames.
+///
+/// Implementors buffer incoming bytes, detect newlines, and emit complete
+/// frames for processing.
 pub trait SseFramer {
+    /// Processes incoming bytes and returns any complete frames.
+    ///
+    /// Partial lines are buffered internally until a newline is encountered.
     fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame>;
+
+    /// Flushes any remaining buffered data as a final frame.
+    ///
+    /// Call this when the stream ends to process incomplete lines.
     fn finish(&mut self) -> Vec<SseFrame>;
 }
 
+/// Simple line-based SSE framer with UTF-8 validation.
+///
+/// This framer splits incoming bytes on newlines, validates UTF-8 encoding,
+/// and emits warnings for malformed data. It handles both `\n` and `\r\n`
+/// line endings.
 #[derive(Default)]
 pub struct SimpleSseFramer {
     buffer: Vec<u8>,
@@ -100,6 +152,7 @@ pub struct SimpleSseFramer {
 }
 
 impl SimpleSseFramer {
+    /// Creates a new SSE framer with an empty buffer.
     pub fn new() -> Self {
         Self::default()
     }
@@ -231,28 +284,133 @@ fn format_api_error(error_text: &str) -> String {
     }
 }
 
+/// Parameters for initiating a chat completion stream.
+///
+/// This struct packages all the necessary information to start a streaming
+/// request to a chat API, including authentication, model selection, and
+/// cancellation control.
 pub struct StreamParams {
+    /// HTTP client for making the streaming request.
     pub client: reqwest::Client,
+
+    /// Base URL of the API endpoint (e.g., `https://api.openai.com/v1`).
     pub base_url: String,
+
+    /// API key for authentication.
     pub api_key: String,
+
+    /// Provider identifier (used for provider-specific auth headers).
     pub provider_name: String,
+
+    /// Model identifier for the chat completion request.
     pub model: String,
+
+    /// Conversation messages to send to the API.
     pub api_messages: Vec<ChatMessage>,
+
+    /// Cancellation token to allow aborting the stream mid-flight.
     pub cancel_token: tokio_util::sync::CancellationToken,
+
+    /// Unique identifier for this stream instance.
     pub stream_id: u64,
 }
 
+/// Service for managing SSE-based chat completion streams.
+///
+/// This service spawns background tasks to handle streaming API requests,
+/// parses Server-Sent Events, and sends [`StreamMessage`] events through
+/// an unbounded channel for consumption by the UI.
+///
+/// Each stream runs in its own Tokio task and can be cancelled mid-flight
+/// using the provided cancellation token.
 #[derive(Clone)]
 pub struct ChatStreamService {
     tx: mpsc::UnboundedSender<(StreamMessage, u64)>,
 }
 
 impl ChatStreamService {
+    /// Creates a new chat stream service and its message receiver.
+    ///
+    /// Returns a tuple of `(service, receiver)` where the receiver can be
+    /// polled for [`StreamMessage`] events emitted by spawned streams.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chabeau::core::chat_stream::ChatStreamService;
+    ///
+    /// let (service, mut rx) = ChatStreamService::new();
+    /// // Use service.spawn_stream() to start streams
+    /// // Poll rx for incoming messages
+    /// ```
     pub fn new() -> (Self, mpsc::UnboundedReceiver<(StreamMessage, u64)>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (Self { tx }, rx)
     }
 
+    /// Spawns a background task to stream chat completions.
+    ///
+    /// This method starts a new Tokio task that makes an HTTP request to the
+    /// chat API, processes the SSE response stream, and sends messages through
+    /// the channel returned by [`new`](Self::new).
+    ///
+    /// The stream automatically handles:
+    /// - API authentication headers
+    /// - SSE parsing and UTF-8 validation
+    /// - Error formatting (JSON, XML, plain text)
+    /// - Cancellation via the provided token
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Stream parameters including API credentials, model, and messages
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. Errors are sent as [`StreamMessage::Error`] events.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use chabeau::core::chat_stream::{ChatStreamService, StreamParams, StreamMessage};
+    /// # use chabeau::api::ChatMessage;
+    /// # use tokio_util::sync::CancellationToken;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let (service, mut rx) = ChatStreamService::new();
+    /// let client = reqwest::Client::new();
+    /// let cancel_token = CancellationToken::new();
+    ///
+    /// let params = StreamParams {
+    ///     client,
+    ///     base_url: "https://api.openai.com/v1".to_string(),
+    ///     api_key: "your-api-key".to_string(),
+    ///     provider_name: "openai".to_string(),
+    ///     model: "gpt-4".to_string(),
+    ///     api_messages: vec![
+    ///         ChatMessage {
+    ///             role: "user".to_string(),
+    ///             content: "Hello!".to_string(),
+    ///         },
+    ///     ],
+    ///     cancel_token: cancel_token.clone(),
+    ///     stream_id: 1,
+    /// };
+    ///
+    /// service.spawn_stream(params);
+    ///
+    /// // Poll for messages
+    /// while let Some((message, stream_id)) = rx.recv().await {
+    ///     match message {
+    ///         StreamMessage::Chunk(content) => println!("{}", content),
+    ///         StreamMessage::End => break,
+    ///         StreamMessage::Error(err) => eprintln!("Error: {}", err),
+    ///         StreamMessage::App { kind, content } => {
+    ///             eprintln!("[{:?}] {}", kind, content);
+    ///         }
+    ///     }
+    /// }
+    /// # }
+    /// ```
     pub fn spawn_stream(&self, params: StreamParams) {
         let tx_clone = self.tx.clone();
         tokio::spawn(async move {

@@ -1,3 +1,13 @@
+//! Terminal UI rendering with Ratatui.
+//!
+//! This module composes the chat transcript, pickers, and input area using
+//! Ratatui layout primitives. It caches wrapped lines for performance,
+//! adapts styling when pickers are open, and projects mode-specific prompts
+//! (compose, edit, streaming indicators) into the title bar.
+//!
+//! Scroll state and OSC hyperlink metadata are recomputed only when necessary
+//! to keep redraws responsive.
+
 use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
 use crate::core::message::ROLE_ASSISTANT;

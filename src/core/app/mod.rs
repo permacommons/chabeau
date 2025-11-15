@@ -1,3 +1,13 @@
+//! Core application state and lifecycle management.
+//!
+//! This module contains the [`App`] struct, which is the heart of the runtime.
+//! It packages the current session, conversation, UI state, pickers, and services
+//! into a single owner that can be mutated atomically within the async event loop.
+//!
+//! Initialization involves loading configuration, resolving authentication,
+//! activating personas and presets, and preparing character greetings. The
+//! module also provides action dispatching for UI events and background commands.
+
 use crate::character::service::CharacterService;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
@@ -38,15 +48,34 @@ pub use settings::{ProviderController, ThemeController};
 #[allow(unused_imports)]
 pub use ui_state::{ActivityKind, UiState, VerticalCursorDirection};
 
-/// Configuration parameters for initializing an App with authentication
+/// Configuration parameters for initializing an App with authentication.
+///
+/// This structure is passed to [`new_with_auth`] to control session setup,
+/// including which provider, model, and character to use, as well as optional
+/// persona and preset overrides.
 pub struct AppInitConfig {
+    /// Model identifier to use for the session.
     pub model: String,
+
+    /// Optional path to a log file for recording API interactions.
     pub log_file: Option<String>,
+
+    /// Provider ID to use (overrides config default if specified).
     pub provider: Option<String>,
+
+    /// If true, use only environment variables for authentication (skip keyring).
     pub env_only: bool,
+
+    /// Pre-resolved provider session (bypasses normal provider resolution).
     pub pre_resolved_session: Option<ProviderSession>,
+
+    /// Character card to load (name or path).
     pub character: Option<String>,
+
+    /// Persona ID to activate for this session.
     pub persona: Option<String>,
+
+    /// Preset ID to activate for this session.
     pub preset: Option<String>,
 }
 
@@ -78,6 +107,54 @@ fn build_app(
     app
 }
 
+/// Creates a new authenticated application instance.
+///
+/// This initializes the full application state including session authentication,
+/// personas, presets, and character configuration. Use this for normal interactive
+/// chat sessions where credentials have been configured.
+///
+/// The function resolves authentication, loads the specified or default persona
+/// and preset for the provider/model combination, and displays any startup errors
+/// in the conversation transcript.
+///
+/// # Arguments
+///
+/// * `init_config` - Configuration controlling session initialization
+/// * `config` - User configuration loaded from disk
+/// * `character_service` - Service for loading and caching character cards
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Authentication resolution fails (no credentials found)
+/// - Persona or preset loading encounters an error
+/// - Character card loading fails
+/// - Session bootstrap fails
+///
+/// # Examples
+///
+/// ```no_run
+/// # use chabeau::core::app::{new_with_auth, AppInitConfig};
+/// # use chabeau::core::config::data::Config;
+/// # use chabeau::character::service::CharacterService;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let config = Config::load()?;
+/// let character_service = CharacterService::new();
+/// let init_config = AppInitConfig {
+///     model: "gpt-4".to_string(),
+///     log_file: None,
+///     provider: None,
+///     env_only: false,
+///     pre_resolved_session: None,
+///     character: None,
+///     persona: None,
+///     preset: None,
+/// };
+///
+/// let app = new_with_auth(init_config, &config, character_service).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn new_with_auth(
     init_config: AppInitConfig,
     config: &Config,
@@ -172,6 +249,24 @@ pub async fn new_with_auth(
     Ok(app)
 }
 
+/// Creates an uninitialized application instance without authentication.
+///
+/// This creates an app in a state where no provider or model is configured,
+/// typically used when no credentials are available and the user needs to
+/// select a provider interactively. The UI will show a provider picker on
+/// startup.
+///
+/// Use this instead of [`new_with_auth`] when authentication cannot be
+/// resolved (e.g., no keyring credentials and no environment variables).
+///
+/// # Arguments
+///
+/// * `log_file` - Optional path to a log file for recording API interactions
+/// * `character_service` - Service for loading and caching character cards
+///
+/// # Errors
+///
+/// Returns an error if session bootstrap or configuration loading fails.
 pub async fn new_uninitialized(
     log_file: Option<String>,
     mut character_service: CharacterService,
@@ -207,12 +302,40 @@ pub async fn new_uninitialized(
     Ok(app)
 }
 
+/// The main application state container.
+///
+/// This struct is the heart of the runtime, packaging all session state,
+/// UI state, pickers, and services into a single owner that can be mutated
+/// atomically within the async event loop.
+///
+/// The app is typically created via [`new_with_auth`] for authenticated
+/// sessions or [`new_uninitialized`] when credentials are not available.
+/// Once created, the app is wrapped in an async mutex and passed to the
+/// UI event loop.
+///
+/// Access to specific controllers is provided through methods like
+/// [`theme_controller`](crate::core::app::App::theme_controller),
+/// [`provider_controller`](crate::core::app::App::provider_controller), and
+/// [`conversation`](crate::core::app::App::conversation).
 pub struct App {
+    /// Active session context (provider, model, API client, theme).
     pub session: SessionContext,
+
+    /// UI state (messages, input, scroll, streaming status).
     pub ui: UiState,
+
+    /// Picker controller (theme, provider, model, character pickers).
     pub picker: PickerController,
+
+    /// Character card service for loading and caching character cards.
     pub character_service: CharacterService,
+
+    /// Persona manager for user identity and system prompts.
     pub persona_manager: crate::core::persona::PersonaManager,
+
+    /// Preset manager for prompt templates and refinement settings.
     pub preset_manager: crate::core::preset::PresetManager,
+
+    /// User configuration loaded from disk.
     pub config: Config,
 }

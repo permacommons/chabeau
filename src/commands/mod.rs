@@ -1,3 +1,15 @@
+//! Slash command processing and routing.
+//!
+//! This module provides a registry-based system for handling slash commands
+//! in the chat interface. Commands are dispatched to handlers that can modify
+//! application state, open pickers, save/load conversations, or pass input
+//! through to the model.
+//!
+//! The [`process_input`] function is the main entry point, returning a
+//! [`CommandResult`] that indicates how the UI should respond.
+//!
+//! See also: [`dump_conversation_with_overwrite`], [`all_commands`]
+
 mod refine;
 mod registry;
 
@@ -10,19 +22,103 @@ use registry::DispatchOutcome;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
+/// Result of processing a command or user input.
+///
+/// Variants indicate how the UI should respond after command execution,
+/// including opening pickers, passing input to the model, or continuing
+/// the current interaction flow.
 pub enum CommandResult {
+    /// Continue without taking action (command handled internally).
     Continue,
+
+    /// Continue and shift focus to the transcript area.
     ContinueWithTranscriptFocus,
+
+    /// Process the contained string as a chat message to the model.
     ProcessAsMessage(String),
+
+    /// Open the model selection picker.
     OpenModelPicker,
+
+    /// Open the provider selection picker.
     OpenProviderPicker,
+
+    /// Open the theme selection picker.
     OpenThemePicker,
+
+    /// Open the character selection picker.
     OpenCharacterPicker,
+
+    /// Open the persona selection picker.
     OpenPersonaPicker,
+
+    /// Open the preset selection picker.
     OpenPresetPicker,
+
+    /// Refine or edit the contained text before sending to the model.
     Refine(String),
 }
 
+/// Processes user input and dispatches commands.
+///
+/// This is the main entry point for command handling. If the input matches
+/// a registered slash command (e.g., `/help`, `/clear`), it dispatches to
+/// the appropriate handler. Otherwise, the input is treated as a message
+/// to send to the chat model.
+///
+/// # Arguments
+///
+/// * `app` - [`App`] state containing session and UI context
+/// * `input` - User input string (may or may not be a command)
+///
+/// # Returns
+///
+/// Returns a [`CommandResult`] indicating how the UI should respond.
+///
+/// # Examples
+///
+/// ```no_run
+/// use chabeau::commands::{process_input, CommandResult};
+/// # use chabeau::core::app::App;
+/// # use chabeau::character::service::CharacterService;
+/// # use chabeau::core::app::AppInitConfig;
+/// # use chabeau::core::config::data::Config;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let config = Config::load()?;
+/// # let character_service = CharacterService::new();
+/// # let init_config = AppInitConfig {
+/// #     model: "gpt-4".to_string(),
+/// #     log_file: None,
+/// #     provider: Some("openai".to_string()),
+/// #     env_only: false,
+/// #     pre_resolved_session: None,
+/// #     character: None,
+/// #     persona: None,
+/// #     preset: None,
+/// # };
+/// # let mut app = chabeau::core::app::new_with_auth(init_config, &config, character_service).await?;
+/// // Process a command
+/// let result = process_input(&mut app, "/help");
+/// match result {
+///     CommandResult::ContinueWithTranscriptFocus => {
+///         // Help was displayed, focus on transcript
+///     }
+///     _ => {}
+/// }
+///
+/// // Process a regular message
+/// let result = process_input(&mut app, "What is Rust?");
+/// match result {
+///     CommandResult::ProcessAsMessage(msg) => {
+///         // Send the message to the chat model
+///         assert_eq!(msg, "What is Rust?");
+///     }
+///     _ => {}
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     match registry::registry().dispatch(input) {
         DispatchOutcome::NotACommand | DispatchOutcome::UnknownCommand => {
@@ -383,6 +479,24 @@ where
     CommandResult::Continue
 }
 
+/// Dumps the conversation to a markdown file.
+///
+/// This function exports the chat transcript to a markdown file, including
+/// user messages, assistant responses, and log entries. App-level messages
+/// (info, warnings, errors) are excluded from the export.
+///
+/// # Arguments
+///
+/// * `app` - [`App`] state containing the conversation
+/// * `filename` - Output file path
+/// * `overwrite` - Whether to overwrite if the file already exists
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The conversation is empty
+/// - The file exists and `overwrite` is false
+/// - File creation or writing fails
 pub fn dump_conversation_with_overwrite(
     app: &App,
     filename: &str,

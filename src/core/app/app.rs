@@ -16,14 +16,27 @@ use crate::core::config::data::{DEFAULT_REFINE_INSTRUCTIONS, DEFAULT_REFINE_PREF
 use crate::ui::theme::Theme;
 
 impl App {
+    /// Returns a controller for theme-related operations.
+    ///
+    /// The theme controller provides methods to switch themes, open the
+    /// theme picker, and manage theme state.
     pub fn theme_controller(&mut self) -> ThemeController<'_> {
         ThemeController::new(&mut self.ui, &mut self.picker)
     }
 
+    /// Returns a controller for provider-related operations.
+    ///
+    /// The provider controller handles switching providers, opening the
+    /// provider picker, and managing provider/model state.
     pub fn provider_controller(&mut self) -> ProviderController<'_> {
         ProviderController::new(&mut self.session, &mut self.picker)
     }
 
+    /// Returns a controller for conversation operations.
+    ///
+    /// The conversation controller provides methods to add messages, clear
+    /// the conversation, apply personas and presets, and manage the message
+    /// history.
     pub fn conversation(&mut self) -> ConversationController<'_> {
         ConversationController::new(
             &mut self.session,

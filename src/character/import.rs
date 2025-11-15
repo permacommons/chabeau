@@ -3,14 +3,16 @@ use std::path::Path;
 
 use crate::character::loader::{get_cards_dir, load_card};
 
-/// Error type for import operations
+/// Errors that can occur when importing character cards.
 #[derive(Debug)]
 pub enum ImportError {
-    /// Card validation failed
+    /// Character card validation failed (invalid card structure or required fields missing).
     ValidationFailed(String),
-    /// File already exists and force flag not set
+
+    /// Destination file already exists and force overwrite was not requested.
     AlreadyExists(String),
-    /// IO error during import
+
+    /// I/O error occurred while copying or writing the character card file.
     IoError(String),
 }
 
@@ -41,7 +43,7 @@ impl std::error::Error for ImportError {}
 /// The cards directory defaults to the config location returned by [`get_cards_dir`] and may
 /// be overridden by setting the `CHABEAU_CARDS_DIR` environment variable. Tests rely on that
 /// override so they can exercise the real import workflow without touching the user's files.
-/// The actual import work happens in [`import_card_into`], which keeps filesystem details in
+/// The actual import work happens in `import_card_into`, which keeps filesystem details in
 /// one place while leaving this public API focused on its high-level behavior.
 ///
 /// # Arguments

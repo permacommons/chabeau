@@ -1,3 +1,12 @@
+//! Character card loading and caching service.
+//!
+//! This module provides the [`CharacterService`] which manages [`CharacterCard`]s,
+//! including loading from disk, caching for performance, and resolving characters
+//! by name or path. The service invalidates cached entries when the underlying
+//! card directory changes to ensure fresh data.
+//!
+//! Character cards define AI personas and greetings for chat sessions.
+
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -8,11 +17,21 @@ use crate::character::loader::{self, CardLoadError};
 use crate::character::CharacterCard;
 use crate::core::config::data::Config;
 
+/// Errors that can occur during character card operations.
 #[derive(Debug)]
 pub enum CharacterServiceError {
+    /// Cache initialization or operation failed.
     Cache(String),
+
+    /// Failed to load or parse a character card file.
+    ///
+    /// See [`CardLoadError`] for specific card loading errors.
     Load(CardLoadError),
+
+    /// I/O error while accessing the character card directory or files.
     Io(std::io::Error),
+
+    /// Character with the specified name was not found in the cards directory.
     NotFound(String),
 }
 
@@ -46,6 +65,18 @@ struct CachedCardEntry {
     modified: Option<SystemTime>,
 }
 
+/// Service for loading and caching character cards.
+///
+/// This service manages [`CharacterCard`] loading from disk with automatic caching
+/// based on file modification times. It invalidates cached entries when the
+/// cards directory changes (based on cache key) and provides fuzzy name matching
+/// for resolving character cards.
+///
+/// Character cards can be stored as JSON files or PNG images with embedded
+/// metadata. The service supports both direct file path lookups and name-based
+/// resolution with normalization (case-insensitive, space-to-underscore conversion).
+///
+/// See also: [`resolve`](Self::resolve), [`list_metadata`](Self::list_metadata)
 pub struct CharacterService {
     cache: CardCache,
     cards: HashMap<PathBuf, CachedCardEntry>,
@@ -53,6 +84,10 @@ pub struct CharacterService {
 }
 
 impl CharacterService {
+    /// Creates a new character service with an empty cache.
+    ///
+    /// The service will lazily initialize the cache on first use and track
+    /// file modification times to automatically reload changed cards.
     pub fn new() -> Self {
         Self {
             cache: CardCache::new(),
@@ -61,6 +96,16 @@ impl CharacterService {
         }
     }
 
+    /// Returns metadata for all character cards in the cards directory.
+    ///
+    /// This method scans the cards directory and returns lightweight
+    /// [`CachedCardMetadata`] (name, description, tags) without loading full
+    /// card contents. The cache is invalidated if the directory has changed
+    /// since the last call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cache initialization or metadata retrieval fails.
     pub fn list_metadata(&mut self) -> Result<Vec<CachedCardMetadata>, CharacterServiceError> {
         let metadata = self
             .cache
@@ -76,6 +121,15 @@ impl CharacterService {
         Ok(metadata)
     }
 
+    /// Returns metadata for all character cards along with their file paths.
+    ///
+    /// This is similar to [`list_metadata`](Self::list_metadata) but includes
+    /// the full path to each card file, useful for operations that need to
+    /// access the original files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cache initialization or metadata retrieval fails.
     pub fn list_metadata_with_paths(
         &mut self,
     ) -> Result<Vec<(CachedCardMetadata, PathBuf)>, CharacterServiceError> {
@@ -89,6 +143,39 @@ impl CharacterService {
         Ok(result)
     }
 
+    /// Resolves a character card by name or file path.
+    ///
+    /// This method attempts to load a character card using flexible input:
+    /// - If `input` is a valid file path, loads from that path directly
+    /// - Otherwise, treats `input` as a character name and performs fuzzy lookup
+    ///
+    /// The method caches loaded cards by path and reloads only if the file
+    /// modification time has changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Either a file path to a character card or a character name
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The file path does not exist or cannot be read
+    /// - The character name cannot be found in the cards directory
+    /// - The card file is malformed or fails validation
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use chabeau::character::service::CharacterService;
+    /// let mut service = CharacterService::new();
+    ///
+    /// // Load by file path
+    /// let card = service.resolve("/path/to/character.json")?;
+    ///
+    /// // Load by name
+    /// let card = service.resolve("Alice")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn resolve(&mut self, input: &str) -> Result<CharacterCard, CharacterServiceError> {
         let path = Path::new(input);
         if path.is_file() {
@@ -98,6 +185,21 @@ impl CharacterService {
         self.resolve_by_name(input)
     }
 
+    /// Resolves a character card by name only (no path lookup).
+    ///
+    /// This method performs fuzzy matching on character names, trying:
+    /// 1. Exact name match with `.json` and `.png` extensions
+    /// 2. Normalized name (lowercase, spaces replaced with underscores)
+    /// 3. Case-insensitive search through cached metadata
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The character name to search for
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CharacterServiceError::NotFound`] if no character with a
+    /// matching name can be found in the cards directory.
     pub fn resolve_by_name(&mut self, name: &str) -> Result<CharacterCard, CharacterServiceError> {
         if let Some(path) = self.try_find_card_path(name)? {
             return self.load_from_path(path);
@@ -106,6 +208,27 @@ impl CharacterService {
         Err(CharacterServiceError::NotFound(name.to_string()))
     }
 
+    /// Loads the default character for a specific provider and model.
+    ///
+    /// This method consults the user configuration to find a default character
+    /// configured for the given provider/model combination. If a default is
+    /// configured, it resolves and loads that character card.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider ID (e.g., "openai", "anthropic")
+    /// * `model` - Model identifier (e.g., "gpt-4", "claude-3-opus")
+    /// * `config` - User configuration containing default character mappings
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some((name, card)))` if a default character is configured
+    /// and successfully loaded, or `Ok(None)` if no default is configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured default character cannot be found
+    /// or loaded.
     pub fn load_default_for_session(
         &mut self,
         provider: &str,

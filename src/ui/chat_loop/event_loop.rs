@@ -1,3 +1,13 @@
+//! Event polling, dispatching, and UI rendering loop.
+//!
+//! This module orchestrates the main event loop for the chat interface.
+//! It polls terminal input, resolves mode-aware keybindings, dispatches
+//! high-level actions, handles background commands like streaming and
+//! model fetching, and triggers UI redraws.
+//!
+//! The event loop wraps the shared [`App`](crate::core::app::App) in an
+//! async mutex and coordinates with Tokio tasks for concurrent operations.
+
 use std::{
     error::Error,
     io,

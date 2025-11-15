@@ -84,6 +84,143 @@ impl PlainStreamState {
     }
 }
 
+enum OutputMode {
+    Terminal { previous_lines: Vec<String> },
+    Plain { state: PlainStreamState },
+}
+
+impl OutputMode {
+    fn new(stdout_is_terminal: bool) -> Self {
+        if stdout_is_terminal {
+            Self::Terminal {
+                previous_lines: Vec::new(),
+            }
+        } else {
+            Self::Plain {
+                state: PlainStreamState::new(),
+            }
+        }
+    }
+
+    fn render_prefix(
+        &mut self,
+        app: &mut app::App,
+        term_width: u16,
+        stdout: &mut io::Stdout,
+    ) -> io::Result<()> {
+        match self {
+            OutputMode::Terminal { previous_lines } => {
+                let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                let encoded = osc::encode_lines_with_links_with_underline(&lines, &metadata);
+                for line in &encoded {
+                    println!("{}", line);
+                }
+                stdout.flush()?;
+                *previous_lines = encoded;
+                Ok(())
+            }
+            OutputMode::Plain { state } => {
+                let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                let plain_lines = plain_text_lines(&lines);
+                state.write_prefix(stdout, &plain_lines)
+            }
+        }
+    }
+
+    fn on_chunk(
+        &mut self,
+        content: &str,
+        app: &mut app::App,
+        term_width: u16,
+        stdout: &mut io::Stdout,
+    ) -> io::Result<()> {
+        match self {
+            OutputMode::Terminal { previous_lines } => {
+                let new_lines: Vec<String> = {
+                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                };
+
+                let mut common_prefix_len = 0usize;
+                let max_prefix = previous_lines.len().min(new_lines.len());
+                while common_prefix_len < max_prefix
+                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
+                {
+                    common_prefix_len += 1;
+                }
+
+                if previous_lines.len() > common_prefix_len {
+                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
+                    if lines_to_move_up > 0 {
+                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                    }
+                }
+
+                for line in new_lines.iter().skip(common_prefix_len) {
+                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                    println!("{}", line);
+                }
+
+                stdout.flush()?;
+                *previous_lines = new_lines;
+                Ok(())
+            }
+            OutputMode::Plain { state } => state.write_chunk(stdout, content),
+        }
+    }
+
+    fn on_error(
+        &mut self,
+        error: &str,
+        app: &mut app::App,
+        term_width: u16,
+        stdout: &mut io::Stdout,
+    ) -> io::Result<()> {
+        match self {
+            OutputMode::Terminal { previous_lines } => {
+                let new_lines: Vec<String> = {
+                    let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
+                    let lines = app.get_prewrapped_lines_cached(term_width).clone();
+                    osc::encode_lines_with_links_with_underline(&lines, &metadata)
+                };
+
+                let mut common_prefix_len = 0usize;
+                let max_prefix = previous_lines.len().min(new_lines.len());
+                while common_prefix_len < max_prefix
+                    && previous_lines[common_prefix_len] == new_lines[common_prefix_len]
+                {
+                    common_prefix_len += 1;
+                }
+
+                if previous_lines.len() > common_prefix_len {
+                    let lines_to_move_up = (previous_lines.len() - common_prefix_len) as u16;
+                    if lines_to_move_up > 0 {
+                        execute!(stdout, MoveUp(lines_to_move_up))?;
+                    }
+                }
+
+                for line in new_lines.iter().skip(common_prefix_len) {
+                    execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
+                    println!("{}", line);
+                }
+
+                stdout.flush()?;
+                Ok(())
+            }
+            OutputMode::Plain { state } => state.write_line(stdout, error),
+        }
+    }
+
+    fn finish(&mut self, stdout: &mut io::Stdout) -> io::Result<()> {
+        match self {
+            OutputMode::Terminal { .. } => Ok(()),
+            OutputMode::Plain { state } => state.ensure_trailing_newline(stdout),
+        }
+    }
+}
+
 fn plain_text_lines(lines: &[Line<'_>]) -> Vec<String> {
     lines
         .iter()
@@ -198,21 +335,8 @@ pub async fn run_say(
 
     let mut stdout = io::stdout();
     let stdout_is_terminal = stdout.is_terminal();
-    let mut plain_stream_state = PlainStreamState::new();
-    let mut previous_lines = if stdout_is_terminal {
-        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-        let encoded = osc::encode_lines_with_links_with_underline(&lines, &metadata);
-        for line in &encoded {
-            println!("{}", line);
-        }
-        Some(encoded)
-    } else {
-        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-        let plain_lines = plain_text_lines(&lines);
-        plain_stream_state.write_prefix(&mut stdout, &plain_lines)?;
-        None
-    };
+    let mut output_mode = OutputMode::new(stdout_is_terminal);
+    output_mode.render_prefix(&mut app, term_width, &mut stdout)?;
 
     loop {
         match rx.recv().await {
@@ -224,40 +348,7 @@ pub async fn run_say(
                     conversation.append_to_response(&content, available_height, term_width);
                 }
 
-                if stdout_is_terminal {
-                    let new_lines: Vec<String> = {
-                        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                        osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                    };
-
-                    if let Some(prev_lines) = previous_lines.as_mut() {
-                        let mut common_prefix_len = 0usize;
-                        let max_prefix = prev_lines.len().min(new_lines.len());
-                        while common_prefix_len < max_prefix
-                            && prev_lines[common_prefix_len] == new_lines[common_prefix_len]
-                        {
-                            common_prefix_len += 1;
-                        }
-
-                        if prev_lines.len() > common_prefix_len {
-                            let lines_to_move_up = (prev_lines.len() - common_prefix_len) as u16;
-                            if lines_to_move_up > 0 {
-                                execute!(stdout, MoveUp(lines_to_move_up))?;
-                            }
-                        }
-
-                        for line in new_lines.iter().skip(common_prefix_len) {
-                            execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                            println!("{}", line);
-                        }
-
-                        stdout.flush()?;
-                        *prev_lines = new_lines;
-                    }
-                } else {
-                    plain_stream_state.write_chunk(&mut stdout, &content)?;
-                }
+                output_mode.on_chunk(&content, &mut app, term_width, &mut stdout)?;
             }
             Some((StreamMessage::Error(err), _)) => {
                 let trimmed = err.trim();
@@ -274,48 +365,13 @@ pub async fn run_say(
                     conversation.update_scroll_position(available_height, term_width);
                 }
 
-                if stdout_is_terminal {
-                    let new_lines: Vec<String> = {
-                        let metadata = app.get_prewrapped_span_metadata_cached(term_width).clone();
-                        let lines = app.get_prewrapped_lines_cached(term_width).clone();
-                        osc::encode_lines_with_links_with_underline(&lines, &metadata)
-                    };
-
-                    if let Some(prev_lines) = previous_lines.as_mut() {
-                        let mut common_prefix_len = 0usize;
-                        let max_prefix = prev_lines.len().min(new_lines.len());
-                        while common_prefix_len < max_prefix
-                            && prev_lines[common_prefix_len] == new_lines[common_prefix_len]
-                        {
-                            common_prefix_len += 1;
-                        }
-
-                        if prev_lines.len() > common_prefix_len {
-                            let lines_to_move_up = (prev_lines.len() - common_prefix_len) as u16;
-                            if lines_to_move_up > 0 {
-                                execute!(stdout, MoveUp(lines_to_move_up))?;
-                            }
-                        }
-
-                        for line in new_lines.iter().skip(common_prefix_len) {
-                            execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-                            println!("{}", line);
-                        }
-
-                        stdout.flush()?;
-                    }
-                    std::process::exit(1);
-                } else {
-                    plain_stream_state.write_line(&mut stdout, trimmed)?;
-                    std::process::exit(1);
-                }
+                output_mode.on_error(trimmed, &mut app, term_width, &mut stdout)?;
+                std::process::exit(1);
             }
             Some((StreamMessage::End, _)) => {
                 let mut conversation = app.conversation();
                 conversation.finalize_response();
-                if !stdout_is_terminal {
-                    plain_stream_state.ensure_trailing_newline(&mut stdout)?;
-                }
+                output_mode.finish(&mut stdout)?;
                 break;
             }
             None => break,

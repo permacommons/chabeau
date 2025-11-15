@@ -1119,4 +1119,235 @@ mod tests {
             indices
         );
     }
+
+    #[tokio::test]
+    async fn test_interleaved_blocks_have_unique_indices() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Add: block -> non-code -> block (exactly what user tested)
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "First block:\n```rust\nfn first() {}\n```".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me more code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Second block:\n```python\ndef second():\n    pass\n```".to_string(),
+                });
+            })
+            .await;
+
+        let blocks_info = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.block_index,
+                            b.start_line,
+                            b.end_line,
+                            b.language.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+
+        // Should find exactly 2 blocks
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find 2 code blocks, found: {:?}",
+            blocks_info
+        );
+
+        // CRITICAL: Block indices must be unique (0 and 1)
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices MUST be globally unique! Got: {:?}. If both are 0, navigation will select both blocks simultaneously.",
+            indices
+        );
+
+        // Verify languages are correct
+        assert_eq!(blocks_info[0].3, Some("rust".to_string()));
+        assert_eq!(blocks_info[1].3, Some("python".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_exact_user_scenario_two_assistant_code_blocks() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Exact scenario from user report:
+        // Message 1: User request -> Assistant code block
+        // Message 2: User non-code -> Assistant non-code
+        // Message 3: User request -> Assistant code block
+        app_handle
+            .update(|app| {
+                // Message 1
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me Rust code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Here it is:\n```rust\nfn first() {}\n```".to_string(),
+                });
+                // Message 2
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Thanks, what about Python?".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Sure, let me explain first...".to_string(),
+                });
+                // Message 3
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me the Python code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Here you go:\n```python\ndef second():\n    pass\n```"
+                        .to_string(),
+                });
+            })
+            .await;
+
+        let (blocks_info, all_metadata) = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                let info = blocks
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.block_index,
+                            b.start_line,
+                            b.end_line,
+                            b.language.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                // Also collect ALL metadata to debug
+                let all_meta: Vec<_> = metadata
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(line_idx, line_meta)| {
+                        for kind in line_meta {
+                            if let Some(meta) = kind.code_block_meta() {
+                                return Some((
+                                    line_idx,
+                                    meta.block_index(),
+                                    meta.language().map(String::from),
+                                ));
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+
+                (info, all_meta)
+            })
+            .await;
+
+        eprintln!("Blocks extracted: {:?}", blocks_info);
+        eprintln!("All code block metadata: {:?}", all_metadata);
+
+        // CRITICAL: Must find 2 blocks
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find exactly 2 code blocks, found: {:?}",
+            blocks_info
+        );
+
+        // CRITICAL: Indices MUST be different (0 and 1)
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_ne!(
+            indices[0], indices[1],
+            "BOTH BLOCKS HAVE INDEX {:?}! This causes simultaneous selection. Indices must be [0, 1], got {:?}",
+            indices[0], indices
+        );
+
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices must be [0, 1], got: {:?}",
+            indices
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_cache_update_preserves_global_indices() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Add first two messages with a code block
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "```rust\nfn first() {}\n```".to_string(),
+                });
+            })
+            .await;
+
+        // Trigger cache build
+        app_handle
+            .update(|app| {
+                let _ = app.get_prewrapped_span_metadata_cached(80);
+            })
+            .await;
+
+        // NOW add another message - this triggers incremental update (splice)
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "And another".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "```python\ndef second():\n    pass\n```".to_string(),
+                });
+            })
+            .await;
+
+        // Get metadata after incremental update
+        let indices = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks.iter().map(|b| b.block_index).collect::<Vec<_>>()
+            })
+            .await;
+
+        // CRITICAL: After incremental update, indices must still be globally unique
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Incremental cache update MUST preserve global uniqueness! Got: {:?}",
+            indices
+        );
+    }
 }

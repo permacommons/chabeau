@@ -122,8 +122,12 @@ impl LayoutEngine {
 
             if block_count > 0 {
                 // Build a mapping from per-message index to global index
+                // Sort local indices to ensure deterministic, sequential global indices
+                let mut sorted_indices: Vec<usize> = blocks_in_message.iter().copied().collect();
+                sorted_indices.sort_unstable();
+
                 let mut index_map = std::collections::HashMap::new();
-                for (i, local_idx) in blocks_in_message.iter().enumerate() {
+                for (i, local_idx) in sorted_indices.iter().enumerate() {
                     index_map.insert(*local_idx, global_block_index + i);
                 }
 

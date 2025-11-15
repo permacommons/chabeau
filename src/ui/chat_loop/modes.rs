@@ -1083,4 +1083,48 @@ mod tests {
             assert_eq!(blocks_info[2].0, 2, "Third block should have index 2");
         }
     }
+
+    #[tokio::test]
+    async fn test_blocks_across_messages_have_unique_indices() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        // Add multiple messages, each with their own code blocks
+        for msg in test_fixtures::blocks_across_messages() {
+            app_handle
+                .update(|app| {
+                    app.ui.messages.push_back(msg);
+                })
+                .await;
+        }
+
+        let blocks_info = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks
+                    .iter()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .await;
+
+        // Should find 2 blocks (one per assistant message)
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find 2 code blocks across messages, found: {:?}",
+            blocks_info
+        );
+
+        // Block indices should be globally unique (0 and 1), not both 0
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices should be globally unique (0, 1), got: {:?}",
+            indices
+        );
+    }
 }

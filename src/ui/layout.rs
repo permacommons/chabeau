@@ -86,6 +86,7 @@ impl LayoutEngine {
         let mut span_metadata = Vec::new();
         let mut message_spans = Vec::with_capacity(messages.len());
         let mut codeblock_ranges = Vec::new();
+        let mut global_block_index = 0usize;
 
         for msg in messages {
             let start = lines.len();
@@ -101,12 +102,48 @@ impl LayoutEngine {
                 codeblock_ranges: msg_ranges,
                 span_metadata: msg_meta,
             } = crate::ui::markdown::render_message_with_config(msg, theme, render_cfg);
-            let msg_metadata = msg_meta.unwrap_or_else(|| {
+            let mut msg_metadata = msg_meta.unwrap_or_else(|| {
                 msg_lines
                     .iter()
                     .map(|line| vec![SpanKind::Text; line.spans.len()])
                     .collect()
             });
+
+            // Renumber code block indices to be globally unique across all messages
+            let mut blocks_in_message = std::collections::HashSet::new();
+            for line_meta in &msg_metadata {
+                for kind in line_meta {
+                    if let Some(meta) = kind.code_block_meta() {
+                        blocks_in_message.insert(meta.block_index());
+                    }
+                }
+            }
+            let block_count = blocks_in_message.len();
+
+            if block_count > 0 {
+                // Build a mapping from per-message index to global index
+                let mut index_map = std::collections::HashMap::new();
+                for (i, local_idx) in blocks_in_message.iter().enumerate() {
+                    index_map.insert(*local_idx, global_block_index + i);
+                }
+
+                // Renumber all code block spans
+                for line_meta in &mut msg_metadata {
+                    for kind in line_meta {
+                        if let crate::ui::span::SpanKind::CodeBlock(ref mut meta) = kind {
+                            if let Some(&new_idx) = index_map.get(&meta.block_index()) {
+                                *meta = crate::ui::span::CodeBlockMeta::new(
+                                    meta.language().map(String::from),
+                                    new_idx,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                global_block_index += block_count;
+            }
+
             let len = msg_lines.len();
             span_metadata.extend(msg_metadata);
             lines.append(&mut msg_lines);

@@ -975,4 +975,112 @@ mod tests {
             assert!(!editing_flag);
         });
     }
+
+    #[tokio::test]
+    async fn test_block_navigation_cycles_through_multiple_blocks() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        // Add a message with multiple blocks
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(test_fixtures::multiple_blocks());
+            })
+            .await;
+
+        // Verify we can extract blocks from metadata
+        let (block_count, first_block_info) = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                let first = blocks.first().map(|b| {
+                    (b.block_index, b.start_line, b.end_line, b.language.clone())
+                });
+                (blocks.len(), first)
+            })
+            .await;
+
+        assert_eq!(block_count, 3, "Should detect 3 blocks from fixture");
+        assert!(first_block_info.is_some(), "Should have first block info");
+
+        // Enter block select mode at block 0
+        app_handle
+            .update(|app| {
+                app.ui.enter_block_select_mode(0);
+                assert_eq!(app.ui.selected_block_index(), Some(0));
+            })
+            .await;
+
+        // Press Down - should go to block 1
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle
+            .read(|app| app.ui.selected_block_index())
+            .await;
+        assert_eq!(selected, Some(1), "Should move to block 1");
+
+        // Press Down again - should go to block 2
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle
+            .read(|app| app.ui.selected_block_index())
+            .await;
+        assert_eq!(selected, Some(2), "Should move to block 2");
+
+        // Press Down again - should wrap to block 0
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle
+            .read(|app| app.ui.selected_block_index())
+            .await;
+        assert_eq!(selected, Some(0), "Should wrap to block 0");
+
+        // Press Up - should wrap to block 2
+        let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        handle_block_select_mode_event(&app_handle, &key_up, 80, 24).await;
+
+        let selected = app_handle
+            .read(|app| app.ui.selected_block_index())
+            .await;
+        assert_eq!(selected, Some(2), "Should wrap backwards to block 2");
+    }
+
+    #[tokio::test]
+    async fn test_block_extraction_returns_consistent_results() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(test_fixtures::multiple_blocks());
+            })
+            .await;
+
+        // Extract blocks multiple times to ensure consistency
+        for i in 0..5 {
+            let blocks_info = app_handle
+                .update(|app| {
+                    let metadata = app.get_prewrapped_span_metadata_cached(80);
+                    let blocks = crate::ui::span::extract_code_blocks(metadata);
+                    blocks
+                        .iter()
+                        .map(|b| (b.block_index, b.start_line, b.end_line))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+
+            assert_eq!(
+                blocks_info.len(),
+                3,
+                "Iteration {}: Should always find 3 blocks",
+                i
+            );
+            assert_eq!(blocks_info[0].0, 0, "First block should have index 0");
+            assert_eq!(blocks_info[1].0, 1, "Second block should have index 1");
+            assert_eq!(blocks_info[2].0, 2, "Third block should have index 2");
+        }
+    }
 }

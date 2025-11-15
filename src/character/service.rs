@@ -1,6 +1,6 @@
 //! Character card loading and caching service.
 //!
-//! This module provides the [`CharacterService`] which manages character cards,
+//! This module provides the [`CharacterService`] which manages [`CharacterCard`]s,
 //! including loading from disk, caching for performance, and resolving characters
 //! by name or path. The service invalidates cached entries when the underlying
 //! card directory changes to ensure fresh data.
@@ -24,6 +24,8 @@ pub enum CharacterServiceError {
     Cache(String),
 
     /// Failed to load or parse a character card file.
+    ///
+    /// See [`CardLoadError`] for specific card loading errors.
     Load(CardLoadError),
 
     /// I/O error while accessing the character card directory or files.
@@ -65,7 +67,7 @@ struct CachedCardEntry {
 
 /// Service for loading and caching character cards.
 ///
-/// This service manages character card loading from disk with automatic caching
+/// This service manages [`CharacterCard`] loading from disk with automatic caching
 /// based on file modification times. It invalidates cached entries when the
 /// cards directory changes (based on cache key) and provides fuzzy name matching
 /// for resolving character cards.
@@ -73,6 +75,8 @@ struct CachedCardEntry {
 /// Character cards can be stored as JSON files or PNG images with embedded
 /// metadata. The service supports both direct file path lookups and name-based
 /// resolution with normalization (case-insensitive, space-to-underscore conversion).
+///
+/// See also: [`resolve`](Self::resolve), [`list_metadata`](Self::list_metadata)
 pub struct CharacterService {
     cache: CardCache,
     cards: HashMap<PathBuf, CachedCardEntry>,
@@ -94,9 +98,10 @@ impl CharacterService {
 
     /// Returns metadata for all character cards in the cards directory.
     ///
-    /// This method scans the cards directory and returns lightweight metadata
-    /// (name, description, tags) without loading full card contents. The cache
-    /// is invalidated if the directory has changed since the last call.
+    /// This method scans the cards directory and returns lightweight
+    /// [`CachedCardMetadata`] (name, description, tags) without loading full
+    /// card contents. The cache is invalidated if the directory has changed
+    /// since the last call.
     ///
     /// # Errors
     ///

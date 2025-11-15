@@ -94,13 +94,16 @@ impl Provider {
 
 /// Authentication manager for handling provider credentials.
 ///
-/// This manager combines multiple authentication sources (keyring, config,
+/// This manager combines multiple authentication sources (keyring, [`Config`],
 /// environment variables) and provides both programmatic and interactive
-/// APIs for managing credentials. It supports built-in providers (OpenAI,
+/// APIs for managing credentials. It supports built-in [`Provider`]s (OpenAI,
 /// Anthropic, etc.) and custom user-defined providers.
 ///
 /// The manager can optionally disable keyring access for testing or when
 /// the system keyring is unavailable.
+///
+/// See also: [`new`](Self::new), [`resolve_authentication`](Self::resolve_authentication),
+/// [`get_token`](Self::get_token), [`store_token`](Self::store_token)
 pub struct AuthManager {
     providers: Vec<Provider>,
     config: Config,

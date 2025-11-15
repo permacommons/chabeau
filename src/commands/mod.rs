@@ -7,6 +7,8 @@
 //!
 //! The [`process_input`] function is the main entry point, returning a
 //! [`CommandResult`] that indicates how the UI should respond.
+//!
+//! See also: [`dump_conversation_with_overwrite`], [`all_commands`]
 
 mod refine;
 mod registry;
@@ -66,7 +68,7 @@ pub enum CommandResult {
 ///
 /// # Arguments
 ///
-/// * `app` - Application state
+/// * `app` - [`App`] state containing session and UI context
 /// * `input` - User input string (may or may not be a command)
 ///
 /// # Returns
@@ -485,7 +487,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `app` - Application state containing the conversation
+/// * `app` - [`App`] state containing the conversation
 /// * `filename` - Output file path
 /// * `overwrite` - Whether to overwrite if the file already exists
 ///

@@ -2,10 +2,12 @@
 //!
 //! This module provides [`ChatStreamService`], which handles outgoing API
 //! requests and processes Server-Sent Events (SSE) streams. Each stream runs
-//! in a Tokio task, posts frames into an unbounded channel, normalizes
-//! malformed input, and reports API errors with helpful summaries.
+//! in a Tokio task, posts [`StreamMessage`] frames into an unbounded channel,
+//! normalizes malformed input, and reports API errors with helpful summaries.
 //!
 //! Cancellation tokens allow user interrupts to stop streaming promptly.
+//!
+//! See also: [`spawn_stream`](ChatStreamService::spawn_stream), [`StreamParams`]
 
 use futures_util::StreamExt;
 use memchr::memchr;
@@ -29,6 +31,8 @@ pub enum StreamMessage {
     Error(String),
 
     /// An application-level message with metadata for display in the UI.
+    ///
+    /// See [`AppMessageKind`] for message severity levels.
     App {
         /// The kind of application message (info, warning, error).
         kind: AppMessageKind,

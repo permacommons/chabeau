@@ -217,6 +217,76 @@ pub fn extract_code_blocks(metadata: &[Vec<SpanKind>]) -> Vec<CodeBlockPosition>
     result
 }
 
+/// Extracts the text content of a specific code block.
+///
+/// Scans lines and metadata to collect all text content belonging
+/// to the specified code block, preserving line breaks.
+///
+/// # Arguments
+///
+/// * `lines` - Rendered lines from the layout
+/// * `metadata` - Span metadata parallel to lines
+/// * `block_index` - Zero-based index of the block to extract
+///
+/// # Returns
+///
+/// The block's content as a string, or None if block_index is invalid.
+///
+/// # Example
+///
+/// ```
+/// use chabeau::ui::span::{extract_code_block_content, SpanKind};
+/// use ratatui::text::{Line, Span};
+///
+/// let lines = vec![
+///     Line::from(vec![Span::raw("fn main() {")]),
+///     Line::from(vec![Span::raw("    println!(\"Hello\");")]),
+///     Line::from(vec![Span::raw("}")]),
+/// ];
+/// let metadata = vec![
+///     vec![SpanKind::code_block(Some("rust"), 0)],
+///     vec![SpanKind::code_block(Some("rust"), 0)],
+///     vec![SpanKind::code_block(Some("rust"), 0)],
+/// ];
+///
+/// let content = extract_code_block_content(&lines, &metadata, 0).unwrap();
+/// assert!(content.contains("fn main()"));
+/// ```
+pub fn extract_code_block_content(
+    lines: &[ratatui::text::Line],
+    metadata: &[Vec<SpanKind>],
+    block_index: usize,
+) -> Option<String> {
+    let mut content = String::new();
+    let mut found_any = false;
+
+    for (line, line_meta) in lines.iter().zip(metadata.iter()) {
+        let mut line_content = String::new();
+
+        for (span, kind) in line.spans.iter().zip(line_meta.iter()) {
+            if let Some(meta) = kind.code_block_meta() {
+                if meta.block_index() == block_index {
+                    line_content.push_str(&span.content);
+                    found_any = true;
+                }
+            }
+        }
+
+        if !line_content.is_empty() {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&line_content);
+        }
+    }
+
+    if found_any {
+        Some(content)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +390,103 @@ mod tests {
 
         let blocks = extract_code_blocks(&metadata);
         assert_eq!(blocks.len(), 0);
+    }
+
+    #[test]
+    fn extract_code_block_content_retrieves_code() {
+        use ratatui::text::{Line, Span};
+
+        let lines = vec![
+            Line::from(vec![Span::raw("fn main() {")]),
+            Line::from(vec![Span::raw("    println!(\"Hello\");")]),
+            Line::from(vec![Span::raw("}")]),
+        ];
+        let metadata = vec![
+            vec![SpanKind::code_block(Some("rust"), 0)],
+            vec![SpanKind::code_block(Some("rust"), 0)],
+            vec![SpanKind::code_block(Some("rust"), 0)],
+        ];
+
+        let content = extract_code_block_content(&lines, &metadata, 0).unwrap();
+        assert!(content.contains("fn main()"));
+        assert!(content.contains("println!"));
+        assert!(content.contains("}"));
+    }
+
+    #[test]
+    fn extract_content_preserves_line_breaks() {
+        use ratatui::text::{Line, Span};
+
+        let lines = vec![
+            Line::from(vec![Span::raw("line1")]),
+            Line::from(vec![Span::raw("line2")]),
+            Line::from(vec![Span::raw("line3")]),
+        ];
+        let metadata = vec![
+            vec![SpanKind::code_block(Some("txt"), 0)],
+            vec![SpanKind::code_block(Some("txt"), 0)],
+            vec![SpanKind::code_block(Some("txt"), 0)],
+        ];
+
+        let content = extract_code_block_content(&lines, &metadata, 0).unwrap();
+        let line_count = content.lines().count();
+        assert_eq!(line_count, 3, "Should preserve 3 lines");
+        assert_eq!(content, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn extract_content_returns_none_for_invalid_index() {
+        use ratatui::text::{Line, Span};
+
+        let lines = vec![Line::from(vec![Span::raw("fn main() {}")])];
+        let metadata = vec![vec![SpanKind::code_block(Some("rust"), 0)]];
+
+        let content = extract_code_block_content(&lines, &metadata, 999);
+        assert!(content.is_none(), "Invalid index should return None");
+    }
+
+    #[test]
+    fn extract_content_handles_multiple_spans_per_line() {
+        use ratatui::text::{Line, Span};
+
+        let lines = vec![Line::from(vec![
+            Span::raw("fn "),
+            Span::raw("main"),
+            Span::raw("() {}"),
+        ])];
+        let metadata = vec![vec![
+            SpanKind::code_block(Some("rust"), 0),
+            SpanKind::code_block(Some("rust"), 0),
+            SpanKind::code_block(Some("rust"), 0),
+        ]];
+
+        let content = extract_code_block_content(&lines, &metadata, 0).unwrap();
+        assert_eq!(content, "fn main() {}");
+    }
+
+    #[test]
+    fn extract_content_selects_correct_block() {
+        use ratatui::text::{Line, Span};
+
+        let lines = vec![
+            Line::from(vec![Span::raw("block 0 line 1")]),
+            Line::from(vec![Span::raw("block 0 line 2")]),
+            Line::from(vec![Span::raw("block 1 line 1")]),
+            Line::from(vec![Span::raw("block 1 line 2")]),
+        ];
+        let metadata = vec![
+            vec![SpanKind::code_block(Some("txt"), 0)],
+            vec![SpanKind::code_block(Some("txt"), 0)],
+            vec![SpanKind::code_block(Some("txt"), 1)],
+            vec![SpanKind::code_block(Some("txt"), 1)],
+        ];
+
+        let content0 = extract_code_block_content(&lines, &metadata, 0).unwrap();
+        assert!(content0.contains("block 0"));
+        assert!(!content0.contains("block 1"));
+
+        let content1 = extract_code_block_content(&lines, &metadata, 1).unwrap();
+        assert!(content1.contains("block 1"));
+        assert!(!content1.contains("block 0"));
     }
 }

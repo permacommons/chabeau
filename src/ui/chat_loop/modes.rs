@@ -283,53 +283,63 @@ pub async fn handle_block_select_mode_event(
             return false;
         }
 
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &app.ui.messages,
-            &app.ui.theme,
-            Some(term_width as usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            app.ui.syntax_enabled,
-            Some(&app.ui.user_display_name),
-        );
-
         match key.code {
             KeyCode::Esc => {
                 app.ui.exit_block_select_mode();
                 true
             }
             KeyCode::Up | KeyCode::Char('k') => {
+                // Query cached metadata instead of recomputing
+                let metadata = app.get_prewrapped_span_metadata_cached(term_width);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+
                 if let Some(cur) = app.ui.selected_block_index() {
-                    let total = ranges.len();
+                    let total = blocks.len();
                     if let Some(next) = wrap_previous_index(cur, total) {
                         app.ui.set_selected_block_index(next);
-                        if let Some((start, _len, _)) = ranges.get(next) {
-                            scroll_block_into_view(app, term_width, term_height, *start);
+                        if let Some(block) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, block.start_line);
                         }
                     }
-                } else if !ranges.is_empty() {
+                } else if !blocks.is_empty() {
                     app.ui.set_selected_block_index(0);
                 }
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
+                // Query cached metadata instead of recomputing
+                let metadata = app.get_prewrapped_span_metadata_cached(term_width);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+
                 if let Some(cur) = app.ui.selected_block_index() {
-                    let total = ranges.len();
+                    let total = blocks.len();
                     if let Some(next) = wrap_next_index(cur, total) {
                         app.ui.set_selected_block_index(next);
-                        if let Some((start, _len, _)) = ranges.get(next) {
-                            scroll_block_into_view(app, term_width, term_height, *start);
+                        if let Some(block) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, block.start_line);
                         }
                     }
-                } else if !ranges.is_empty() {
+                } else if !blocks.is_empty() {
                     app.ui.set_selected_block_index(0);
                 }
                 true
             }
 
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                if let Some(cur) = app.ui.selected_block_index() {
-                    if let Some((_start, _len, content)) = ranges.get(cur) {
-                        match crate::utils::clipboard::copy_to_clipboard(content) {
+                let cur = app.ui.selected_block_index();
+                if let Some(cur) = cur {
+                    // Populate cache
+                    let _ = app.get_prewrapped_span_metadata_cached(term_width);
+                    // Extract content from cache
+                    let content = app.ui.prewrap_cache.as_ref().and_then(|cache| {
+                        crate::ui::span::extract_code_block_content(
+                            &cache.lines,
+                            &cache.span_metadata,
+                            cur,
+                        )
+                    });
+                    if let Some(content) = content {
+                        match crate::utils::clipboard::copy_to_clipboard(&content) {
                             Ok(()) => app.conversation().set_status("Copied code block"),
                             Err(_e) => app.conversation().set_status("Clipboard error"),
                         }
@@ -347,21 +357,32 @@ pub async fn handle_block_select_mode_event(
                 true
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                if let Some(cur) = app.ui.selected_block_index() {
-                    let contents =
-                        crate::ui::markdown::compute_codeblock_contents_with_lang(&app.ui.messages);
-                    if let Some((content, lang)) = contents.get(cur) {
+                let cur = app.ui.selected_block_index();
+                if let Some(cur) = cur {
+                    // Populate cache
+                    let _ = app.get_prewrapped_span_metadata_cached(term_width);
+                    // Extract from cache
+                    let result = app.ui.prewrap_cache.as_ref().and_then(|cache| {
+                        let blocks = crate::ui::span::extract_code_blocks(&cache.span_metadata);
+                        let block = blocks.get(cur).cloned()?;
+                        let content = crate::ui::span::extract_code_block_content(
+                            &cache.lines,
+                            &cache.span_metadata,
+                            cur,
+                        )?;
+                        Some((block, content))
+                    });
+                    if let Some((block, content)) = result {
                         use chrono::Utc;
                         use std::fs;
                         let date = Utc::now().format("%Y-%m-%d");
-                        let ext = language_to_extension(lang.as_deref());
+                        let ext = language_to_extension(block.language.as_deref());
                         let filename = format!("chabeau-block-{}.{}", date, ext);
                         if std::path::Path::new(&filename).exists() {
                             app.conversation().set_status("File already exists.");
-                            app.ui
-                                .start_file_prompt_save_block(filename, content.clone());
+                            app.ui.start_file_prompt_save_block(filename, content);
                         } else {
-                            match fs::write(&filename, content) {
+                            match fs::write(&filename, &content) {
                                 Ok(()) => app
                                     .conversation()
                                     .set_status(format!("Saved to {}", filename)),

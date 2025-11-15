@@ -516,22 +516,17 @@ impl KeyHandler for CtrlBHandler {
                 return KeyResult::Handled;
             }
 
-            let blocks = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-                &app.ui.messages,
-                &app.ui.theme,
-                Some(term_width as usize),
-                crate::ui::layout::TableOverflowPolicy::WrapCells,
-                app.ui.syntax_enabled,
-                Some(&app.ui.user_display_name),
-            );
+            // Use cached metadata instead of recomputing
+            let metadata = app.get_prewrapped_span_metadata_cached(term_width);
+            let blocks = crate::ui::span::extract_code_blocks(metadata);
 
             if app.ui.in_block_select_mode() {
                 if let Some(cur) = app.ui.selected_block_index() {
                     let total = blocks.len();
                     if let Some(next) = wrap_previous_index(cur, total) {
                         app.ui.set_selected_block_index(next);
-                        if let Some((start, _len, _)) = blocks.get(next) {
-                            scroll_block_into_view(app, term_width, term_height, *start);
+                        if let Some(block) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, block.start_line);
                         }
                     }
                 }
@@ -540,8 +535,8 @@ impl KeyHandler for CtrlBHandler {
             } else {
                 let last = blocks.len().saturating_sub(1);
                 app.ui.enter_block_select_mode(last);
-                if let Some((start, _len, _)) = blocks.get(last) {
-                    scroll_block_into_view(app, term_width, term_height, *start);
+                if let Some(block) = blocks.get(last) {
+                    scroll_block_into_view(app, term_width, term_height, block.start_line);
                 }
             }
 

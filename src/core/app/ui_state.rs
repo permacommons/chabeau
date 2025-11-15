@@ -1203,8 +1203,8 @@ pub(crate) struct PrewrapCache {
     theme_sig: u64,
     messages_len: usize,
     last_msg_hash: u64,
-    lines: Vec<Line<'static>>,
-    span_metadata: Vec<Vec<SpanKind>>,
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) span_metadata: Vec<Vec<SpanKind>>,
     last_start: usize,
     last_len: usize,
 }

@@ -17,11 +17,19 @@ use crate::character::loader::{self, CardLoadError};
 use crate::character::CharacterCard;
 use crate::core::config::data::Config;
 
+/// Errors that can occur during character card operations.
 #[derive(Debug)]
 pub enum CharacterServiceError {
+    /// Cache initialization or operation failed.
     Cache(String),
+
+    /// Failed to load or parse a character card file.
     Load(CardLoadError),
+
+    /// I/O error while accessing the character card directory or files.
     Io(std::io::Error),
+
+    /// Character with the specified name was not found in the cards directory.
     NotFound(String),
 }
 

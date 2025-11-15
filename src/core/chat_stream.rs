@@ -15,14 +15,28 @@ use crate::api::{ChatMessage, ChatRequest, ChatResponse};
 use crate::core::message::AppMessageKind;
 use crate::utils::url::construct_api_url;
 
+/// Messages emitted by the SSE streaming service.
+///
+/// These messages are sent through the channel returned by
+/// [`ChatStreamService::new`] and represent different events
+/// during the streaming lifecycle.
 #[derive(Clone, Debug)]
 pub enum StreamMessage {
+    /// A content chunk received from the streaming API response.
     Chunk(String),
+
+    /// An error occurred during streaming (e.g., API error, network failure).
     Error(String),
+
+    /// An application-level message with metadata for display in the UI.
     App {
+        /// The kind of application message (info, warning, error).
         kind: AppMessageKind,
+        /// The message content to display.
         content: String,
     },
+
+    /// The stream has ended (received `[DONE]` signal from API).
     End,
 }
 

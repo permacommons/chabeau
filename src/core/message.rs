@@ -17,9 +17,16 @@ pub const ROLE_APP_LOG: &str = "app/log";
 /// transmitted to the remote API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppMessageKind {
+    /// Informational message (e.g., configuration changes, feature notifications).
     Info,
+
+    /// Warning message indicating potential issues or deprecated features.
     Warning,
+
+    /// Error message for failures or invalid operations.
     Error,
+
+    /// Logging output from API requests or internal operations.
     Log,
 }
 

@@ -10,7 +10,16 @@ use std::sync::Arc;
 /// cause directly so callers can report them to the user.
 #[derive(Debug)]
 pub enum KeyringAccessError {
+    /// Temporary failure (e.g., keyring locked or service unavailable).
+    ///
+    /// The operation may succeed if retried after the user unlocks
+    /// the keyring or the service becomes available.
     Recoverable(keyring::Error),
+
+    /// Permanent failure that cannot be resolved by retrying.
+    ///
+    /// Examples include missing entries, invalid credentials,
+    /// or unsupported platform operations.
     Permanent(keyring::Error),
 }
 

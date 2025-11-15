@@ -20,16 +20,40 @@ use registry::DispatchOutcome;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
+/// Result of processing a command or user input.
+///
+/// Variants indicate how the UI should respond after command execution,
+/// including opening pickers, passing input to the model, or continuing
+/// the current interaction flow.
 pub enum CommandResult {
+    /// Continue without taking action (command handled internally).
     Continue,
+
+    /// Continue and shift focus to the transcript area.
     ContinueWithTranscriptFocus,
+
+    /// Process the contained string as a chat message to the model.
     ProcessAsMessage(String),
+
+    /// Open the model selection picker.
     OpenModelPicker,
+
+    /// Open the provider selection picker.
     OpenProviderPicker,
+
+    /// Open the theme selection picker.
     OpenThemePicker,
+
+    /// Open the character selection picker.
     OpenCharacterPicker,
+
+    /// Open the persona selection picker.
     OpenPersonaPicker,
+
+    /// Open the preset selection picker.
     OpenPresetPicker,
+
+    /// Refine or edit the contained text before sending to the model.
     Refine(String),
 }
 

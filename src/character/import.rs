@@ -3,14 +3,16 @@ use std::path::Path;
 
 use crate::character::loader::{get_cards_dir, load_card};
 
-/// Error type for import operations
+/// Errors that can occur when importing character cards.
 #[derive(Debug)]
 pub enum ImportError {
-    /// Card validation failed
+    /// Character card validation failed (invalid card structure or required fields missing).
     ValidationFailed(String),
-    /// File already exists and force flag not set
+
+    /// Destination file already exists and force overwrite was not requested.
     AlreadyExists(String),
-    /// IO error during import
+
+    /// I/O error occurred while copying or writing the character card file.
     IoError(String),
 }
 

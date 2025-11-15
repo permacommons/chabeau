@@ -5,18 +5,22 @@ use std::path::{Path, PathBuf};
 use crate::character::{png_text, CharacterCard};
 use base64::Engine;
 
-/// Errors that can occur when loading character cards
+/// Errors that can occur when loading character cards.
 #[derive(Debug)]
 pub enum CardLoadError {
-    /// File could not be found or read
+    /// Character card file could not be found or read from disk.
     FileNotFound(String),
-    /// JSON parsing failed
+
+    /// JSON parsing failed (malformed JSON in card file or PNG metadata).
     InvalidJson(String),
-    /// PNG parsing failed
+
+    /// PNG image parsing failed (corrupted or invalid PNG file).
     InvalidPng(String),
-    /// PNG metadata missing
+
+    /// Required PNG metadata chunk is missing from character card image.
     MissingMetadata(String),
-    /// Card validation failed
+
+    /// Character card validation failed (invalid or missing required fields).
     ValidationFailed(Vec<String>),
 }
 

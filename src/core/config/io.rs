@@ -7,14 +7,22 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
+/// Errors that can occur when loading configuration from disk.
 #[derive(Debug)]
 pub enum ConfigError {
+    /// Failed to read the configuration file from disk.
     Read {
+        /// Path to the configuration file that could not be read.
         path: PathBuf,
+        /// The underlying I/O error.
         source: std::io::Error,
     },
+
+    /// Failed to parse the configuration file as valid TOML.
     Parse {
+        /// Path to the configuration file with invalid TOML.
         path: PathBuf,
+        /// The TOML deserialization error.
         source: toml::de::Error,
     },
 }

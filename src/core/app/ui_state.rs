@@ -10,15 +10,23 @@ use std::sync::Arc;
 use std::time::Instant;
 use tui_textarea::{CursorMove, TextArea};
 
+/// Background activity being performed in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
+    /// Streaming a chat response from the API.
     ChatStream,
+
+    /// Fetching the list of available models from the provider.
     ModelRequest,
 }
 
+/// Type of file operation prompt being displayed.
 #[derive(Debug, Clone)]
 pub enum FilePromptKind {
+    /// Dumping the full conversation to a file.
     Dump,
+
+    /// Saving a specific code block to a file.
     SaveCodeBlock,
 }
 
@@ -28,31 +36,53 @@ pub struct FilePrompt {
     pub content: Option<String>,
 }
 
+/// Target message type for edit-select operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditSelectTarget {
+    /// Select a user message for editing.
     User,
+
+    /// Select an assistant message for editing.
     Assistant,
 }
 
+/// Current UI interaction mode.
 #[derive(Debug, Clone)]
 pub enum UiMode {
+    /// Default typing mode for composing new messages.
     Typing,
+
+    /// Selecting a message to edit (user or assistant).
     EditSelect {
+        /// Index of the currently selected message.
         selected_index: usize,
+        /// Whether selecting user or assistant messages.
         target: EditSelectTarget,
     },
+
+    /// Selecting a code block to save.
     BlockSelect {
+        /// Index of the selected code block.
         block_index: usize,
     },
+
+    /// Editing a message in place within the transcript.
     InPlaceEdit {
+        /// Index of the message being edited.
         index: usize,
     },
+
+    /// Prompting for a file path (save or dump operation).
     FilePrompt(FilePrompt),
 }
 
+/// Which UI pane currently has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiFocus {
+    /// Transcript area has focus (for scrolling).
     Transcript,
+
+    /// Input area has focus (for typing).
     Input,
 }
 

@@ -111,8 +111,12 @@ impl fmt::Display for ProviderResolutionError {
 
 impl Error for ProviderResolutionError {}
 
+/// Errors that can occur when resolving a provider session.
 pub enum ResolveSessionError {
+    /// Provider configuration or authentication error with helpful guidance.
     Provider(ProviderResolutionError),
+
+    /// Error from an underlying authentication source (e.g., keyring access failure).
     Source(Box<dyn Error>),
 }
 

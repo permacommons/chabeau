@@ -63,18 +63,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         );
         (layout.lines, layout.span_metadata)
     } else if app.ui.in_block_select_mode() {
-        let highlight = Style::default().add_modifier(Modifier::BOLD);
-        let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_codeblock_highlight_and_flags_and_width(
-            &app.ui.messages,
-            &app.ui.theme,
-            app.ui.selected_block_index(),
-            highlight,
-            app.ui.markdown_enabled,
-            app.ui.syntax_enabled,
-            Some(chunks[0].width as usize),
-            Some(app.ui.user_display_name.clone()),
-        );
-        (layout.lines, layout.span_metadata)
+        // Use cache with highlighting applied in-place
+        let mut lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
+        let metadata = app
+            .get_prewrapped_span_metadata_cached(chunks[0].width)
+            .clone();
+
+        if let Some(selected_idx) = app.ui.selected_block_index() {
+            apply_code_block_highlight(&mut lines, &metadata, selected_idx);
+        }
+
+        (lines, metadata)
     } else {
         unreachable!()
     };
@@ -648,6 +647,34 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
         y: ny,
         width: nw,
         height: nh,
+    }
+}
+
+/// Applies highlighting to spans belonging to a specific code block.
+///
+/// Modifies the style of all spans that are part of the specified
+/// code block to add bold modifier for visual distinction.
+///
+/// # Arguments
+///
+/// * `lines` - Mutable reference to rendered lines
+/// * `metadata` - Span metadata parallel to lines
+/// * `block_index` - Zero-based index of the block to highlight
+fn apply_code_block_highlight(
+    lines: &mut [ratatui::text::Line],
+    metadata: &[Vec<crate::ui::span::SpanKind>],
+    block_index: usize,
+) {
+    use ratatui::style::Modifier;
+
+    for (line, line_meta) in lines.iter_mut().zip(metadata.iter()) {
+        for (span, kind) in line.spans.iter_mut().zip(line_meta.iter()) {
+            if let Some(meta) = kind.code_block_meta() {
+                if meta.block_index() == block_index {
+                    span.style = span.style.add_modifier(Modifier::BOLD);
+                }
+            }
+        }
     }
 }
 

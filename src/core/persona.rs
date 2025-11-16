@@ -483,6 +483,7 @@ fn test_message_rendering_with_persona_display_name() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_persona_display_name_in_codeblock_ranges_bugfix() {
     use crate::core::message::Message;
     use crate::ui::theme::Theme;

@@ -283,53 +283,63 @@ pub async fn handle_block_select_mode_event(
             return false;
         }
 
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &app.ui.messages,
-            &app.ui.theme,
-            Some(term_width as usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            app.ui.syntax_enabled,
-            Some(&app.ui.user_display_name),
-        );
-
         match key.code {
             KeyCode::Esc => {
                 app.ui.exit_block_select_mode();
                 true
             }
             KeyCode::Up | KeyCode::Char('k') => {
+                // Query cached metadata instead of recomputing
+                let metadata = app.get_prewrapped_span_metadata_cached(term_width);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+
                 if let Some(cur) = app.ui.selected_block_index() {
-                    let total = ranges.len();
+                    let total = blocks.len();
                     if let Some(next) = wrap_previous_index(cur, total) {
                         app.ui.set_selected_block_index(next);
-                        if let Some((start, _len, _)) = ranges.get(next) {
-                            scroll_block_into_view(app, term_width, term_height, *start);
+                        if let Some(block) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, block.start_line);
                         }
                     }
-                } else if !ranges.is_empty() {
+                } else if !blocks.is_empty() {
                     app.ui.set_selected_block_index(0);
                 }
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
+                // Query cached metadata instead of recomputing
+                let metadata = app.get_prewrapped_span_metadata_cached(term_width);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+
                 if let Some(cur) = app.ui.selected_block_index() {
-                    let total = ranges.len();
+                    let total = blocks.len();
                     if let Some(next) = wrap_next_index(cur, total) {
                         app.ui.set_selected_block_index(next);
-                        if let Some((start, _len, _)) = ranges.get(next) {
-                            scroll_block_into_view(app, term_width, term_height, *start);
+                        if let Some(block) = blocks.get(next) {
+                            scroll_block_into_view(app, term_width, term_height, block.start_line);
                         }
                     }
-                } else if !ranges.is_empty() {
+                } else if !blocks.is_empty() {
                     app.ui.set_selected_block_index(0);
                 }
                 true
             }
 
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                if let Some(cur) = app.ui.selected_block_index() {
-                    if let Some((_start, _len, content)) = ranges.get(cur) {
-                        match crate::utils::clipboard::copy_to_clipboard(content) {
+                let cur = app.ui.selected_block_index();
+                if let Some(cur) = cur {
+                    // Populate cache
+                    let _ = app.get_prewrapped_span_metadata_cached(term_width);
+                    // Extract content from cache
+                    let content = app.ui.prewrap_cache.as_ref().and_then(|cache| {
+                        crate::ui::span::extract_code_block_content(
+                            &cache.lines,
+                            &cache.span_metadata,
+                            cur,
+                        )
+                    });
+                    if let Some(content) = content {
+                        match crate::utils::clipboard::copy_to_clipboard(&content) {
                             Ok(()) => app.conversation().set_status("Copied code block"),
                             Err(_e) => app.conversation().set_status("Clipboard error"),
                         }
@@ -347,21 +357,32 @@ pub async fn handle_block_select_mode_event(
                 true
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                if let Some(cur) = app.ui.selected_block_index() {
-                    let contents =
-                        crate::ui::markdown::compute_codeblock_contents_with_lang(&app.ui.messages);
-                    if let Some((content, lang)) = contents.get(cur) {
+                let cur = app.ui.selected_block_index();
+                if let Some(cur) = cur {
+                    // Populate cache
+                    let _ = app.get_prewrapped_span_metadata_cached(term_width);
+                    // Extract from cache
+                    let result = app.ui.prewrap_cache.as_ref().and_then(|cache| {
+                        let blocks = crate::ui::span::extract_code_blocks(&cache.span_metadata);
+                        let block = blocks.get(cur).cloned()?;
+                        let content = crate::ui::span::extract_code_block_content(
+                            &cache.lines,
+                            &cache.span_metadata,
+                            cur,
+                        )?;
+                        Some((block, content))
+                    });
+                    if let Some((block, content)) = result {
                         use chrono::Utc;
                         use std::fs;
                         let date = Utc::now().format("%Y-%m-%d");
-                        let ext = language_to_extension(lang.as_deref());
+                        let ext = language_to_extension(block.language.as_deref());
                         let filename = format!("chabeau-block-{}.{}", date, ext);
                         if std::path::Path::new(&filename).exists() {
                             app.conversation().set_status("File already exists.");
-                            app.ui
-                                .start_file_prompt_save_block(filename, content.clone());
+                            app.ui.start_file_prompt_save_block(filename, content);
                         } else {
-                            match fs::write(&filename, content) {
+                            match fs::write(&filename, &content) {
                                 Ok(()) => app
                                     .conversation()
                                     .set_status(format!("Saved to {}", filename)),
@@ -953,5 +974,365 @@ mod tests {
             assert_eq!(last_content.as_deref(), Some("revised"));
             assert!(!editing_flag);
         });
+    }
+
+    #[tokio::test]
+    async fn test_block_navigation_cycles_through_multiple_blocks() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        // Add a message with multiple blocks
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(test_fixtures::multiple_blocks());
+            })
+            .await;
+
+        // Verify we can extract blocks from metadata
+        let (block_count, first_block_info) = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                let first = blocks
+                    .first()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()));
+                (blocks.len(), first)
+            })
+            .await;
+
+        assert_eq!(block_count, 3, "Should detect 3 blocks from fixture");
+        assert!(first_block_info.is_some(), "Should have first block info");
+
+        // Enter block select mode at block 0
+        app_handle
+            .update(|app| {
+                app.ui.enter_block_select_mode(0);
+                assert_eq!(app.ui.selected_block_index(), Some(0));
+            })
+            .await;
+
+        // Press Down - should go to block 1
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
+        assert_eq!(selected, Some(1), "Should move to block 1");
+
+        // Press Down again - should go to block 2
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
+        assert_eq!(selected, Some(2), "Should move to block 2");
+
+        // Press Down again - should wrap to block 0
+        handle_block_select_mode_event(&app_handle, &key, 80, 24).await;
+
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
+        assert_eq!(selected, Some(0), "Should wrap to block 0");
+
+        // Press Up - should wrap to block 2
+        let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        handle_block_select_mode_event(&app_handle, &key_up, 80, 24).await;
+
+        let selected = app_handle.read(|app| app.ui.selected_block_index()).await;
+        assert_eq!(selected, Some(2), "Should wrap backwards to block 2");
+    }
+
+    #[tokio::test]
+    async fn test_block_extraction_returns_consistent_results() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(test_fixtures::multiple_blocks());
+            })
+            .await;
+
+        // Extract blocks multiple times to ensure consistency
+        for i in 0..5 {
+            let blocks_info = app_handle
+                .update(|app| {
+                    let metadata = app.get_prewrapped_span_metadata_cached(80);
+                    let blocks = crate::ui::span::extract_code_blocks(metadata);
+                    blocks
+                        .iter()
+                        .map(|b| (b.block_index, b.start_line, b.end_line))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+
+            assert_eq!(
+                blocks_info.len(),
+                3,
+                "Iteration {}: Should always find 3 blocks",
+                i
+            );
+            assert_eq!(blocks_info[0].0, 0, "First block should have index 0");
+            assert_eq!(blocks_info[1].0, 1, "Second block should have index 1");
+            assert_eq!(blocks_info[2].0, 2, "Third block should have index 2");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blocks_across_messages_have_unique_indices() {
+        use crate::ui::markdown::test_fixtures;
+
+        let app_handle = setup_app();
+
+        // Add multiple messages, each with their own code blocks
+        for msg in test_fixtures::blocks_across_messages() {
+            app_handle
+                .update(|app| {
+                    app.ui.messages.push_back(msg);
+                })
+                .await;
+        }
+
+        let blocks_info = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks
+                    .iter()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .await;
+
+        // Should find 2 blocks (one per assistant message)
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find 2 code blocks across messages, found: {:?}",
+            blocks_info
+        );
+
+        // Block indices should be globally unique (0 and 1), not both 0
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices should be globally unique (0, 1), got: {:?}",
+            indices
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interleaved_blocks_have_unique_indices() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Add: block -> non-code -> block (exactly what user tested)
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "First block:\n```rust\nfn first() {}\n```".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me more code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Second block:\n```python\ndef second():\n    pass\n```".to_string(),
+                });
+            })
+            .await;
+
+        let blocks_info = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks
+                    .iter()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .await;
+
+        // Should find exactly 2 blocks
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find 2 code blocks, found: {:?}",
+            blocks_info
+        );
+
+        // CRITICAL: Block indices must be unique (0 and 1)
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices MUST be globally unique! Got: {:?}. If both are 0, navigation will select both blocks simultaneously.",
+            indices
+        );
+
+        // Verify languages are correct
+        assert_eq!(blocks_info[0].3, Some("rust".to_string()));
+        assert_eq!(blocks_info[1].3, Some("python".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_exact_user_scenario_two_assistant_code_blocks() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Exact scenario from user report:
+        // Message 1: User request -> Assistant code block
+        // Message 2: User non-code -> Assistant non-code
+        // Message 3: User request -> Assistant code block
+        app_handle
+            .update(|app| {
+                // Message 1
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me Rust code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Here it is:\n```rust\nfn first() {}\n```".to_string(),
+                });
+                // Message 2
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Thanks, what about Python?".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Sure, let me explain first...".to_string(),
+                });
+                // Message 3
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me the Python code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "Here you go:\n```python\ndef second():\n    pass\n```".to_string(),
+                });
+            })
+            .await;
+
+        let (blocks_info, all_metadata) = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                let info = blocks
+                    .iter()
+                    .map(|b| (b.block_index, b.start_line, b.end_line, b.language.clone()))
+                    .collect::<Vec<_>>();
+
+                // Also collect ALL metadata to debug
+                let all_meta: Vec<_> = metadata
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(line_idx, line_meta)| {
+                        for kind in line_meta {
+                            if let Some(meta) = kind.code_block_meta() {
+                                return Some((
+                                    line_idx,
+                                    meta.block_index(),
+                                    meta.language().map(String::from),
+                                ));
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+
+                (info, all_meta)
+            })
+            .await;
+
+        eprintln!("Blocks extracted: {:?}", blocks_info);
+        eprintln!("All code block metadata: {:?}", all_metadata);
+
+        // CRITICAL: Must find 2 blocks
+        assert_eq!(
+            blocks_info.len(),
+            2,
+            "Should find exactly 2 code blocks, found: {:?}",
+            blocks_info
+        );
+
+        // CRITICAL: Indices MUST be different (0 and 1)
+        let indices: Vec<usize> = blocks_info.iter().map(|b| b.0).collect();
+        assert_ne!(
+            indices[0], indices[1],
+            "BOTH BLOCKS HAVE INDEX {:?}! This causes simultaneous selection. Indices must be [0, 1], got {:?}",
+            indices[0], indices
+        );
+
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Block indices must be [0, 1], got: {:?}",
+            indices
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_cache_update_preserves_global_indices() {
+        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+
+        let app_handle = setup_app();
+
+        // Add first two messages with a code block
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "Show me code".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "```rust\nfn first() {}\n```".to_string(),
+                });
+            })
+            .await;
+
+        // Trigger cache build
+        app_handle
+            .update(|app| {
+                let _ = app.get_prewrapped_span_metadata_cached(80);
+            })
+            .await;
+
+        // NOW add another message - this triggers incremental update (splice)
+        app_handle
+            .update(|app| {
+                app.ui.messages.push_back(Message {
+                    role: ROLE_USER.to_string(),
+                    content: "And another".to_string(),
+                });
+                app.ui.messages.push_back(Message {
+                    role: ROLE_ASSISTANT.to_string(),
+                    content: "```python\ndef second():\n    pass\n```".to_string(),
+                });
+            })
+            .await;
+
+        // Get metadata after incremental update
+        let indices = app_handle
+            .update(|app| {
+                let metadata = app.get_prewrapped_span_metadata_cached(80);
+                let blocks = crate::ui::span::extract_code_blocks(metadata);
+                blocks.iter().map(|b| b.block_index).collect::<Vec<_>>()
+            })
+            .await;
+
+        // CRITICAL: After incremental update, indices must still be globally unique
+        assert_eq!(
+            indices,
+            vec![0, 1],
+            "Incremental cache update MUST preserve global uniqueness! Got: {:?}",
+            indices
+        );
     }
 }

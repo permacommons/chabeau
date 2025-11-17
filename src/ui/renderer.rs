@@ -70,7 +70,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .clone();
 
         if let Some(selected_idx) = app.ui.selected_block_index() {
-            apply_code_block_highlight(&mut lines, &metadata, selected_idx, &app.ui.theme);
+            apply_code_block_highlight(
+                &mut lines,
+                &metadata,
+                selected_idx,
+                &app.ui.theme,
+                chunks[0].width as usize,
+            );
         }
 
         (lines, metadata)
@@ -653,8 +659,10 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 /// Applies highlighting to spans belonging to a specific code block.
 ///
 /// Modifies the style of all spans that are part of the specified
-/// code block using the theme's selection highlight style. On 16-color
-/// terminals, falls back to reverse-video with preserved foreground colors.
+/// code block using the theme's selection highlight style. Extends each
+/// line to the full terminal width with padding to create a block highlight
+/// effect. On 16-color terminals, falls back to reverse-video with preserved
+/// foreground colors.
 ///
 /// # Arguments
 ///
@@ -662,11 +670,13 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 /// * `metadata` - Span metadata parallel to lines
 /// * `block_index` - Zero-based index of the block to highlight
 /// * `theme` - Theme containing selection highlight style
+/// * `terminal_width` - Terminal width for padding lines to create block effect
 fn apply_code_block_highlight(
     lines: &mut [ratatui::text::Line],
     metadata: &[Vec<crate::ui::span::SpanKind>],
     block_index: usize,
     theme: &crate::ui::theme::Theme,
+    terminal_width: usize,
 ) {
     use crate::utils::color::ColorDepth;
     use ratatui::style::{Color, Modifier};
@@ -686,9 +696,12 @@ fn apply_code_block_highlight(
             .or(theme.user_text_style.fg)
             .unwrap_or(Color::White);
 
+        let mut line_belongs_to_block = false;
+
         for (span, kind) in line.spans.iter_mut().zip(line_meta.iter()) {
             if let Some(meta) = kind.code_block_meta() {
                 if meta.block_index() == block_index {
+                    line_belongs_to_block = true;
                     if using_16_color {
                         let base_fg = span.style.fg.unwrap_or(fallback_fg);
                         fallback_fg = base_fg;
@@ -696,6 +709,15 @@ fn apply_code_block_highlight(
                     }
                     span.style = span.style.patch(highlight_style);
                 }
+            }
+        }
+
+        // Extend line to full width with padding to create block highlight effect
+        if line_belongs_to_block && terminal_width > 0 {
+            let current_width = line.width();
+            if current_width < terminal_width {
+                let padding = " ".repeat(terminal_width - current_width);
+                line.spans.push(Span::styled(padding, highlight_style));
             }
         }
     }

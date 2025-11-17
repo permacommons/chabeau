@@ -403,13 +403,19 @@ impl<'a> MarkdownRenderer<'a> {
                                 }
                             }
                         };
+                        // Calculate indent from parent levels before updating current level
+                        let parent_indent: usize = self
+                            .list_indent_stack
+                            .iter()
+                            .take(self.list_indent_stack.len().saturating_sub(1))
+                            .sum();
                         if let Some(indent) = self.list_indent_stack.last_mut() {
                             *indent = marker.width();
                         }
                         if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
                             self.ensure_role_prefix_once();
                         }
-                        self.pending_list_indent = None;
+                        self.pending_list_indent = Some(parent_indent);
                         self.push_span(
                             Span::styled(marker, self.theme.md_list_marker_style()),
                             SpanKind::Text,
@@ -509,7 +515,11 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     TagEnd::List(_) => {
                         self.flush_current_spans(true);
-                        self.push_empty_line();
+                        // Only add blank line when ending the outermost list,
+                        // not when exiting nested lists that have parent lists continuing
+                        if self.list_stack.len() == 1 {
+                            self.push_empty_line();
+                        }
                         self.list_stack.pop();
                         self.list_indent_stack.pop();
                         self.pending_list_indent = None;
@@ -2683,6 +2693,82 @@ End of table."###
             languages.len() >= 4,
             "Should preserve different language tags"
         );
+    }
+
+    #[test]
+    fn nested_bullet_lists_render_with_indentation() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "* Item 1\n    * Sub-item 1.1\n    * Sub-item 1.2\n        * Sub-sub-item 1.2.1"
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Verify that nested items have leading spaces
+        // Line 0 should be "- Item 1" (no indent)
+        // Line 1 should be "  - Sub-item 1.1" (2 space indent from parent "- " marker)
+        // Line 2 should be "  - Sub-item 1.2" (2 space indent)
+        // Line 3 should be "    - Sub-sub-item 1.2.1" (4 space indent: 2 from first level + 2 from second level)
+
+        assert!(
+            lines.len() >= 4,
+            "Should have at least 4 lines, got {}",
+            lines.len()
+        );
+        assert!(
+            lines[0].starts_with("- "),
+            "First item should start with '- ', got: '{}'",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("  - "),
+            "Sub-item should have 2-space indent, got: '{}'",
+            lines[1]
+        );
+        assert!(
+            lines[2].starts_with("  - "),
+            "Sub-item should have 2-space indent, got: '{}'",
+            lines[2]
+        );
+        assert!(
+            lines[3].starts_with("    - "),
+            "Sub-sub-item should have 4-space indent, got: '{}'",
+            lines[3]
+        );
+    }
+
+    #[test]
+    fn nested_lists_dont_add_blank_lines_between_same_level_items() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- Budget tree, branch one\n  - Emergency fund\n    - Sub-sticky note\n  - Groceries"
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the indices of key items
+        let emergency_idx = lines.iter().position(|l| l.contains("Emergency")).unwrap();
+        let sub_sticky_idx = lines.iter().position(|l| l.contains("Sub-sticky")).unwrap();
+        let groceries_idx = lines.iter().position(|l| l.contains("Groceries")).unwrap();
+
+        // After "Sub-sticky note" ends its nested list, "Groceries" should immediately follow
+        // without any blank lines, since they're both at the same level (level 2)
+        assert_eq!(
+            groceries_idx,
+            sub_sticky_idx + 1,
+            "Groceries should come immediately after Sub-sticky note without blank lines. Lines: {:#?}",
+            lines
+        );
+
+        // Verify the structure is correct
+        assert!(emergency_idx < sub_sticky_idx, "Emergency should come before Sub-sticky");
+        assert!(sub_sticky_idx < groceries_idx, "Sub-sticky should come before Groceries");
     }
 }
 

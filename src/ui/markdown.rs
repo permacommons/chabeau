@@ -14,6 +14,9 @@ use wrap::wrap_spans_to_width_generic_shared;
 mod table;
 use table::TableRenderer;
 
+#[cfg(test)]
+pub mod test_fixtures;
+
 #[derive(Clone, Debug)]
 enum ListKind {
     Unordered,
@@ -26,18 +29,13 @@ pub struct RenderedMessage {
 }
 
 /// Extended render metadata used by the layout engine when downstream consumers
-/// need code block ranges or per-message spans.
+/// need per-message spans.
 pub struct RenderedMessageDetails {
     pub lines: Vec<Line<'static>>,
-    pub codeblock_ranges: Vec<(usize, usize, String)>,
     pub span_metadata: Option<Vec<Vec<SpanKind>>>,
 }
 
-type RenderedLinesWithMetadata = (
-    Vec<Line<'static>>,
-    Vec<(usize, usize, String)>,
-    Vec<Vec<SpanKind>>,
-);
+type RenderedLinesWithMetadata = (Vec<Line<'static>>, Vec<Vec<SpanKind>>);
 
 impl RenderedMessageDetails {
     pub fn into_rendered(self) -> RenderedMessage {
@@ -166,7 +164,7 @@ pub fn render_message_with_config(
     config: MessageRenderConfig,
 ) -> RenderedMessageDetails {
     let role = RoleKind::from_message(msg);
-    let (mut lines, ranges, mut metadata) = if config.markdown {
+    let (mut lines, mut metadata) = if config.markdown {
         let renderer_config = MarkdownRendererConfig {
             collect_span_metadata: config.collect_span_metadata,
             syntax_highlighting: config.syntax_highlighting,
@@ -209,7 +207,6 @@ pub fn render_message_with_config(
     }
     RenderedMessageDetails {
         lines,
-        codeblock_ranges: ranges,
         span_metadata: if config.collect_span_metadata {
             Some(metadata)
         } else {
@@ -225,7 +222,6 @@ struct MarkdownRenderer<'a> {
     config: MarkdownRendererConfig,
     lines: Vec<Line<'static>>,
     span_metadata: Vec<Vec<SpanKind>>,
-    ranges: Vec<(usize, usize, String)>,
     current_spans: Vec<Span<'static>>,
     current_span_kinds: Vec<SpanKind>,
     style_stack: Vec<Style>,
@@ -235,6 +231,7 @@ struct MarkdownRenderer<'a> {
     pending_list_indent: Option<usize>,
     in_code_block: Option<String>,
     code_block_lines: Vec<String>,
+    code_block_count: usize,
     table_renderer: Option<TableRenderer>,
     did_prefix: bool,
     app_prefix_indent: Option<String>,
@@ -261,7 +258,6 @@ impl<'a> MarkdownRenderer<'a> {
             config,
             lines: Vec::new(),
             span_metadata: Vec::new(),
-            ranges: Vec::new(),
             current_spans: Vec::new(),
             current_span_kinds: Vec::new(),
             style_stack: vec![base_text_style(role, theme)],
@@ -271,6 +267,7 @@ impl<'a> MarkdownRenderer<'a> {
             pending_list_indent: None,
             in_code_block: None,
             code_block_lines: Vec::new(),
+            code_block_count: 0,
             table_renderer: None,
             did_prefix: !matches!(role, RoleKind::User | RoleKind::App(_)),
             app_prefix_indent,
@@ -660,7 +657,7 @@ impl<'a> MarkdownRenderer<'a> {
             Vec::new()
         };
 
-        (self.lines, self.ranges, metadata)
+        (self.lines, metadata)
     }
 
     fn push_span(&mut self, span: Span<'static>, kind: SpanKind) {
@@ -755,9 +752,10 @@ impl<'a> MarkdownRenderer<'a> {
             self.theme,
             &mut self.lines,
             metadata,
-            &mut self.ranges,
             list_indent,
+            self.code_block_count,
         );
+        self.code_block_count += 1;
         self.push_empty_line();
         self.in_code_block = None;
         self.pending_list_indent = (list_indent > 0).then_some(list_indent);
@@ -767,136 +765,17 @@ impl<'a> MarkdownRenderer<'a> {
         self.list_indent_stack.iter().sum()
     }
 }
-/// Test-only helper: compute code block ranges across messages using
-/// the simplified width-agnostic renderer. Intended for unit tests to
-/// validate code block extraction and range mapping without involving
-/// full table or width-aware rendering.
-#[cfg(test)]
-pub fn compute_codeblock_ranges(
-    messages: &VecDeque<crate::core::message::Message>,
-    theme: &Theme,
-) -> Vec<(usize, usize, String)> {
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    for msg in messages {
-        let is_user = msg.role == ROLE_USER;
-        if message::is_app_message_role(&msg.role) {
-            let app_role = RoleKind::App(message::app_message_kind_from_role(&msg.role));
-            let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                app_role,
-                &msg.content,
-                theme,
-                true, // syntax_enabled
-                None, // terminal_width
-                crate::ui::layout::TableOverflowPolicy::WrapCells,
-                None, // user_display_name
-            );
-            offset += lines.len();
-            continue;
-        }
-        let role = if is_user {
-            RoleKind::User
-        } else {
-            RoleKind::Assistant
-        };
-        let (lines, ranges, _) = MarkdownRenderer::new(
-            role,
-            &msg.content,
-            theme,
-            MarkdownRendererConfig {
-                collect_span_metadata: false,
-                syntax_highlighting: false,
-                width: None,
-                user_display_name: None,
-            },
-        )
-        .render();
-        for (start, len, content) in ranges {
-            out.push((offset + start, len, content));
-        }
-        offset += lines.len();
-    }
-    out
-}
 
-/// Render message with width/policy and collect code block ranges aligned to produced lines.
-fn render_message_with_ranges_with_width_and_policy(
-    role: RoleKind,
-    content: &str,
-    theme: &Theme,
-    syntax_enabled: bool,
-    terminal_width: Option<usize>,
-    table_policy: crate::ui::layout::TableOverflowPolicy,
-    user_display_name: Option<&str>,
-) -> RenderedLinesWithMetadata {
-    let config = MarkdownRendererConfig {
-        collect_span_metadata: true,
-        syntax_highlighting: syntax_enabled,
-        width: Some(MarkdownWidthConfig {
-            terminal_width,
-            table_policy,
-        }),
-        user_display_name: user_display_name.map(|s| s.to_string()),
-    };
-    MarkdownRenderer::new(role, content, theme, config).render()
-}
-
-/// Compute code block ranges aligned to width-aware rendering and table layout.
-pub fn compute_codeblock_ranges_with_width_and_policy(
-    messages: &VecDeque<crate::core::message::Message>,
-    theme: &Theme,
-    terminal_width: Option<usize>,
-    policy: crate::ui::layout::TableOverflowPolicy,
-    syntax_enabled: bool,
-    user_display_name: Option<&str>,
-) -> Vec<(usize, usize, String)> {
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    for msg in messages {
-        if message::is_app_message_role(&msg.role) {
-            let (lines, _, _) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::App(message::app_message_kind_from_role(&msg.role)),
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-                None,
-            );
-            offset += lines.len();
-        } else if msg.role == ROLE_USER {
-            let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::User,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-                user_display_name,
-            );
-            for (start, len, content) in ranges {
-                out.push((offset + start, len, content));
-            }
-            offset += lines.len();
-        } else {
-            let (lines, ranges, _) = render_message_with_ranges_with_width_and_policy(
-                RoleKind::Assistant,
-                &msg.content,
-                theme,
-                syntax_enabled,
-                terminal_width,
-                policy,
-                None,
-            );
-            for (start, len, content) in ranges {
-                out.push((offset + start, len, content));
-            }
-            offset += lines.len();
-        }
-    }
-    out
-}
 /// Provides only content and optional language hint for each code block, in order of appearance.
+///
+/// # Deprecated
+///
+/// Use [`crate::ui::span::extract_code_block_content`] with cached metadata instead.
+/// This function re-parses all markdown on every call, which is inefficient.
+#[deprecated(
+    since = "0.6.1",
+    note = "Use crate::ui::span::extract_code_block_content with cached metadata instead"
+)]
 pub fn compute_codeblock_contents_with_lang(
     messages: &VecDeque<crate::core::message::Message>,
 ) -> Vec<(String, Option<String>)> {
@@ -951,8 +830,7 @@ pub fn compute_codeblock_contents_with_lang(
 mod tests {
     #![allow(unused_imports)]
     use super::{
-        compute_codeblock_ranges, render_message_markdown_details_with_policy_and_user_name,
-        render_message_with_config, render_message_with_ranges_with_width_and_policy,
+        render_message_markdown_details_with_policy_and_user_name, render_message_with_config,
         table::TableRenderer, MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig,
         MessageRenderConfig, RoleKind,
     };
@@ -1175,41 +1053,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_renderer_without_metadata_matches_legacy_ranges() {
-        let theme = crate::ui::theme::Theme::dark_default();
-        let content = "Paragraph before\n\n```\nfirst\nsecond\n```\nparagraph after";
-
-        let (legacy_lines, legacy_ranges, _) = render_message_with_ranges_with_width_and_policy(
-            RoleKind::Assistant,
-            content,
-            &theme,
-            false, // syntax_enabled
-            None,  // terminal_width
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            None, // user_display_name
-        );
-        let (lines, ranges, metadata) = MarkdownRenderer::new(
-            RoleKind::Assistant,
-            content,
-            &theme,
-            MarkdownRendererConfig {
-                collect_span_metadata: false,
-                syntax_highlighting: false,
-                width: None,
-                user_display_name: None,
-            },
-        )
-        .render();
-
-        assert_eq!(legacy_lines, lines);
-        assert_eq!(legacy_ranges, ranges);
-        assert!(
-            metadata.is_empty(),
-            "metadata should be empty when disabled"
-        );
-    }
-
-    #[test]
     fn shared_renderer_with_metadata_matches_details_wrapper() {
         let theme = crate::ui::theme::Theme::dark_default();
         let message = Message {
@@ -1228,7 +1071,7 @@ mod tests {
             None,
         );
 
-        let (lines, ranges, metadata) = MarkdownRenderer::new(
+        let (lines, metadata) = MarkdownRenderer::new(
             RoleKind::Assistant,
             &message.content,
             &theme,
@@ -1245,26 +1088,10 @@ mod tests {
         .render();
 
         assert_eq!(expected.lines, lines);
-        assert_eq!(expected.codeblock_ranges, ranges);
         let expected_metadata = expected
             .span_metadata
             .expect("details wrapper should provide metadata");
         assert_eq!(expected_metadata, metadata);
-    }
-
-    #[test]
-    fn codeblock_ranges_map_correctly() {
-        let mut messages = VecDeque::new();
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: "before\n```\nline1\nline2\n```\nafter".into(),
-        });
-        let theme = crate::ui::theme::Theme::dark_default();
-        let ranges = compute_codeblock_ranges(&messages, &theme);
-        assert_eq!(ranges.len(), 1);
-        let (_start, len, content) = &ranges[0];
-        assert_eq!(*len, 2);
-        assert_eq!(content, "line1\nline2");
     }
 
     #[test]
@@ -1379,39 +1206,6 @@ mod tests {
     }
 
     #[test]
-    fn width_aware_ranges_align_with_render_wrapping() {
-        let theme = crate::ui::theme::Theme::dark_default();
-        let mut messages = VecDeque::new();
-        // A long paragraph that will wrap, followed by a fenced code block
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: "This is a very long paragraph that should wrap when rendered at a small width so we can verify that the computed code block start index reflects wrapped lines.\n\n```\nfirst\nsecond\n```".into(),
-        });
-
-        let width = Some(20usize);
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &messages,
-            &theme,
-            width,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            false,
-            None,
-        );
-        assert_eq!(ranges.len(), 1);
-        let (start, len, content) = &ranges[0];
-        assert_eq!(*len, 2, "two code lines expected");
-        assert_eq!(content, "first\nsecond");
-
-        // Render the same message with width and ensure the lines at [start..start+len]
-        // correspond to the code lines
-        let rendered = render_markdown_for_test(&messages[0], &theme, false, width);
-        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
-        assert!(lines.len() > *start + *len);
-        assert_eq!(lines[*start], "first");
-        assert_eq!(lines[*start + 1], "second");
-    }
-
-    #[test]
     fn markdown_links_wrap_at_word_boundaries_with_width() {
         let theme = crate::ui::theme::Theme::dark_default();
         let message = Message {
@@ -1475,49 +1269,6 @@ mod tests {
             "link text missing from output: {:?}",
             combined
         );
-    }
-
-    #[test]
-    fn width_aware_ranges_account_for_preceding_table() {
-        let theme = crate::ui::theme::Theme::dark_default();
-        let mut messages = VecDeque::new();
-        // Message 0: a table
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: "| A | B |\n|---|---|\n| 1 | 2 |\n".into(),
-        });
-        // Message 1: a code block
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: "```\nalpha\nbeta\n```".into(),
-        });
-
-        let width = Some(60usize);
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &messages,
-            &theme,
-            width,
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            false,
-            None,
-        );
-        assert_eq!(ranges.len(), 1);
-        let (start, len, content) = &ranges[0];
-        assert_eq!(*len, 2, "two code lines expected");
-        assert_eq!(content, "alpha\nbeta");
-
-        // Build full rendering for both messages and assert selected span matches
-        let rendered0 = render_markdown_for_test(&messages[0], &theme, false, width);
-        let rendered1 = render_markdown_for_test(&messages[1], &theme, false, width);
-        let combined: Vec<String> = rendered0
-            .lines
-            .iter()
-            .chain(rendered1.lines.iter())
-            .map(|l| l.to_string())
-            .collect();
-        assert!(combined.len() > *start + *len);
-        assert_eq!(combined[*start], "alpha");
-        assert_eq!(combined[*start + 1], "beta");
     }
 
     #[test]
@@ -2646,6 +2397,293 @@ End of table."###
             assert!(row_width <= 100, "Row {} should not be excessively wide due to proper wrapping: width={}, content: '{}'", i, row_width, row);
         }
     }
+
+    // Phase 0 tests: Code block span metadata (currently failing, will pass in Phase 1)
+
+    #[test]
+    
+    fn code_block_spans_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::single_block();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Find spans that should be code blocks
+        let code_spans: Vec<_> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter(|kind| kind.is_code_block())
+            .collect();
+
+        assert!(
+            !code_spans.is_empty(),
+            "Code block should have CodeBlock metadata"
+        );
+
+        // Verify metadata contains language and block index
+        if let Some(meta) = code_spans[0].code_block_meta() {
+            assert_eq!(meta.language(), Some("rust"));
+            assert_eq!(meta.block_index(), 0);
+        } else {
+            panic!("Expected CodeBlock metadata");
+        }
+    }
+
+    #[test]
+    
+    fn multiple_code_blocks_have_unique_indices() {
+        use super::test_fixtures;
+        let msg = test_fixtures::multiple_blocks();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Extract unique block indices
+        let mut indices = std::collections::HashSet::new();
+        for line_meta in metadata.iter() {
+            for kind in line_meta.iter() {
+                if let Some(meta) = kind.code_block_meta() {
+                    indices.insert(meta.block_index());
+                }
+            }
+        }
+
+        assert_eq!(indices.len(), 3, "Should have 3 unique code block indices");
+        assert!(indices.contains(&0));
+        assert!(indices.contains(&1));
+        assert!(indices.contains(&2));
+    }
+
+    #[test]
+    
+    fn empty_code_block_has_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::empty_block();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Empty blocks produce no span metadata and are not navigable.
+        // This is correct behavior - there's no content to select or extract.
+        let has_code_meta = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        assert!(
+            !has_code_meta,
+            "Empty blocks should not create code block metadata"
+        );
+    }
+
+    #[test]
+    
+    fn wrapped_code_preserves_metadata_across_lines() {
+        use super::test_fixtures;
+        let msg = test_fixtures::wrapped_code();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            Some(40), // Narrow width to force wrapping
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // All code spans should have block_index 0
+        let block_indices: Vec<usize> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta().map(|m| m.block_index()))
+            .collect();
+
+        assert!(!block_indices.is_empty(), "Should have code block metadata");
+        assert!(
+            block_indices.iter().all(|&idx| idx == 0),
+            "All wrapped lines should have same block_index"
+        );
+    }
+
+    #[test]
+    
+    fn code_block_without_language_has_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::no_language_tag();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let code_metas: Vec<_> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta())
+            .collect();
+
+        assert!(!code_metas.is_empty(), "Should have code block metadata");
+        assert_eq!(
+            code_metas[0].language(),
+            None,
+            "Block without language should have None language"
+        );
+    }
+
+    #[test]
+    
+    fn nested_code_blocks_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::nested_in_list();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        // Should have two code blocks (indices 0 and 1)
+        let mut indices = std::collections::HashSet::new();
+        for line_meta in metadata.iter() {
+            for kind in line_meta.iter() {
+                if let Some(meta) = kind.code_block_meta() {
+                    indices.insert(meta.block_index());
+                }
+            }
+        }
+
+        assert_eq!(indices.len(), 2, "Should have 2 code blocks in list");
+    }
+
+    #[test]
+    
+    fn user_message_code_blocks_have_metadata() {
+        use super::test_fixtures;
+        let msg = test_fixtures::user_message_with_code();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            Some("User"),
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let has_code_blocks = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        assert!(
+            has_code_blocks,
+            "User messages should have code block metadata"
+        );
+    }
+
+    #[test]
+    
+    fn code_and_link_metadata_coexist() {
+        use super::test_fixtures;
+        let msg = test_fixtures::code_and_links();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let has_code_blocks = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_code_block());
+
+        let has_links = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .any(|k| k.is_link());
+
+        assert!(has_code_blocks, "Should have code block metadata");
+        assert!(has_links, "Should have link metadata");
+    }
+
+    #[test]
+    
+    fn various_language_tags_preserved() {
+        use super::test_fixtures;
+        let msg = test_fixtures::various_languages();
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        let details = render_message_markdown_details_with_policy_and_user_name(
+            &msg,
+            &theme,
+            true,
+            None,
+            crate::ui::layout::TableOverflowPolicy::WrapCells,
+            None,
+        );
+        let metadata = details.span_metadata.expect("metadata should be present");
+
+        let languages: Vec<Option<&str>> = metadata
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter_map(|k| k.code_block_meta())
+            .map(|m| m.language())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Should find bash, javascript, json, txt
+        assert!(
+            languages.len() >= 4,
+            "Should preserve different language tags"
+        );
+    }
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";
@@ -2682,16 +2720,15 @@ fn flush_code_block_buffer(
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
     span_metadata: Option<&mut Vec<Vec<SpanKind>>>,
-    ranges: &mut Vec<(usize, usize, String)>,
     list_indent: usize,
+    block_index: usize,
 ) {
     if code_block_lines.is_empty() {
         return;
     }
 
-    let start = lines.len();
-    let joined = code_block_lines.join("\n");
     let produced_lines = if syntax_enabled {
+        let joined = code_block_lines.join("\n");
         crate::utils::syntax::highlight_code_block(language_hint.unwrap_or(""), &joined, theme)
             .unwrap_or_else(|| plain_codeblock_lines(code_block_lines, theme))
     } else {
@@ -2706,10 +2743,29 @@ fn flush_code_block_buffer(
 
     if let Some(metadata) = span_metadata {
         for mut line in produced_lines {
-            if let Some(indent) = indent.as_ref() {
+            let has_indent = if let Some(indent) = indent.as_ref() {
                 line.spans.insert(0, Span::raw(indent.clone()));
+                true
+            } else {
+                false
+            };
+
+            // Convert empty language string to None
+            let lang = language_hint.and_then(|s| if s.is_empty() { None } else { Some(s) });
+            let code_block_kind = SpanKind::code_block(lang, block_index);
+
+            // Build metadata: indent span (if any) is Text, code spans are CodeBlock
+            let mut line_metadata = Vec::with_capacity(line.spans.len());
+            for (i, _) in line.spans.iter().enumerate() {
+                if i == 0 && has_indent {
+                    // First span is the indent added for list nesting, not part of code
+                    line_metadata.push(SpanKind::Text);
+                } else {
+                    line_metadata.push(code_block_kind.clone());
+                }
             }
-            metadata.push(vec![SpanKind::Text; line.spans.len()]);
+
+            metadata.push(line_metadata);
             lines.push(line);
         }
     } else {
@@ -2719,11 +2775,6 @@ fn flush_code_block_buffer(
             }
             lines.push(line);
         }
-    }
-
-    let end = lines.len();
-    if end > start {
-        ranges.push((start, end - start, joined));
     }
 
     code_block_lines.clear();
@@ -2806,7 +2857,7 @@ fn render_plain_message(
         lines.push(Line::from(""));
     }
 
-    (lines, Vec::new(), metadata)
+    (lines, metadata)
 }
 
 /// Build display lines for all messages using markdown rendering

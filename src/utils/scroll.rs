@@ -423,73 +423,6 @@ impl ScrollCalculator {
         layout
     }
 
-    /// Build display lines with codeblock highlighting and terminal width for table balancing
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_display_lines_with_codeblock_highlight_and_flags_and_width(
-        messages: &VecDeque<Message>,
-        theme: &crate::ui::theme::Theme,
-        selected_block: Option<usize>,
-        highlight: ratatui::style::Style,
-        markdown_enabled: bool,
-        syntax_enabled: bool,
-        terminal_width: Option<usize>,
-        user_display_name: Option<String>,
-    ) -> Vec<Line<'static>> {
-        Self::build_layout_with_codeblock_highlight_and_flags_and_width(
-            messages,
-            theme,
-            selected_block,
-            highlight,
-            markdown_enabled,
-            syntax_enabled,
-            terminal_width,
-            user_display_name,
-        )
-        .lines
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_layout_with_codeblock_highlight_and_flags_and_width(
-        messages: &VecDeque<Message>,
-        theme: &crate::ui::theme::Theme,
-        selected_block: Option<usize>,
-        highlight: ratatui::style::Style,
-        markdown_enabled: bool,
-        syntax_enabled: bool,
-        terminal_width: Option<usize>,
-        user_display_name: Option<String>,
-    ) -> crate::ui::layout::Layout {
-        let cfg = crate::ui::layout::LayoutConfig {
-            width: terminal_width,
-            markdown_enabled,
-            syntax_enabled,
-            table_overflow_policy: crate::ui::layout::TableOverflowPolicy::WrapCells,
-            user_display_name,
-        };
-        let mut layout = crate::ui::layout::LayoutEngine::layout_messages(messages, theme, &cfg);
-
-        if markdown_enabled {
-            if let Some(idx) = selected_block {
-                if let Some((start, len, _content)) = layout.codeblock_ranges.get(idx).cloned() {
-                    let highlight_style = theme.selection_highlight_style.patch(highlight);
-                    for line in layout.lines.iter_mut().skip(start).take(len) {
-                        Self::apply_selection_highlight(
-                            line,
-                            highlight_style,
-                            cfg.width,
-                            true,
-                            None,
-                            theme,
-                        );
-                    }
-                }
-            }
-        }
-
-        layout
-    }
-
     /// Compute a scroll offset that positions the start of a given logical line index
     /// within view, taking wrapping and available height into account. The caller should
     /// clamp the result to the maximum scroll.
@@ -759,9 +692,9 @@ mod tests {
     use crate::ui::span::SpanKind;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{
-        create_test_message, create_test_messages, TestEnvVarGuard, SAMPLE_HYPERTEXT_PARAGRAPH,
+        create_test_message, create_test_messages, SAMPLE_HYPERTEXT_PARAGRAPH,
     };
-    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::style::Style;
     use ratatui::text::Line as TLine;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -1462,133 +1395,6 @@ mod tests {
                 s
             );
             assert_ne!(s.trim(), ".", "wrapped line became a lonely '.'");
-        }
-    }
-
-    #[test]
-    fn highlight_is_correct_after_wrapped_paragraph() {
-        let mut env = TestEnvVarGuard::new();
-        env.set_var("CHABEAU_COLOR", "truecolor");
-        let theme = Theme::dark_default();
-        let mut messages: VecDeque<Message> = VecDeque::new();
-        let long_para = "This is a very long line that should wrap multiple times given a small terminal width so that the visual line count before the code block increases significantly.";
-        let content = format!("{}\n\n```\ncode1\ncode2\n```", long_para);
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content,
-        });
-
-        let highlight = ratatui::style::Style::default();
-
-        let lines =
-            ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
-                &messages,
-                &theme,
-                Some(0), // select first block
-                highlight,
-                true,     // markdown enabled
-                false,    // syntax disabled for deterministic line counts
-                Some(20), // small width to force wrapping
-                None,     // user_display_name
-            );
-
-        let expected_style = theme
-            .md_codeblock_text_style()
-            .patch(theme.selection_highlight_style.patch(highlight));
-
-        // Determine expected highlighted range via width-aware ranges
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &messages,
-            &theme,
-            Some(20usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            false,
-            None,
-        );
-        assert_eq!(ranges.len(), 1, "Should have one code block");
-        let (start, len, _content) = ranges[0].clone();
-        for line in lines.iter().skip(start).take(len) {
-            for sp in line
-                .spans
-                .iter()
-                .filter(|span| !span.content.trim().is_empty())
-            {
-                let alt_style = Style::default()
-                    .fg(expected_style.fg.unwrap_or(Color::White))
-                    .add_modifier(Modifier::REVERSED);
-                assert!(
-                    sp.style == expected_style || sp.style == alt_style,
-                    "Code line should be highlighted"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn highlight_is_correct_after_table() {
-        let mut env = TestEnvVarGuard::new();
-        env.set_var("CHABEAU_COLOR", "truecolor");
-        let theme = Theme::dark_default();
-        let mut messages: VecDeque<Message> = VecDeque::new();
-        // Message 0: a table that will be rendered before the code block
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: r#"| A | B |\n|---|---|\n| 1 | 2 |\n"#.to_string(),
-        });
-        // Message 1: a code block to highlight
-        messages.push_back(Message {
-            role: "assistant".into(),
-            content: "```\nalpha\nbeta\n```\n".to_string(),
-        });
-
-        let highlight =
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD);
-
-        let lines =
-            ScrollCalculator::build_display_lines_with_codeblock_highlight_and_flags_and_width(
-                &messages,
-                &theme,
-                Some(0), // select first block
-                highlight,
-                true,  // markdown enabled
-                false, // syntax disabled for determinism
-                Some(60),
-                None, // user_display_name
-            );
-
-        // Sanity: parser should find one code block
-        let contents = crate::ui::markdown::compute_codeblock_contents_with_lang(&messages);
-        assert_eq!(contents.len(), 1, "Parser should detect one code block");
-
-        let expected_style = theme
-            .md_codeblock_text_style()
-            .patch(theme.selection_highlight_style.patch(highlight));
-
-        // Determine expected highlighted range via width-aware ranges
-        let ranges = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &messages,
-            &theme,
-            Some(60usize),
-            crate::ui::layout::TableOverflowPolicy::WrapCells,
-            false,
-            None,
-        );
-        assert_eq!(ranges.len(), 1, "Should have one code block");
-        let (start, len, _content) = ranges[0].clone();
-        for line in lines.iter().skip(start).take(len) {
-            for sp in line
-                .spans
-                .iter()
-                .filter(|span| !span.content.trim().is_empty())
-            {
-                let alt_style = Style::default()
-                    .fg(expected_style.fg.unwrap_or(Color::White))
-                    .add_modifier(Modifier::REVERSED);
-                assert!(
-                    sp.style == expected_style || sp.style == alt_style,
-                    "Highlight modifiers should be applied"
-                );
-            }
         }
     }
 }

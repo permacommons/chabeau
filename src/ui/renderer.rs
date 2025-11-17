@@ -63,18 +63,23 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         );
         (layout.lines, layout.span_metadata)
     } else if app.ui.in_block_select_mode() {
-        let highlight = Style::default().add_modifier(Modifier::BOLD);
-        let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_codeblock_highlight_and_flags_and_width(
-            &app.ui.messages,
-            &app.ui.theme,
-            app.ui.selected_block_index(),
-            highlight,
-            app.ui.markdown_enabled,
-            app.ui.syntax_enabled,
-            Some(chunks[0].width as usize),
-            Some(app.ui.user_display_name.clone()),
-        );
-        (layout.lines, layout.span_metadata)
+        // Use cache with highlighting applied in-place
+        let mut lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
+        let metadata = app
+            .get_prewrapped_span_metadata_cached(chunks[0].width)
+            .clone();
+
+        if let Some(selected_idx) = app.ui.selected_block_index() {
+            apply_code_block_highlight(
+                &mut lines,
+                &metadata,
+                selected_idx,
+                &app.ui.theme,
+                chunks[0].width as usize,
+            );
+        }
+
+        (lines, metadata)
     } else {
         unreachable!()
     };
@@ -648,6 +653,73 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
         y: ny,
         width: nw,
         height: nh,
+    }
+}
+
+/// Applies highlighting to spans belonging to a specific code block.
+///
+/// Modifies the style of all spans that are part of the specified
+/// code block using the theme's selection highlight style. Extends each
+/// line to the full terminal width with padding to create a block highlight
+/// effect. On 16-color terminals, falls back to reverse-video with preserved
+/// foreground colors.
+///
+/// # Arguments
+///
+/// * `lines` - Mutable reference to rendered lines
+/// * `metadata` - Span metadata parallel to lines
+/// * `block_index` - Zero-based index of the block to highlight
+/// * `theme` - Theme containing selection highlight style
+/// * `terminal_width` - Terminal width for padding lines to create block effect
+fn apply_code_block_highlight(
+    lines: &mut [ratatui::text::Line],
+    metadata: &[Vec<crate::ui::span::SpanKind>],
+    block_index: usize,
+    theme: &crate::ui::theme::Theme,
+    terminal_width: usize,
+) {
+    use crate::utils::color::ColorDepth;
+    use ratatui::style::{Color, Modifier};
+
+    let depth = crate::utils::color::detect_color_depth();
+    let using_16_color = depth == ColorDepth::X16;
+    let mut highlight_style = theme.selection_highlight_style;
+
+    if using_16_color {
+        highlight_style = Style::default().add_modifier(Modifier::REVERSED);
+    }
+
+    for (line, line_meta) in lines.iter_mut().zip(metadata.iter()) {
+        let mut fallback_fg = theme
+            .assistant_text_style
+            .fg
+            .or(theme.user_text_style.fg)
+            .unwrap_or(Color::White);
+
+        let mut line_belongs_to_block = false;
+
+        for (span, kind) in line.spans.iter_mut().zip(line_meta.iter()) {
+            if let Some(meta) = kind.code_block_meta() {
+                if meta.block_index() == block_index {
+                    line_belongs_to_block = true;
+                    if using_16_color {
+                        let base_fg = span.style.fg.unwrap_or(fallback_fg);
+                        fallback_fg = base_fg;
+                        span.style = Style::default().fg(base_fg);
+                    }
+                    span.style = span.style.patch(highlight_style);
+                }
+            }
+        }
+
+        // Extend line to full width with padding to create block highlight effect
+        if line_belongs_to_block && terminal_width > 0 {
+            let current_width = line.width();
+            if current_width < terminal_width {
+                let padding = " ".repeat(terminal_width - current_width);
+                line.spans.push(Span::styled(padding, highlight_style));
+            }
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use ratatui::text::Line;
 
 use super::span::SpanKind;
 use super::theme::Theme;
-use crate::core::message::{self, Message};
+use crate::core::message::Message;
 
 /// Policy for how tables should behave when they cannot reasonably fit within the terminal width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,14 +43,12 @@ pub struct MessageLineSpan {
 }
 
 /// Result of a layout pass. Carries the flattened lines along with metadata
-/// describing each message's contribution and any code block ranges (for
-/// selection/highlight overlays).
+/// describing each message's contribution.
 #[derive(Clone, Debug, Default)]
 pub struct Layout {
     pub lines: Vec<Line<'static>>,
     pub span_metadata: Vec<Vec<SpanKind>>,
     pub message_spans: Vec<MessageLineSpan>,
-    pub codeblock_ranges: Vec<(usize, usize, String)>,
 }
 
 pub struct LayoutEngine;
@@ -85,7 +83,7 @@ impl LayoutEngine {
         let mut lines = Vec::new();
         let mut span_metadata = Vec::new();
         let mut message_spans = Vec::with_capacity(messages.len());
-        let mut codeblock_ranges = Vec::new();
+        let mut global_block_index = 0usize;
 
         for msg in messages {
             let start = lines.len();
@@ -98,31 +96,64 @@ impl LayoutEngine {
             .with_user_display_name(cfg.user_display_name.clone());
             let crate::ui::markdown::RenderedMessageDetails {
                 lines: mut msg_lines,
-                codeblock_ranges: msg_ranges,
                 span_metadata: msg_meta,
             } = crate::ui::markdown::render_message_with_config(msg, theme, render_cfg);
-            let msg_metadata = msg_meta.unwrap_or_else(|| {
+            let mut msg_metadata = msg_meta.unwrap_or_else(|| {
                 msg_lines
                     .iter()
                     .map(|line| vec![SpanKind::Text; line.spans.len()])
                     .collect()
             });
+
+            // Renumber code block indices to be globally unique across all messages
+            let mut blocks_in_message = std::collections::HashSet::new();
+            for line_meta in &msg_metadata {
+                for kind in line_meta {
+                    if let Some(meta) = kind.code_block_meta() {
+                        blocks_in_message.insert(meta.block_index());
+                    }
+                }
+            }
+            let block_count = blocks_in_message.len();
+
+            if block_count > 0 {
+                // Build a mapping from per-message index to global index
+                // Sort local indices to ensure deterministic, sequential global indices
+                let mut sorted_indices: Vec<usize> = blocks_in_message.iter().copied().collect();
+                sorted_indices.sort_unstable();
+
+                let mut index_map = std::collections::HashMap::new();
+                for (i, local_idx) in sorted_indices.iter().enumerate() {
+                    index_map.insert(*local_idx, global_block_index + i);
+                }
+
+                // Renumber all code block spans
+                for line_meta in &mut msg_metadata {
+                    for kind in line_meta {
+                        if let crate::ui::span::SpanKind::CodeBlock(ref mut meta) = kind {
+                            if let Some(&new_idx) = index_map.get(&meta.block_index()) {
+                                *meta = crate::ui::span::CodeBlockMeta::new(
+                                    meta.language().map(String::from),
+                                    new_idx,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                global_block_index += block_count;
+            }
+
             let len = msg_lines.len();
             span_metadata.extend(msg_metadata);
             lines.append(&mut msg_lines);
             message_spans.push(MessageLineSpan { start, len });
-            if cfg.markdown_enabled && !message::is_app_message_role(&msg.role) {
-                for (offset, cb_len, content) in msg_ranges {
-                    codeblock_ranges.push((start + offset, cb_len, content));
-                }
-            }
         }
 
         Layout {
             lines,
             span_metadata,
             message_spans,
-            codeblock_ranges,
         }
     }
 }
@@ -130,7 +161,7 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::{LayoutConfig, LayoutEngine, Theme};
-    use crate::core::message::{Message, ROLE_ASSISTANT};
+    use crate::core::message::Message;
     use std::collections::VecDeque;
 
     #[test]
@@ -212,31 +243,5 @@ mod tests {
         let first_meta = layout.span_metadata.first().expect("meta");
         assert_eq!(first_line.spans.len(), first_meta.len());
         assert!(first_meta.iter().all(|kind| kind.is_link()));
-    }
-
-    #[test]
-    fn layout_codeblock_ranges_skip_app_messages() {
-        let theme = Theme::dark_default();
-        let mut messages = VecDeque::new();
-        messages.push_back(Message::app_error("```text\nerror\n```"));
-        messages.push_back(Message {
-            role: ROLE_ASSISTANT.into(),
-            content: "```rust\nfn main() {}\n```".into(),
-        });
-
-        let cfg = LayoutConfig::default();
-        let layout = LayoutEngine::layout_messages(&messages, &theme, &cfg);
-        let expected = crate::ui::markdown::compute_codeblock_ranges_with_width_and_policy(
-            &messages,
-            &theme,
-            cfg.width,
-            cfg.table_overflow_policy,
-            cfg.syntax_enabled,
-            cfg.user_display_name.as_deref(),
-        );
-
-        assert_eq!(layout.codeblock_ranges, expected);
-        assert_eq!(layout.codeblock_ranges.len(), 1);
-        assert!(layout.codeblock_ranges[0].2.contains("fn main"));
     }
 }

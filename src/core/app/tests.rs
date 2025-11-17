@@ -894,71 +894,6 @@ fn streaming_table_autoscroll_stays_consistent() {
 }
 
 #[test]
-fn block_selection_offset_matches_renderer_with_tables() {
-    // Test that block selection scroll calculations match renderer when tables are involved
-    let mut app = create_test_app();
-
-    // Add content with a table followed by a code block
-    let content_with_table_and_code = r#"Here's a table:
-
-| Government System | Definition | Key Properties |
-|-------------------|------------|----------------|
-| Democracy | A system where power is vested in the people, who rule either directly or through freely elected representatives. | Universal suffrage, Free and fair elections |
-| Dictatorship | A form of government where a single person or a small group holds absolute power. | Centralized authority, Limited or no political opposition |
-
-And here's some code:
-
-```rust
-fn main() {
-println!("Hello, world!");
-}
-```"#;
-
-    app.ui.messages.push_back(Message {
-        role: "assistant".into(),
-        content: content_with_table_and_code.to_string(),
-    });
-
-    let width = 80u16;
-    let available_height = 20u16;
-
-    // Get codeblock ranges (these are computed from widthless lines)
-    let ranges = crate::ui::markdown::compute_codeblock_ranges(&app.ui.messages, &app.ui.theme);
-    assert!(!ranges.is_empty(), "Should have at least one code block");
-
-    let (code_block_start, _len, _content) = &ranges[0];
-
-    // Test that block selection navigation uses the same width-aware approach as the renderer
-    // Both should now use width-aware line building for consistent results
-
-    // The key insight: Both block navigation and rendering should use the same cached approach
-    // for consistency. In production, block navigation would also use get_prewrapped_lines_cached.
-    let lines = app.get_prewrapped_lines_cached(width);
-
-    let _block_nav_offset = crate::utils::scroll::ScrollCalculator::scroll_offset_to_line_start(
-        lines,
-        width,
-        available_height,
-        *code_block_start,
-    );
-
-    // Since both use the same method, heights are identical
-    let block_nav_height = lines.len();
-    let renderer_height = lines.len();
-
-    // This should always pass now since they're the same method
-    assert_eq!(
-        block_nav_height, renderer_height,
-        "Block navigation height ({}) should match renderer height ({}) for accurate block selection",
-        block_nav_height, renderer_height
-    );
-
-    // Legacy widthless path is deprecated under the unified layout engine.
-    // We no longer assert differences against that path because width-aware layout
-    // is the single source of truth for visual line counts.
-}
-
-#[test]
 fn narrow_terminal_exposes_scroll_height_mismatch() {
     // Test with very narrow terminal that forces significant table wrapping differences
     let mut app = create_test_app();
@@ -1200,4 +1135,162 @@ fn test_turn_off_character_mode_from_picker() {
 
     assert!(app.session.active_character.is_none());
     assert_eq!(app.ui.status.as_deref(), Some("Character mode disabled"));
+}
+
+// Phase 0 tests: Code block cache behavior (currently ignored, will pass in Phase 2)
+
+/// Helper to count code blocks in span metadata.
+#[allow(dead_code)]
+fn count_code_blocks_in_metadata(metadata: &[Vec<crate::ui::span::SpanKind>]) -> usize {
+    let mut indices = std::collections::HashSet::new();
+    for line_meta in metadata {
+        for kind in line_meta {
+            if let Some(meta) = kind.code_block_meta() {
+                indices.insert(meta.block_index());
+            }
+        }
+    }
+    indices.len()
+}
+
+#[test]
+
+fn block_selection_uses_cached_metadata() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::multiple_blocks());
+
+    // First render caches metadata
+    let width = 80u16;
+    let _lines = app.get_prewrapped_lines_cached(width);
+    let ptr_before = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // Count code block spans in cache
+    let cached_blocks =
+        count_code_blocks_in_metadata(app.get_prewrapped_span_metadata_cached(width));
+    assert_eq!(cached_blocks, 3, "Should cache 3 code blocks");
+
+    // Enter block select mode
+    app.ui.enter_block_select_mode(0);
+
+    // Navigation should not invalidate cache
+    let ptr_after = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    assert_eq!(
+        ptr_before, ptr_after,
+        "Block navigation should reuse cached metadata"
+    );
+}
+
+#[test]
+
+fn cache_invalidates_on_message_change() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width = 80u16;
+    let metadata_before = app.get_prewrapped_span_metadata_cached(width);
+    let lines_before = metadata_before.len();
+
+    // Modify messages - add a message with multiple blocks
+    app.ui.messages.push_back(test_fixtures::multiple_blocks());
+    app.invalidate_prewrap_cache();
+
+    let metadata_after = app.get_prewrapped_span_metadata_cached(width);
+    let lines_after = metadata_after.len();
+
+    // Cache should reflect the new messages (more lines)
+    assert!(
+        lines_after > lines_before,
+        "Should have more lines after adding message: {} -> {}",
+        lines_before,
+        lines_after
+    );
+}
+
+#[test]
+
+fn cache_invalidates_on_width_change() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width1 = 80u16;
+    let width2 = 40u16;
+
+    // Get metadata at width1
+    let metadata1 = app.get_prewrapped_span_metadata_cached(width1);
+    let has_code1 = metadata1
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    // Get metadata at different width - should rebuild cache
+    let metadata2 = app.get_prewrapped_span_metadata_cached(width2);
+    let has_code2 = metadata2
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    // Both widths should have code block metadata
+    assert!(has_code1, "Width1 should have code blocks");
+    assert!(has_code2, "Width2 should have code blocks");
+
+    // Verify cache was rebuilt by checking at width1 again
+    let metadata1_again = app.get_prewrapped_span_metadata_cached(width1);
+    let has_code1_again = metadata1_again
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    assert!(
+        has_code1_again,
+        "Width1 again should still have code blocks"
+    );
+}
+
+#[test]
+
+fn cache_reused_for_same_width() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width = 80u16;
+
+    // Multiple accesses at same width
+    let ptr1 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    let ptr2 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+    let ptr3 = app.get_prewrapped_span_metadata_cached(width) as *const _;
+
+    // All should return the same pointer
+    assert_eq!(ptr1, ptr2);
+    assert_eq!(ptr2, ptr3);
+}
+
+#[test]
+
+fn metadata_contains_code_blocks_after_cache() {
+    use crate::ui::markdown::test_fixtures;
+
+    let mut app = create_test_app();
+    app.ui.messages.push_back(test_fixtures::multiple_blocks());
+
+    let width = 80u16;
+    let metadata = app.get_prewrapped_span_metadata_cached(width);
+
+    // Cached metadata should include code block metadata
+    let has_code_blocks = metadata
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    assert!(
+        has_code_blocks,
+        "Cached metadata should include code blocks"
+    );
 }

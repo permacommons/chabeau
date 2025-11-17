@@ -1203,8 +1203,8 @@ pub(crate) struct PrewrapCache {
     theme_sig: u64,
     messages_len: usize,
     last_msg_hash: u64,
-    lines: Vec<Line<'static>>,
-    span_metadata: Vec<Vec<SpanKind>>,
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) span_metadata: Vec<Vec<SpanKind>>,
     last_start: usize,
     last_len: usize,
 }
@@ -1220,9 +1220,40 @@ fn splice_last_message_layout(
     new_lines.extend_from_slice(&layout.lines);
     cache.lines = new_lines;
 
-    let mut new_meta: Vec<Vec<SpanKind>> = Vec::with_capacity(start + layout.span_metadata.len());
+    // Find the maximum existing block index in the cache
+    let mut max_existing_block_index = None;
+    for line_meta in &cache.span_metadata[..start] {
+        for kind in line_meta {
+            if let Some(meta) = kind.code_block_meta() {
+                max_existing_block_index = Some(
+                    max_existing_block_index
+                        .map(|max: usize| max.max(meta.block_index()))
+                        .unwrap_or(meta.block_index()),
+                );
+            }
+        }
+    }
+
+    // Renumber block indices in the new message to be globally unique
+    let mut new_message_metadata = layout.span_metadata;
+    if let Some(max_idx) = max_existing_block_index {
+        let offset = max_idx + 1;
+
+        for line_meta in &mut new_message_metadata {
+            for kind in line_meta {
+                if let SpanKind::CodeBlock(ref mut meta) = kind {
+                    *meta = crate::ui::span::CodeBlockMeta::new(
+                        meta.language().map(String::from),
+                        meta.block_index() + offset,
+                    );
+                }
+            }
+        }
+    }
+
+    let mut new_meta: Vec<Vec<SpanKind>> = Vec::with_capacity(start + new_message_metadata.len());
     new_meta.extend_from_slice(&cache.span_metadata[..start]);
-    new_meta.extend_from_slice(&layout.span_metadata);
+    new_meta.extend_from_slice(&new_message_metadata);
     cache.span_metadata = new_meta;
 
     let last_span = layout.message_spans.last().cloned().unwrap_or_default();

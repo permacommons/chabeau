@@ -229,6 +229,11 @@ struct MarkdownRenderer<'a> {
     list_stack: Vec<ListKind>,
     list_indent_stack: Vec<usize>,
     pending_list_indent: Option<usize>,
+    /// Track which list items (at any nesting level) should have blank lines before them,
+    /// indexed by their absolute position in the document (0-based)
+    items_needing_blank_lines_before: std::collections::HashSet<usize>,
+    /// Current item index across all nesting levels (increments for every list item encountered)
+    current_item_index: usize,
     in_code_block: Option<String>,
     code_block_lines: Vec<String>,
     code_block_count: usize,
@@ -238,6 +243,47 @@ struct MarkdownRenderer<'a> {
 }
 
 impl<'a> MarkdownRenderer<'a> {
+    /// Check if there's a blank line immediately before the given position in the content.
+    fn has_blank_line_before(content: &str, pos: usize) -> bool {
+        // Find the start of the line containing this position
+        let line_start = content[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if line_start <= 1 {
+            return false; // No room for a previous line
+        }
+
+        // Get the content before the current line's newline
+        let before_newline = line_start - 1;
+        let prev_content = &content[..before_newline];
+
+        // Find the previous line
+        if let Some(prev_line_start) = prev_content.rfind('\n') {
+            let prev_line = &prev_content[prev_line_start + 1..];
+            prev_line.trim().is_empty()
+        } else {
+            // Only one line exists before current line; check if it's blank
+            prev_content.trim().is_empty()
+        }
+    }
+
+    /// Use pulldown-cmark's parser to find list items preceded by blank lines.
+    /// Returns a set of item indices (0-based, in document order) that should have blank lines before them.
+    fn find_items_needing_blank_lines(content: &str) -> std::collections::HashSet<usize> {
+        let mut result = std::collections::HashSet::new();
+        let parser = Parser::new_ext(content, Options::all()).into_offset_iter();
+        let mut item_index = 0;
+
+        for (event, range) in parser {
+            if let Event::Start(Tag::Item) = event {
+                if item_index > 0 && Self::has_blank_line_before(content, range.start) {
+                    result.insert(item_index);
+                }
+                item_index += 1;
+            }
+        }
+
+        result
+    }
+
     fn new(
         role: RoleKind,
         content: &'a str,
@@ -265,6 +311,8 @@ impl<'a> MarkdownRenderer<'a> {
             list_stack: Vec::new(),
             list_indent_stack: Vec::new(),
             pending_list_indent: None,
+            items_needing_blank_lines_before: Self::find_items_needing_blank_lines(content),
+            current_item_index: 0,
             in_code_block: None,
             code_block_lines: Vec::new(),
             code_block_count: 0,
@@ -348,8 +396,9 @@ impl<'a> MarkdownRenderer<'a> {
         options.insert(Options::ENABLE_SUPERSCRIPT);
         options.insert(Options::ENABLE_SUBSCRIPT);
         let parser = Parser::new_ext(self.content, options);
+        let mut parser = parser.peekable();
 
-        for event in parser {
+        while let Some(event) = parser.next() {
             match event {
                 Event::Start(tag) => match tag {
                     Tag::Paragraph => {
@@ -383,6 +432,12 @@ impl<'a> MarkdownRenderer<'a> {
                         self.pending_list_indent = None;
                     }
                     Tag::Item => {
+                        // Check if this item (at any nesting level) needs a blank line before it
+                        if self.items_needing_blank_lines_before.contains(&self.current_item_index) {
+                            self.push_empty_line();
+                        }
+                        self.current_item_index += 1;
+
                         self.flush_current_spans(true);
                         let marker = match self
                             .list_stack
@@ -499,7 +554,26 @@ impl<'a> MarkdownRenderer<'a> {
                 Event::End(tag_end) => match tag_end {
                     TagEnd::Paragraph => {
                         self.flush_current_spans(true);
-                        self.push_empty_line();
+                        if self.list_stack.is_empty() {
+                            // Outside lists, always add blank line after paragraph
+                            self.push_empty_line();
+                        } else {
+                            // Inside a list - peek ahead to preserve blank lines before block elements
+                            // Note: We DON'T add blank before Tag::List because the Tag::Item inside
+                            // that nested list will add the blank line via our preprocessing.
+                            // We only add blanks before blocks that don't have Tag::Item events.
+                            let next_is_block = matches!(
+                                parser.peek(),
+                                Some(Event::Start(
+                                    Tag::Paragraph | Tag::CodeBlock(_) |
+                                    Tag::BlockQuote(_) | Tag::Heading { .. }
+                                ))
+                            );
+                            if next_is_block {
+                                self.push_empty_line();
+                            }
+                            // Otherwise suppress blank line (our preprocessing handles item-level spacing)
+                        }
                     }
                     TagEnd::Heading(_) => {
                         self.flush_current_spans(true);
@@ -515,11 +589,12 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     TagEnd::List(_) => {
                         self.flush_current_spans(true);
-                        // Only add blank line when ending the outermost list,
-                        // not when exiting nested lists that have parent lists continuing
+
+                        // Add blank line when outermost list ends
                         if self.list_stack.len() == 1 {
                             self.push_empty_line();
                         }
+
                         self.list_stack.pop();
                         self.list_indent_stack.pop();
                         self.pending_list_indent = None;
@@ -774,6 +849,7 @@ impl<'a> MarkdownRenderer<'a> {
     fn current_list_indent_width(&self) -> usize {
         self.list_indent_stack.iter().sum()
     }
+
 }
 
 /// Provides only content and optional language hint for each code block, in order of appearance.
@@ -2769,6 +2845,653 @@ End of table."###
         // Verify the structure is correct
         assert!(emergency_idx < sub_sticky_idx, "Emergency should come before Sub-sticky");
         assert!(sub_sticky_idx < groceries_idx, "Sub-sticky should come before Groceries");
+    }
+
+    #[test]
+    fn list_with_source_blank_lines_preserves_spacing_between_top_level_items() {
+        // When the markdown source has blank lines between top-level list items,
+        // those should be preserved to provide visual breathing room
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- Strategic Foundations\n  - Long-Horizon Thinking\n    - Scenario Branches\n\n- Implementation Patterns\n  - Knowledge Architecture\n    - Modular repositories\n\n- Resilience\n  - Stressors".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find indices
+        let implementation_idx = lines.iter().position(|l| l.contains("Implementation")).unwrap();
+        let resilience_idx = lines.iter().position(|l| l.contains("Resilience")).unwrap();
+
+        // Check if there's a blank line between Strategic section and Implementation section
+        let has_blank_before_implementation = lines[implementation_idx - 1].trim().is_empty();
+
+        // Check if there's a blank line between Implementation section and Resilience section
+        let has_blank_before_resilience = lines[resilience_idx - 1].trim().is_empty();
+
+        assert!(
+            has_blank_before_implementation,
+            "Should have blank line before 'Implementation Patterns' (source has blank line). Lines: {:#?}",
+            lines
+        );
+        assert!(
+            has_blank_before_resilience,
+            "Should have blank line before 'Resilience' (source has blank line). Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn list_without_source_blank_lines_has_no_spacing_between_top_level_items() {
+        // When the markdown source has NO blank lines between top-level list items,
+        // they should render consecutively without extra spacing
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- First section\n  - Nested item\n- Second section\n  - Another nested".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find index
+        let second_idx = lines.iter().position(|l| l.contains("Second section")).unwrap();
+
+        // Second section should come relatively soon after First section ends
+        // There should be no blank line between them since source has none
+        // We need to account for the nested item, so check the line before Second section
+        let line_before_second = &lines[second_idx - 1];
+
+        assert!(
+            !line_before_second.trim().is_empty(),
+            "Should NOT have blank line before 'Second section' (source has no blank line). Line before: '{}'. All lines: {:#?}",
+            line_before_second,
+            lines
+        );
+    }
+
+    #[test]
+    fn list_preceded_by_paragraph_has_blank_line_before() {
+        // A list preceded by a paragraph should have a blank line separating them
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Here is some introductory text.\n\n- First item\n- Second item".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let intro_idx = lines.iter().position(|l| l.contains("introductory")).unwrap();
+        let first_item_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
+
+        // There should be a blank line between the paragraph and the list
+        assert!(
+            first_item_idx > intro_idx + 1,
+            "Should have blank line between paragraph and list. Lines: {:#?}",
+            lines
+        );
+        assert!(
+            lines[intro_idx + 1].trim().is_empty(),
+            "Line after paragraph should be blank. Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn list_followed_by_paragraph_has_blank_line_after() {
+        // A list followed by a paragraph should have a blank line separating them
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- First item\n- Second item\n\nThis is concluding text.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let second_item_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let concluding_idx = lines.iter().position(|l| l.contains("concluding")).unwrap();
+
+        // There should be a blank line between the list and the paragraph
+        assert!(
+            concluding_idx > second_item_idx + 1,
+            "Should have blank line between list and paragraph. Lines: {:#?}",
+            lines
+        );
+        assert!(
+            lines[second_item_idx + 1].trim().is_empty(),
+            "Line after list should be blank. Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn list_preceded_by_heading_has_blank_line_before() {
+        // A list preceded by a heading should have a blank line separating them
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "## My Section\n\n- First item\n- Second item".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let heading_idx = lines.iter().position(|l| l.contains("My Section")).unwrap();
+        let first_item_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
+
+        // There should be a blank line between the heading and the list
+        assert!(
+            first_item_idx > heading_idx + 1,
+            "Should have blank line between heading and list. Lines: {:#?}",
+            lines
+        );
+        assert!(
+            lines[heading_idx + 1].trim().is_empty(),
+            "Line after heading should be blank. Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn list_followed_by_heading_has_blank_line_after() {
+        // A list followed by a heading should have a blank line separating them
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- First item\n- Second item\n\n## Next Section".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let second_item_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let heading_idx = lines.iter().position(|l| l.contains("Next Section")).unwrap();
+
+        // There should be a blank line between the list and the heading
+        assert!(
+            heading_idx > second_item_idx + 1,
+            "Should have blank line between list and heading. Lines: {:#?}",
+            lines
+        );
+        assert!(
+            lines[second_item_idx + 1].trim().is_empty(),
+            "Line after list should be blank. Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn complex_nested_lists_with_long_text_preserve_blank_lines() {
+        // Test complex nested markdown with multiple levels, long wrapping text,
+        // and blank lines at various nesting depths
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"### Architecture Overview
+
+1. **Primary Concept: The Architecture of a Modern Knowledge System**
+   In designing a contemporary knowledge system, several foundational components must be conceptualized, integrated, and optimized for scalability. The architecture should balance information retrieval efficiency, semantic accuracy, and human-centered accessibility.
+   Below is a structured decomposition of its design hierarchy:
+
+   - **Layer One: Data Acquisition and Normalization**
+     Collecting heterogeneous data streams across structured and unstructured sources forms the backbone of long-term informational reliability.
+     Examples include web-scraped data, curated research papers, user-generated content, and transaction logs.
+
+     - **Sub-layer A: Source Validation**
+       - Ensure authenticity through cryptographic checksums.
+       - Implement redundancy detection using fuzzy hashing.
+       - Maintain timestamp precision to establish causal consistency.
+
+     - **Sub-layer B: Normalization Pipeline**
+       - Convert text encodings to UTF-8 for cross-platform compatibility.
+       - Apply tokenization with semantic segmentation to retain linguistic intent.
+
+   - **Layer Two: Knowledge Representation**
+     Once normalized, data should be molded into adaptive knowledge graphs or relational mappings.
+     These structures serve to bridge connections across domains, entities, and abstract relationships.
+
+     - **Sub-layer A: Ontological Framework**
+       - Define entities, attributes, and relations using logical formalisms.
+       - Incorporate context-sensitive nodes for ambiguous linguistic references.
+"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(80));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Debug: print all lines
+        eprintln!("\n=== RENDERED OUTPUT ===");
+        for (i, line) in lines.iter().enumerate() {
+            eprintln!("{:3}: '{}'", i, line);
+        }
+        eprintln!("=== END OUTPUT ===\n");
+
+        // Find key elements
+        let heading_idx = lines.iter().position(|l| l.contains("Architecture Overview")).unwrap();
+        let primary_idx = lines.iter().position(|l| l.contains("Primary Concept")).unwrap();
+        let layer_one_idx = lines.iter().position(|l| l.contains("Layer One")).unwrap();
+        let sublayer_a_idx = lines.iter().position(|l| l.contains("Sub-layer A")).unwrap();
+        let ensure_auth_idx = lines.iter().position(|l| l.contains("Ensure authenticity")).unwrap();
+        let implement_red_idx = lines.iter().position(|l| l.contains("Implement redundancy")).unwrap();
+        let sublayer_b_idx = lines.iter().position(|l| l.contains("Sub-layer B")).unwrap();
+        let layer_two_idx = lines.iter().position(|l| l.contains("Layer Two")).unwrap();
+
+        // === EXPECTATION 1: Blank line after heading ===
+        assert!(
+            lines[heading_idx + 1].trim().is_empty(),
+            "Should have blank line after heading. Line {}: '{}'",
+            heading_idx + 1,
+            lines[heading_idx + 1]
+        );
+
+        // === EXPECTATION 2: Ordered list item starts after blank line ===
+        assert_eq!(
+            heading_idx + 2,
+            primary_idx,
+            "Ordered list should start right after blank line following heading"
+        );
+
+        // === EXPECTATION 3: Blank line before Layer One (nested bullet in ordered list) ===
+        // Source has blank line after "Below is a structured decomposition..." and before Layer One
+        let line_before_layer_one = &lines[layer_one_idx - 1];
+        assert!(
+            line_before_layer_one.trim().is_empty(),
+            "Should have blank line before 'Layer One' (source has blank line). Line {}: '{}'",
+            layer_one_idx - 1,
+            line_before_layer_one
+        );
+
+        // === EXPECTATION 4: Blank line before Sub-layer A ===
+        // Source has blank line after "Examples include web-scraped data..." and before Sub-layer A
+        let line_before_sublayer_a = &lines[sublayer_a_idx - 1];
+        assert!(
+            line_before_sublayer_a.trim().is_empty(),
+            "Should have blank line before 'Sub-layer A' (source has blank line). Line {}: '{}'",
+            sublayer_a_idx - 1,
+            line_before_sublayer_a
+        );
+
+        // === EXPECTATION 5: No blank lines within Sub-layer A's nested items ===
+        // The three items under Sub-layer A should be consecutive (no blank lines in source)
+        let line_after_ensure = &lines[ensure_auth_idx + 1];
+        assert!(
+            !line_after_ensure.trim().is_empty(),
+            "Should NOT have blank line after 'Ensure authenticity' (no blank line in source). Line {}: '{}'",
+            ensure_auth_idx + 1,
+            line_after_ensure
+        );
+
+        let line_after_implement = &lines[implement_red_idx + 1];
+        assert!(
+            !line_after_implement.trim().is_empty(),
+            "Should NOT have blank line after 'Implement redundancy' (no blank line in source). Line {}: '{}'",
+            implement_red_idx + 1,
+            line_after_implement
+        );
+
+        // === EXPECTATION 6: Blank line before Sub-layer B ===
+        // Source has blank line after last item of Sub-layer A and before Sub-layer B
+        let line_before_sublayer_b = &lines[sublayer_b_idx - 1];
+        assert!(
+            line_before_sublayer_b.trim().is_empty(),
+            "Should have blank line before 'Sub-layer B' (source has blank line). Line {}: '{}'",
+            sublayer_b_idx - 1,
+            line_before_sublayer_b
+        );
+
+        // === EXPECTATION 7: Blank line before Layer Two ===
+        // Source has blank line after last item of Sub-layer B and before Layer Two
+        let line_before_layer_two = &lines[layer_two_idx - 1];
+        assert!(
+            line_before_layer_two.trim().is_empty(),
+            "Should have blank line before 'Layer Two' (source has blank line). Line {}: '{}'",
+            layer_two_idx - 1,
+            line_before_layer_two
+        );
+    }
+
+    #[test]
+    fn blank_line_before_paragraph_doesnt_cause_blank_before_later_list_item() {
+        // Regression test: prev_was_blank persisting across paragraph text would cause
+        // a later list item to incorrectly get a blank line before it.
+        // Scenario: item, paragraph, blank, paragraph, item - the second item should NOT
+        // get a blank line because there's no blank immediately before it.
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- First item
+Paragraph text after first item.
+
+More paragraph text.
+- Second item (should have NO blank before it)"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the items
+        let first_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
+        let second_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+
+        // The second item should NOT have a blank line before it from our preprocessing
+        // (it may have one from TagEnd::Paragraph, but that's a separate rendering decision)
+        // What we're testing is that the blank line before "More paragraph text" doesn't
+        // cause our preprocessing to mark the second item as needing a blank line.
+
+        // If the bug exists, find_items_needing_blank_lines would return {1} (second item)
+        // With the fix, it should return {} (no items need blank lines from preprocessing)
+        // We can't directly test the set, but we can verify the item doesn't get EXTRA spacing
+
+        // Actually, let me verify by checking there's only one blank line before second item
+        // (from TagEnd::Paragraph), not two (from both TagEnd::Paragraph and our preprocessing)
+        let mut blank_count = 0;
+        for i in (first_idx + 1)..second_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have at most 2 blank lines (one after "Paragraph text" paragraph end,
+        // one for the explicit blank line in source before "More paragraph text")
+        // If our preprocessing bug existed, there'd be an additional blank before the second item
+        assert!(
+            blank_count <= 2,
+            "Should have at most 2 blank lines between items (not from preprocessing bug). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
+    }
+
+    #[test]
+    fn lists_with_numeric_text_before_them_dont_shift_indices() {
+        // Regression test: lines starting with digits like "2024 roadmap" should not be
+        // counted as list items, which would shift indices and cause blank lines
+        // to appear at wrong positions
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"2024 roadmap includes several initiatives.
+
+1. First initiative
+2. Second initiative
+
+3. Third initiative (after blank line)"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the items
+        let first_idx = lines.iter().position(|l| l.contains("First initiative")).unwrap();
+        let second_idx = lines.iter().position(|l| l.contains("Second initiative")).unwrap();
+        let third_idx = lines.iter().position(|l| l.contains("Third initiative")).unwrap();
+
+        // No blank line between first and second (they're consecutive in source)
+        assert_eq!(
+            second_idx,
+            first_idx + 1,
+            "Second item should immediately follow first. Lines: {:#?}",
+            lines
+        );
+
+        // Blank line before third (source has blank line)
+        let line_before_third = &lines[third_idx - 1];
+        assert!(
+            line_before_third.trim().is_empty(),
+            "Should have blank line before third item (source has blank line). Line {}: '{}'. Lines: {:#?}",
+            third_idx - 1,
+            line_before_third,
+            lines
+        );
+    }
+
+    #[test]
+    fn lists_with_plus_markers_preserve_blank_lines() {
+        // Regression test: + markers should be recognized as list items and preserve
+        // blank lines from source, just like - and * markers
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"+ First item
++ Second item
+
++ Third item (after blank line)
++ Fourth item"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the items
+        let first_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
+        let second_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let third_idx = lines.iter().position(|l| l.contains("Third item")).unwrap();
+        let fourth_idx = lines.iter().position(|l| l.contains("Fourth item")).unwrap();
+
+        // No blank line between first and second (consecutive in source)
+        assert_eq!(
+            second_idx,
+            first_idx + 1,
+            "Second item should immediately follow first. Lines: {:#?}",
+            lines
+        );
+
+        // Blank line before third (source has blank line)
+        let line_before_third = &lines[third_idx - 1];
+        assert!(
+            line_before_third.trim().is_empty(),
+            "Should have blank line before third item (source has blank line). Line {}: '{}'. Lines: {:#?}",
+            third_idx - 1,
+            line_before_third,
+            lines
+        );
+
+        // No blank line between third and fourth (consecutive in source)
+        assert_eq!(
+            fourth_idx,
+            third_idx + 1,
+            "Fourth item should immediately follow third. Lines: {:#?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn code_blocks_dont_shift_list_item_indices() {
+        // Regression test: lines inside fenced code blocks that look like list items
+        // should not increment item_index, which would shift indices and cause
+        // blank lines to appear at wrong positions
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"Example code:
+```
+- not a real item
+- also not real
+```
+
+- First real item
+- Second real item
+
+- Third real item (should have blank before)"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the real items (not the ones in the code block)
+        let first_idx = lines.iter().position(|l| l.contains("First real item")).unwrap();
+        let second_idx = lines.iter().position(|l| l.contains("Second real item")).unwrap();
+        let third_idx = lines.iter().position(|l| l.contains("Third real item")).unwrap();
+
+        // No blank line between first and second (consecutive in source)
+        assert_eq!(
+            second_idx,
+            first_idx + 1,
+            "Second item should immediately follow first. Lines: {:#?}",
+            lines
+        );
+
+        // Blank line before third (source has blank line)
+        let line_before_third = &lines[third_idx - 1];
+        assert!(
+            line_before_third.trim().is_empty(),
+            "Should have blank line before third item (source has blank line). Line {}: '{}'. Lines: {:#?}",
+            third_idx - 1,
+            line_before_third,
+            lines
+        );
+    }
+
+    #[test]
+    fn list_items_with_multiple_paragraphs_preserve_blank_lines() {
+        // Regression test: blank lines between paragraphs within a single list item
+        // should be preserved, not suppressed by the "skip blank after paragraph in list" logic
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- First paragraph in item
+
+  Second paragraph in same item
+
+- Next item"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the paragraphs
+        let first_para_idx = lines.iter().position(|l| l.contains("First paragraph")).unwrap();
+        let second_para_idx = lines.iter().position(|l| l.contains("Second paragraph")).unwrap();
+        let next_item_idx = lines.iter().position(|l| l.contains("Next item")).unwrap();
+
+        // Should have a blank line between the two paragraphs within the same item
+        assert!(
+            second_para_idx > first_para_idx + 1,
+            "Second paragraph should have blank line before it. First at {}, Second at {}. Lines: {:#?}",
+            first_para_idx,
+            second_para_idx,
+            lines
+        );
+
+        // Verify there's actually a blank line
+        let line_between = &lines[first_para_idx + 1];
+        assert!(
+            line_between.trim().is_empty(),
+            "Should have blank line between paragraphs in same item. Line {}: '{}'. Lines: {:#?}",
+            first_para_idx + 1,
+            line_between,
+            lines
+        );
+
+        // Should also have blank line before next item
+        let line_before_next = &lines[next_item_idx - 1];
+        assert!(
+            line_before_next.trim().is_empty(),
+            "Should have blank line before next item. Line {}: '{}'. Lines: {:#?}",
+            next_item_idx - 1,
+            line_before_next,
+            lines
+        );
+    }
+
+    #[test]
+    fn list_items_preserve_blank_lines_before_all_block_elements() {
+        // Regression test: blank lines before code blocks, nested lists, and blockquotes
+        // within list items should be preserved, not just blank lines before paragraphs
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- Introduction paragraph
+
+  ```python
+  code_example()
+  ```
+
+- Main point about something
+
+  - Nested item one
+  - Nested item two
+
+- Context paragraph
+
+  > Important quote here"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Test 1: Blank line before code block
+        let intro_idx = lines.iter().position(|l| l.contains("Introduction")).unwrap();
+        let code_idx = lines.iter().position(|l| l.contains("code_example")).unwrap();
+        assert!(
+            code_idx > intro_idx + 1,
+            "Code block should have blank line before it. Intro at {}, Code at {}. Lines: {:#?}",
+            intro_idx,
+            code_idx,
+            lines
+        );
+
+        // Test 2: Blank line before nested list
+        let main_point_idx = lines.iter().position(|l| l.contains("Main point")).unwrap();
+        let nested_one_idx = lines.iter().position(|l| l.contains("Nested item one")).unwrap();
+        assert!(
+            nested_one_idx > main_point_idx + 1,
+            "Nested list should have blank line before it. Main at {}, Nested at {}. Lines: {:#?}",
+            main_point_idx,
+            nested_one_idx,
+            lines
+        );
+
+        // Test 3: Blank line before blockquote
+        let context_idx = lines.iter().position(|l| l.contains("Context paragraph")).unwrap();
+        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
+        assert!(
+            quote_idx > context_idx + 1,
+            "Blockquote should have blank line before it. Context at {}, Quote at {}. Lines: {:#?}",
+            context_idx,
+            quote_idx,
+            lines
+        );
+    }
+
+    #[test]
+    fn nested_lists_with_single_blank_line_dont_double_space() {
+        // Regression test: when a list item contains a nested list with a single blank
+        // line before it, we should render ONE blank line, not two (one from TagEnd::Paragraph
+        // peeking ahead and seeing Tag::List, and another from Tag::Item preprocessing)
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- parent
+
+  - child one
+  - child two"#.into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let parent_idx = lines.iter().position(|l| l.contains("parent")).unwrap();
+        let child_idx = lines.iter().position(|l| l.contains("child one")).unwrap();
+
+        // Count blank lines between parent and child
+        let mut blank_count = 0;
+        for i in (parent_idx + 1)..child_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have exactly 1 blank line, not 2
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line between parent and nested child (source has 1). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
     }
 }
 

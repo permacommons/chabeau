@@ -515,7 +515,11 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     TagEnd::List(_) => {
                         self.flush_current_spans(true);
-                        self.push_empty_line();
+                        // Only add blank line when ending the outermost list,
+                        // not when exiting nested lists that have parent lists continuing
+                        if self.list_stack.len() == 1 {
+                            self.push_empty_line();
+                        }
                         self.list_stack.pop();
                         self.list_indent_stack.pop();
                         self.pending_list_indent = None;
@@ -2734,6 +2738,37 @@ End of table."###
             "Sub-sub-item should have 4-space indent, got: '{}'",
             lines[3]
         );
+    }
+
+    #[test]
+    fn nested_lists_dont_add_blank_lines_between_same_level_items() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- Budget tree, branch one\n  - Emergency fund\n    - Sub-sticky note\n  - Groceries"
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the indices of key items
+        let emergency_idx = lines.iter().position(|l| l.contains("Emergency")).unwrap();
+        let sub_sticky_idx = lines.iter().position(|l| l.contains("Sub-sticky")).unwrap();
+        let groceries_idx = lines.iter().position(|l| l.contains("Groceries")).unwrap();
+
+        // After "Sub-sticky note" ends its nested list, "Groceries" should immediately follow
+        // without any blank lines, since they're both at the same level (level 2)
+        assert_eq!(
+            groceries_idx,
+            sub_sticky_idx + 1,
+            "Groceries should come immediately after Sub-sticky note without blank lines. Lines: {:#?}",
+            lines
+        );
+
+        // Verify the structure is correct
+        assert!(emergency_idx < sub_sticky_idx, "Emergency should come before Sub-sticky");
+        assert!(sub_sticky_idx < groceries_idx, "Sub-sticky should come before Groceries");
     }
 }
 

@@ -403,13 +403,19 @@ impl<'a> MarkdownRenderer<'a> {
                                 }
                             }
                         };
+                        // Calculate indent from parent levels before updating current level
+                        let parent_indent: usize = self
+                            .list_indent_stack
+                            .iter()
+                            .take(self.list_indent_stack.len().saturating_sub(1))
+                            .sum();
                         if let Some(indent) = self.list_indent_stack.last_mut() {
                             *indent = marker.width();
                         }
                         if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
                             self.ensure_role_prefix_once();
                         }
-                        self.pending_list_indent = None;
+                        self.pending_list_indent = Some(parent_indent);
                         self.push_span(
                             Span::styled(marker, self.theme.md_list_marker_style()),
                             SpanKind::Text,
@@ -2682,6 +2688,51 @@ End of table."###
         assert!(
             languages.len() >= 4,
             "Should preserve different language tags"
+        );
+    }
+
+    #[test]
+    fn nested_bullet_lists_render_with_indentation() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "* Item 1\n    * Sub-item 1.1\n    * Sub-item 1.2\n        * Sub-sub-item 1.2.1"
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Verify that nested items have leading spaces
+        // Line 0 should be "- Item 1" (no indent)
+        // Line 1 should be "  - Sub-item 1.1" (2 space indent from parent "- " marker)
+        // Line 2 should be "  - Sub-item 1.2" (2 space indent)
+        // Line 3 should be "    - Sub-sub-item 1.2.1" (4 space indent: 2 from first level + 2 from second level)
+
+        assert!(
+            lines.len() >= 4,
+            "Should have at least 4 lines, got {}",
+            lines.len()
+        );
+        assert!(
+            lines[0].starts_with("- "),
+            "First item should start with '- ', got: '{}'",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("  - "),
+            "Sub-item should have 2-space indent, got: '{}'",
+            lines[1]
+        );
+        assert!(
+            lines[2].starts_with("  - "),
+            "Sub-item should have 2-space indent, got: '{}'",
+            lines[2]
+        );
+        assert!(
+            lines[3].starts_with("    - "),
+            "Sub-sub-item should have 4-space indent, got: '{}'",
+            lines[3]
         );
     }
 }

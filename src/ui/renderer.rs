@@ -70,7 +70,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .clone();
 
         if let Some(selected_idx) = app.ui.selected_block_index() {
-            apply_code_block_highlight(&mut lines, &metadata, selected_idx);
+            apply_code_block_highlight(&mut lines, &metadata, selected_idx, &app.ui.theme);
         }
 
         (lines, metadata)
@@ -653,25 +653,48 @@ fn inset_rect(r: Rect, dx: u16, dy: u16) -> Rect {
 /// Applies highlighting to spans belonging to a specific code block.
 ///
 /// Modifies the style of all spans that are part of the specified
-/// code block to add bold modifier for visual distinction.
+/// code block using the theme's selection highlight style. On 16-color
+/// terminals, falls back to reverse-video with preserved foreground colors.
 ///
 /// # Arguments
 ///
 /// * `lines` - Mutable reference to rendered lines
 /// * `metadata` - Span metadata parallel to lines
 /// * `block_index` - Zero-based index of the block to highlight
+/// * `theme` - Theme containing selection highlight style
 fn apply_code_block_highlight(
     lines: &mut [ratatui::text::Line],
     metadata: &[Vec<crate::ui::span::SpanKind>],
     block_index: usize,
+    theme: &crate::ui::theme::Theme,
 ) {
-    use ratatui::style::Modifier;
+    use crate::utils::color::ColorDepth;
+    use ratatui::style::{Color, Modifier};
+
+    let depth = crate::utils::color::detect_color_depth();
+    let using_16_color = depth == ColorDepth::X16;
+    let mut highlight_style = theme.selection_highlight_style;
+
+    if using_16_color {
+        highlight_style = Style::default().add_modifier(Modifier::REVERSED);
+    }
 
     for (line, line_meta) in lines.iter_mut().zip(metadata.iter()) {
+        let mut fallback_fg = theme
+            .assistant_text_style
+            .fg
+            .or(theme.user_text_style.fg)
+            .unwrap_or(Color::White);
+
         for (span, kind) in line.spans.iter_mut().zip(line_meta.iter()) {
             if let Some(meta) = kind.code_block_meta() {
                 if meta.block_index() == block_index {
-                    span.style = span.style.add_modifier(Modifier::BOLD);
+                    if using_16_color {
+                        let base_fg = span.style.fg.unwrap_or(fallback_fg);
+                        fallback_fg = base_fg;
+                        span.style = Style::default().fg(base_fg);
+                    }
+                    span.style = span.style.patch(highlight_style);
                 }
             }
         }

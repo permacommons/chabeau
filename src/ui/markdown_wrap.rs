@@ -111,20 +111,32 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 }
                             } else if punct_start == Some(0) {
                                 // Punctuation doesn't fit AND it's directly adjacent (no leading space).
-                                // Backtrack: pop styled span, wrap current line, then add styled span
-                                // to next line followed by current text. This preserves the styling.
-                                if let Some((last_span, last_kind)) = current_line.pop() {
-                                    // Wrap the current line (without the styled span)
-                                    wrapped_lines.push(std::mem::take(&mut current_line));
+                                // Before backtracking, check if we'd make progress:
+                                // If styled span + punctuation won't fit on a new line, don't backtrack.
+                                let punct_width = UnicodeWidthStr::width(&text[..punct_end]);
+                                let last_span_width = current_line
+                                    .last()
+                                    .map(|(span, _)| UnicodeWidthStr::width(span.content.as_ref()))
+                                    .unwrap_or(0);
 
-                                    // Start new line with the styled span (preserving its style/kind)
-                                    current_line.push((last_span, last_kind));
-                                    current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
-                                    line_limit = continuation_width;
+                                // Only backtrack if styled word + punctuation will fit on continuation line
+                                if last_span_width + punct_width <= continuation_width {
+                                    // Backtrack: pop styled span, wrap current line, then add styled span
+                                    // to next line followed by current text. This preserves the styling.
+                                    if let Some((last_span, last_kind)) = current_line.pop() {
+                                        // Wrap the current line (without the styled span)
+                                        wrapped_lines.push(std::mem::take(&mut current_line));
 
-                                    // Restart the while loop to reprocess current text on the new line
-                                    continue;
+                                        // Start new line with the styled span (preserving its style/kind)
+                                        current_line.push((last_span, last_kind));
+                                        current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                        line_limit = continuation_width;
+
+                                        // Restart the while loop to reprocess current text on the new line
+                                        continue;
+                                    }
                                 }
+                                // else: backtracking won't help, let normal wrapping handle it
                             } else if punct_start.is_some() {
                                 // Punctuation doesn't fit but "stands alone" (has leading space).
                                 // Trim the leading space and let punctuation wrap normally.
@@ -260,20 +272,32 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 }
                             } else if punct_start == Some(0) {
                                 // Punctuation doesn't fit AND it's directly adjacent (no leading space).
-                                // Backtrack: pop styled span, wrap current line, then add styled span
-                                // to next line followed by current text. This preserves the styling.
-                                if let Some((last_span, last_kind)) = current_line.pop() {
-                                    // Wrap the current line (without the styled span)
-                                    wrapped_lines.push(std::mem::take(&mut current_line));
+                                // Before backtracking, check if we'd make progress:
+                                // If styled span + punctuation won't fit on a new line, don't backtrack.
+                                let punct_width = UnicodeWidthStr::width(&text[..punct_end]);
+                                let last_span_width = current_line
+                                    .last()
+                                    .map(|(span, _)| UnicodeWidthStr::width(span.content.as_ref()))
+                                    .unwrap_or(0);
 
-                                    // Start new line with the styled span (preserving its style/kind)
-                                    current_line.push((last_span, last_kind));
-                                    current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
-                                    line_limit = continuation_width;
+                                // Only backtrack if styled word + punctuation will fit on continuation line
+                                if last_span_width + punct_width <= continuation_width {
+                                    // Backtrack: pop styled span, wrap current line, then add styled span
+                                    // to next line followed by current text. This preserves the styling.
+                                    if let Some((last_span, last_kind)) = current_line.pop() {
+                                        // Wrap the current line (without the styled span)
+                                        wrapped_lines.push(std::mem::take(&mut current_line));
 
-                                    // Restart the while loop to reprocess current text on the new line
-                                    continue;
+                                        // Start new line with the styled span (preserving its style/kind)
+                                        current_line.push((last_span, last_kind));
+                                        current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                        line_limit = continuation_width;
+
+                                        // Restart the while loop to reprocess current text on the new line
+                                        continue;
+                                    }
                                 }
+                                // else: backtracking won't help, let normal wrapping handle it
                             } else if punct_start.is_some() {
                                 // Punctuation doesn't fit but "stands alone" (has leading space).
                                 // Trim the leading space and let punctuation wrap normally.

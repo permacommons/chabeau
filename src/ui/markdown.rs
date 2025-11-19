@@ -4402,6 +4402,33 @@ Next paragraph"#
         );
     }
 
+    #[test]
+    fn emphasis_fills_entire_width_with_adjacent_punct() {
+        // Critical edge case: styled word that fills entire width by itself,
+        // followed by adjacent punctuation. This could cause infinite loop
+        // in backtracking if not handled correctly.
+        let theme = crate::ui::theme::Theme::dark_default();
+
+        // Create a word that's exactly 36 chars
+        let word = "a_very_long_italicized_word_here"; // 32 chars
+        let message = Message {
+            role: "assistant".into(),
+            content: format!("*{}*) more.", word),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(32));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // If we get here without hanging, the bug is fixed
+        // The word should appear somewhere in output
+        let combined = lines.join("");
+        assert!(
+            combined.contains(word),
+            "Should not hang and should preserve word. Output: {:?}",
+            lines
+        );
+    }
+
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";

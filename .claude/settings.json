@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -n \"$CLAUDE_CODE_REMOTE\" ]; then sudo apt-get install -y libdbus-1-dev; fi"
+            "command": "if [ -n \"$CLAUDE_CODE_REMOTE\" ]; then apt-get install -y libdbus-1-dev; fi"
           }
         ]
       }

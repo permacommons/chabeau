@@ -4062,14 +4062,15 @@ Next paragraph"#
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // The word "good" should not have leading space
-        let good_line = lines.iter().find(|l| l.contains("good"));
-        if let Some(line) = good_line {
-            assert!(
-                !line.starts_with(" good"),
-                "The word 'good' should not have a leading space. Found: '{}'",
-                line
-            );
-        }
+        let good_line = lines
+            .iter()
+            .find(|l| l.contains("good"))
+            .expect("The word 'good' should appear in the wrapped output");
+        assert!(
+            !good_line.starts_with(" good"),
+            "The word 'good' should not have a leading space. Found: '{}'",
+            good_line
+        );
     }
 
     #[test]
@@ -4084,14 +4085,15 @@ Next paragraph"#
         let rendered = render_markdown_for_test(&message, &theme, false, Some(35));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let useful_line = lines.iter().find(|l| l.contains("useful"));
-        if let Some(line) = useful_line {
-            assert!(
-                !line.starts_with(" useful"),
-                "The word 'useful' after bold should not have a leading space. Found: '{}'",
-                line
-            );
-        }
+        let useful_line = lines
+            .iter()
+            .find(|l| l.contains("useful"))
+            .expect("The word 'useful' should appear in the wrapped output");
+        assert!(
+            !useful_line.starts_with(" useful"),
+            "The word 'useful' after bold should not have a leading space. Found: '{}'",
+            useful_line
+        );
     }
 
     #[test]
@@ -4118,14 +4120,15 @@ Next paragraph"#
         }
         eprintln!("=== END DEBUG ===\n");
 
-        let today_line = lines.iter().find(|l| l.contains("today"));
-        if let Some(line) = today_line {
-            assert!(
-                !line.starts_with(" today"),
-                "The word 'today' after inline code should not have a leading space. Found: '{}'",
-                line
-            );
-        }
+        let today_line = lines
+            .iter()
+            .find(|l| l.contains("today"))
+            .expect("The word 'today' should appear in the wrapped output");
+        assert!(
+            !today_line.starts_with(" today"),
+            "The word 'today' after inline code should not have a leading space. Found: '{}'",
+            today_line
+        );
     }
 
     #[test]
@@ -4140,14 +4143,15 @@ Next paragraph"#
         let rendered = render_markdown_for_test(&message, &theme, false, Some(35));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let here_line = lines.iter().find(|l| l.contains("here"));
-        if let Some(line) = here_line {
-            assert!(
-                !line.starts_with(" here"),
-                "The word 'here' after link should not have a leading space. Found: '{}'",
-                line
-            );
-        }
+        let here_line = lines
+            .iter()
+            .find(|l| l.contains("here"))
+            .expect("The word 'here' should appear in the wrapped output");
+        assert!(
+            !here_line.starts_with(" here"),
+            "The word 'here' after link should not have a leading space. Found: '{}'",
+            here_line
+        );
     }
 
     #[test]
@@ -4162,14 +4166,15 @@ Next paragraph"#
         let rendered = render_markdown_for_test(&message, &theme, false, Some(30));
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let useful_line = lines.iter().find(|l| l.contains("useful"));
-        if let Some(line) = useful_line {
-            assert!(
-                !line.starts_with(" useful"),
-                "The word 'useful' after strikethrough should not have a leading space. Found: '{}'",
-                line
-            );
-        }
+        let useful_line = lines
+            .iter()
+            .find(|l| l.contains("useful"))
+            .expect("The word 'useful' should appear in the wrapped output");
+        assert!(
+            !useful_line.starts_with(" useful"),
+            "The word 'useful' after strikethrough should not have a leading space. Found: '{}'",
+            useful_line
+        );
     }
 
     #[test]
@@ -4185,15 +4190,16 @@ Next paragraph"#
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // The "I think" part should not have inappropriate leading space
-        let i_line = lines.iter().find(|l| l.contains("I think"));
-        if let Some(line) = i_line {
-            // Allow leading space if the whole phrase wrapped, but check for double space
-            assert!(
-                !line.starts_with("  "),
-                "Should not have double leading space. Found: '{}'",
-                line
-            );
-        }
+        let i_line = lines
+            .iter()
+            .find(|l| l.contains("I think"))
+            .expect("The phrase 'I think' should appear in the wrapped output");
+        // Allow leading space if the whole phrase wrapped, but check for double space
+        assert!(
+            !i_line.starts_with("  "),
+            "Should not have double leading space. Found: '{}'",
+            i_line
+        );
     }
 
     // Tests for markdown with punctuation at width boundaries

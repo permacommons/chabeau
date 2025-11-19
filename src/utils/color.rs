@@ -91,6 +91,9 @@ pub fn quantize_theme_if_needed(
     theme.input_text_style = quantize_style(theme.input_text_style, depth);
     theme.input_cursor_style = quantize_style(theme.input_cursor_style, depth);
     theme.input_cursor_line_style = quantize_style(theme.input_cursor_line_style, depth);
+    theme.input_cursor_color = theme
+        .input_cursor_color
+        .map(|color| quantize_color(color, depth));
 
     theme.md_h1 = theme.md_h1.map(|s| quantize_style(s, depth));
     theme.md_h2 = theme.md_h2.map(|s| quantize_style(s, depth));
@@ -116,6 +119,30 @@ pub fn quantize_theme_for_current_terminal(
 ) -> crate::ui::theme::Theme {
     let depth = detect_color_depth();
     quantize_theme_if_needed(theme, depth)
+}
+
+pub fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::Red => Some((205, 0, 0)),
+        Color::Green => Some((0, 205, 0)),
+        Color::Yellow => Some((205, 205, 0)),
+        Color::Blue => Some((0, 0, 205)),
+        Color::Magenta => Some((205, 0, 205)),
+        Color::Cyan => Some((0, 205, 205)),
+        Color::Gray => Some((192, 192, 192)),
+        Color::DarkGray => Some((128, 128, 128)),
+        Color::LightRed => Some((255, 0, 0)),
+        Color::LightGreen => Some((0, 255, 0)),
+        Color::LightYellow => Some((255, 255, 0)),
+        Color::LightBlue => Some((92, 92, 255)),
+        Color::LightMagenta => Some((255, 0, 255)),
+        Color::LightCyan => Some((0, 255, 255)),
+        Color::White => Some((255, 255, 255)),
+        Color::Indexed(i) => Some(xterm256_to_rgb(i)),
+        Color::Reset => None,
+    }
 }
 
 fn quantize_color_256(color: Color) -> Color {

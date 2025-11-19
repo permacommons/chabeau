@@ -324,6 +324,8 @@ When no explicit theme is set, Chabeau tries to infer a sensible default from yo
 
 Custom themes belong in `config.toml` under `[[custom_themes]]`. See [src/builtins/themes.toml](src/builtins/themes.toml) for color references and [examples/config.toml.sample](examples/config.toml.sample) for structure.
 
+Themes can also set a `cursor_color` to change the terminal cursor via OSC 12 when the theme is applied.
+
 App messages—Chabeau’s own informational banners, warnings, and errors—use dedicated theme knobs so they’re easy to distinguish from assistant replies. Customize them with the `app_info_*`, `app_warning_*`, and `app_error_*` keys in your theme to control the prefix text, prefix styling, and message styling independently.
 
 ### Markdown and Syntax Highlighting

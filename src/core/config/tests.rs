@@ -342,6 +342,7 @@ fn test_custom_theme_save_load() {
         id: "mytheme".to_string(),
         display_name: "My Theme".to_string(),
         background: Some("black".to_string()),
+        cursor_color: None,
         user_prefix: Some("green,bold".to_string()),
         user_text: Some("green".to_string()),
         assistant_text: Some("white".to_string()),

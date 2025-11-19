@@ -3906,10 +3906,11 @@ More paragraph text.
         let theme = crate::ui::theme::Theme::dark_default();
         let message = Message {
             role: "assistant".into(),
-            content: r#"> "Relax," it squeals, "we're diversified in hope and overdue library fines."
+            content:
+                r#"> "Relax," it squeals, "we're diversified in hope and overdue library fines."
 
 - **Merit:** it funds the dream of four walls and a window box."#
-                .into(),
+                    .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
@@ -3951,8 +3952,14 @@ This is a paragraph after the quote."#
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
-        let para_idx = lines.iter().position(|l| l.contains("This is a paragraph")).unwrap();
+        let quote_idx = lines
+            .iter()
+            .position(|l| l.contains("Important quote"))
+            .unwrap();
+        let para_idx = lines
+            .iter()
+            .position(|l| l.contains("This is a paragraph"))
+            .unwrap();
 
         // Count blank lines between blockquote and paragraph
         let mut blank_count = 0;
@@ -3986,8 +3993,14 @@ This is a paragraph after the quote."#
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
-        let heading_idx = lines.iter().position(|l| l.contains("Next Section")).unwrap();
+        let quote_idx = lines
+            .iter()
+            .position(|l| l.contains("Important quote"))
+            .unwrap();
+        let heading_idx = lines
+            .iter()
+            .position(|l| l.contains("Next Section"))
+            .unwrap();
 
         // Count blank lines between blockquote and heading
         let mut blank_count = 0;
@@ -4025,7 +4038,10 @@ Next paragraph"#
 
         // Find the code block and next paragraph
         let code_idx = lines.iter().position(|l| l.contains("code_here")).unwrap();
-        let para_idx = lines.iter().position(|l| l.contains("Next paragraph")).unwrap();
+        let para_idx = lines
+            .iter()
+            .position(|l| l.contains("Next paragraph"))
+            .unwrap();
 
         // Count blank lines between code block and paragraph
         let mut blank_count = 0;

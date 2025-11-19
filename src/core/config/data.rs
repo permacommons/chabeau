@@ -26,6 +26,7 @@ pub struct CustomTheme {
     pub id: String,
     pub display_name: String,
     pub background: Option<String>,
+    pub cursor_color: Option<String>,
     pub user_prefix: Option<String>,
     pub user_text: Option<String>,
     pub assistant_text: Option<String>,

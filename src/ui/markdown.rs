@@ -4355,6 +4355,47 @@ Next paragraph"#
         assert_eq!(lines[1], "more.");
     }
 
+    #[test]
+    fn emphasis_preserves_style_during_backtracking() {
+        // Critical test: verify that styled text preserves its styling when backtracked
+        // "Space exploration is fundamentally_x" = 36 chars exactly
+        // ") useful" doesn't fit, triggers backtracking
+        // The word "fundamentally_x" MUST remain italic on the wrapped line
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally_x*) useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+
+        eprintln!("\n=== DEBUG emphasis_preserves_style_during_backtracking ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}'", i, line_str);
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' style={:?}", j, span.content, span.style);
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        // Line 1 should have "fundamentally_x" with italic styling
+        let line1_spans = &rendered.lines[1].spans;
+
+        // Find the span containing "fundamentally_x"
+        let fundamentally_span = line1_spans.iter()
+            .find(|span| span.content.contains("fundamentally_x"))
+            .expect("Should find 'fundamentally_x' on line 1");
+
+        // Verify it has italic styling (ITALIC modifier should be set)
+        assert!(
+            fundamentally_span.style.add_modifier.contains(ratatui::style::Modifier::ITALIC),
+            "The word 'fundamentally_x' must preserve italic styling after backtracking. \
+             Expected ITALIC modifier but got style: {:?}",
+            fundamentally_span.style
+        );
+    }
+
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";

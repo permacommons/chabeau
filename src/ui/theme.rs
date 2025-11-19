@@ -656,6 +656,9 @@ impl Theme {
     pub fn md_blockquote_style(&self) -> Style {
         self.md_blockquote_text.unwrap_or(self.system_text_style)
     }
+    pub fn md_rule_style(&self) -> Style {
+        self.md_rule.unwrap_or(self.input_border_style)
+    }
     pub fn md_list_marker_style(&self) -> Style {
         self.md_list_marker
             .unwrap_or(self.streaming_indicator_style)

@@ -111,11 +111,21 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 }
                             } else if punct_start == Some(0) {
                                 // Punctuation doesn't fit AND it's directly adjacent (no leading space).
-                                // Backtrack: pop last span and merge to keep styled_word + punct together.
-                                // Preserve all content including spaces - they're meaningful word separators.
+                                // Backtrack: pop styled span, wrap current line, then add styled span
+                                // to next line followed by current text. This preserves the styling.
                                 if let Some((last_span, last_kind)) = current_line.pop() {
                                     current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
-                                    text = format!("{}{}", last_span.content, text);
+
+                                    // Wrap the current line (without the styled span)
+                                    wrapped_lines.push(std::mem::take(&mut current_line));
+
+                                    // Start new line with the styled span (preserving its style/kind)
+                                    current_line.push((last_span, last_kind));
+                                    current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                    line_limit = continuation_width;
+
+                                    // Restart the while loop to reprocess current text on the new line
+                                    continue;
                                 }
                             } else if punct_start.is_some() {
                                 // Punctuation doesn't fit but "stands alone" (has leading space).
@@ -252,11 +262,21 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 }
                             } else if punct_start == Some(0) {
                                 // Punctuation doesn't fit AND it's directly adjacent (no leading space).
-                                // Backtrack: pop last span and merge to keep styled_word + punct together.
-                                // Preserve all content including spaces - they're meaningful word separators.
+                                // Backtrack: pop styled span, wrap current line, then add styled span
+                                // to next line followed by current text. This preserves the styling.
                                 if let Some((last_span, last_kind)) = current_line.pop() {
                                     current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
-                                    text = format!("{}{}", last_span.content, text);
+
+                                    // Wrap the current line (without the styled span)
+                                    wrapped_lines.push(std::mem::take(&mut current_line));
+
+                                    // Start new line with the styled span (preserving its style/kind)
+                                    current_line.push((last_span, last_kind));
+                                    current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                    line_limit = continuation_width;
+
+                                    // Restart the while loop to reprocess current text on the new line
+                                    continue;
                                 }
                             } else if punct_start.is_some() {
                                 // Punctuation doesn't fit but "stands alone" (has leading space).

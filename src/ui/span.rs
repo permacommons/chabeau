@@ -593,8 +593,8 @@ mod tests {
         let metadata = rendered.span_metadata.unwrap();
 
         // Extract the code block
-        let content =
-            extract_code_block_content(&rendered.lines, &metadata, 0).expect("Should extract code block");
+        let content = extract_code_block_content(&rendered.lines, &metadata, 0)
+            .expect("Should extract code block");
 
         // CRITICAL: Content should NOT include the 3-space list indent
         // The original code is column-zero:

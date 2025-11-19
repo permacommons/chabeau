@@ -5,10 +5,12 @@ use unicode_width::UnicodeWidthStr;
 
 /// Wrap spans to the provided width while preserving styles and word boundaries.
 /// Shared between markdown rendering and range computation so downstream
-/// consumers stay in sync.
+/// consumers stay in sync. A continuation indent width can be supplied to
+/// account for prefixes added after wrapping (e.g., hanging indents).
 pub(crate) fn wrap_spans_to_width_generic_shared(
     spans: &[(Span<'static>, SpanKind)],
     max_width: usize,
+    continuation_indent_width: usize,
 ) -> Vec<Vec<(Span<'static>, SpanKind)>> {
     const MAX_UNBREAKABLE_LENGTH: usize = 30;
     if spans.is_empty() {
@@ -17,6 +19,10 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
     let mut wrapped_lines = Vec::new();
     let mut current_line: Vec<(Span<'static>, SpanKind)> = Vec::new();
     let mut current_width = 0usize;
+    let continuation_width = max_width
+        .saturating_sub(continuation_indent_width)
+        .max(1 /* prevent zero width */);
+    let mut line_limit = max_width;
     // Break incoming spans into owned (text, style) parts
     let mut parts: Vec<(String, Style, SpanKind)> = spans
         .iter()
@@ -30,7 +36,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
             for (grapheme_start, grapheme) in text.grapheme_indices(true) {
                 let grapheme_end = grapheme_start + grapheme.len();
                 let gw = UnicodeWidthStr::width(grapheme);
-                if current_width + width_so_far + gw <= max_width {
+                if current_width + width_so_far + gw <= line_limit {
                     width_so_far += gw;
                     chars_to_fit = grapheme_end;
                     if grapheme.chars().all(|c| c.is_whitespace()) {
@@ -45,6 +51,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                 if !current_line.is_empty() {
                     wrapped_lines.push(std::mem::take(&mut current_line));
                     current_width = 0;
+                    line_limit = continuation_width;
                     continue;
                 } else {
                     // Consider unbreakable word
@@ -67,7 +74,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         for (grapheme_start, grapheme) in text.grapheme_indices(true) {
                             let grapheme_end = grapheme_start + grapheme.len();
                             let gw = UnicodeWidthStr::width(grapheme);
-                            if forced_width + gw > max_width {
+                            if forced_width + gw > line_limit {
                                 if forced_end == 0 {
                                     forced_end = grapheme_end;
                                     forced_width += gw;
@@ -88,6 +95,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         if !text.is_empty() {
                             wrapped_lines.push(std::mem::take(&mut current_line));
                             current_width = 0;
+                            line_limit = continuation_width;
                         }
                     }
                 }
@@ -102,14 +110,16 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     // multi-word links and long tokens stay intact.
                     wrapped_lines.push(std::mem::take(&mut current_line));
                     current_width = 0;
+                    line_limit = continuation_width;
                     continue;
                 }
                 let left = text[..break_pos].trim_end();
                 if !left.is_empty() {
                     let left_width = UnicodeWidthStr::width(left);
-                    if current_width > 0 && current_width + left_width > max_width {
+                    if current_width > 0 && current_width + left_width > line_limit {
                         wrapped_lines.push(std::mem::take(&mut current_line));
                         current_width = 0;
+                        line_limit = continuation_width;
                     }
                     if left_width > 0 {
                         current_line.push((Span::styled(left.to_string(), style), kind.clone()));
@@ -120,6 +130,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                 if !text.is_empty() {
                     wrapped_lines.push(std::mem::take(&mut current_line));
                     current_width = 0;
+                    line_limit = continuation_width;
                 }
             }
         }
@@ -143,7 +154,7 @@ mod tests {
     #[test]
     fn wrap_splits_at_spaces() {
         let spans = vec![(Span::raw("word boundary test"), SpanKind::Text)];
-        let wrapped = wrap_spans_to_width_generic_shared(&spans, 6);
+        let wrapped = wrap_spans_to_width_generic_shared(&spans, 6, 0);
         let lines: Vec<String> = wrapped
             .into_iter()
             .map(|line| {
@@ -159,7 +170,7 @@ mod tests {
     #[test]
     fn wrap_preserves_zwj_clusters() {
         let spans = vec![(Span::raw("👩‍💻👩‍💻"), SpanKind::Text)];
-        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2);
+        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2, 0);
         let lines: Vec<String> = wrapped
             .into_iter()
             .map(|line| {
@@ -175,7 +186,7 @@ mod tests {
     #[test]
     fn wrap_preserves_skin_tone_modifiers() {
         let spans = vec![(Span::raw("👍🏽👍🏽"), SpanKind::Text)];
-        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2);
+        let wrapped = wrap_spans_to_width_generic_shared(&spans, 2, 0);
         let lines: Vec<String> = wrapped
             .into_iter()
             .map(|line| {

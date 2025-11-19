@@ -597,7 +597,9 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     TagEnd::BlockQuote(_) => {
                         self.flush_current_spans(true);
-                        self.push_empty_line();
+                        // Don't add blank line here - all inner elements (paragraph, heading,
+                        // code block, list, nested blockquote) already add their own trailing
+                        // blank lines, so adding another here would double-space.
                         self.style_stack.pop();
                         self.kind_stack.pop();
                     }
@@ -1242,8 +1244,9 @@ mod tests {
         let rendered = render_markdown_for_test(&message, &theme, true, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
+        // Blockquote contains a paragraph, which adds a trailing blank line
         assert!(
-            lines.len() >= 3,
+            lines.len() >= 2,
             "expected callout blockquote to render with trailing spacing"
         );
         assert_eq!(lines[0], "Always document parser upgrades.");
@@ -3890,6 +3893,152 @@ More paragraph text.
         assert_eq!(
             blank_count, 1,
             "Should have exactly 1 blank line between parent and nested child (source has 1). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
+    }
+
+    #[test]
+    fn blockquote_followed_by_list_has_single_blank_line() {
+        // Regression test: when a blockquote is followed by a list with a single blank
+        // line between them, we should render ONE blank line, not two (one from TagEnd::Paragraph
+        // inside the blockquote, and another from TagEnd::BlockQuote)
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"> "Relax," it squeals, "we're diversified in hope and overdue library fines."
+
+- **Merit:** it funds the dream of four walls and a window box."#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let quote_idx = lines.iter().position(|l| l.contains("Relax")).unwrap();
+        let list_idx = lines.iter().position(|l| l.contains("Merit")).unwrap();
+
+        // Count blank lines between blockquote and list
+        let mut blank_count = 0;
+        for i in (quote_idx + 1)..list_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have exactly 1 blank line, not 2
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line between blockquote and list (source has 1). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
+    }
+
+    #[test]
+    fn blockquote_followed_by_paragraph_has_single_blank_line() {
+        // Similar issue: blockquote followed by a paragraph should preserve
+        // the single blank line from the source, not double it
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"> Important quote here.
+
+This is a paragraph after the quote."#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
+        let para_idx = lines.iter().position(|l| l.contains("This is a paragraph")).unwrap();
+
+        // Count blank lines between blockquote and paragraph
+        let mut blank_count = 0;
+        for i in (quote_idx + 1)..para_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have exactly 1 blank line, not 2
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line between blockquote and paragraph (source has 1). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
+    }
+
+    #[test]
+    fn blockquote_followed_by_heading_has_single_blank_line() {
+        // Same issue with headings after blockquotes
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"> Important quote here.
+
+## Next Section"#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
+        let heading_idx = lines.iter().position(|l| l.contains("Next Section")).unwrap();
+
+        // Count blank lines between blockquote and heading
+        let mut blank_count = 0;
+        for i in (quote_idx + 1)..heading_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have exactly 1 blank line, not 2
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line between blockquote and heading (source has 1). Found {}. Lines: {:#?}",
+            blank_count,
+            lines
+        );
+    }
+
+    #[test]
+    fn blockquote_with_code_block_followed_by_paragraph() {
+        // Test what happens when a blockquote contains a code block
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"> ```python
+> code_here()
+> ```
+
+Next paragraph"#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Find the code block and next paragraph
+        let code_idx = lines.iter().position(|l| l.contains("code_here")).unwrap();
+        let para_idx = lines.iter().position(|l| l.contains("Next paragraph")).unwrap();
+
+        // Count blank lines between code block and paragraph
+        let mut blank_count = 0;
+        for i in (code_idx + 1)..para_idx {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            }
+        }
+
+        // Should have exactly 1 blank line, not 2
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line between blockquote code block and next paragraph (source has 1). Found {}. Lines: {:#?}",
             blank_count,
             lines
         );

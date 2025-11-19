@@ -4043,6 +4043,288 @@ Next paragraph"#
             lines
         );
     }
+
+    // Tests for markdown control characters at width boundaries
+    // These test the case where styled text (italic, bold, code, links) ends
+    // at or near the wrapping width boundary, and ensure that following spaces
+    // and words don't get improperly wrapped to a new line.
+
+    #[test]
+    fn emphasis_ending_one_after_width() {
+        // Test when italic word extends one char past the width
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally* good.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(34));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // The word "good" should not have leading space
+        let good_line = lines.iter().find(|l| l.contains("good"));
+        if let Some(line) = good_line {
+            assert!(
+                !line.starts_with(" good"),
+                "The word 'good' should not have a leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn strong_emphasis_ending_at_width() {
+        // Test with **bold** text
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is **fundamentally** useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(35));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let useful_line = lines.iter().find(|l| l.contains("useful"));
+        if let Some(line) = useful_line {
+            assert!(
+                !line.starts_with(" useful"),
+                "The word 'useful' after bold should not have a leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn inline_code_ending_at_width() {
+        // Test with `code` text
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "The function is `very_important_func` today.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(35));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // Debug: print all lines and their details
+        eprintln!("\n=== DEBUG inline_code_ending_at_width ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}'", i, line_str);
+            eprintln!("  Spans: {}", line_obj.spans.len());
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        let today_line = lines.iter().find(|l| l.contains("today"));
+        if let Some(line) = today_line {
+            assert!(
+                !line.starts_with(" today"),
+                "The word 'today' after inline code should not have a leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn link_ending_at_width() {
+        // Test with [text](url) links
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Check out [this important resource](http://example.com) here.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(35));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let here_line = lines.iter().find(|l| l.contains("here"));
+        if let Some(line) = here_line {
+            assert!(
+                !line.starts_with(" here"),
+                "The word 'here' after link should not have a leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn strikethrough_ending_at_width() {
+        // Test with ~~strikethrough~~ text
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "This approach is ~~fundamentally~~ useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(30));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let useful_line = lines.iter().find(|l| l.contains("useful"));
+        if let Some(line) = useful_line {
+            assert!(
+                !line.starts_with(" useful"),
+                "The word 'useful' after strikethrough should not have a leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn emphasis_with_punctuation_at_width() {
+        // Test emphasis followed by punctuation then space
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally*, I think, useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        // The "I think" part should not have inappropriate leading space
+        let i_line = lines.iter().find(|l| l.contains("I think"));
+        if let Some(line) = i_line {
+            // Allow leading space if the whole phrase wrapped, but check for double space
+            assert!(
+                !line.starts_with("  "),
+                "Should not have double leading space. Found: '{}'",
+                line
+            );
+        }
+    }
+
+    // Tests for markdown with punctuation at width boundaries
+
+    #[test]
+    fn emphasis_with_paren_inside_at_width() {
+        // Test paren INSIDE emphasis: *(word)* next
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *(fundamentally)* useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        eprintln!("\n=== DEBUG emphasis_with_paren_inside_at_width (paren INSIDE) ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}'", i, line_str);
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        if lines.len() > 1 {
+            let second_line = &lines[1];
+            assert!(
+                !second_line.starts_with(" useful"),
+                "Should not have ' useful' at start of wrapped line. Found: '{}'",
+                second_line
+            );
+        }
+    }
+
+    #[test]
+    fn emphasis_with_paren_outside_one_past_width() {
+        // Test paren OUTSIDE emphasis, but paren is exactly 1 char past boundary
+        // "Space exploration is " = 21 chars
+        // "fundamentally_x" = 15 chars
+        // Total = 36 chars (exactly at width)
+        // Then ")" is at position 37 (1 past boundary)
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally_x*) useful.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        eprintln!("\n=== DEBUG emphasis_with_paren_outside_one_past_width ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        // With backtracking, the styled word wraps with punctuation and space preserved
+        assert_eq!(lines[0], "Space exploration is ");
+        assert_eq!(lines[1], "fundamentally_x) useful.");
+    }
+
+    #[test]
+    fn code_with_closing_paren_at_width() {
+        // Test inline code followed by closing paren: `code`) next
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "The function is `very_important_func`) today.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        eprintln!("\n=== DEBUG code_with_closing_paren_at_width ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}'", i, line_str);
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        if lines.len() > 1 {
+            let second_line = &lines[1];
+            assert!(
+                !second_line.starts_with(") today"),
+                "Should not have ') today' at start of wrapped line. Found: '{}'",
+                second_line
+            );
+        }
+    }
+
+    #[test]
+    fn emphasis_with_standalone_paren() {
+        // Test punctuation that "stands alone" (has space before it)
+        // "Space exploration is fundamentally" = 34 chars
+        // If we add " )" that would be 36 chars (at width limit)
+        // But let's test when the ) is 1 past by using fundamentally_x
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally_x* )".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(36));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        eprintln!("\n=== DEBUG emphasis_with_standalone_paren ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        // The ) has a space before it, so it "stands alone" and can wrap by itself
+        // We should NOT backtrack and merge fundamentally_x with )
+        // Expected: Line 1 ends with "fundamentally_x", Line 2 is just ")"
+        assert_eq!(lines[0], "Space exploration is fundamentally_x");
+        assert_eq!(lines[1], ")");
+    }
+
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";

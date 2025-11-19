@@ -49,6 +49,91 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
             if chars_to_fit == 0 {
                 // Nothing fits on this line
                 if !current_line.is_empty() {
+                    // Look back at the previous span to find natural word boundary.
+                    // When styled text (code, emphasis) fills the line and the next span
+                    // starts with whitespace/punctuation, we want to recognize that as
+                    // a word boundary between the spans, not as content of the next span.
+                    if let Some((last_span, _)) = current_line.last() {
+                        let last_content = last_span.content.as_ref();
+                        let combined = format!("{}{}", last_content, text);
+                        let last_len = last_content.len();
+
+                        // Extract any leading punctuation to keep with previous line.
+                        // Trim any whitespace. Never lose characters.
+                        // Examples: ") today" → extract ")", trim " ", wrap "today"
+                        //           " useful" → trim " ", wrap "useful"
+                        //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
+                        let mut punct_start = None;  // Where punctuation begins (None if not found)
+                        let mut punct_end = 0;
+                        let mut ws_end = 0;
+
+                        for (idx, ch) in text.char_indices() {
+                            if punct_start.is_none() {
+                                if ch.is_whitespace() {
+                                    ws_end = idx + ch.len_utf8();
+                                } else if !ch.is_alphanumeric() && ch != '_' {
+                                    // Found punctuation
+                                    punct_start = Some(idx);
+                                    punct_end = idx + ch.len_utf8();
+                                    ws_end = punct_end;
+                                } else {
+                                    // Hit word character, stop
+                                    break;
+                                }
+                            } else {
+                                // We already found punctuation, now skip trailing whitespace
+                                if ch.is_whitespace() {
+                                    ws_end = idx + ch.len_utf8();
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Check if punctuation fits on current line
+                        if punct_end > 0 {
+                            let punct_width = UnicodeWidthStr::width(&text[..punct_end]);
+                            if current_width + punct_width <= line_limit {
+                                // Punctuation fits, add it to current line and trim trailing space
+                                let punct_text = text[..punct_end].to_string();
+                                current_line.push((Span::styled(punct_text, style), kind.clone()));
+                                current_width += punct_width;
+                                text = text[ws_end..].to_string();
+
+                                if text.is_empty() {
+                                    // After processing boundary characters, nothing remains
+                                    wrapped_lines.push(std::mem::take(&mut current_line));
+                                    current_width = 0;
+                                    line_limit = continuation_width;
+                                    continue;
+                                }
+                            } else if punct_start == Some(0) {
+                                // Punctuation doesn't fit AND it's directly adjacent (no leading space).
+                                // Backtrack: pop last span and merge to keep styled_word + punct together.
+                                // Preserve all content including spaces - they're meaningful word separators.
+                                if let Some((last_span, last_kind)) = current_line.pop() {
+                                    current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
+                                    text = format!("{}{}", last_span.content, text);
+                                }
+                            } else if punct_start.is_some() {
+                                // Punctuation doesn't fit but "stands alone" (has leading space).
+                                // Trim the leading space and let punctuation wrap normally.
+                                text = text.trim_start().to_string();
+                            }
+                        } else if ws_end > 0 {
+                            // Just whitespace, trim it
+                            text = text[ws_end..].to_string();
+
+                            if text.is_empty() {
+                                // After trimming whitespace, nothing remains
+                                wrapped_lines.push(std::mem::take(&mut current_line));
+                                current_width = 0;
+                                line_limit = continuation_width;
+                                continue;
+                            }
+                        }
+                    }
+
                     wrapped_lines.push(std::mem::take(&mut current_line));
                     current_width = 0;
                     line_limit = continuation_width;
@@ -108,6 +193,86 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                 if last_break_pos.is_none() && current_width > 0 {
                     // No natural break inside the incoming span; start it on the next line so
                     // multi-word links and long tokens stay intact.
+                    // BUT FIRST: apply lookahead to find word boundaries between spans.
+                    if let Some((last_span, _)) = current_line.last() {
+                        let last_content = last_span.content.as_ref();
+                        let combined = format!("{}{}", last_content, text);
+                        let last_len = last_content.len();
+
+                        // Extract any leading punctuation to keep with previous line.
+                        // Trim any whitespace. Never lose characters.
+                        //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
+                        let mut punct_start = None;  // Where punctuation begins (None if not found)
+                        let mut punct_end = 0;
+                        let mut ws_end = 0;
+
+                        for (idx, ch) in text.char_indices() {
+                            if punct_start.is_none() {
+                                if ch.is_whitespace() {
+                                    ws_end = idx + ch.len_utf8();
+                                } else if !ch.is_alphanumeric() && ch != '_' {
+                                    // Found punctuation
+                                    punct_start = Some(idx);
+                                    punct_end = idx + ch.len_utf8();
+                                    ws_end = punct_end;
+                                } else {
+                                    // Hit word character, stop
+                                    break;
+                                }
+                            } else {
+                                // We already found punctuation, now skip trailing whitespace
+                                if ch.is_whitespace() {
+                                    ws_end = idx + ch.len_utf8();
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Check if punctuation fits on current line
+                        if punct_end > 0 {
+                            let punct_width = UnicodeWidthStr::width(&text[..punct_end]);
+                            if current_width + punct_width <= line_limit {
+                                // Punctuation fits, add it to current line and trim trailing space
+                                let punct_text = text[..punct_end].to_string();
+                                current_line.push((Span::styled(punct_text, style), kind.clone()));
+                                current_width += punct_width;
+                                text = text[ws_end..].to_string();
+
+                                if text.is_empty() {
+                                    // After processing boundary characters, nothing remains
+                                    wrapped_lines.push(std::mem::take(&mut current_line));
+                                    current_width = 0;
+                                    line_limit = continuation_width;
+                                    continue;
+                                }
+                            } else if punct_start == Some(0) {
+                                // Punctuation doesn't fit AND it's directly adjacent (no leading space).
+                                // Backtrack: pop last span and merge to keep styled_word + punct together.
+                                // Preserve all content including spaces - they're meaningful word separators.
+                                if let Some((last_span, last_kind)) = current_line.pop() {
+                                    current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
+                                    text = format!("{}{}", last_span.content, text);
+                                }
+                            } else if punct_start.is_some() {
+                                // Punctuation doesn't fit but "stands alone" (has leading space).
+                                // Trim the leading space and let punctuation wrap normally.
+                                text = text.trim_start().to_string();
+                            }
+                        } else if ws_end > 0 {
+                            // Just whitespace, trim it
+                            text = text[ws_end..].to_string();
+
+                            if text.is_empty() {
+                                // After trimming whitespace, nothing remains
+                                wrapped_lines.push(std::mem::take(&mut current_line));
+                                current_width = 0;
+                                line_limit = continuation_width;
+                                continue;
+                            }
+                        }
+                    }
+
                     wrapped_lines.push(std::mem::take(&mut current_line));
                     current_width = 0;
                     line_limit = continuation_width;

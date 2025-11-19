@@ -53,7 +53,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     // When styled text (code, emphasis) fills the line and the next span
                     // starts with whitespace/punctuation, we want to recognize that as
                     // a word boundary between the spans, not as content of the next span.
-                    if let Some((last_span, _)) = current_line.last() {
+                    if let Some((_last_span, _)) = current_line.last() {
                         // Extract any leading punctuation to keep with previous line.
                         // Trim any whitespace. Never lose characters.
                         // Examples: ") today" → extract ")", trim " ", wrap "today"
@@ -99,7 +99,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 // Punctuation fits, add it to current line and trim trailing space
                                 let punct_text = text[..punct_end].to_string();
                                 current_line.push((Span::styled(punct_text, style), kind.clone()));
-                                current_width += punct_width;
+                                // Note: current_width update not needed - will be reset when wrapping
                                 text = text[ws_end..].to_string();
 
                                 if text.is_empty() {
@@ -114,8 +114,6 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 // Backtrack: pop styled span, wrap current line, then add styled span
                                 // to next line followed by current text. This preserves the styling.
                                 if let Some((last_span, last_kind)) = current_line.pop() {
-                                    current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
-
                                     // Wrap the current line (without the styled span)
                                     wrapped_lines.push(std::mem::take(&mut current_line));
 
@@ -206,7 +204,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     // No natural break inside the incoming span; start it on the next line so
                     // multi-word links and long tokens stay intact.
                     // BUT FIRST: apply lookahead to find word boundaries between spans.
-                    if let Some((last_span, _)) = current_line.last() {
+                    if let Some((_last_span, _)) = current_line.last() {
                         // Extract any leading punctuation to keep with previous line.
                         // Trim any whitespace. Never lose characters.
                         //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
@@ -250,7 +248,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 // Punctuation fits, add it to current line and trim trailing space
                                 let punct_text = text[..punct_end].to_string();
                                 current_line.push((Span::styled(punct_text, style), kind.clone()));
-                                current_width += punct_width;
+                                // Note: current_width update not needed - will be reset when wrapping
                                 text = text[ws_end..].to_string();
 
                                 if text.is_empty() {
@@ -265,8 +263,6 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 // Backtrack: pop styled span, wrap current line, then add styled span
                                 // to next line followed by current text. This preserves the styling.
                                 if let Some((last_span, last_kind)) = current_line.pop() {
-                                    current_width -= UnicodeWidthStr::width(last_span.content.as_ref());
-
                                     // Wrap the current line (without the styled span)
                                     wrapped_lines.push(std::mem::take(&mut current_line));
 

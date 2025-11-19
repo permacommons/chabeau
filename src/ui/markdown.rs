@@ -721,6 +721,7 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 Event::Rule => {
                     self.flush_current_spans(true);
+                    self.push_horizontal_rule();
                     self.push_empty_line();
                 }
                 Event::TaskListMarker(_checked) => {
@@ -847,6 +848,41 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn push_empty_line(&mut self) {
         self.push_line(Vec::new(), Vec::new());
+    }
+
+    fn push_horizontal_rule(&mut self) {
+        let available_width = self
+            .config
+            .width
+            .and_then(|cfg| cfg.terminal_width)
+            .unwrap_or(80)
+            .max(1);
+        let target_width = ((available_width as f32) * 0.8).round() as usize;
+        let rule_width = target_width.clamp(1, available_width);
+        let padding = available_width.saturating_sub(rule_width);
+        let left_padding = padding / 2;
+        let right_padding = padding.saturating_sub(left_padding);
+
+        let mut spans = Vec::new();
+        let mut kinds = Vec::new();
+
+        if left_padding > 0 {
+            spans.push(Span::raw(" ".repeat(left_padding)));
+            kinds.push(SpanKind::Text);
+        }
+
+        spans.push(Span::styled(
+            "─".repeat(rule_width),
+            self.theme.md_rule_style(),
+        ));
+        kinds.push(SpanKind::Text);
+
+        if right_padding > 0 {
+            spans.push(Span::raw(" ".repeat(right_padding)));
+            kinds.push(SpanKind::Text);
+        }
+
+        self.push_line(spans, kinds);
     }
 
     fn finalize_code_block(&mut self) {
@@ -1024,6 +1060,47 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
+    }
+
+    #[test]
+    fn horizontal_rules_render_as_centered_lines() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Above\n\n---\n\nBelow".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(50));
+        let hr_line = rendered
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains('─'))
+            .expect("horizontal rule should render");
+
+        let hr_text = hr_line.to_string();
+        assert_eq!(UnicodeWidthStr::width(hr_text.as_str()), 50);
+
+        let hr_chars: Vec<char> = hr_text.chars().collect();
+        let first_rule_idx = hr_chars
+            .iter()
+            .position(|c| *c == '─')
+            .expect("rule characters present");
+        let rule_len = hr_chars[first_rule_idx..]
+            .iter()
+            .take_while(|c| **c == '─')
+            .count();
+        let right_padding = hr_chars.len().saturating_sub(first_rule_idx + rule_len);
+
+        assert_eq!(first_rule_idx, 5);
+        assert_eq!(rule_len, 40);
+        assert_eq!(right_padding, 5);
+
+        let rule_span = hr_line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().contains('─'))
+            .expect("rule span present");
+        assert_eq!(rule_span.style, theme.md_rule_style());
     }
 
     #[test]

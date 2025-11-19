@@ -37,6 +37,8 @@ pub struct RenderedMessageDetails {
 
 type RenderedLinesWithMetadata = (Vec<Line<'static>>, Vec<Vec<SpanKind>>);
 
+const MAX_LIST_HANGING_INDENT_WIDTH: usize = 32;
+
 impl RenderedMessageDetails {
     pub fn into_rendered(self) -> RenderedMessage {
         RenderedMessage { lines: self.lines }
@@ -405,6 +407,9 @@ impl<'a> MarkdownRenderer<'a> {
                         if matches!(self.role, RoleKind::User | RoleKind::App(_)) {
                             self.ensure_role_prefix_or_indent();
                         }
+                        if self.pending_list_indent.is_none() && !self.list_stack.is_empty() {
+                            self.pending_list_indent = Some(self.current_list_indent_width());
+                        }
                     }
                     Tag::Heading { level, .. } => {
                         self.flush_current_spans(true);
@@ -433,7 +438,10 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     Tag::Item => {
                         // Check if this item (at any nesting level) needs a blank line before it
-                        if self.items_needing_blank_lines_before.contains(&self.current_item_index) {
+                        if self
+                            .items_needing_blank_lines_before
+                            .contains(&self.current_item_index)
+                        {
                             self.push_empty_line();
                         }
                         self.current_item_index += 1;
@@ -565,8 +573,10 @@ impl<'a> MarkdownRenderer<'a> {
                             let next_is_block = matches!(
                                 parser.peek(),
                                 Some(Event::Start(
-                                    Tag::Paragraph | Tag::CodeBlock(_) |
-                                    Tag::BlockQuote(_) | Tag::Heading { .. }
+                                    Tag::Paragraph
+                                        | Tag::CodeBlock(_)
+                                        | Tag::BlockQuote(_)
+                                        | Tag::Heading { .. }
                                 ))
                             );
                             if next_is_block {
@@ -686,6 +696,9 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 Event::SoftBreak => {
                     self.flush_current_spans(true);
+                    if !self.list_stack.is_empty() {
+                        self.pending_list_indent = Some(self.current_list_indent_width());
+                    }
                     if matches!(self.role, RoleKind::User | RoleKind::App(_)) && self.did_prefix {
                         match self.role {
                             RoleKind::User => {
@@ -702,6 +715,9 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 Event::HardBreak => {
                     self.flush_current_spans(true);
+                    if !self.list_stack.is_empty() {
+                        self.pending_list_indent = Some(self.current_list_indent_width());
+                    }
                 }
                 Event::Rule => {
                     self.flush_current_spans(true);
@@ -771,17 +787,29 @@ impl<'a> MarkdownRenderer<'a> {
                     .cloned()
                     .zip(self.current_span_kinds.iter().cloned())
                     .collect();
-                let wrapped = wrap_spans_to_width_generic_shared(&zipped, width);
+                let hanging_indent = if self.list_stack.is_empty() {
+                    0
+                } else {
+                    self.current_list_indent_width()
+                        .min(MAX_LIST_HANGING_INDENT_WIDTH)
+                };
                 let indent_wrapped_user_lines =
                     indent_user_wraps && matches!(self.role, RoleKind::User | RoleKind::App(_));
+                let continuation_indent_width = if indent_wrapped_user_lines {
+                    hanging_indent + self.role_continuation_indent_width()
+                } else {
+                    hanging_indent
+                };
+                let wrapped =
+                    wrap_spans_to_width_generic_shared(&zipped, width, continuation_indent_width);
                 for (idx, segs) in wrapped.into_iter().enumerate() {
                     let (mut spans_only, mut kinds_only): (Vec<_>, Vec<_>) =
                         segs.into_iter().unzip();
-                    if idx == 0 || !indent_wrapped_user_lines {
-                        self.push_line(spans_only, kinds_only);
-                    } else {
-                        let mut spans_with_indent = Vec::with_capacity(spans_only.len() + 1);
-                        let mut kinds_with_indent = Vec::with_capacity(kinds_only.len() + 1);
+                    if idx > 0 && hanging_indent > 0 {
+                        spans_only.insert(0, Span::raw(" ".repeat(hanging_indent)));
+                        kinds_only.insert(0, SpanKind::Text);
+                    }
+                    if idx > 0 && indent_wrapped_user_lines {
                         let indent_span = match self.role {
                             RoleKind::User => Span::raw(USER_CONTINUATION_INDENT),
                             RoleKind::App(_) => Span::raw(
@@ -789,12 +817,10 @@ impl<'a> MarkdownRenderer<'a> {
                             ),
                             RoleKind::Assistant => Span::raw(""),
                         };
-                        spans_with_indent.push(indent_span);
-                        kinds_with_indent.push(SpanKind::Text);
-                        spans_with_indent.append(&mut spans_only);
-                        kinds_with_indent.append(&mut kinds_only);
-                        self.push_line(spans_with_indent, kinds_with_indent);
+                        spans_only.insert(0, indent_span);
+                        kinds_only.insert(0, SpanKind::Text);
                     }
+                    self.push_line(spans_only, kinds_only);
                 }
                 self.current_spans.clear();
                 self.current_span_kinds.clear();
@@ -850,6 +876,17 @@ impl<'a> MarkdownRenderer<'a> {
         self.list_indent_stack.iter().sum()
     }
 
+    fn role_continuation_indent_width(&self) -> usize {
+        match self.role {
+            RoleKind::User => USER_CONTINUATION_INDENT.width(),
+            RoleKind::App(_) => self
+                .app_prefix_indent
+                .as_deref()
+                .map(UnicodeWidthStr::width)
+                .unwrap_or(1),
+            RoleKind::Assistant => 0,
+        }
+    }
 }
 
 /// Provides only content and optional language hint for each code block, in order of appearance.
@@ -987,6 +1024,69 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
+    }
+
+    #[test]
+    fn wrapped_list_items_align_under_text() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "- Parent item that wraps within the width budget and keeps alignment.\n  - Child item that wraps nicely under its parent alignment requirement.\n    - Grandchild entry that wraps and keeps deeper indentation consistent.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, true, Some(28));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let parent_idx = lines
+            .iter()
+            .position(|l| l.starts_with("- Parent item"))
+            .expect("parent line present");
+        let parent_continuation = &lines[parent_idx + 1];
+        assert!(
+            !parent_continuation.trim().is_empty()
+                && !parent_continuation.trim_start().starts_with('-')
+        );
+        assert_eq!(
+            parent_continuation
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count(),
+            2
+        );
+
+        let child_idx = lines
+            .iter()
+            .position(|l| l.contains("Child item that wraps"))
+            .expect("child line present");
+        let child_continuation = &lines[child_idx + 1];
+        assert!(
+            !child_continuation.trim().is_empty()
+                && !child_continuation.trim_start().starts_with('-')
+        );
+        assert_eq!(
+            child_continuation
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count(),
+            4
+        );
+
+        let grandchild_idx = lines
+            .iter()
+            .position(|l| l.contains("Grandchild entry"))
+            .expect("grandchild line present");
+        let grandchild_continuation = &lines[grandchild_idx + 1];
+        assert!(
+            !grandchild_continuation.trim().is_empty()
+                && !grandchild_continuation.trim_start().starts_with('-')
+        );
+        assert_eq!(
+            grandchild_continuation
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count(),
+            6
+        );
     }
 
     #[test]
@@ -2487,7 +2587,7 @@ End of table."###
     // Phase 0 tests: Code block span metadata (currently failing, will pass in Phase 1)
 
     #[test]
-    
+
     fn code_block_spans_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::single_block();
@@ -2525,7 +2625,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn multiple_code_blocks_have_unique_indices() {
         use super::test_fixtures;
         let msg = test_fixtures::multiple_blocks();
@@ -2558,7 +2658,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn empty_code_block_has_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::empty_block();
@@ -2588,7 +2688,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn wrapped_code_preserves_metadata_across_lines() {
         use super::test_fixtures;
         let msg = test_fixtures::wrapped_code();
@@ -2619,7 +2719,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn code_block_without_language_has_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::no_language_tag();
@@ -2650,7 +2750,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn nested_code_blocks_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::nested_in_list();
@@ -2680,7 +2780,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn user_message_code_blocks_have_metadata() {
         use super::test_fixtures;
         let msg = test_fixtures::user_message_with_code();
@@ -2708,7 +2808,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn code_and_link_metadata_coexist() {
         use super::test_fixtures;
         let msg = test_fixtures::code_and_links();
@@ -2739,7 +2839,7 @@ End of table."###
     }
 
     #[test]
-    
+
     fn various_language_tags_preserved() {
         use super::test_fixtures;
         let msg = test_fixtures::various_languages();
@@ -2776,8 +2876,9 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
         let message = Message {
             role: "assistant".into(),
-            content: "* Item 1\n    * Sub-item 1.1\n    * Sub-item 1.2\n        * Sub-sub-item 1.2.1"
-                .into(),
+            content:
+                "* Item 1\n    * Sub-item 1.1\n    * Sub-item 1.2\n        * Sub-sub-item 1.2.1"
+                    .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
@@ -2843,8 +2944,14 @@ End of table."###
         );
 
         // Verify the structure is correct
-        assert!(emergency_idx < sub_sticky_idx, "Emergency should come before Sub-sticky");
-        assert!(sub_sticky_idx < groceries_idx, "Sub-sticky should come before Groceries");
+        assert!(
+            emergency_idx < sub_sticky_idx,
+            "Emergency should come before Sub-sticky"
+        );
+        assert!(
+            sub_sticky_idx < groceries_idx,
+            "Sub-sticky should come before Groceries"
+        );
     }
 
     #[test]
@@ -2861,7 +2968,10 @@ End of table."###
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find indices
-        let implementation_idx = lines.iter().position(|l| l.contains("Implementation")).unwrap();
+        let implementation_idx = lines
+            .iter()
+            .position(|l| l.contains("Implementation"))
+            .unwrap();
         let resilience_idx = lines.iter().position(|l| l.contains("Resilience")).unwrap();
 
         // Check if there's a blank line between Strategic section and Implementation section
@@ -2889,14 +2999,18 @@ End of table."###
         let theme = crate::ui::theme::Theme::dark_default();
         let message = Message {
             role: "assistant".into(),
-            content: "- First section\n  - Nested item\n- Second section\n  - Another nested".into(),
+            content: "- First section\n  - Nested item\n- Second section\n  - Another nested"
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find index
-        let second_idx = lines.iter().position(|l| l.contains("Second section")).unwrap();
+        let second_idx = lines
+            .iter()
+            .position(|l| l.contains("Second section"))
+            .unwrap();
 
         // Second section should come relatively soon after First section ends
         // There should be no blank line between them since source has none
@@ -2923,7 +3037,10 @@ End of table."###
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let intro_idx = lines.iter().position(|l| l.contains("introductory")).unwrap();
+        let intro_idx = lines
+            .iter()
+            .position(|l| l.contains("introductory"))
+            .unwrap();
         let first_item_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
 
         // There should be a blank line between the paragraph and the list
@@ -2951,7 +3068,10 @@ End of table."###
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let second_item_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let second_item_idx = lines
+            .iter()
+            .position(|l| l.contains("Second item"))
+            .unwrap();
         let concluding_idx = lines.iter().position(|l| l.contains("concluding")).unwrap();
 
         // There should be a blank line between the list and the paragraph
@@ -3007,8 +3127,14 @@ End of table."###
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
-        let second_item_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
-        let heading_idx = lines.iter().position(|l| l.contains("Next Section")).unwrap();
+        let second_item_idx = lines
+            .iter()
+            .position(|l| l.contains("Second item"))
+            .unwrap();
+        let heading_idx = lines
+            .iter()
+            .position(|l| l.contains("Next Section"))
+            .unwrap();
 
         // There should be a blank line between the list and the heading
         assert!(
@@ -3070,13 +3196,31 @@ End of table."###
         eprintln!("=== END OUTPUT ===\n");
 
         // Find key elements
-        let heading_idx = lines.iter().position(|l| l.contains("Architecture Overview")).unwrap();
-        let primary_idx = lines.iter().position(|l| l.contains("Primary Concept")).unwrap();
+        let heading_idx = lines
+            .iter()
+            .position(|l| l.contains("Architecture Overview"))
+            .unwrap();
+        let primary_idx = lines
+            .iter()
+            .position(|l| l.contains("Primary Concept"))
+            .unwrap();
         let layer_one_idx = lines.iter().position(|l| l.contains("Layer One")).unwrap();
-        let sublayer_a_idx = lines.iter().position(|l| l.contains("Sub-layer A")).unwrap();
-        let ensure_auth_idx = lines.iter().position(|l| l.contains("Ensure authenticity")).unwrap();
-        let implement_red_idx = lines.iter().position(|l| l.contains("Implement redundancy")).unwrap();
-        let sublayer_b_idx = lines.iter().position(|l| l.contains("Sub-layer B")).unwrap();
+        let sublayer_a_idx = lines
+            .iter()
+            .position(|l| l.contains("Sub-layer A"))
+            .unwrap();
+        let ensure_auth_idx = lines
+            .iter()
+            .position(|l| l.contains("Ensure authenticity"))
+            .unwrap();
+        let implement_red_idx = lines
+            .iter()
+            .position(|l| l.contains("Implement redundancy"))
+            .unwrap();
+        let sublayer_b_idx = lines
+            .iter()
+            .position(|l| l.contains("Sub-layer B"))
+            .unwrap();
         let layer_two_idx = lines.iter().position(|l| l.contains("Layer Two")).unwrap();
 
         // === EXPECTATION 1: Blank line after heading ===
@@ -3166,7 +3310,8 @@ End of table."###
 Paragraph text after first item.
 
 More paragraph text.
-- Second item (should have NO blank before it)"#.into(),
+- Second item (should have NO blank before it)"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
@@ -3174,7 +3319,10 @@ More paragraph text.
 
         // Find the items
         let first_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
-        let second_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let second_idx = lines
+            .iter()
+            .position(|l| l.contains("Second item"))
+            .unwrap();
 
         // The second item should NOT have a blank line before it from our preprocessing
         // (it may have one from TagEnd::Paragraph, but that's a separate rendering decision)
@@ -3218,16 +3366,26 @@ More paragraph text.
 1. First initiative
 2. Second initiative
 
-3. Third initiative (after blank line)"#.into(),
+3. Third initiative (after blank line)"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find the items
-        let first_idx = lines.iter().position(|l| l.contains("First initiative")).unwrap();
-        let second_idx = lines.iter().position(|l| l.contains("Second initiative")).unwrap();
-        let third_idx = lines.iter().position(|l| l.contains("Third initiative")).unwrap();
+        let first_idx = lines
+            .iter()
+            .position(|l| l.contains("First initiative"))
+            .unwrap();
+        let second_idx = lines
+            .iter()
+            .position(|l| l.contains("Second initiative"))
+            .unwrap();
+        let third_idx = lines
+            .iter()
+            .position(|l| l.contains("Third initiative"))
+            .unwrap();
 
         // No blank line between first and second (they're consecutive in source)
         assert_eq!(
@@ -3259,7 +3417,8 @@ More paragraph text.
 + Second item
 
 + Third item (after blank line)
-+ Fourth item"#.into(),
++ Fourth item"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
@@ -3267,9 +3426,15 @@ More paragraph text.
 
         // Find the items
         let first_idx = lines.iter().position(|l| l.contains("First item")).unwrap();
-        let second_idx = lines.iter().position(|l| l.contains("Second item")).unwrap();
+        let second_idx = lines
+            .iter()
+            .position(|l| l.contains("Second item"))
+            .unwrap();
         let third_idx = lines.iter().position(|l| l.contains("Third item")).unwrap();
-        let fourth_idx = lines.iter().position(|l| l.contains("Fourth item")).unwrap();
+        let fourth_idx = lines
+            .iter()
+            .position(|l| l.contains("Fourth item"))
+            .unwrap();
 
         // No blank line between first and second (consecutive in source)
         assert_eq!(
@@ -3315,16 +3480,26 @@ More paragraph text.
 - First real item
 - Second real item
 
-- Third real item (should have blank before)"#.into(),
+- Third real item (should have blank before)"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find the real items (not the ones in the code block)
-        let first_idx = lines.iter().position(|l| l.contains("First real item")).unwrap();
-        let second_idx = lines.iter().position(|l| l.contains("Second real item")).unwrap();
-        let third_idx = lines.iter().position(|l| l.contains("Third real item")).unwrap();
+        let first_idx = lines
+            .iter()
+            .position(|l| l.contains("First real item"))
+            .unwrap();
+        let second_idx = lines
+            .iter()
+            .position(|l| l.contains("Second real item"))
+            .unwrap();
+        let third_idx = lines
+            .iter()
+            .position(|l| l.contains("Third real item"))
+            .unwrap();
 
         // No blank line between first and second (consecutive in source)
         assert_eq!(
@@ -3356,15 +3531,22 @@ More paragraph text.
 
   Second paragraph in same item
 
-- Next item"#.into(),
+- Next item"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Find the paragraphs
-        let first_para_idx = lines.iter().position(|l| l.contains("First paragraph")).unwrap();
-        let second_para_idx = lines.iter().position(|l| l.contains("Second paragraph")).unwrap();
+        let first_para_idx = lines
+            .iter()
+            .position(|l| l.contains("First paragraph"))
+            .unwrap();
+        let second_para_idx = lines
+            .iter()
+            .position(|l| l.contains("Second paragraph"))
+            .unwrap();
         let next_item_idx = lines.iter().position(|l| l.contains("Next item")).unwrap();
 
         // Should have a blank line between the two paragraphs within the same item
@@ -3417,15 +3599,22 @@ More paragraph text.
 
 - Context paragraph
 
-  > Important quote here"#.into(),
+  > Important quote here"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);
         let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
 
         // Test 1: Blank line before code block
-        let intro_idx = lines.iter().position(|l| l.contains("Introduction")).unwrap();
-        let code_idx = lines.iter().position(|l| l.contains("code_example")).unwrap();
+        let intro_idx = lines
+            .iter()
+            .position(|l| l.contains("Introduction"))
+            .unwrap();
+        let code_idx = lines
+            .iter()
+            .position(|l| l.contains("code_example"))
+            .unwrap();
         assert!(
             code_idx > intro_idx + 1,
             "Code block should have blank line before it. Intro at {}, Code at {}. Lines: {:#?}",
@@ -3436,7 +3625,10 @@ More paragraph text.
 
         // Test 2: Blank line before nested list
         let main_point_idx = lines.iter().position(|l| l.contains("Main point")).unwrap();
-        let nested_one_idx = lines.iter().position(|l| l.contains("Nested item one")).unwrap();
+        let nested_one_idx = lines
+            .iter()
+            .position(|l| l.contains("Nested item one"))
+            .unwrap();
         assert!(
             nested_one_idx > main_point_idx + 1,
             "Nested list should have blank line before it. Main at {}, Nested at {}. Lines: {:#?}",
@@ -3446,14 +3638,102 @@ More paragraph text.
         );
 
         // Test 3: Blank line before blockquote
-        let context_idx = lines.iter().position(|l| l.contains("Context paragraph")).unwrap();
-        let quote_idx = lines.iter().position(|l| l.contains("Important quote")).unwrap();
+        let context_idx = lines
+            .iter()
+            .position(|l| l.contains("Context paragraph"))
+            .unwrap();
+        let quote_idx = lines
+            .iter()
+            .position(|l| l.contains("Important quote"))
+            .unwrap();
         assert!(
             quote_idx > context_idx + 1,
             "Blockquote should have blank line before it. Context at {}, Quote at {}. Lines: {:#?}",
             context_idx,
             quote_idx,
             lines
+        );
+    }
+
+    #[test]
+    fn list_paragraphs_keep_indent_after_blank_lines() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- **Primary Concept**
+  In designing a contemporary knowledge system, several foundational components must be conceptualized.
+
+  Once normalized, data should be molded into adaptive knowledge graphs or relational mappings.
+- Next item"#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let detail_idx = lines
+            .iter()
+            .position(|l| l.contains("In designing a contemporary"))
+            .unwrap();
+        let followup_idx = lines
+            .iter()
+            .position(|l| l.contains("Once normalized"))
+            .unwrap();
+
+        assert!(
+            lines[detail_idx].starts_with("  In designing"),
+            "Detail paragraph should be indented under the list marker. Line: '{}'",
+            lines[detail_idx]
+        );
+        assert!(
+            lines[followup_idx].starts_with("  Once normalized"),
+            "Follow-up paragraph should reuse list indent after blank line. Line: '{}'",
+            lines[followup_idx]
+        );
+    }
+
+    #[test]
+    fn list_paragraphs_with_soft_breaks_keep_indent() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: r#"- **Primary Concept: The Architecture of a Modern Knowledge System**
+  In designing a contemporary knowledge system, several foundational components must be conceptualized, integrated, and optimized for scalability.
+  The architecture should balance **information retrieval efficiency**, **semantic accuracy**, and **human-centered accessibility**.
+  Below is a structured decomposition of its design hierarchy:"#
+                .into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, None);
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        let designing_idx = lines
+            .iter()
+            .position(|l| l.contains("In designing a contemporary"))
+            .unwrap();
+        let architecture_idx = lines
+            .iter()
+            .position(|l| l.contains("The architecture should balance"))
+            .unwrap();
+        let below_idx = lines
+            .iter()
+            .position(|l| l.contains("Below is a structured decomposition"))
+            .unwrap();
+
+        assert!(
+            lines[designing_idx].starts_with("  In designing"),
+            "First soft-wrapped paragraph line should be indented under marker. Line: '{}'",
+            lines[designing_idx]
+        );
+        assert!(
+            lines[architecture_idx].starts_with("  The architecture"),
+            "Second soft-wrapped paragraph line should keep list indent. Line: '{}'",
+            lines[architecture_idx]
+        );
+        assert!(
+            lines[below_idx].starts_with("  Below is"),
+            "Third soft-wrapped paragraph line should keep list indent. Line: '{}'",
+            lines[below_idx]
         );
     }
 
@@ -3468,7 +3748,8 @@ More paragraph text.
             content: r#"- parent
 
   - child one
-  - child two"#.into(),
+  - child two"#
+                .into(),
         };
 
         let rendered = render_markdown_for_test(&message, &theme, false, None);

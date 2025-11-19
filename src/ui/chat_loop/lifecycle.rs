@@ -83,7 +83,6 @@ fn cursor_color_payload(color: Color) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as SyncMutex;
     use tokio::runtime::Runtime;
 
     #[test]
@@ -119,34 +118,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_cursor_color_writes_sequence_to_backend() {
-        #[derive(Clone)]
-        struct RecordingWriter(Arc<SyncMutex<Vec<u8>>>);
+    fn apply_cursor_color_writes_sequence() {
+        let mut buf: Vec<u8> = Vec::new();
+        queue_cursor_color(&mut buf, Color::Rgb(0x12, 0x34, 0x56)).expect("write");
+        assert_eq!(buf, b"\x1b]12;#123456\x1b\\");
+    }
 
-        impl Write for RecordingWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let storage = Arc::new(SyncMutex::new(Vec::new()));
-        let writer = RecordingWriter(storage.clone());
-        let backend = OscBackend::new(writer);
-        let terminal: SharedTerminal<_> =
-            Arc::new(Mutex::new(Terminal::new(backend).expect("terminal")));
-
-        let runtime = Runtime::new().expect("runtime");
-        runtime.block_on(async {
-            apply_cursor_color_to_terminal(&terminal, Some(Color::Rgb(0x12, 0x34, 0x56)))
-                .await
-                .expect("cursor color");
-        });
-
-        assert_eq!(storage.lock().unwrap().as_slice(), b"\x1b]12;#123456\x1b\\");
+    #[test]
+    fn apply_cursor_reset_writes_sequence() {
+        let mut buf: Vec<u8> = Vec::new();
+        queue_reset_cursor_color(&mut buf).expect("write");
+        assert_eq!(buf, b"\x1b]112\x1b\\");
     }
 }

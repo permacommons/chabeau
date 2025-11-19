@@ -54,13 +54,10 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     // starts with whitespace/punctuation, we want to recognize that as
                     // a word boundary between the spans, not as content of the next span.
                     if let Some((last_span, _)) = current_line.last() {
-                        let last_content = last_span.content.as_ref();
-                        let combined = format!("{}{}", last_content, text);
-                        let last_len = last_content.len();
-
                         // Extract any leading punctuation to keep with previous line.
                         // Trim any whitespace. Never lose characters.
                         // Examples: ") today" → extract ")", trim " ", wrap "today"
+                        //           "))) more" → extract ")))", trim " ", wrap "more"
                         //           " useful" → trim " ", wrap "useful"
                         //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
                         let mut punct_start = None;  // Where punctuation begins (None if not found)
@@ -72,7 +69,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 if ch.is_whitespace() {
                                     ws_end = idx + ch.len_utf8();
                                 } else if !ch.is_alphanumeric() && ch != '_' {
-                                    // Found punctuation
+                                    // Found first punctuation character
                                     punct_start = Some(idx);
                                     punct_end = idx + ch.len_utf8();
                                     ws_end = punct_end;
@@ -81,10 +78,15 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                     break;
                                 }
                             } else {
-                                // We already found punctuation, now skip trailing whitespace
+                                // We already found punctuation, continue scanning
                                 if ch.is_whitespace() {
                                     ws_end = idx + ch.len_utf8();
+                                } else if !ch.is_alphanumeric() && ch != '_' {
+                                    // Found additional punctuation character
+                                    punct_end = idx + ch.len_utf8();
+                                    ws_end = punct_end;
                                 } else {
+                                    // Hit word character, stop
                                     break;
                                 }
                             }
@@ -195,13 +197,10 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                     // multi-word links and long tokens stay intact.
                     // BUT FIRST: apply lookahead to find word boundaries between spans.
                     if let Some((last_span, _)) = current_line.last() {
-                        let last_content = last_span.content.as_ref();
-                        let combined = format!("{}{}", last_content, text);
-                        let last_len = last_content.len();
-
                         // Extract any leading punctuation to keep with previous line.
                         // Trim any whitespace. Never lose characters.
                         //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
+                        //           "))) more" → extract ")))", wrap "more"
                         let mut punct_start = None;  // Where punctuation begins (None if not found)
                         let mut punct_end = 0;
                         let mut ws_end = 0;
@@ -211,7 +210,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                 if ch.is_whitespace() {
                                     ws_end = idx + ch.len_utf8();
                                 } else if !ch.is_alphanumeric() && ch != '_' {
-                                    // Found punctuation
+                                    // Found first punctuation character
                                     punct_start = Some(idx);
                                     punct_end = idx + ch.len_utf8();
                                     ws_end = punct_end;
@@ -220,10 +219,15 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                                     break;
                                 }
                             } else {
-                                // We already found punctuation, now skip trailing whitespace
+                                // We already found punctuation, continue scanning
                                 if ch.is_whitespace() {
                                     ws_end = idx + ch.len_utf8();
+                                } else if !ch.is_alphanumeric() && ch != '_' {
+                                    // Found additional punctuation character
+                                    punct_end = idx + ch.len_utf8();
+                                    ws_end = punct_end;
                                 } else {
+                                    // Hit word character, stop
                                     break;
                                 }
                             }

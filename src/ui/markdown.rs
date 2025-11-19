@@ -4325,6 +4325,36 @@ Next paragraph"#
         assert_eq!(lines[1], ")");
     }
 
+    #[test]
+    fn emphasis_with_multiple_adjacent_punctuation() {
+        // Test multiple punctuation characters adjacent to styled word
+        // "Space exploration is fundamentally" = 34 chars
+        // Then "))) more" - width limit is 37, so first ) fits but not all
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content: "Space exploration is *fundamentally*))) more.".into(),
+        };
+
+        let rendered = render_markdown_for_test(&message, &theme, false, Some(37));
+        let lines: Vec<String> = rendered.lines.iter().map(|l| l.to_string()).collect();
+
+        eprintln!("\n=== DEBUG emphasis_with_multiple_adjacent_punctuation ===");
+        for (i, line_obj) in rendered.lines.iter().enumerate() {
+            let line_str: String = line_obj.to_string();
+            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            for (j, span) in line_obj.spans.iter().enumerate() {
+                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+            }
+        }
+        eprintln!("=== END DEBUG ===\n");
+
+        // First ) fits (34 + 1 = 35 < 37), so it gets extracted
+        // But we should extract ALL adjacent punctuation, not just one
+        assert_eq!(lines[0], "Space exploration is fundamentally)))");
+        assert_eq!(lines[1], "more.");
+    }
+
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";

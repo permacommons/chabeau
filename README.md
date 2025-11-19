@@ -333,7 +333,9 @@ Toggle these features at runtime:
 - `/markdown on|off|toggle`
 - `/syntax on|off|toggle`
 
-Chabeau persists these preferences to the config file automatically. Syntax colors adapt to the active theme and use the theme’s code block background for consistent contrast.
+ Chabeau persists these preferences to the config file automatically. Syntax colors adapt to the active theme and use the theme’s code block background for consistent contrast.
+
+When markdown is enabled, image ALT text is rendered as an OSC hyperlink pointing to the underlying image URL so you can open assets directly from the transcript.
 
 ### Color Support
 

@@ -536,6 +536,10 @@ impl<'a> MarkdownRenderer<'a> {
                         self.style_stack.push(self.theme.md_link_style());
                         self.kind_stack.push(SpanKind::link(dest_url.as_ref()));
                     }
+                    Tag::Image { dest_url, .. } => {
+                        self.style_stack.push(self.theme.md_link_style());
+                        self.kind_stack.push(SpanKind::link(dest_url.as_ref()));
+                    }
                     Tag::Table(_) => {
                         self.flush_current_spans(true);
                         if self.config.width.is_some() {
@@ -620,6 +624,7 @@ impl<'a> MarkdownRenderer<'a> {
                     | TagEnd::Strong
                     | TagEnd::Strikethrough
                     | TagEnd::Link
+                    | TagEnd::Image
                     | TagEnd::Superscript
                     | TagEnd::Subscript => {
                         self.style_stack.pop();
@@ -1060,6 +1065,44 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
+    }
+
+    #[test]
+    fn markdown_images_emit_clickable_links() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message {
+            role: "assistant".into(),
+            content:
+                "Look at this sketch: ![diagram](https://example.com/diagram.png) neat, right?"
+                    .into(),
+        };
+
+        let cfg = MessageRenderConfig::markdown(true, false).with_span_metadata();
+        let details = render_message_with_config(&message, &theme, cfg);
+        let metadata = details.span_metadata.expect("metadata present");
+        let mut saw_image_link = false;
+        for kinds in metadata {
+            for kind in kinds {
+                if let Some(meta) = kind.link_meta() {
+                    if meta.href() == "https://example.com/diagram.png" {
+                        saw_image_link = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_image_link,
+            "expected image alt text to emit a hyperlink"
+        );
+
+        let rendered_text = details
+            .lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(rendered_text.contains("diagram"));
     }
 
     #[test]

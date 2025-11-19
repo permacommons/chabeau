@@ -59,7 +59,7 @@ or prompt templates without reloading config from disk.【F:src/core/app/mod.rs�
 
 ## Commands and input routing
 Slash commands share a central registry that distinguishes between messages and control commands. Handlers can
-return `CommandResult` variants instructing the UI to continue, pass the text to the model, or open pickers
+return `CommandResult` variants instructing the UI to continue, pass the text to the model, toggle UI features, trigger message refinement, or open pickers
 for themes, providers, models, characters, personas, and presets. File and logging commands reuse shared
 controllers so that interactive flows stay consistent across keyboard shortcuts and slash commands.【F:src/commands/mod.rs†L4-L200】
 

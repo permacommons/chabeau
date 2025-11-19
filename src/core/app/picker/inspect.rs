@@ -105,12 +105,19 @@ fn append_theme_sections(lines: &mut Vec<String>, spec: &ThemeSpec) {
     append_theme_section(
         lines,
         "Input",
-        &["Border", "Title", "Text", "Cursor modifiers"],
+        &[
+            "Border",
+            "Title",
+            "Text",
+            "Cursor modifiers",
+            "Cursor color",
+        ],
         &[
             &spec.input_border,
             &spec.input_title,
             &spec.input_text,
             &spec.input_cursor_modifiers,
+            &spec.cursor_color,
         ],
     );
 

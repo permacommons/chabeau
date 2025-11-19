@@ -764,6 +764,7 @@ mod tests {
                     id: "sunset".to_string(),
                     display_name: "Sunset".to_string(),
                     background: None,
+                    cursor_color: None,
                     user_prefix: None,
                     user_text: None,
                     assistant_text: None,

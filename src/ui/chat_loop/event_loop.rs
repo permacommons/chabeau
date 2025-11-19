@@ -29,7 +29,9 @@ use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::ui::renderer::ui;
 
 use super::keybindings::{build_mode_aware_registry, KeyContext, KeyResult, ModeAwareRegistry};
-use super::lifecycle::{restore_terminal, setup_terminal, SharedTerminal};
+use super::lifecycle::{
+    apply_cursor_color_to_terminal, restore_terminal, setup_terminal, SharedTerminal,
+};
 use super::setup::bootstrap_app;
 use super::AppHandle;
 
@@ -471,7 +473,9 @@ pub async fn run_chat(
         "Chabeau is in the public domain, forever. Contribute: https://github.com/permacommons/chabeau"
     );
 
-    let terminal = setup_terminal()?;
+    let initial_cursor_color = app.read(|app| app.ui.theme.input_cursor_color).await;
+    let terminal = setup_terminal(initial_cursor_color)?;
+    let mut active_cursor_color = initial_cursor_color;
 
     let (stream_service, mut rx) = ChatStreamService::new();
     let stream_service = Arc::new(stream_service);
@@ -525,6 +529,12 @@ pub async fn run_chat(
 
         if event_outcome.request_redraw {
             request_redraw = true;
+        }
+
+        let theme_cursor_color = app.read(|app| app.ui.theme.input_cursor_color).await;
+        if theme_cursor_color != active_cursor_color {
+            apply_cursor_color_to_terminal(&terminal, theme_cursor_color).await?;
+            active_cursor_color = theme_cursor_color;
         }
 
         let current_stream_id = app.read(|app| app.session.current_stream_id).await;

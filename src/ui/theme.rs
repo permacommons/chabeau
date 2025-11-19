@@ -1,5 +1,6 @@
 use crate::core::message::AppMessageKind;
 use crate::ui::builtin_themes::ThemeSpec;
+use crate::utils::color::color_to_rgb;
 use ratatui::style::{Color, Modifier, Style};
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,7 @@ pub struct Theme {
     pub input_text_style: Style,
     pub input_cursor_style: Style,
     pub input_cursor_line_style: Style,
+    pub input_cursor_color: Option<Color>,
 
     // Markdown styles (optional overrides with sensible fallbacks)
     pub md_h1: Option<Style>,
@@ -121,6 +123,7 @@ impl Theme {
             input_text_style: Style::default().fg(Color::White),
             input_cursor_style: Style::default().add_modifier(Modifier::REVERSED),
             input_cursor_line_style: Style::default(),
+            input_cursor_color: Some(Self::default_cursor_color_for_bg(Color::Black)),
             md_h1: None,
             md_h2: None,
             md_h3: None,
@@ -185,6 +188,7 @@ impl Theme {
             input_text_style: Style::default().fg(Color::Black),
             input_cursor_style: Style::default().add_modifier(Modifier::REVERSED),
             input_cursor_line_style: Style::default(),
+            input_cursor_color: Some(Self::default_cursor_color_for_bg(Color::White)),
             md_h1: None,
             md_h2: None,
             md_h3: None,
@@ -249,6 +253,7 @@ impl Theme {
             input_text_style: Style::default().fg(Color::White),
             input_cursor_style: Style::default().add_modifier(Modifier::REVERSED),
             input_cursor_line_style: Style::default(),
+            input_cursor_color: Some(Self::default_cursor_color_for_bg(Color::Black)),
             md_h1: None,
             md_h2: None,
             md_h3: None,
@@ -314,6 +319,7 @@ impl Theme {
             input_text_style: Style::default(),
             input_cursor_style: Style::default().add_modifier(Modifier::REVERSED),
             input_cursor_line_style: Style::default(),
+            input_cursor_color: Some(Self::default_cursor_color_for_bg(Color::Reset)),
             md_h1: Some(Style::default().add_modifier(Modifier::BOLD)),
             md_h2: Some(Style::default().add_modifier(Modifier::BOLD)),
             md_h3: Some(Style::default().add_modifier(Modifier::BOLD)),
@@ -449,6 +455,11 @@ impl Theme {
             .as_deref()
             .and_then(parse_color)
             .unwrap_or(Color::Black);
+        let cursor_color = spec
+            .cursor_color
+            .as_deref()
+            .and_then(parse_color)
+            .or_else(|| Some(Self::default_cursor_color_for_bg(background_color)));
 
         let mut app_messages = AppMessageStyles::fallback();
         if let Some(prefix) = &spec.app_info_prefix {
@@ -521,6 +532,7 @@ impl Theme {
                 s
             },
             input_cursor_line_style: Style::default(),
+            input_cursor_color: cursor_color,
             md_h1: spec.md_h1.as_ref().map(|s| parse_style(&Some(s.clone()))),
             md_h2: spec.md_h2.as_ref().map(|s| parse_style(&Some(s.clone()))),
             md_h3: spec.md_h3.as_ref().map(|s| parse_style(&Some(s.clone()))),
@@ -604,6 +616,18 @@ impl Theme {
         lum >= 140.0
     }
 
+    fn default_cursor_color_for_bg(bg: Color) -> Color {
+        if let Some((r, g, b)) = color_to_rgb(bg) {
+            if Self::is_bright(r, g, b) {
+                Color::Black
+            } else {
+                Color::White
+            }
+        } else {
+            Color::White
+        }
+    }
+
     fn with_md_fallbacks(mut self) -> Self {
         // Headings default to assistant_text_style with bold for H1/H2
         self.md_h1 = self
@@ -677,5 +701,77 @@ impl Theme {
     }
     pub fn md_codeblock_bg_color(&self) -> Option<Color> {
         self.md_codeblock_bg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_spec() -> ThemeSpec {
+        ThemeSpec {
+            id: "test".to_string(),
+            display_name: "Test".to_string(),
+            background: None,
+            cursor_color: None,
+            user_prefix: None,
+            user_text: None,
+            assistant_text: None,
+            system_text: None,
+            app_info_prefix: None,
+            app_info_prefix_style: None,
+            app_info_text: None,
+            app_warning_prefix: None,
+            app_warning_prefix_style: None,
+            app_warning_text: None,
+            app_error_prefix: None,
+            app_error_prefix_style: None,
+            app_error_text: None,
+            app_log_prefix: None,
+            app_log_prefix_style: None,
+            app_log_text: None,
+            title: None,
+            streaming_indicator: None,
+            selection_highlight: None,
+            input_border: None,
+            input_title: None,
+            input_text: None,
+            input_cursor_modifiers: None,
+            md_h1: None,
+            md_h2: None,
+            md_h3: None,
+            md_h4: None,
+            md_h5: None,
+            md_h6: None,
+            md_paragraph: None,
+            md_inline_code: None,
+            md_link: None,
+            md_rule: None,
+            md_blockquote_text: None,
+            md_list_marker: None,
+            md_codeblock_text: None,
+            md_codeblock_bg: None,
+        }
+    }
+
+    #[test]
+    fn parses_cursor_color_from_spec() {
+        let mut spec = base_spec();
+        spec.background = Some("#000000".to_string());
+        spec.cursor_color = Some("#123456".to_string());
+
+        let theme = Theme::from_spec(&spec);
+
+        assert_eq!(theme.input_cursor_color, Some(Color::Rgb(0x12, 0x34, 0x56)));
+    }
+
+    #[test]
+    fn defaults_cursor_color_from_background() {
+        let mut spec = base_spec();
+        spec.background = Some("#ffffff".to_string());
+
+        let theme = Theme::from_spec(&spec);
+
+        assert_eq!(theme.input_cursor_color, Some(Color::Black));
     }
 }

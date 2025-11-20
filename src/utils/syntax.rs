@@ -142,11 +142,13 @@ pub fn highlight_code_block(
     let lang_norm = normalize_lang_hint(lang_hint);
 
     // Initialize syntect lazily
-    use std::sync::OnceLock;
-    static SYNTAX_SET: OnceLock<syntect::parsing::SyntaxSet> = OnceLock::new();
-    static THEME_SET: OnceLock<syntect::highlighting::ThemeSet> = OnceLock::new();
-    let ps = SYNTAX_SET.get_or_init(syntect::parsing::SyntaxSet::load_defaults_newlines);
-    let ts = THEME_SET.get_or_init(syntect::highlighting::ThemeSet::load_defaults);
+    use std::sync::LazyLock;
+    static SYNTAX_SET: LazyLock<syntect::parsing::SyntaxSet> =
+        LazyLock::new(syntect::parsing::SyntaxSet::load_defaults_newlines);
+    static THEME_SET: LazyLock<syntect::highlighting::ThemeSet> =
+        LazyLock::new(syntect::highlighting::ThemeSet::load_defaults);
+    let ps = &*SYNTAX_SET;
+    let ts = &*THEME_SET;
 
     // Pick a syntect theme that matches background brightness (higher contrast on light)
     let theme_name = pick_syntect_theme_name_for_theme(theme);

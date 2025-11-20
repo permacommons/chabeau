@@ -18,7 +18,7 @@ use crate::core::providers::{
 use crate::utils::url::normalize_base_url;
 use keyring::Entry;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 mod ui;
 
@@ -652,21 +652,19 @@ impl AuthManager {
             return;
         }
 
-        if let Ok(mut cache) = token_cache().lock() {
+        if let Ok(mut cache) = TOKEN_CACHE.lock() {
             cache.insert(provider_name.to_string(), entry);
         }
     }
 }
 
 fn get_cached_entry(provider_name: &str) -> Option<KeyringCacheEntry> {
-    let cache = token_cache().lock().ok()?;
+    let cache = TOKEN_CACHE.lock().ok()?;
     cache.get(provider_name).cloned()
 }
 
-fn token_cache() -> &'static Mutex<HashMap<String, KeyringCacheEntry>> {
-    static TOKEN_CACHE: OnceLock<Mutex<HashMap<String, KeyringCacheEntry>>> = OnceLock::new();
-    TOKEN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static TOKEN_CACHE: LazyLock<Mutex<HashMap<String, KeyringCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl ProviderAuthSource for AuthManager {
     fn uses_keyring(&self) -> bool {

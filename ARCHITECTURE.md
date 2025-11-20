@@ -1,4 +1,4 @@
-# Chabeau Architecture (commit 5d81609a33ce1abeef3ccb976b5387c474221511)
+# Chabeau Architecture
 
 ## System overview
 Chabeau is a terminal-first chat client that wraps OpenAI-compatible APIs behind a rich TUI. The
@@ -35,7 +35,8 @@ The Ratatui event loop wraps the shared `App` inside an `AppHandle` so tasks can
 mutex. Terminal setup, input polling, and resize handling feed `UiEvent`s into the dispatcher, which resolves
 mode-aware keymaps and emits high-level `AppAction`s. Actions are grouped by concern—streaming, input
 manipulation, picker interaction, and file prompts—and reducers can return `AppCommand`s that request new
-background work such as spawning a stream or loading models.【F:src/ui/chat_loop/mod.rs†L1-L42】【F:src/ui/chat_loop/event_loop.rs†L1-L200】【F:src/core/app/actions/mod.rs†L1-L194】
+background work such as spawning a stream or loading models. Keybindings are managed by a dedicated registry
+that routes input events to handlers based on the active UI mode.【F:src/ui/chat_loop/mod.rs†L1-L42】【F:src/ui/chat_loop/event_loop.rs†L1-L200】【F:src/ui/chat_loop/keybindings/mod.rs†L1-L300】【F:src/core/app/actions/mod.rs†L1-L194】
 
 ## Streaming pipeline
 Outgoing requests are encapsulated in `StreamParams` and executed by `ChatStreamService`. Each stream runs in
@@ -55,7 +56,7 @@ Character cards are cached and resolved by `CharacterService`, which invalidates
 change, supports direct path loads, and falls back to metadata scans when necessary. It also cooperates with
 session bootstrapping to honour per-provider defaults.【F:src/character/service.rs†L49-L189】 Personas and
 presets are managed by dedicated managers loaded during app construction so that the UI can swap identities
-or prompt templates without reloading config from disk.【F:src/core/app/mod.rs†L81-L148】
+or prompt templates without reloading config from disk.【F:src/core/app/mod.rs†L81-L148】【F:src/core/persona.rs†L1-L200】【F:src/core/preset.rs†L1-L200】
 
 ## Commands and input routing
 Slash commands share a central registry that distinguishes between messages and control commands. Handlers can

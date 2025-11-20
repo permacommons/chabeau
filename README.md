@@ -395,6 +395,7 @@ Chabeau uses a modular design with focused components:
 - `builtins/` – Build-time assets embedded into the binary
   - `help.md` – In-app keyboard shortcut and command reference
   - `models.toml` – Supported provider definitions
+  - `presets.toml` – Built-in system instruction presets
   - `themes.toml` – Built-in UI themes
 - `character/` – Character card support (v2 format)
   - `cache.rs` – In-memory caching with invalidation
@@ -412,6 +413,7 @@ Chabeau uses a modular design with focused components:
   - `theme_list.rs` – Theme listing functionality
 - `commands/` – Chat command processing and registry-driven dispatch
   - `mod.rs` – Command handlers and dispatcher
+  - `refine.rs` – Message refinement logic
   - `registry.rs` – Static command metadata registry
 - `core/` – Core application components
   - `app/` – Application state and controllers
@@ -426,6 +428,7 @@ Chabeau uses a modular design with focused components:
     - `streaming.rs` – Handles streaming responses from the API
     - `ui_helpers.rs` – UI state transition helpers
     - `ui_state.rs` – UI state management and text input helpers
+    - `builtin_presets.rs` – Built-in preset loader
   - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
   - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
   - `config/` – Configuration data, defaults, caching, and persistence
@@ -436,11 +439,16 @@ Chabeau uses a modular design with focused components:
     - `orchestrator.rs` – Cached config loader and mutation orchestrator
     - `printing.rs` – CLI-facing config print helpers
     - `tests.rs` – Configuration module tests
+  - `keyring.rs` – Secure storage for API keys
   - `message.rs` – Message data structures
+  - `persona.rs` – Persona management and variable substitution
+  - `preset.rs` – System instruction preset management
+  - `text_wrapping.rs` – Text wrapping utilities
 - `ui/` – Terminal interface rendering
   - `appearance.rs` – Theme and style definitions
   - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
     - `event_loop.rs` – Async terminal loop orchestration, event polling, and stream dispatch
+    - `keybindings/` – Mode-aware keybinding registry and handlers
     - `lifecycle.rs` – Terminal setup/teardown helpers and resource guards
     - `modes.rs` – Mode-aware key handlers and text interaction utilities
   - `help.rs` – Help text rendering

@@ -226,15 +226,24 @@ fn test_prewrap_cache_reuse_when_unchanged() {
         let p2 = app.get_prewrapped_lines_cached(w);
         p2.as_ptr()
     };
-    assert_eq!(lines_ptr1, lines_ptr2, "lines cache should be reused when nothing changed");
+    assert_eq!(
+        lines_ptr1, lines_ptr2,
+        "lines cache should be reused when nothing changed"
+    );
 
     // Test metadata cache reuse
     let meta_ptr1 = app.get_prewrapped_span_metadata_cached(w) as *const _;
     let meta_ptr2 = app.get_prewrapped_span_metadata_cached(w) as *const _;
     let meta_ptr3 = app.get_prewrapped_span_metadata_cached(w) as *const _;
 
-    assert_eq!(meta_ptr1, meta_ptr2, "metadata cache should be reused when nothing changed");
-    assert_eq!(meta_ptr2, meta_ptr3, "metadata cache should be reused across multiple calls");
+    assert_eq!(
+        meta_ptr1, meta_ptr2,
+        "metadata cache should be reused when nothing changed"
+    );
+    assert_eq!(
+        meta_ptr2, meta_ptr3,
+        "metadata cache should be reused across multiple calls"
+    );
 }
 
 #[test]
@@ -256,7 +265,10 @@ fn test_prewrap_cache_invalidates_on_width_change() {
         let p2 = app.get_prewrapped_lines_cached(width2);
         p2.as_ptr()
     };
-    assert_ne!(lines_ptr1, lines_ptr2, "lines cache should invalidate on width change");
+    assert_ne!(
+        lines_ptr1, lines_ptr2,
+        "lines cache should invalidate on width change"
+    );
 
     // Test metadata cache invalidation
     let metadata1 = app.get_prewrapped_span_metadata_cached(width1);

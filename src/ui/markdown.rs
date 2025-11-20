@@ -2352,8 +2352,9 @@ End of table."###
             "Should have at least header + data rows"
         );
         assert!(
-            table_lines.len() <= 15,
-            "Should not create excessive wrapped lines"
+            table_lines.len() <= 17,
+            "Should not create excessive wrapped lines (got {})",
+            table_lines.len()
         );
     }
 
@@ -2562,6 +2563,7 @@ End of table."###
                     && !line.contains("┌")
                     && !line.contains("├")
                     && !line.contains("└")
+                    && !line.contains("───────────────") // Exclude row separator lines
             })
             .collect();
 
@@ -4131,7 +4133,12 @@ Next paragraph"#
             eprintln!("Line {}: '{}'", i, line_str);
             eprintln!("  Spans: {}", line_obj.spans.len());
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4237,7 +4244,12 @@ Next paragraph"#
             let line_str: String = line_obj.to_string();
             eprintln!("Line {}: '{}'", i, line_str);
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4271,9 +4283,19 @@ Next paragraph"#
         eprintln!("\n=== DEBUG emphasis_with_paren_outside_one_past_width ===");
         for (i, line_obj) in rendered.lines.iter().enumerate() {
             let line_str: String = line_obj.to_string();
-            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            eprintln!(
+                "Line {}: '{}' (width={})",
+                i,
+                line_str,
+                line_str.chars().count()
+            );
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4300,7 +4322,12 @@ Next paragraph"#
             let line_str: String = line_obj.to_string();
             eprintln!("Line {}: '{}'", i, line_str);
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4333,9 +4360,19 @@ Next paragraph"#
         eprintln!("\n=== DEBUG emphasis_with_standalone_paren ===");
         for (i, line_obj) in rendered.lines.iter().enumerate() {
             let line_str: String = line_obj.to_string();
-            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            eprintln!(
+                "Line {}: '{}' (width={})",
+                i,
+                line_str,
+                line_str.chars().count()
+            );
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4364,9 +4401,19 @@ Next paragraph"#
         eprintln!("\n=== DEBUG emphasis_with_multiple_adjacent_punctuation ===");
         for (i, line_obj) in rendered.lines.iter().enumerate() {
             let line_str: String = line_obj.to_string();
-            eprintln!("Line {}: '{}' (width={})", i, line_str, line_str.chars().count());
+            eprintln!(
+                "Line {}: '{}' (width={})",
+                i,
+                line_str,
+                line_str.chars().count()
+            );
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' width={}", j, span.content, span.content.width());
+                eprintln!(
+                    "    Span {}: content='{}' width={}",
+                    j,
+                    span.content,
+                    span.content.width()
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4396,7 +4443,10 @@ Next paragraph"#
             let line_str: String = line_obj.to_string();
             eprintln!("Line {}: '{}'", i, line_str);
             for (j, span) in line_obj.spans.iter().enumerate() {
-                eprintln!("    Span {}: content='{}' style={:?}", j, span.content, span.style);
+                eprintln!(
+                    "    Span {}: content='{}' style={:?}",
+                    j, span.content, span.style
+                );
             }
         }
         eprintln!("=== END DEBUG ===\n");
@@ -4405,13 +4455,17 @@ Next paragraph"#
         let line1_spans = &rendered.lines[1].spans;
 
         // Find the span containing "fundamentally_x"
-        let fundamentally_span = line1_spans.iter()
+        let fundamentally_span = line1_spans
+            .iter()
             .find(|span| span.content.contains("fundamentally_x"))
             .expect("Should find 'fundamentally_x' on line 1");
 
         // Verify it has italic styling (ITALIC modifier should be set)
         assert!(
-            fundamentally_span.style.add_modifier.contains(ratatui::style::Modifier::ITALIC),
+            fundamentally_span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::ITALIC),
             "The word 'fundamentally_x' must preserve italic styling after backtracking. \
              Expected ITALIC modifier but got style: {:?}",
             fundamentally_span.style
@@ -4444,7 +4498,6 @@ Next paragraph"#
             lines
         );
     }
-
 }
 
 const USER_CONTINUATION_INDENT: &str = "     ";

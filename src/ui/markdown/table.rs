@@ -160,7 +160,11 @@ impl TableRenderer {
             let meta = vec![SpanKind::Text; sep_line.spans.len()];
             lines.push((sep_line, meta));
 
-            for row in &wrapped_rows[1..] {
+            for (row_idx, row) in wrapped_rows[1..].iter().enumerate() {
+                if row_idx > 0 {
+                    let separator = self.create_row_separator(&col_widths, theme);
+                    lines.push(separator);
+                }
                 let max_lines_in_row = row.iter().map(|cell| cell.len()).max().unwrap_or(1);
                 for line_idx in 0..max_lines_in_row {
                     let content_line = self.create_content_line_with_spans(
@@ -661,6 +665,32 @@ impl TableRenderer {
         }
         line.push_str(right);
         line
+    }
+
+    fn create_row_separator(&self, col_widths: &[usize], theme: &Theme) -> TableLine {
+        let rule_style = theme.md_rule_style();
+        let table_style = theme.md_paragraph_style();
+        let mut spans = Vec::new();
+        let mut kinds = Vec::new();
+
+        spans.push(Span::styled("│", table_style));
+        kinds.push(SpanKind::Text);
+
+        for &width in col_widths.iter() {
+            spans.push(Span::raw(" "));
+            kinds.push(SpanKind::Text);
+
+            // Add the dashes with rule style
+            spans.push(Span::styled("─".repeat(width), rule_style));
+            kinds.push(SpanKind::Text);
+
+            spans.push(Span::raw(" "));
+            kinds.push(SpanKind::Text);
+            spans.push(Span::styled("│", table_style));
+            kinds.push(SpanKind::Text);
+        }
+
+        (Line::from(spans), kinds)
     }
 
     fn create_content_line_with_spans(

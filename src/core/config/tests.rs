@@ -62,23 +62,35 @@ fn test_config_persistence_lifecycle() {
         theme: Some("dark".to_string()),
         ..Default::default()
     };
-    config.save_to_path(&config_path).expect("Failed to save config");
+    config
+        .save_to_path(&config_path)
+        .expect("Failed to save config");
     let loaded = Config::load_from_path(&config_path).expect("Failed to load config");
-    assert_eq!(loaded.default_provider, Some("initial-provider".to_string()));
+    assert_eq!(
+        loaded.default_provider,
+        Some("initial-provider".to_string())
+    );
     assert_eq!(loaded.theme, Some("dark".to_string()));
 
     // Phase 2: Modify and verify persistence of changes
     let mut config = loaded;
     config.default_provider = Some("changed-provider".to_string());
-    config.save_to_path(&config_path).expect("Failed to save modified config");
+    config
+        .save_to_path(&config_path)
+        .expect("Failed to save modified config");
     let loaded = Config::load_from_path(&config_path).expect("Failed to load modified config");
-    assert_eq!(loaded.default_provider, Some("changed-provider".to_string()));
+    assert_eq!(
+        loaded.default_provider,
+        Some("changed-provider".to_string())
+    );
     assert_eq!(loaded.theme, Some("dark".to_string())); // Other fields should persist
 
     // Phase 3: Unset and verify persistence of None
     let mut config = loaded;
     config.default_provider = None;
-    config.save_to_path(&config_path).expect("Failed to save unset config");
+    config
+        .save_to_path(&config_path)
+        .expect("Failed to save unset config");
     let loaded = Config::load_from_path(&config_path).expect("Failed to load unset config");
     assert_eq!(loaded.default_provider, None);
     assert_eq!(loaded.theme, Some("dark".to_string())); // Other fields should still persist
@@ -98,7 +110,9 @@ fn test_provider_id_normalization() {
     config.set_default_model("AnThRoPiC".to_string(), "claude-3-opus".to_string());
     config.set_default_model("poe".to_string(), "claude-instant".to_string());
 
-    config.save_to_path(&config_path).expect("Failed to save config");
+    config
+        .save_to_path(&config_path)
+        .expect("Failed to save config");
     let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
 
     // Verify storage is normalized (internal representation is lowercase)
@@ -109,16 +123,40 @@ fn test_provider_id_normalization() {
     assert!(loaded_config.default_models.contains_key("poe"));
 
     // Verify lookups work with any casing
-    assert_eq!(loaded_config.get_default_model("openai"), Some(&"gpt-4".to_string()));
-    assert_eq!(loaded_config.get_default_model("OpenAI"), Some(&"gpt-4".to_string()));
-    assert_eq!(loaded_config.get_default_model("OPENAI"), Some(&"gpt-4".to_string()));
+    assert_eq!(
+        loaded_config.get_default_model("openai"),
+        Some(&"gpt-4".to_string())
+    );
+    assert_eq!(
+        loaded_config.get_default_model("OpenAI"),
+        Some(&"gpt-4".to_string())
+    );
+    assert_eq!(
+        loaded_config.get_default_model("OPENAI"),
+        Some(&"gpt-4".to_string())
+    );
 
-    assert_eq!(loaded_config.get_default_model("anthropic"), Some(&"claude-3-opus".to_string()));
-    assert_eq!(loaded_config.get_default_model("Anthropic"), Some(&"claude-3-opus".to_string()));
-    assert_eq!(loaded_config.get_default_model("AnThRoPiC"), Some(&"claude-3-opus".to_string()));
+    assert_eq!(
+        loaded_config.get_default_model("anthropic"),
+        Some(&"claude-3-opus".to_string())
+    );
+    assert_eq!(
+        loaded_config.get_default_model("Anthropic"),
+        Some(&"claude-3-opus".to_string())
+    );
+    assert_eq!(
+        loaded_config.get_default_model("AnThRoPiC"),
+        Some(&"claude-3-opus".to_string())
+    );
 
-    assert_eq!(loaded_config.get_default_model("poe"), Some(&"claude-instant".to_string()));
-    assert_eq!(loaded_config.get_default_model("POE"), Some(&"claude-instant".to_string()));
+    assert_eq!(
+        loaded_config.get_default_model("poe"),
+        Some(&"claude-instant".to_string())
+    );
+    assert_eq!(
+        loaded_config.get_default_model("POE"),
+        Some(&"claude-instant".to_string())
+    );
 }
 
 #[test]
@@ -458,7 +496,11 @@ fn test_format_default_characters_sorting_and_format() {
     let mut config = Config::default();
 
     // Set up in non-alphabetical order to verify sorting
-    config.set_default_character("openai".to_string(), "gpt-4".to_string(), "alice".to_string());
+    config.set_default_character(
+        "openai".to_string(),
+        "gpt-4".to_string(),
+        "alice".to_string(),
+    );
     config.set_default_character(
         "anthropic".to_string(),
         "claude-3-opus".to_string(),

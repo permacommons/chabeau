@@ -1,4 +1,4 @@
-# Chabeau Architecture
+# Chabeau Architecture (commit 41e7ee64efbbab7e9be7deb9a81f18002dd7ea3e)
 
 ## System overview
 Chabeau is a terminal-first chat client that wraps OpenAI-compatible APIs behind a rich TUI. The

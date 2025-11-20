@@ -677,14 +677,8 @@ impl TableRenderer {
         kinds.push(SpanKind::Text);
 
         for &width in col_widths.iter() {
-            spans.push(Span::raw(" "));
-            kinds.push(SpanKind::Text);
-
-            // Add the dashes with rule style
-            spans.push(Span::styled("─".repeat(width), rule_style));
-            kinds.push(SpanKind::Text);
-
-            spans.push(Span::raw(" "));
+            // Fill the entire cell width (content + 2 spaces) with dashes
+            spans.push(Span::styled("─".repeat(width + 2), rule_style));
             kinds.push(SpanKind::Text);
             spans.push(Span::styled("│", table_style));
             kinds.push(SpanKind::Text);

@@ -206,7 +206,7 @@ fn default_sort_mode_helper_behaviour() {
 }
 
 #[test]
-fn prewrap_cache_reuse_no_changes() {
+fn test_prewrap_cache_reuse_when_unchanged() {
     let mut app = create_test_app();
     for i in 0..50 {
         app.ui.messages.push_back(Message {
@@ -215,34 +215,77 @@ fn prewrap_cache_reuse_no_changes() {
         });
     }
     let w = 100u16;
-    let ptr1 = {
+
+    // Test lines cache reuse
+    let lines_ptr1 = {
         let p1 = app.get_prewrapped_lines_cached(w);
         assert!(!p1.is_empty());
         p1.as_ptr()
     };
-    let ptr2 = {
+    let lines_ptr2 = {
         let p2 = app.get_prewrapped_lines_cached(w);
         p2.as_ptr()
     };
-    assert_eq!(ptr1, ptr2, "cache should be reused when nothing changed");
+    assert_eq!(lines_ptr1, lines_ptr2, "lines cache should be reused when nothing changed");
+
+    // Test metadata cache reuse
+    let meta_ptr1 = app.get_prewrapped_span_metadata_cached(w) as *const _;
+    let meta_ptr2 = app.get_prewrapped_span_metadata_cached(w) as *const _;
+    let meta_ptr3 = app.get_prewrapped_span_metadata_cached(w) as *const _;
+
+    assert_eq!(meta_ptr1, meta_ptr2, "metadata cache should be reused when nothing changed");
+    assert_eq!(meta_ptr2, meta_ptr3, "metadata cache should be reused across multiple calls");
 }
 
 #[test]
-fn prewrap_cache_invalidates_on_width_change() {
+fn test_prewrap_cache_invalidates_on_width_change() {
+    use crate::ui::markdown::test_fixtures;
+
     let mut app = create_test_app();
-    app.ui.messages.push_back(Message {
-        role: "user".into(),
-        content: "hello world".into(),
-    });
-    let ptr1 = {
-        let p1 = app.get_prewrapped_lines_cached(80);
+    app.ui.messages.push_back(test_fixtures::single_block());
+
+    let width1 = 80u16;
+    let width2 = 120u16;
+
+    // Test lines cache invalidation
+    let lines_ptr1 = {
+        let p1 = app.get_prewrapped_lines_cached(width1);
         p1.as_ptr()
     };
-    let ptr2 = {
-        let p2 = app.get_prewrapped_lines_cached(120);
+    let lines_ptr2 = {
+        let p2 = app.get_prewrapped_lines_cached(width2);
         p2.as_ptr()
     };
-    assert_ne!(ptr1, ptr2, "cache should invalidate on width change");
+    assert_ne!(lines_ptr1, lines_ptr2, "lines cache should invalidate on width change");
+
+    // Test metadata cache invalidation
+    let metadata1 = app.get_prewrapped_span_metadata_cached(width1);
+    let has_code1 = metadata1
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    let metadata2 = app.get_prewrapped_span_metadata_cached(width2);
+    let has_code2 = metadata2
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    // Both widths should have code block metadata
+    assert!(has_code1, "Width1 metadata should have code blocks");
+    assert!(has_code2, "Width2 metadata should have code blocks");
+
+    // Verify cache was rebuilt by checking at width1 again
+    let metadata1_again = app.get_prewrapped_span_metadata_cached(width1);
+    let has_code1_again = metadata1_again
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|k| k.is_code_block());
+
+    assert!(
+        has_code1_again,
+        "Width1 again should still have code blocks after cache rebuild"
+    );
 }
 
 #[test]
@@ -817,8 +860,10 @@ fn test_last_and_first_user_message_index() {
 }
 
 #[test]
-fn prewrap_height_matches_renderer_with_tables() {
-    // Test that scroll height calculations match renderer height when tables are involved
+fn test_scroll_height_consistency_with_tables_regression() {
+    // Regression test: Ensures scroll height calculations match renderer height with tables.
+    // Previously, scroll calculations could diverge from actual rendered height, causing
+    // scroll targeting issues where the viewport wouldn't scroll to the correct position.
     let mut app = create_test_app();
 
     // Add a message with a large table that will trigger width-dependent wrapping
@@ -845,7 +890,7 @@ fn prewrap_height_matches_renderer_with_tables() {
     // Get the height that scroll calculations currently use
     let scroll_height = app.ui.calculate_wrapped_line_count(width);
 
-    // These should match - if they don't, scroll targeting will be off
+    // Verify heights match - mismatch would cause scroll targeting to be off
     assert_eq!(
         renderer_height, scroll_height,
         "Renderer height ({}) should match scroll calculation height ({})",
@@ -894,8 +939,11 @@ fn streaming_table_autoscroll_stays_consistent() {
 }
 
 #[test]
-fn narrow_terminal_exposes_scroll_height_mismatch() {
-    // Test with very narrow terminal that forces significant table wrapping differences
+fn test_scroll_height_consistency_narrow_terminal_regression() {
+    // Regression test: Verifies scroll height calculations in narrow terminals with tables.
+    // Narrow terminals (40 chars) force aggressive table column rebalancing, which previously
+    // caused scroll height calculations to diverge significantly from actual rendered height.
+    // This edge case is critical for maintaining scroll accuracy in constrained environments.
     let mut app = create_test_app();
 
     // Add a wide table that will need significant rebalancing in narrow terminals
@@ -923,7 +971,7 @@ Some additional text after the table."#;
     // Get the height that scroll calculations currently use (widthless, then scroll heuristic)
     let scroll_height = app.ui.calculate_wrapped_line_count(width);
 
-    // This should expose the mismatch if it exists
+    // Verify the fix is still in place - heights must match to ensure correct scroll positioning
     assert_eq!(
         renderer_height, scroll_height,
         "Narrow terminal: Renderer height ({}) should match scroll calculation height ({})",
@@ -1137,10 +1185,7 @@ fn test_turn_off_character_mode_from_picker() {
     assert_eq!(app.ui.status.as_deref(), Some("Character mode disabled"));
 }
 
-// Phase 0 tests: Code block cache behavior (currently ignored, will pass in Phase 2)
-
 /// Helper to count code blocks in span metadata.
-#[allow(dead_code)]
 fn count_code_blocks_in_metadata(metadata: &[Vec<crate::ui::span::SpanKind>]) -> usize {
     let mut indices = std::collections::HashSet::new();
     for line_meta in metadata {
@@ -1208,68 +1253,6 @@ fn cache_invalidates_on_message_change() {
         lines_before,
         lines_after
     );
-}
-
-#[test]
-
-fn cache_invalidates_on_width_change() {
-    use crate::ui::markdown::test_fixtures;
-
-    let mut app = create_test_app();
-    app.ui.messages.push_back(test_fixtures::single_block());
-
-    let width1 = 80u16;
-    let width2 = 40u16;
-
-    // Get metadata at width1
-    let metadata1 = app.get_prewrapped_span_metadata_cached(width1);
-    let has_code1 = metadata1
-        .iter()
-        .flat_map(|line| line.iter())
-        .any(|k| k.is_code_block());
-
-    // Get metadata at different width - should rebuild cache
-    let metadata2 = app.get_prewrapped_span_metadata_cached(width2);
-    let has_code2 = metadata2
-        .iter()
-        .flat_map(|line| line.iter())
-        .any(|k| k.is_code_block());
-
-    // Both widths should have code block metadata
-    assert!(has_code1, "Width1 should have code blocks");
-    assert!(has_code2, "Width2 should have code blocks");
-
-    // Verify cache was rebuilt by checking at width1 again
-    let metadata1_again = app.get_prewrapped_span_metadata_cached(width1);
-    let has_code1_again = metadata1_again
-        .iter()
-        .flat_map(|line| line.iter())
-        .any(|k| k.is_code_block());
-
-    assert!(
-        has_code1_again,
-        "Width1 again should still have code blocks"
-    );
-}
-
-#[test]
-
-fn cache_reused_for_same_width() {
-    use crate::ui::markdown::test_fixtures;
-
-    let mut app = create_test_app();
-    app.ui.messages.push_back(test_fixtures::single_block());
-
-    let width = 80u16;
-
-    // Multiple accesses at same width
-    let ptr1 = app.get_prewrapped_span_metadata_cached(width) as *const _;
-    let ptr2 = app.get_prewrapped_span_metadata_cached(width) as *const _;
-    let ptr3 = app.get_prewrapped_span_metadata_cached(width) as *const _;
-
-    // All should return the same pointer
-    assert_eq!(ptr1, ptr2);
-    assert_eq!(ptr2, ptr3);
 }
 
 #[test]

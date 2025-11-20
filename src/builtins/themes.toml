@@ -36,6 +36,7 @@ md_list_marker = "#9ca3af"
 md_link = "#93c5fd,underline"
 md_rule = "#374151"
 md_codeblock_text = "#cbd5e1"
+md_table_row_alt_bg = "#111111"
 
 [[themes]]
 id = "light"
@@ -76,6 +77,7 @@ md_link = "#2563eb,underline"
 md_rule = "#9ca3af"
 md_codeblock_text = "#374151"
 md_codeblock_bg = "#f3f4f6"
+md_table_row_alt_bg = "#f3f4f6"
 
 [[themes]]
 id = "dracula"
@@ -116,6 +118,7 @@ md_link = "#8be9fd,underline"
 md_rule = "#44475a"
 md_codeblock_text = "#f8f8f2"
 md_codeblock_bg = "#21222c"
+md_table_row_alt_bg = "#343746"
 
 [[themes]]
 id = "solarized-dark"
@@ -156,6 +159,7 @@ md_link = "#268bd2,underline"
 md_rule = "#073642"
 md_codeblock_text = "#839496"       # base0
 md_codeblock_bg = "#073642"         # base02
+md_table_row_alt_bg = "#073642"
 
 [[themes]]
 id = "solarized-light"
@@ -196,6 +200,7 @@ md_link = "#268bd2,underline"
 md_rule = "#93a1a1"
 md_codeblock_text = "#657b83"       # base00
 md_codeblock_bg = "#eee8d5"         # base2
+md_table_row_alt_bg = "#eee8d5"
 
 [[themes]]
 id = "high-contrast-dark"
@@ -236,6 +241,7 @@ md_link = "#00e5ff,underline"
 md_rule = "#facc15"
 md_codeblock_text = "#ffffff"
 md_codeblock_bg = "#111111"
+md_table_row_alt_bg = "#111111"
 
 [[themes]]
 id = "paper"
@@ -276,3 +282,4 @@ md_link = "#1f6feb,underline"
 md_rule = "#d1d5db"
 md_codeblock_text = "#1f2937"
 md_codeblock_bg = "#f0ebe0"
+md_table_row_alt_bg = "#f0ebe0"

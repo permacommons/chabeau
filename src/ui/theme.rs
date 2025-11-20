@@ -94,6 +94,7 @@ pub struct Theme {
     pub md_list_marker: Option<Style>,
     pub md_codeblock_text: Option<Style>,
     pub md_codeblock_bg: Option<Color>,
+    pub md_table_row_alt_bg: Option<Color>,
 }
 
 impl Theme {
@@ -138,6 +139,7 @@ impl Theme {
             md_list_marker: None,
             md_codeblock_text: None,
             md_codeblock_bg: None,
+            md_table_row_alt_bg: Some(Color::Rgb(17, 17, 17)),
         }
     }
 
@@ -203,6 +205,7 @@ impl Theme {
             md_list_marker: None,
             md_codeblock_text: None,
             md_codeblock_bg: None,
+            md_table_row_alt_bg: Some(Color::Rgb(243, 244, 246)),
         }
     }
 
@@ -268,6 +271,7 @@ impl Theme {
             md_list_marker: None,
             md_codeblock_text: None,
             md_codeblock_bg: None,
+            md_table_row_alt_bg: Some(Color::Rgb(52, 55, 70)),
         }
     }
 
@@ -334,6 +338,7 @@ impl Theme {
             md_list_marker: Some(Style::default()),
             md_codeblock_text: Some(Style::default()),
             md_codeblock_bg: None,
+            md_table_row_alt_bg: None,
         }
     }
 
@@ -562,6 +567,10 @@ impl Theme {
                 .as_ref()
                 .map(|s| parse_style(&Some(s.clone()))),
             md_codeblock_bg: spec.md_codeblock_bg.as_deref().and_then(parse_color),
+            md_table_row_alt_bg: spec
+                .md_table_row_alt_bg
+                .as_deref()
+                .and_then(parse_color),
         };
 
         // Fallbacks for markdown styles when not provided
@@ -702,6 +711,9 @@ impl Theme {
     pub fn md_codeblock_bg_color(&self) -> Option<Color> {
         self.md_codeblock_bg
     }
+    pub fn md_table_row_alt_bg_color(&self) -> Option<Color> {
+        self.md_table_row_alt_bg
+    }
 }
 
 #[cfg(test)]
@@ -751,6 +763,7 @@ mod tests {
             md_list_marker: None,
             md_codeblock_text: None,
             md_codeblock_bg: None,
+            md_table_row_alt_bg: None,
         }
     }
 

@@ -45,6 +45,7 @@ pub struct ThemeSpec {
     pub md_list_marker: Option<String>,
     pub md_codeblock_text: Option<String>,
     pub md_codeblock_bg: Option<String>,
+    pub md_table_row_alt_bg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +110,7 @@ pub fn theme_spec_from_custom(ct: &CustomTheme) -> ThemeSpec {
         md_list_marker: None,
         md_codeblock_text: None,
         md_codeblock_bg: None,
+        md_table_row_alt_bg: None,
     }
 }
 

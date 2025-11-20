@@ -1,7 +1,7 @@
 use crate::ui::layout::TableOverflowPolicy;
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -136,6 +136,7 @@ impl TableRenderer {
             self.balance_column_widths(&ideal_col_widths, terminal_width, table_policy);
         let wrapped_rows = self.wrap_rows_for_rendering(&col_widths, table_policy);
         let table_style = theme.md_paragraph_style();
+        let alt_row_bg = theme.md_table_row_alt_bg_color();
 
         if !wrapped_rows.is_empty() {
             let top_border = self.create_border_line(&col_widths, "┌", "┬", "┐", "─");
@@ -151,6 +152,7 @@ impl TableRenderer {
                     &col_widths,
                     line_idx,
                     table_style,
+                    None,
                 );
                 lines.push(header_line);
             }
@@ -160,14 +162,17 @@ impl TableRenderer {
             let meta = vec![SpanKind::Text; sep_line.spans.len()];
             lines.push((sep_line, meta));
 
-            for row in &wrapped_rows[1..] {
+            for (row_idx, row) in wrapped_rows[1..].iter().enumerate() {
                 let max_lines_in_row = row.iter().map(|cell| cell.len()).max().unwrap_or(1);
+                let row_bg = if row_idx % 2 != 0 { alt_row_bg } else { None };
+
                 for line_idx in 0..max_lines_in_row {
                     let content_line = self.create_content_line_with_spans(
                         row,
                         &col_widths,
                         line_idx,
                         table_style,
+                        row_bg,
                     );
                     lines.push(content_line);
                 }
@@ -669,15 +674,24 @@ impl TableRenderer {
         col_widths: &[usize],
         line_idx: usize,
         style: Style,
+        row_bg: Option<Color>,
     ) -> (Line<'static>, Vec<SpanKind>) {
         let mut spans = Vec::new();
         let mut kinds = Vec::new();
+
+        // Content style includes the background color if set
+        let content_style = if let Some(bg) = row_bg {
+            style.bg(bg)
+        } else {
+            style
+        };
 
         spans.push(Span::styled("│", style));
         kinds.push(SpanKind::Text);
 
         for (i, width) in col_widths.iter().enumerate() {
-            spans.push(Span::raw(" "));
+            // Padding before cell content
+            spans.push(Span::styled(" ", content_style));
             kinds.push(SpanKind::Text);
 
             let cell_spans = row
@@ -717,15 +731,25 @@ impl TableRenderer {
             }
 
             if cell_text_len < *width {
-                rendered_cell.push((Span::raw(" ".repeat(width - cell_text_len)), SpanKind::Text));
+                // Padding inside the cell to fill width
+                rendered_cell.push((
+                    Span::styled(" ".repeat(width - cell_text_len), content_style),
+                    SpanKind::Text,
+                ));
             }
 
             for (span, kind) in rendered_cell.into_iter() {
-                spans.push(span);
+                // Apply background color to content spans
+                let mut s = span;
+                if let Some(bg) = row_bg {
+                    s.style = s.style.bg(bg);
+                }
+                spans.push(s);
                 kinds.push(kind);
             }
 
-            spans.push(Span::raw(" "));
+            // Padding after cell content
+            spans.push(Span::styled(" ", content_style));
             kinds.push(SpanKind::Text);
             spans.push(Span::styled("│", style));
             kinds.push(SpanKind::Text);
@@ -800,5 +824,74 @@ mod tests {
         let renderer = TableRenderer::new();
         let clipped = renderer.clip_text_to_width("A👩‍💻 docs", 3);
         assert_eq!(clipped, "A👩‍💻");
+    }
+
+    #[test]
+    fn test_alternating_row_colors() {
+        use ratatui::style::Color;
+        let mut renderer = TableRenderer::new();
+        // Row 1 (Header - implicit first row)
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.add_span(Span::raw("Header"), SpanKind::Text);
+        renderer.end_cell();
+        renderer.end_row();
+
+        // Row 2 (Data 1) - should have no bg (index 0 in data rows)
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.add_span(Span::raw("Row 1"), SpanKind::Text);
+        renderer.end_cell();
+        renderer.end_row();
+
+        // Row 3 (Data 2) - should have alt bg (index 1 in data rows)
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.add_span(Span::raw("Row 2"), SpanKind::Text);
+        renderer.end_cell();
+        renderer.end_row();
+
+        let mut theme = Theme::dark_default();
+        let alt_bg = Color::Red; // Distinct color for testing
+        theme.md_table_row_alt_bg = Some(alt_bg);
+
+        let lines = renderer.render_table_with_width(&theme, Some(80));
+
+        // Verify lines
+        // Structure:
+        // 0: Top border
+        // 1: Header content
+        // 2: Header separator
+        // 3: Row 1 content (no bg)
+        // 4: Row 2 content (alt bg)
+        // 5: Bottom border
+
+        assert!(lines.len() >= 6);
+
+        let row1_line = &lines[3].0;
+        let row2_line = &lines[4].0;
+
+        // Check Row 1 spans (should not have alt_bg)
+        for span in &row1_line.spans {
+             // Border might have style, but bg shouldn't be alt_bg unless explicitly set in theme (which it isn't)
+             if span.content.trim().len() > 0 && span.content != "│" {
+                 assert_ne!(span.style.bg, Some(alt_bg), "Row 1 content '{}' should not have alt bg", span.content);
+             }
+        }
+
+        // Check Row 2 spans (should have alt_bg)
+        // Note: borders "│" should NOT have bg. Padding " " and content "Row 2" SHOULD have bg.
+        let mut found_content = false;
+        for span in &row2_line.spans {
+             if span.content == "│" {
+                  assert_ne!(span.style.bg, Some(alt_bg), "Row 2 border should not have alt bg");
+             } else {
+                  assert_eq!(span.style.bg, Some(alt_bg), "Row 2 content/padding '{}' should have alt bg", span.content);
+                  if span.content.contains("Row") || span.content.contains("2") {
+                      found_content = true;
+                  }
+             }
+        }
+        assert!(found_content, "Did not find expected content spans in Row 2");
     }
 }

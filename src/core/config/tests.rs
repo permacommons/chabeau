@@ -51,208 +51,74 @@ fn test_load_nonexistent_config() {
 }
 
 #[test]
-fn test_save_and_load_config() {
+fn test_config_persistence_lifecycle() {
+    // Tests the full lifecycle of config persistence: initial save, modification, and unsetting values
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let config_path = temp_dir.path().join("test_config.toml");
 
-    let config = Config {
-        default_provider: Some("test-provider".to_string()),
-        ..Default::default()
-    };
-
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
-
-    assert_eq!(
-        loaded_config.default_provider,
-        Some("test-provider".to_string())
-    );
-}
-
-#[test]
-fn test_unset_default_provider() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let config_path = temp_dir.path().join("test_config.toml");
-
-    let config = Config {
-        default_provider: Some("test-provider".to_string()),
-        ..Default::default()
-    };
-
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let mut config = Config::load_from_path(&config_path).expect("Failed to load config");
-    config.default_provider = None;
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
-
-    assert_eq!(loaded_config.default_provider, None);
-}
-
-#[test]
-fn test_change_default_provider() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let config_path = temp_dir.path().join("test_config.toml");
-
+    // Phase 1: Initial save and load
     let config = Config {
         default_provider: Some("initial-provider".to_string()),
+        theme: Some("dark".to_string()),
         ..Default::default()
     };
+    config.save_to_path(&config_path).expect("Failed to save config");
+    let loaded = Config::load_from_path(&config_path).expect("Failed to load config");
+    assert_eq!(loaded.default_provider, Some("initial-provider".to_string()));
+    assert_eq!(loaded.theme, Some("dark".to_string()));
 
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
+    // Phase 2: Modify and verify persistence of changes
+    let mut config = loaded;
+    config.default_provider = Some("changed-provider".to_string());
+    config.save_to_path(&config_path).expect("Failed to save modified config");
+    let loaded = Config::load_from_path(&config_path).expect("Failed to load modified config");
+    assert_eq!(loaded.default_provider, Some("changed-provider".to_string()));
+    assert_eq!(loaded.theme, Some("dark".to_string())); // Other fields should persist
 
-    let mut config = Config::load_from_path(&config_path).expect("Failed to load config");
-    config.default_provider = Some("new-provider".to_string());
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
-
-    assert_eq!(
-        loaded_config.default_provider,
-        Some("new-provider".to_string())
-    );
+    // Phase 3: Unset and verify persistence of None
+    let mut config = loaded;
+    config.default_provider = None;
+    config.save_to_path(&config_path).expect("Failed to save unset config");
+    let loaded = Config::load_from_path(&config_path).expect("Failed to load unset config");
+    assert_eq!(loaded.default_provider, None);
+    assert_eq!(loaded.theme, Some("dark".to_string())); // Other fields should still persist
 }
 
 #[test]
-fn test_set_and_load_theme() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let config_path = temp_dir.path().join("theme_config.toml");
-
-    let cfg = Config {
-        theme: Some("light".to_string()),
-        ..Default::default()
-    };
-    cfg.save_to_path(&config_path).expect("save config failed");
-
-    let loaded = Config::load_from_path(&config_path).expect("load config failed");
-    assert_eq!(loaded.theme, Some("light".to_string()));
-}
-
-#[test]
-fn test_default_model_lookup_uses_provider_id() {
+fn test_provider_id_normalization() {
+    // Verifies that provider IDs are normalized to lowercase for storage
+    // but lookups remain case-insensitive for user convenience
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let config_path = temp_dir.path().join("test_config.toml");
 
     let mut config = Config::default();
 
-    config.set_default_model("openai".to_string(), "gpt-4".to_string());
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
-
-    assert_eq!(
-        loaded_config.get_default_model("openai"),
-        Some(&"gpt-4".to_string())
-    );
-
-    assert_eq!(
-        loaded_config.get_default_model("OpenAI"),
-        Some(&"gpt-4".to_string())
-    );
-}
-
-#[test]
-fn test_multiple_provider_default_models() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let config_path = temp_dir.path().join("test_config.toml");
-
-    let mut config = Config::default();
-
-    config.set_default_model("openai".to_string(), "gpt-4".to_string());
-    config.set_default_model(
-        "anthropic".to_string(),
-        "claude-3-opus-20240229".to_string(),
-    );
-    config.set_default_model("custom-provider".to_string(), "custom-model".to_string());
-
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
-    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
-
-    assert_eq!(
-        loaded_config.get_default_model("openai"),
-        Some(&"gpt-4".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("anthropic"),
-        Some(&"claude-3-opus-20240229".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("custom-provider"),
-        Some(&"custom-model".to_string())
-    );
-
-    assert_eq!(
-        loaded_config.get_default_model("OpenAI"),
-        Some(&"gpt-4".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("Anthropic"),
-        Some(&"claude-3-opus-20240229".to_string())
-    );
-}
-
-#[test]
-fn test_case_insensitive_provider_normalization() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let config_path = temp_dir.path().join("test_config.toml");
-
-    let mut config = Config::default();
-
+    // Set with various cases - should all normalize to lowercase internally
     config.set_default_model("OpenAI".to_string(), "gpt-4".to_string());
-    config.set_default_model("POE".to_string(), "claude-instant".to_string());
     config.set_default_model("AnThRoPiC".to_string(), "claude-3-opus".to_string());
+    config.set_default_model("poe".to_string(), "claude-instant".to_string());
 
-    config
-        .save_to_path(&config_path)
-        .expect("Failed to save config");
-
+    config.save_to_path(&config_path).expect("Failed to save config");
     let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
 
-    assert_eq!(
-        loaded_config.get_default_model("openai"),
-        Some(&"gpt-4".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("poe"),
-        Some(&"claude-instant".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("anthropic"),
-        Some(&"claude-3-opus".to_string())
-    );
-
-    assert_eq!(
-        loaded_config.get_default_model("OpenAI"),
-        Some(&"gpt-4".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("POE"),
-        Some(&"claude-instant".to_string())
-    );
-    assert_eq!(
-        loaded_config.get_default_model("AnThRoPiC"),
-        Some(&"claude-3-opus".to_string())
-    );
-
+    // Verify storage is normalized (internal representation is lowercase)
     assert!(loaded_config.default_models.contains_key("openai"));
     assert!(!loaded_config.default_models.contains_key("OpenAI"));
+    assert!(loaded_config.default_models.contains_key("anthropic"));
+    assert!(!loaded_config.default_models.contains_key("AnThRoPiC"));
+    assert!(loaded_config.default_models.contains_key("poe"));
+
+    // Verify lookups work with any casing
+    assert_eq!(loaded_config.get_default_model("openai"), Some(&"gpt-4".to_string()));
+    assert_eq!(loaded_config.get_default_model("OpenAI"), Some(&"gpt-4".to_string()));
+    assert_eq!(loaded_config.get_default_model("OPENAI"), Some(&"gpt-4".to_string()));
+
+    assert_eq!(loaded_config.get_default_model("anthropic"), Some(&"claude-3-opus".to_string()));
+    assert_eq!(loaded_config.get_default_model("Anthropic"), Some(&"claude-3-opus".to_string()));
+    assert_eq!(loaded_config.get_default_model("AnThRoPiC"), Some(&"claude-3-opus".to_string()));
+
+    assert_eq!(loaded_config.get_default_model("poe"), Some(&"claude-instant".to_string()));
+    assert_eq!(loaded_config.get_default_model("POE"), Some(&"claude-instant".to_string()));
 }
 
 #[test]
@@ -579,28 +445,73 @@ fn test_save_and_load_default_characters() {
 }
 
 #[test]
-fn test_print_default_characters_empty() {
+fn test_format_default_characters_empty() {
     let config = Config::default();
 
-    config.print_default_characters();
+    let output = config.format_default_characters();
+
+    assert_eq!(output, "  default-characters: (none set)");
 }
 
 #[test]
-fn test_print_default_characters_with_data() {
+fn test_format_default_characters_sorting_and_format() {
     let mut config = Config::default();
 
-    config.set_default_character(
-        "openai".to_string(),
-        "gpt-4".to_string(),
-        "alice".to_string(),
-    );
+    // Set up in non-alphabetical order to verify sorting
+    config.set_default_character("openai".to_string(), "gpt-4".to_string(), "alice".to_string());
     config.set_default_character(
         "anthropic".to_string(),
-        "claude-3-opus-20240229".to_string(),
+        "claude-3-opus".to_string(),
         "bob".to_string(),
     );
+    config.set_default_character(
+        "openai".to_string(),
+        "gpt-3.5-turbo".to_string(),
+        "charlie".to_string(),
+    );
 
-    config.print_default_characters();
+    let output = config.format_default_characters();
+
+    // Verify header
+    assert!(output.contains("  default-characters:"));
+
+    // Verify all entries are present with correct format (provider:model: character)
+    assert!(output.contains("anthropic:claude-3-opus: bob"));
+    assert!(output.contains("openai:gpt-3.5-turbo: charlie"));
+    assert!(output.contains("openai:gpt-4: alice"));
+
+    // Verify alphabetical sorting: anthropic should come before openai
+    let anthropic_pos = output.find("anthropic:claude-3-opus").unwrap();
+    let openai_pos = output.find("openai:gpt-3.5-turbo").unwrap();
+    assert!(
+        anthropic_pos < openai_pos,
+        "Providers should be alphabetically sorted (anthropic before openai)"
+    );
+
+    // Verify models within same provider are sorted: gpt-3.5-turbo before gpt-4
+    let gpt_35_pos = output.find("openai:gpt-3.5-turbo").unwrap();
+    let gpt_4_pos = output.find("openai:gpt-4").unwrap();
+    assert!(
+        gpt_35_pos < gpt_4_pos,
+        "Models should be alphabetically sorted (gpt-3.5-turbo before gpt-4)"
+    );
+
+    // Verify indentation (should have 4 spaces before each entry)
+    let lines: Vec<&str> = output.lines().collect();
+    for line in lines.iter().skip(1) {
+        // Skip header line
+        if !line.is_empty() {
+            assert!(
+                line.starts_with("    "),
+                "Entry lines should be indented with 4 spaces: '{}'",
+                line
+            );
+        }
+    }
+
+    // Verify the exact output format
+    let expected = "  default-characters:\n    anthropic:claude-3-opus: bob\n    openai:gpt-3.5-turbo: charlie\n    openai:gpt-4: alice";
+    assert_eq!(output, expected);
 }
 
 #[test]

@@ -86,20 +86,29 @@ impl Config {
         }
     }
 
-    pub fn print_default_characters(&self) {
+    /// Format the default characters configuration as a string.
+    /// This separates formatting logic from I/O for easier testing.
+    pub fn format_default_characters(&self) -> String {
         if self.default_characters.is_empty() {
-            println!("  default-characters: (none set)");
+            "  default-characters: (none set)".to_string()
         } else {
-            println!("  default-characters:");
+            let mut output = String::from("  default-characters:\n");
             let mut providers: Vec<_> = self.default_characters.iter().collect();
             providers.sort_by_key(|(k, _)| *k);
             for (provider, models) in providers {
                 let mut model_entries: Vec<_> = models.iter().collect();
                 model_entries.sort_by_key(|(k, _)| *k);
                 for (model, character) in model_entries {
-                    println!("    {}:{}: {}", provider, model, character);
+                    output.push_str(&format!("    {}:{}: {}\n", provider, model, character));
                 }
             }
+            // Remove trailing newline
+            output.pop();
+            output
         }
+    }
+
+    pub fn print_default_characters(&self) {
+        println!("{}", self.format_default_characters());
     }
 }

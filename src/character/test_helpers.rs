@@ -82,34 +82,9 @@ pub(crate) mod helpers {
         .to_string()
     }
 
-    /// Helper to create an invalid character card JSON string
-    pub fn create_invalid_card_json() -> String {
-        serde_json::json!({
-            "spec": "wrong_spec",
-            "spec_version": "1.0",
-            "data": {
-                "name": "",  // Empty name
-                "description": "Invalid",
-                "personality": "Invalid",
-                "scenario": "Invalid",
-                "first_mes": "Invalid",
-                "mes_example": "Invalid"
-            }
-        })
-        .to_string()
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn test_create_test_character() {
-            let card = create_test_character("TestChar", "Hello!");
-            assert_eq!(card.data.name, "TestChar");
-            assert_eq!(card.data.first_mes, "Hello!");
-            assert_eq!(card.spec, "chara_card_v2");
-        }
 
         #[test]
         fn test_create_temp_card_file() {
@@ -121,13 +96,6 @@ pub(crate) mod helpers {
             let contents = fs::read_to_string(temp_file.path()).unwrap();
             let loaded: CharacterCard = serde_json::from_str(&contents).unwrap();
             assert_eq!(loaded.data.name, "TempTest");
-        }
-
-        #[test]
-        fn test_create_temp_cards_dir() {
-            let (_temp_dir, cards_dir) = create_temp_cards_dir();
-            assert!(cards_dir.exists());
-            assert!(cards_dir.is_dir());
         }
 
         #[test]
@@ -150,15 +118,6 @@ pub(crate) mod helpers {
             let card: CharacterCard = serde_json::from_str(&json).unwrap();
             assert_eq!(card.spec, "chara_card_v2");
             assert_eq!(card.data.name, "Test Character");
-        }
-
-        #[test]
-        fn test_invalid_card_json() {
-            let json = create_invalid_card_json();
-            // Should parse but fail validation
-            let card: CharacterCard = serde_json::from_str(&json).unwrap();
-            assert_eq!(card.spec, "wrong_spec");
-            assert_eq!(card.data.name, "");
         }
     }
 }

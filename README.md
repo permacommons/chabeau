@@ -326,6 +326,8 @@ Custom themes belong in `config.toml` under `[[custom_themes]]`. See [src/builti
 
 Themes can also set a `cursor_color` to change the terminal cursor via OSC 12 when the theme is applied.
 
+Input uses a steady bar cursor inside the chat box so the insertion point stays easy to see while typing.
+
 App messages—Chabeau’s own informational banners, warnings, and errors—use dedicated theme knobs so they’re easy to distinguish from assistant replies. Customize them with the `app_info_*`, `app_warning_*`, and `app_error_*` keys in your theme to control the prefix text, prefix styling, and message styling independently.
 
 ### Markdown and Syntax Highlighting

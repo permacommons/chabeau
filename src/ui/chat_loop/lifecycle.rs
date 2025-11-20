@@ -1,6 +1,7 @@
 use std::{error::Error, io, io::Write, sync::Arc};
 
 use ratatui::crossterm::{
+    cursor::SetCursorStyle,
     event::{DisableBracketedPaste, EnableBracketedPaste},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -18,7 +19,12 @@ pub fn setup_terminal(cursor_color: Option<Color>) -> Result<SharedTerminal, Box
     enable_raw_mode()?;
 
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        SetCursorStyle::SteadyBar
+    )?;
 
     if let Some(color) = cursor_color {
         queue_cursor_color(&mut stdout, color)?;
@@ -43,6 +49,7 @@ where
     guard.backend_mut().flush()?;
     execute!(
         guard.backend_mut(),
+        SetCursorStyle::DefaultUserShape,
         LeaveAlternateScreen,
         DisableBracketedPaste
     )?;

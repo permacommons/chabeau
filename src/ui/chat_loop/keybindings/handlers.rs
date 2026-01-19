@@ -12,6 +12,7 @@ use crate::core::app::ui_state::{EditSelectTarget, VerticalCursorDirection};
 use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
+use crate::mcp::permissions::ToolPermissionDecision;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::modes::{
     handle_block_select_mode_event, handle_ctrl_j_shortcut, handle_edit_select_mode_event,
@@ -179,6 +180,8 @@ impl KeyHandler for EscapeHandler {
                 let mut actions = Vec::new();
                 if app.ui.file_prompt().is_some() {
                     actions.push(AppAction::CancelFilePrompt);
+                } else if app.ui.mcp_prompt_input().is_some() {
+                    actions.push(AppAction::CancelMcpPromptInput);
                 } else if app.ui.in_place_edit_index().is_some() {
                     actions.push(AppAction::CancelInPlaceEdit);
                 } else if app.ui.is_streaming {
@@ -955,6 +958,49 @@ impl KeyHandler for PickerHandler {
         } else {
             KeyResult::NotHandled
         }
+    }
+}
+
+/// Handler for tool permission prompts (Allow/Deny).
+pub struct ToolPromptDecisionHandler;
+
+#[async_trait::async_trait]
+impl KeyHandler for ToolPromptDecisionHandler {
+    async fn handle(
+        &self,
+        _app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
+        key: &KeyEvent,
+        term_width: u16,
+        term_height: u16,
+        _last_input_layout_update: Option<Instant>,
+    ) -> KeyResult {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return KeyResult::NotHandled;
+        }
+
+        let decision = match key.code {
+            KeyCode::Enter => ToolPermissionDecision::AllowOnce,
+            KeyCode::Esc => ToolPermissionDecision::DenyOnce,
+            KeyCode::Char(ch) => match ch.to_ascii_lowercase() {
+                'a' => ToolPermissionDecision::AllowOnce,
+                's' => ToolPermissionDecision::AllowSession,
+                'd' => ToolPermissionDecision::DenyOnce,
+                'b' => ToolPermissionDecision::Block,
+                _ => return KeyResult::NotHandled,
+            },
+            _ => return KeyResult::NotHandled,
+        };
+
+        dispatcher.dispatch_many(
+            [AppAction::ToolPermissionDecision { decision }],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+
+        KeyResult::Handled
     }
 }
 

@@ -12,6 +12,8 @@ use crate::character::service::CharacterService;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
 use crate::core::providers::ProviderSession;
+use crate::mcp::client::McpClientManager;
+use crate::mcp::permissions::ToolPermissionStore;
 
 pub mod actions;
 pub mod conversation;
@@ -79,6 +81,7 @@ pub struct AppInitConfig {
     pub preset: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_app(
     session: SessionContext,
     ui: UiState,
@@ -87,6 +90,7 @@ fn build_app(
     persona_manager: crate::core::persona::PersonaManager,
     preset_manager: crate::core::preset::PresetManager,
     config: Config,
+    mcp: McpClientManager,
 ) -> App {
     let mut app = App {
         session,
@@ -96,6 +100,8 @@ fn build_app(
         persona_manager,
         preset_manager,
         config,
+        mcp,
+        mcp_permissions: ToolPermissionStore::default(),
     };
 
     app.ui.set_input_text(String::new());
@@ -214,6 +220,7 @@ pub async fn new_with_auth(
 
     let ui = UiState::from_config(theme, config);
     let picker = PickerController::new();
+    let mcp = McpClientManager::from_config(config);
 
     let mut app = build_app(
         session,
@@ -223,6 +230,7 @@ pub async fn new_with_auth(
         persona_manager,
         preset_manager,
         config.clone(),
+        mcp,
     );
 
     // Add log startup message if logging is active
@@ -284,6 +292,7 @@ pub async fn new_uninitialized(
 
     let ui = UiState::from_config(theme, &config);
     let picker = PickerController::new();
+    let mcp = McpClientManager::from_config(&config);
 
     let mut app = build_app(
         session,
@@ -293,6 +302,7 @@ pub async fn new_uninitialized(
         persona_manager,
         preset_manager,
         config.clone(),
+        mcp,
     );
 
     if startup_requires_provider {
@@ -338,4 +348,10 @@ pub struct App {
 
     /// User configuration loaded from disk.
     pub config: Config,
+
+    /// MCP client runtime and cached server listings.
+    pub mcp: McpClientManager,
+
+    /// Tool permission decisions for MCP tools.
+    pub mcp_permissions: ToolPermissionStore,
 }

@@ -12,6 +12,8 @@ pub const ROLE_APP_INFO: &str = "app/info";
 pub const ROLE_APP_WARNING: &str = "app/warning";
 pub const ROLE_APP_ERROR: &str = "app/error";
 pub const ROLE_APP_LOG: &str = "app/log";
+pub const ROLE_TOOL_CALL: &str = "tool/call";
+pub const ROLE_TOOL_RESULT: &str = "tool/result";
 
 /// Severity for app-authored messages rendered in the transcript but never
 /// transmitted to the remote API.
@@ -88,6 +90,20 @@ impl Message {
             content: content.into(),
         }
     }
+
+    pub fn tool_call(content: impl Into<String>) -> Self {
+        Self {
+            role: ROLE_TOOL_CALL.to_string(),
+            content: content.into(),
+        }
+    }
+
+    pub fn tool_result(content: impl Into<String>) -> Self {
+        Self {
+            role: ROLE_TOOL_RESULT.to_string(),
+            content: content.into(),
+        }
+    }
 }
 
 pub fn is_app_message_role(role: &str) -> bool {
@@ -105,4 +121,23 @@ pub fn app_message_kind_from_role(role: &str) -> AppMessageKind {
         }
     }
     AppMessageKind::Info
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_roles_are_not_app_roles() {
+        assert!(!is_app_message_role(ROLE_TOOL_CALL));
+        assert!(!is_app_message_role(ROLE_TOOL_RESULT));
+    }
+
+    #[test]
+    fn tool_messages_set_roles() {
+        let call = Message::tool_call("call");
+        let result = Message::tool_result("result");
+        assert_eq!(call.role, ROLE_TOOL_CALL);
+        assert_eq!(result.role, ROLE_TOOL_RESULT);
+    }
 }

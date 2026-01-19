@@ -60,7 +60,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         //           "))) more" → extract ")))", trim " ", wrap "more"
                         //           " useful" → trim " ", wrap "useful"
                         //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
-                        let mut punct_start = None;  // Where punctuation begins (None if not found)
+                        let mut punct_start = None; // Where punctuation begins (None if not found)
                         let mut punct_end = 0;
                         let mut ws_end = 0;
 
@@ -129,7 +129,9 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
 
                                         // Start new line with the styled span (preserving its style/kind)
                                         current_line.push((last_span, last_kind));
-                                        current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                        current_width = UnicodeWidthStr::width(
+                                            current_line[0].0.content.as_ref(),
+                                        );
                                         line_limit = continuation_width;
 
                                         // Restart the while loop to reprocess current text on the new line
@@ -221,7 +223,7 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
                         // Trim any whitespace. Never lose characters.
                         //           " )" → trim " ", wrap ")" (standalone, don't backtrack)
                         //           "))) more" → extract ")))", wrap "more"
-                        let mut punct_start = None;  // Where punctuation begins (None if not found)
+                        let mut punct_start = None; // Where punctuation begins (None if not found)
                         let mut punct_end = 0;
                         let mut ws_end = 0;
 
@@ -290,7 +292,9 @@ pub(crate) fn wrap_spans_to_width_generic_shared(
 
                                         // Start new line with the styled span (preserving its style/kind)
                                         current_line.push((last_span, last_kind));
-                                        current_width = UnicodeWidthStr::width(current_line[0].0.content.as_ref());
+                                        current_width = UnicodeWidthStr::width(
+                                            current_line[0].0.content.as_ref(),
+                                        );
                                         line_limit = continuation_width;
 
                                         // Restart the while loop to reprocess current text on the new line

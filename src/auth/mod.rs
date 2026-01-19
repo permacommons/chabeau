@@ -23,11 +23,16 @@ use std::sync::{LazyLock, Mutex};
 mod ui;
 
 use self::ui::{
-    prompt_auth_menu, prompt_custom_provider_details, prompt_deauth_menu, prompt_provider_token,
-    AuthMenuSelection, CustomProviderInput, DeauthMenuItem, ProviderMenuItem, UiError,
+    prompt_auth_menu, prompt_custom_provider_details, prompt_deauth_menu, AuthMenuSelection,
+    CustomProviderInput, DeauthMenuItem, ProviderMenuItem, UiError,
 };
 // Constants for repeated strings
 const KEYRING_SERVICE: &str = "chabeau";
+
+pub fn prompt_provider_token(display_name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    ui::prompt_provider_token(display_name)
+        .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)
+}
 
 /// Provider metadata for authentication.
 ///
@@ -365,7 +370,7 @@ impl AuthManager {
         match selection {
             AuthMenuSelection::Provider(index) => {
                 let provider = &self.providers[index];
-                let token = map_ui_result(prompt_provider_token(&provider.display_name))?;
+                let token = map_ui_result(ui::prompt_provider_token(&provider.display_name))?;
                 if token.is_empty() {
                     return Err("Token cannot be empty".into());
                 }

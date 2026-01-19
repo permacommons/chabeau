@@ -1,8 +1,13 @@
 use super::*;
+use crate::api::ChatMessage;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::picker::{PickerItem, PickerState};
 use crate::utils::test_utils::{create_test_app, create_test_message};
+use rust_mcp_sdk::schema::{ListResourcesResult, ListToolsResult, Resource, Tool, ToolInputSchema};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 use tui_textarea::{CursorMove, Input, Key};
 
 #[test]
@@ -206,6 +211,155 @@ fn default_sort_mode_helper_behaviour() {
 }
 
 #[test]
+fn build_stream_params_includes_mcp_tools() {
+    let mut app = create_test_app();
+
+    app.config
+        .mcp_servers
+        .push(crate::core::config::data::McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha MCP".to_string(),
+            base_url: "https://mcp.example.com".to_string(),
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: Some(vec!["search".to_string()]),
+            protocol_version: None,
+            enabled: Some(true),
+        });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    let mut prop_map = Map::new();
+    prop_map.insert("type".to_string(), Value::String("string".to_string()));
+    let mut properties = HashMap::new();
+    properties.insert("query".to_string(), prop_map);
+    let input_schema = ToolInputSchema::new(vec!["query".to_string()], Some(properties), None);
+
+    let tool_allowed = Tool {
+        annotations: None,
+        description: Some("Search the index".to_string()),
+        execution: None,
+        icons: Vec::new(),
+        input_schema: input_schema.clone(),
+        meta: None,
+        name: "search".to_string(),
+        output_schema: None,
+        title: None,
+    };
+
+    let tool_blocked = Tool {
+        annotations: None,
+        description: Some("Ignore me".to_string()),
+        execution: None,
+        icons: Vec::new(),
+        input_schema,
+        meta: None,
+        name: "hidden".to_string(),
+        output_schema: None,
+        title: None,
+    };
+
+    let list = ListToolsResult {
+        meta: None,
+        next_cursor: None,
+        tools: vec![tool_allowed, tool_blocked],
+    };
+
+    if let Some(server) = app.mcp.server_mut("alpha") {
+        server.cached_tools = Some(list);
+    } else {
+        panic!("missing MCP server state");
+    }
+
+    let params = app.build_stream_params(
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }],
+        CancellationToken::new(),
+        1,
+    );
+
+    let tools = params.tools.expect("expected MCP tools");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].function.name, "search");
+    let description = tools[0]
+        .function
+        .description
+        .as_ref()
+        .expect("missing tool description");
+    assert!(description.contains("Alpha MCP"));
+}
+
+#[test]
+fn build_stream_params_includes_mcp_resources() {
+    let mut app = create_test_app();
+
+    app.config
+        .mcp_servers
+        .push(crate::core::config::data::McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha MCP".to_string(),
+            base_url: "https://mcp.example.com".to_string(),
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+        });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    let resources = ListResourcesResult {
+        meta: None,
+        next_cursor: None,
+        resources: vec![Resource {
+            annotations: None,
+            description: Some("Alpha resource".to_string()),
+            icons: Vec::new(),
+            meta: None,
+            mime_type: None,
+            name: "alpha-doc".to_string(),
+            size: None,
+            title: Some("Alpha Doc".to_string()),
+            uri: "mcp://alpha/doc".to_string(),
+        }],
+    };
+
+    if let Some(server) = app.mcp.server_mut("alpha") {
+        server.cached_resources = Some(resources);
+    } else {
+        panic!("missing MCP server state");
+    }
+
+    let params = app.build_stream_params(
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }],
+        CancellationToken::new(),
+        1,
+    );
+
+    let tools = params.tools.expect("expected MCP tools");
+    assert!(tools
+        .iter()
+        .any(|tool| tool.function.name == crate::mcp::MCP_READ_RESOURCE_TOOL));
+
+    let system_message = params
+        .api_messages
+        .iter()
+        .find(|msg| msg.role == "system")
+        .expect("missing system message");
+    assert!(system_message
+        .content
+        .contains("MCP resources (by server id):"));
+    assert!(system_message.content.contains("mcp://alpha/doc"));
+}
+
+#[test]
 fn test_prewrap_cache_reuse_when_unchanged() {
     let mut app = create_test_app();
     for i in 0..50 {
@@ -226,15 +380,24 @@ fn test_prewrap_cache_reuse_when_unchanged() {
         let p2 = app.get_prewrapped_lines_cached(w);
         p2.as_ptr()
     };
-    assert_eq!(lines_ptr1, lines_ptr2, "lines cache should be reused when nothing changed");
+    assert_eq!(
+        lines_ptr1, lines_ptr2,
+        "lines cache should be reused when nothing changed"
+    );
 
     // Test metadata cache reuse
     let meta_ptr1 = app.get_prewrapped_span_metadata_cached(w) as *const _;
     let meta_ptr2 = app.get_prewrapped_span_metadata_cached(w) as *const _;
     let meta_ptr3 = app.get_prewrapped_span_metadata_cached(w) as *const _;
 
-    assert_eq!(meta_ptr1, meta_ptr2, "metadata cache should be reused when nothing changed");
-    assert_eq!(meta_ptr2, meta_ptr3, "metadata cache should be reused across multiple calls");
+    assert_eq!(
+        meta_ptr1, meta_ptr2,
+        "metadata cache should be reused when nothing changed"
+    );
+    assert_eq!(
+        meta_ptr2, meta_ptr3,
+        "metadata cache should be reused across multiple calls"
+    );
 }
 
 #[test]
@@ -256,7 +419,10 @@ fn test_prewrap_cache_invalidates_on_width_change() {
         let p2 = app.get_prewrapped_lines_cached(width2);
         p2.as_ptr()
     };
-    assert_ne!(lines_ptr1, lines_ptr2, "lines cache should invalidate on width change");
+    assert_ne!(
+        lines_ptr1, lines_ptr2,
+        "lines cache should invalidate on width change"
+    );
 
     // Test metadata cache invalidation
     let metadata1 = app.get_prewrapped_span_metadata_cached(width1);
@@ -826,7 +992,7 @@ fn complete_slash_command_lists_multiple_matches() {
     assert_eq!(app.ui.get_input_text(), "/p");
     assert_eq!(
         app.ui.status.as_deref(),
-        Some("Commands: /provider, /persona, /preset")
+        Some("Commands: /persona, /preset, /provider")
     );
 }
 

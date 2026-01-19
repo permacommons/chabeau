@@ -132,6 +132,10 @@ pub enum KeyContext {
     InPlaceEdit,
     /// File prompt mode
     FilePrompt,
+    /// Tool permission prompt mode
+    ToolPrompt,
+    /// MCP prompt argument input
+    McpPromptInput,
     /// Picker is open (model/theme selection)
     Picker,
 }
@@ -149,6 +153,8 @@ impl KeyContext {
             UiMode::BlockSelect { .. } => KeyContext::BlockSelect,
             UiMode::InPlaceEdit { .. } => KeyContext::InPlaceEdit,
             UiMode::FilePrompt(_) => KeyContext::FilePrompt,
+            UiMode::ToolPrompt(_) => KeyContext::ToolPrompt,
+            UiMode::McpPromptInput(_) => KeyContext::McpPromptInput,
         }
     }
 }
@@ -197,6 +203,24 @@ impl ModeAwareRegistry {
                     return true;
                 }
                 false
+            }
+            KeyContext::ToolPrompt => false,
+            KeyContext::McpPromptInput => {
+                // Treat MCP prompt input like file prompt input.
+                match key.code {
+                    KeyCode::Esc => false,
+                    KeyCode::Enter => false,
+                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'x')
+                    }
+                    KeyCode::F(4) => false,
+                    _ if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.code == KeyCode::Enter =>
+                    {
+                        false
+                    }
+                    _ => true,
+                }
             }
             KeyContext::InPlaceEdit => {
                 // In in-place edit mode, keep navigation keys routed through handlers

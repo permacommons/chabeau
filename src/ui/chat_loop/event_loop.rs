@@ -17,15 +17,18 @@ use std::{
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
+use serde::Serialize;
+use serde_json;
 use tokio::sync::mpsc;
 
 use crate::api::models::fetch_models;
 use crate::character::CharacterService;
 use crate::core::app::{
-    apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
+    apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
     ModelPickerRequest,
 };
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
+use crate::core::mcp_auth::McpTokenStore;
 use crate::ui::renderer::ui;
 
 use super::keybindings::{build_mode_aware_registry, KeyContext, KeyResult, ModeAwareRegistry};
@@ -63,6 +66,177 @@ fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPick
         };
 
         dispatcher.dispatch_many([action], AppActionContext::default());
+    });
+}
+
+fn spawn_mcp_initializer(app: AppHandle, dispatcher: AppActionDispatcher) {
+    tokio::spawn(async move {
+        let has_enabled_servers = app
+            .read(|app| app.mcp.servers().any(|server| server.config.is_enabled()))
+            .await;
+
+        if !has_enabled_servers {
+            dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+            return;
+        }
+
+        let keyring_enabled = app.read(|app| !app.session.startup_env_only).await;
+        let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
+
+        let config = app.read(|app| app.config.clone()).await;
+        let mut mcp = crate::mcp::client::McpClientManager::from_config(&config);
+        mcp.connect_all(&token_store).await;
+
+        let server_ids: Vec<String> = mcp
+            .servers()
+            .filter(|server| server.config.is_enabled())
+            .map(|server| server.config.id.clone())
+            .collect();
+
+        for server_id in server_ids {
+            mcp.refresh_tools(&server_id).await;
+            mcp.refresh_prompts(&server_id).await;
+            mcp.refresh_resources(&server_id).await;
+        }
+
+        app.update(|app| {
+            app.mcp = mcp;
+            app.session.mcp_init_in_progress = false;
+            app.session.mcp_init_complete = true;
+        })
+        .await;
+
+        dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+    });
+}
+
+fn spawn_mcp_tool_call(
+    app: AppHandle,
+    dispatcher: AppActionDispatcher,
+    request: crate::core::app::session::ToolCallRequest,
+) {
+    tokio::spawn(async move {
+        let term_size = app.read(|app| app.ui.last_term_size).await;
+        let ctx = AppActionContext {
+            term_width: term_size.width,
+            term_height: term_size.height,
+        };
+
+        let mut call_context = match app
+            .read(|app| app.mcp.tool_call_context(&request.server_id))
+            .await
+        {
+            Some(context) => context,
+            None => {
+                dispatcher.dispatch_many(
+                    [AppAction::ToolCallCompleted {
+                        tool_name: request.tool_name.clone(),
+                        tool_call_id: request.tool_call_id.clone(),
+                        result: Err("MCP server not available.".to_string()),
+                    }],
+                    ctx,
+                );
+                return;
+            }
+        };
+
+        let result = if request
+            .tool_name
+            .eq_ignore_ascii_case(crate::mcp::MCP_READ_RESOURCE_TOOL)
+        {
+            let uri = match request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("uri"))
+                .and_then(|value| value.as_str())
+            {
+                Some(uri) => uri.to_string(),
+                None => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolCallCompleted {
+                            tool_name: request.tool_name.clone(),
+                            tool_call_id: request.tool_call_id.clone(),
+                            result: Err("Resource read requires uri.".to_string()),
+                        }],
+                        ctx,
+                    );
+                    return;
+                }
+            };
+
+            crate::mcp::client::execute_resource_read(&mut call_context, &uri)
+                .await
+                .map(|result| serialize_mcp_result(&result))
+        } else {
+            crate::mcp::client::execute_tool_call(&mut call_context, &request)
+                .await
+                .map(|result| serialize_mcp_result(&result))
+        };
+
+        let session_id = call_context.session_id.clone();
+        let error = result.as_ref().err().cloned();
+        app.update(|app| {
+            app.mcp
+                .update_tool_call_session(&call_context.server_id, session_id, error);
+        })
+        .await;
+
+        dispatcher.dispatch_many(
+            [AppAction::ToolCallCompleted {
+                tool_name: request.tool_name.clone(),
+                tool_call_id: request.tool_call_id.clone(),
+                result,
+            }],
+            ctx,
+        );
+    });
+}
+
+fn serialize_mcp_result<T: Serialize>(result: &T) -> String {
+    serde_json::to_string_pretty(result)
+        .unwrap_or_else(|_| "Unable to serialize MCP result.".to_string())
+}
+
+fn spawn_mcp_prompt_call(
+    app: AppHandle,
+    dispatcher: AppActionDispatcher,
+    request: crate::core::app::session::McpPromptRequest,
+) {
+    tokio::spawn(async move {
+        let term_size = app.read(|app| app.ui.last_term_size).await;
+        let ctx = AppActionContext {
+            term_width: term_size.width,
+            term_height: term_size.height,
+        };
+
+        let mut call_context = match app
+            .read(|app| app.mcp.prompt_call_context(&request.server_id))
+            .await
+        {
+            Some(context) => context,
+            None => {
+                dispatcher.dispatch_many(
+                    [AppAction::McpPromptCompleted {
+                        request,
+                        result: Err("MCP server not available.".to_string()),
+                    }],
+                    ctx,
+                );
+                return;
+            }
+        };
+
+        let result = crate::mcp::client::execute_prompt(&mut call_context, &request).await;
+
+        let session_id = call_context.session_id.clone();
+        let error = result.as_ref().err().cloned();
+        app.update(|app| {
+            app.mcp
+                .update_prompt_session(&call_context.server_id, session_id, error);
+        })
+        .await;
+
+        dispatcher.dispatch_many([AppAction::McpPromptCompleted { request, result }], ctx);
     });
 }
 
@@ -339,6 +513,12 @@ fn process_stream_updates(
                 coalesced_chunks.push_str(&content);
                 chunk_stream_id = Some(msg_stream_id);
             }
+            StreamMessage::ToolCallDelta(delta) => {
+                followup_actions.push(AppAction::StreamToolCallDelta {
+                    delta,
+                    stream_id: msg_stream_id,
+                });
+            }
             StreamMessage::App { kind, content } => {
                 followup_actions.push(AppAction::StreamAppMessage {
                     kind,
@@ -406,11 +586,17 @@ async fn drain_action_queue(
     let commands = app.update(|app| apply_actions(app, pending)).await;
     for cmd in commands {
         match cmd {
-            crate::core::app::AppCommand::SpawnStream(params) => {
+            AppCommand::SpawnStream(params) => {
                 stream_service.spawn_stream(params);
             }
-            crate::core::app::AppCommand::LoadModelPicker(request) => {
+            AppCommand::LoadModelPicker(request) => {
                 spawn_model_picker_loader(dispatcher.clone(), request);
+            }
+            AppCommand::RunMcpTool(request) => {
+                spawn_mcp_tool_call(app.clone(), dispatcher.clone(), request);
+            }
+            AppCommand::RunMcpPrompt(request) => {
+                spawn_mcp_prompt_call(app.clone(), dispatcher.clone(), request);
             }
         }
     }
@@ -468,6 +654,17 @@ pub async fn run_chat(
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     let action_dispatcher = AppActionDispatcher::new(action_tx);
+    let has_enabled_mcp = app
+        .read(|app| app.mcp.servers().any(|server| server.config.is_enabled()))
+        .await;
+    if has_enabled_mcp {
+        app.update(|app| {
+            app.session.mcp_init_in_progress = true;
+            app.session.mcp_init_complete = false;
+        })
+        .await;
+    }
+    spawn_mcp_initializer(app.clone(), action_dispatcher.clone());
 
     println!(
         "Chabeau is in the public domain, forever. Contribute: https://github.com/permacommons/chabeau"
@@ -492,6 +689,8 @@ pub async fn run_chat(
     let mut last_input_layout_update = Instant::now();
     let mut indicator_visible = false;
     let mut last_indicator_frame = Instant::now() - frame_duration;
+    let mut tool_prompt_visible = false;
+    let mut last_tool_prompt_frame = Instant::now() - frame_duration;
 
     let result = 'main_loop: loop {
         if is_exit_requested(&app).await {
@@ -558,6 +757,7 @@ pub async fn run_chat(
         }
 
         let indicator_now = app.read(|app| app.ui.is_activity_indicator_visible()).await;
+        let tool_prompt_now = app.read(|app| app.ui.tool_prompt().is_some()).await;
 
         if indicator_now != indicator_visible {
             indicator_visible = indicator_now;
@@ -572,6 +772,22 @@ pub async fn run_chat(
             if now.duration_since(last_indicator_frame) >= frame_duration {
                 request_redraw = true;
                 last_indicator_frame = now;
+            }
+        }
+
+        if tool_prompt_now != tool_prompt_visible {
+            tool_prompt_visible = tool_prompt_now;
+            request_redraw = true;
+            if !tool_prompt_visible {
+                last_tool_prompt_frame = Instant::now() - frame_duration;
+            }
+        }
+
+        if tool_prompt_visible {
+            let now = Instant::now();
+            if now.duration_since(last_tool_prompt_frame) >= frame_duration {
+                request_redraw = true;
+                last_tool_prompt_frame = now;
             }
         }
 

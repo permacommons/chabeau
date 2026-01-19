@@ -19,6 +19,10 @@ pub(super) fn handle_input_action(
             app.cancel_file_prompt();
             None
         }
+        AppAction::CancelMcpPromptInput => {
+            app.ui.cancel_mcp_prompt_input();
+            None
+        }
         AppAction::CancelInPlaceEdit => {
             if app.has_in_place_edit() {
                 app.cancel_in_place_edit();
@@ -79,7 +83,7 @@ fn handle_process_command(
             None
         }
         CommandResult::ProcessAsMessage(message) => {
-            Some(streaming::spawn_stream_for_message(app, message, ctx))
+            streaming::spawn_stream_for_message(app, message, ctx)
         }
         CommandResult::OpenModelPicker => match app.prepare_model_picker_request() {
             Ok(request) => Some(AppCommand::LoadModelPicker(request)),
@@ -114,6 +118,7 @@ fn handle_process_command(
             let action = AppAction::RefineLastMessage { prompt };
             streaming::handle_streaming_action(app, action, ctx)
         }
+        CommandResult::RunMcpPrompt(request) => Some(AppCommand::RunMcpPrompt(request)),
     }
 }
 

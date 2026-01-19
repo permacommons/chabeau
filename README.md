@@ -2,7 +2,7 @@
 
 ![Chabeau rendering a complex table](chabeau.png)
 
-Chabeau is a full-screen terminal chat interface that connects to various AI APIs for real-time conversations. Chabeau brings the convenience of modern chat UIs to the terminal with a focus on speed, ergonomics, and sensible defaults. It is not a coding agent.
+Chabeau is a full-screen terminal chat interface that connects to various AI APIs for real-time conversations. Chabeau brings the convenience of modern chat UIs to the terminal with a focus on speed, ergonomics, and sensible defaults. It is not a coding agent, but preliminary support for the Model Context Protocol is in development. This makes it possible to connect Chabeau with various local and remote services as well.
 
 ![Our friendly mascot](chabeau-mascot-small.png)
 
@@ -14,6 +14,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
   - [Launch](#launch)
 - [Working with Providers and Models](#working-with-providers-and-models)
 - [Configuration](#configuration)
+- [MCP Servers](#mcp-servers)
 - [Character Cards](#character-cards)
 - [Personas](#personas)
 - [Presets](#presets)
@@ -163,6 +164,18 @@ chabeau set
 Both the CLI and TUI run these mutations through the same configuration orchestrator. Chabeau caches the parsed file based on its last-modified timestamp, skipping redundant reloads when nothing has changed, and persists updates atomically so a failed write never clobbers your existing `config.toml`.
 
 Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory and adjust it to suit your setup. The sample covers provider defaults, markdown/syntax toggles, custom providers, custom themes, and character assignments.
+
+## MCP Servers
+
+Chabeau can track MCP-over-HTTP server definitions in `config.toml` and surface them in the TUI.
+
+- Configure MCP servers with `[[mcp_servers]]` entries (see `examples/config.toml.sample`).
+- Use `/mcp` to connect on demand and list configured servers and basic status; `/mcp tools <server>` (and `/mcp resources`, `/mcp prompts`) fetch cached listings.
+- Store bearer tokens with `chabeau mcp token <server>` (tokens are saved in the system keyring under the server id).
+- For transport debugging, run `chabeau --debug-mcp` to enable verbose MCP logs on stderr.
+- MCP token storage uses the system keyring keyed by server id. Chabeau warms tool listings in the background and may pause the first send until tools are ready. When MCP tool listings are cached, Chabeau includes tool schemas in chat requests and adds a short MCP tool-use preamble to the system prompt; when models request tools, Chabeau prompts for permission (Allow once / Allow for session / Deny), executes MCP tools, and renders tool calls/results in the transcript before continuing the assistant response.
+- When MCP resources are cached, Chabeau injects a resources list into the system prompt and exposes a `mcp_read_resource` tool so models can fetch resource URIs.
+- Invoke MCP prompt templates with `/<server-id>:<prompt-id>` (e.g. `/agpedia:article-outline topic="soil health"`). If required arguments are missing, Chabeau will prompt for them in the input area before fetching the prompt and continuing the conversation.
 
 ## Character Cards
 

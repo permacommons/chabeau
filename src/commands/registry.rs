@@ -243,6 +243,29 @@ const COMMANDS: &[Command] = &[
         handler: super::handle_clear,
     },
     Command {
+        name: "mcp",
+        usages: &[
+            CommandUsage {
+                syntax: "/mcp",
+                description: "List configured MCP servers and status.",
+            },
+            CommandUsage {
+                syntax: "/mcp tools <server>",
+                description: "List MCP tools for a configured server.",
+            },
+            CommandUsage {
+                syntax: "/mcp resources <server>",
+                description: "List MCP resources for a configured server.",
+            },
+            CommandUsage {
+                syntax: "/mcp prompts <server>",
+                description: "List MCP prompts for a configured server.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handle_mcp,
+    },
+    Command {
         name: "log",
         usages: &[CommandUsage {
             syntax: "/log [filename]",

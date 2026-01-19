@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use clap::{Parser, Subcommand};
 
 // Import specific items we need
+use crate::auth::prompt_provider_token;
 use crate::auth::AuthManager;
 use crate::character::CharacterService;
 use crate::cli::character_list::list_characters;
@@ -21,10 +22,12 @@ use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
 use crate::cli::theme_list::list_themes;
 use crate::core::builtin_providers::find_builtin_provider;
-use crate::core::config::data::Config;
+use crate::core::config::data::{Config, McpServerConfig};
+use crate::core::mcp_auth::McpTokenStore;
 use crate::core::persona::PersonaManager;
 use crate::ui::builtin_themes::find_builtin_theme;
 use crate::ui::chat_loop::run_chat;
+use tracing_subscriber::EnvFilter;
 
 fn print_version_info() {
     println!("chabeau {}", env!("CARGO_PKG_VERSION"));
@@ -157,6 +160,10 @@ pub struct Args {
     /// Print version information
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
     pub version: bool,
+
+    /// Enable verbose MCP debug logging
+    #[arg(long = "debug-mcp", global = true, action = clap::ArgAction::SetTrue)]
+    pub debug_mcp: bool,
 }
 
 #[derive(Subcommand)]
@@ -195,6 +202,20 @@ pub enum Commands {
     Say {
         /// The prompt to send to the model
         prompt: Vec<String>,
+    },
+    /// Manage MCP server authentication
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum McpCommands {
+    /// Store or update the bearer token for an MCP server
+    Token {
+        /// MCP server id from config.toml
+        server: String,
     },
 }
 
@@ -286,7 +307,27 @@ fn validate_preset(preset_id: &str, config: &Config) -> Result<(), Box<dyn Error
 
 async fn async_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    init_mcp_debugging(args.debug_mcp);
     handle_args(args).await
+}
+
+fn init_mcp_debugging(enabled: bool) {
+    if !enabled {
+        return;
+    }
+
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var(
+            "RUST_LOG",
+            "rust_mcp_sdk=trace,rust_mcp_transport=trace,rust_mcp_schema=trace,reqwest=debug",
+        );
+    }
+    std::env::set_var("CHABEAU_MCP_DEBUG", "1");
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_target(true)
+        .try_init();
 }
 
 async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
@@ -648,7 +689,55 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
             )
             .await
         }
+        Some(Commands::Mcp { command }) => handle_mcp_command(command, args.env_only),
     }
+}
+
+fn handle_mcp_command(command: McpCommands, env_only: bool) -> Result<(), Box<dyn Error>> {
+    if env_only {
+        eprintln!("❌ MCP tokens require keyring access; remove --env.");
+        std::process::exit(1);
+    }
+
+    let config = Config::load()?;
+    match command {
+        McpCommands::Token { server } => {
+            let server_config = resolve_mcp_server(&config, &server)?;
+            let token = prompt_provider_token(&server_config.display_name)
+                .map_err(|err| err.to_string())?;
+            let store = McpTokenStore::new();
+            store.set_token(&server_config.id, &token)?;
+            println!("✅ Stored MCP token for {}", server_config.display_name);
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_mcp_server<'a>(
+    config: &'a Config,
+    input: &str,
+) -> Result<&'a McpServerConfig, Box<dyn Error>> {
+    if let Some(server) = config.get_mcp_server(input) {
+        return Ok(server);
+    }
+
+    let known: Vec<String> = config
+        .list_mcp_servers()
+        .iter()
+        .map(|server| format!("{} ({})", server.display_name, server.id))
+        .collect();
+
+    eprintln!("❌ MCP server '{}' not found.", input);
+    if known.is_empty() {
+        eprintln!("   Add MCP servers to config.toml first.");
+    } else {
+        eprintln!("   Available MCP servers:");
+        for server in known {
+            eprintln!("   {}", server);
+        }
+    }
+    std::process::exit(1);
 }
 
 #[cfg(test)]
@@ -727,6 +816,19 @@ mod tests {
 
         let args = Args::try_parse_from(["chabeau"]).unwrap();
         assert_eq!(args.preset, None);
+    }
+
+    #[test]
+    fn test_mcp_token_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "token", "agpedia"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command: McpCommands::Token { server },
+            }) => {
+                assert_eq!(server, "agpedia");
+            }
+            _ => panic!("Expected mcp token subcommand"),
+        }
     }
 
     #[test]

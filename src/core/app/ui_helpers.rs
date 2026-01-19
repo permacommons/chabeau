@@ -73,9 +73,14 @@ impl App {
         }
 
         let typed: String = chars[1..cursor].iter().collect();
-        let matches = matching_commands(&typed);
+        let mut command_names: Vec<String> = matching_commands(&typed)
+            .iter()
+            .map(|command| command.name.to_string())
+            .collect();
+        let prompt_commands = self.matching_mcp_prompt_commands(&typed);
+        command_names.extend(prompt_commands);
 
-        if matches.is_empty() {
+        if command_names.is_empty() {
             if !typed.is_empty() {
                 self.conversation()
                     .set_status(format!("No command matches '/{}'", typed));
@@ -85,20 +90,28 @@ impl App {
         }
 
         let remainder: String = chars[command_end..].iter().collect();
-        let command_names: Vec<&str> = matches.iter().map(|command| command.name).collect();
+        command_names.sort();
+        command_names.dedup();
+        let command_names_ref: Vec<&str> = command_names.iter().map(String::as_str).collect();
 
-        if command_names.len() == 1 {
-            apply_command_completion(&mut self.ui, command_names[0], &remainder, true, term_width);
+        if command_names_ref.len() == 1 {
+            apply_command_completion(
+                &mut self.ui,
+                command_names_ref[0],
+                &remainder,
+                true,
+                term_width,
+            );
             return true;
         }
 
-        let prefix = longest_common_prefix(&command_names);
+        let prefix = longest_common_prefix(&command_names_ref);
         if prefix.len() > typed.len() {
             apply_command_completion(&mut self.ui, &prefix, &remainder, false, term_width);
             return true;
         }
 
-        let suggestions = format_command_suggestions(&command_names);
+        let suggestions = format_command_suggestions(&command_names_ref);
         self.conversation()
             .set_status(format!("Commands: {}", suggestions));
         true
@@ -180,6 +193,22 @@ impl App {
 
     pub fn get_logging_status(&self) -> String {
         self.session.logging.get_status_string()
+    }
+
+    fn matching_mcp_prompt_commands(&self, prefix: &str) -> Vec<String> {
+        let mut commands = Vec::new();
+        for server in self.mcp.servers() {
+            let Some(prompts) = &server.cached_prompts else {
+                continue;
+            };
+            for prompt in &prompts.prompts {
+                let command = format!("{}:{}", server.config.id, prompt.name);
+                if command.starts_with(prefix) {
+                    commands.push(command);
+                }
+            }
+        }
+        commands
     }
 }
 

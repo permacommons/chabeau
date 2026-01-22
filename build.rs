@@ -1,5 +1,4 @@
-use vergen::{BuildBuilder, CargoBuilder, Emitter, RustcBuilder};
-use vergen_git2::Git2Builder;
+use vergen_git2::{BuildBuilder, CargoBuilder, Emitter, Git2Builder, RustcBuilder};
 
 macro_rules! emit_instructions {
     ($build:expr, $cargo:expr, $rustc:expr $(, $git2:expr)?) => {

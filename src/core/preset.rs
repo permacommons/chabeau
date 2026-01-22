@@ -125,6 +125,9 @@ impl PresetManager {
                 ChatMessage {
                     role: "system".to_string(),
                     content: String::new(),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
                 },
             );
         }
@@ -138,6 +141,9 @@ impl PresetManager {
             messages.push(ChatMessage {
                 role: "system".to_string(),
                 content: String::new(),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
             });
         }
 
@@ -259,6 +265,9 @@ mod tests {
         vec![ChatMessage {
             role: "user".to_string(),
             content: "Hello".to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
         }]
     }
 

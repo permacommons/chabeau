@@ -8,10 +8,11 @@
 //! Scroll state and OSC hyperlink metadata are recomputed only when necessary
 //! to keep redraws responsive.
 
-use crate::core::app::ui_state::EditSelectTarget;
+use crate::core::app::ui_state::{EditSelectTarget, ToolPrompt};
 use crate::core::app::App;
-use crate::core::message::ROLE_ASSISTANT;
+use crate::core::message::{AppMessageKind, ROLE_ASSISTANT, ROLE_TOOL_CALL};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
+use crate::ui::layout::{LayoutConfig, LayoutEngine, TableOverflowPolicy};
 use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
 use crate::ui::span::SpanKind;
 use crate::ui::title::build_main_title;
@@ -23,6 +24,7 @@ use ratatui::{
     Frame,
 };
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     // Paint full-frame background based on theme to ensure readable contrast
@@ -42,13 +44,30 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Use cached prewrapped lines in normal mode for faster redraws.
     // Otherwise, build lines with selection/highlight and prewrap on the fly.
-    let (lines, span_metadata) = if !app.ui.in_edit_select_mode() && !app.ui.in_block_select_mode()
-    {
+    let tool_prompt = app.ui.tool_prompt().cloned();
+    let use_prompt_layout =
+        tool_prompt.is_some() && !app.ui.in_edit_select_mode() && !app.ui.in_block_select_mode();
+
+    let (mut lines, mut span_metadata, message_spans) = if use_prompt_layout {
+        let layout_cfg = LayoutConfig {
+            width: Some(chunks[0].width as usize),
+            markdown_enabled: app.ui.markdown_enabled,
+            syntax_enabled: app.ui.syntax_enabled,
+            table_overflow_policy: TableOverflowPolicy::WrapCells,
+            user_display_name: Some(app.ui.user_display_name.clone()),
+        };
+        let layout = LayoutEngine::layout_messages(&app.ui.messages, &app.ui.theme, &layout_cfg);
+        (
+            layout.lines,
+            layout.span_metadata,
+            Some(layout.message_spans),
+        )
+    } else if !app.ui.in_edit_select_mode() && !app.ui.in_block_select_mode() {
         let lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
         let metadata = app
             .get_prewrapped_span_metadata_cached(chunks[0].width)
             .clone();
-        (lines, metadata)
+        (lines, metadata, None)
     } else if app.ui.in_edit_select_mode() {
         let highlight = Style::default();
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
@@ -61,7 +80,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             Some(chunks[0].width as usize),
             Some(app.ui.user_display_name.clone()),
         );
-        (layout.lines, layout.span_metadata)
+        (layout.lines, layout.span_metadata, None)
     } else if app.ui.in_block_select_mode() {
         // Use cache with highlighting applied in-place
         let mut lines = app.get_prewrapped_lines_cached(chunks[0].width).clone();
@@ -79,10 +98,34 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             );
         }
 
-        (lines, metadata)
+        (lines, metadata, None)
     } else {
         unreachable!()
     };
+
+    if let (Some(prompt), Some(spans)) = (tool_prompt.as_ref(), message_spans.as_ref()) {
+        if let Some(insert_at) =
+            tool_prompt_insert_index(&app.ui.messages, prompt, spans, lines.len())
+        {
+            const TOOL_PROMPT_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+            const TOOL_PROMPT_ROTATIONS_PER_SECOND: f32 = 1.5;
+            let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
+            let total_frames =
+                (elapsed * TOOL_PROMPT_ROTATIONS_PER_SECOND * TOOL_PROMPT_FRAMES.len() as f32)
+                    .floor() as usize;
+            let frame = TOOL_PROMPT_FRAMES[total_frames % TOOL_PROMPT_FRAMES.len()];
+            let info_style = app.ui.theme.app_message_style(AppMessageKind::Info);
+            let text_style = info_style
+                .text_style
+                .add_modifier(Modifier::DIM | Modifier::ITALIC);
+            let line = Line::from(Span::styled(
+                format!("❓ Tool permission pending {frame} (A/S/D/B)"),
+                text_style,
+            ));
+            lines.insert(insert_at, line);
+            span_metadata.insert(insert_at, vec![SpanKind::Text]);
+        }
+    }
 
     // Calculate scroll position using the prewrapped lines (exact render)
     let available_height = {
@@ -191,6 +234,32 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
         }
+    } else if let Some(prompt) = app.ui.tool_prompt() {
+        let mut title = format!(
+            "Allow tool {} on {}? (A=once • S=session • D/Esc=deny • B=block)",
+            prompt.tool_name, prompt.server_name
+        );
+        if !prompt.args_summary.trim().is_empty() {
+            title.push_str(" • Args: ");
+            title.push_str(prompt.args_summary.trim());
+        }
+        Cow::Owned(title)
+    } else if let Some(prompt) = app.ui.mcp_prompt_input() {
+        let label = prompt
+            .pending_args
+            .get(prompt.next_index)
+            .and_then(|arg| arg.title.as_deref())
+            .unwrap_or_else(|| {
+                prompt
+                    .pending_args
+                    .get(prompt.next_index)
+                    .map(|arg| arg.name.as_str())
+                    .unwrap_or("value")
+            });
+        Cow::Owned(format!(
+            "Prompt {} on {}: {} (Enter=Next • Esc=Cancel)",
+            prompt.prompt_name, prompt.server_name, label
+        ))
     } else if app.ui.file_prompt().is_some() {
         Cow::Borrowed("Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)")
     } else if let Some(index) = app.ui.in_place_edit_index() {
@@ -540,6 +609,36 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let help = Paragraph::new(help_text.as_str()).style(app.ui.theme.system_text_style);
         f.render_widget(help, help_area);
     }
+}
+
+fn tool_prompt_insert_index(
+    messages: &VecDeque<crate::core::message::Message>,
+    prompt: &ToolPrompt,
+    spans: &[crate::ui::layout::MessageLineSpan],
+    line_count: usize,
+) -> Option<usize> {
+    if messages.len() != spans.len() {
+        return None;
+    }
+
+    let mut fallback = None;
+    for (idx, message) in messages.iter().enumerate().rev() {
+        if message.role != ROLE_TOOL_CALL {
+            continue;
+        }
+        fallback = Some(idx);
+        if message.content.starts_with(&prompt.tool_name) {
+            break;
+        }
+    }
+
+    let target_idx = fallback?;
+    let span = spans.get(target_idx)?;
+    if span.len == 0 {
+        return Some(span.start.min(line_count));
+    }
+    let insert_at = span.start.saturating_add(span.len.saturating_sub(1));
+    Some(insert_at.min(line_count))
 }
 
 /// Generate help text for picker dialogs with appropriate shortcuts

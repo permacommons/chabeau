@@ -13,6 +13,8 @@ use crate::character::service::CharacterService;
 #[cfg(any(test, feature = "bench"))]
 use crate::core::config::data::{DEFAULT_REFINE_INSTRUCTIONS, DEFAULT_REFINE_PREFIX};
 #[cfg(any(test, feature = "bench"))]
+use crate::mcp::client::McpClientManager;
+#[cfg(any(test, feature = "bench"))]
 use crate::ui::theme::Theme;
 
 impl App {
@@ -69,6 +71,18 @@ impl App {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: std::collections::BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: std::collections::VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);
@@ -79,6 +93,7 @@ impl App {
             .expect("Failed to create test PersonaManager");
         let preset_manager = crate::core::preset::PresetManager::load_presets(&test_config)
             .expect("Failed to create test PresetManager");
+        let mcp = McpClientManager::from_config(&test_config);
 
         App {
             session,
@@ -88,6 +103,8 @@ impl App {
             persona_manager,
             preset_manager,
             config: test_config,
+            mcp,
+            mcp_permissions: crate::mcp::permissions::ToolPermissionStore::default(),
         }
     }
 

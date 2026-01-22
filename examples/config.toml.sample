@@ -54,6 +54,18 @@ id = "myproxy"
 display_name = "My Proxy"
 base_url = "https://api.example.com/v1"
 
+# Configure MCP servers for MCP-over-HTTP access.
+#
+# Tokens are stored in the system keyring under each server id.
+[[mcp_servers]]
+id = "local-mcp"
+display_name = "Local MCP"
+base_url = "http://localhost:3333"
+transport = "streamable-http"
+enabled = true
+allowed_tools = ["weather.lookup", "time.now"]
+# protocol_version = "2024-11-05"
+
 # Add custom themes, each in its own [[custom_themes]] block.
 #
 # Select them with `/theme` in the app.
@@ -120,4 +132,3 @@ pre = """
 Be concise and to the point. Avoid unnecessary elaboration.
 """
 # post is optional
-

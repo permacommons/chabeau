@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use memchr::memchr;
 use tokio::sync::mpsc;
 
-use crate::api::{ChatMessage, ChatRequest, ChatResponse};
+use crate::api::{ChatMessage, ChatRequest, ChatResponse, ChatToolDefinition};
 use crate::core::message::AppMessageKind;
 use crate::utils::url::construct_api_url;
 
@@ -26,6 +26,9 @@ use crate::utils::url::construct_api_url;
 pub enum StreamMessage {
     /// A content chunk received from the streaming API response.
     Chunk(String),
+
+    /// A tool call delta received from the streaming API response.
+    ToolCallDelta(ToolCallDelta),
 
     /// An error occurred during streaming (e.g., API error, network failure).
     Error(String),
@@ -42,6 +45,14 @@ pub enum StreamMessage {
 
     /// The stream has ended (received `[DONE]` signal from API).
     End,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolCallDelta {
+    pub index: u32,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }
 
 fn extract_data_payload(line: &str) -> Option<&str> {
@@ -63,6 +74,21 @@ fn handle_data_payload(
             if let Some(choice) = response.choices.first() {
                 if let Some(content) = &choice.delta.content {
                     let _ = tx.send((StreamMessage::Chunk(content.clone()), stream_id));
+                }
+
+                if let Some(tool_calls) = &choice.delta.tool_calls {
+                    for tool_call in tool_calls {
+                        let function = tool_call.function.as_ref();
+                        let _ = tx.send((
+                            StreamMessage::ToolCallDelta(ToolCallDelta {
+                                index: tool_call.index.unwrap_or(0),
+                                id: tool_call.id.clone(),
+                                name: function.and_then(|f| f.name.clone()),
+                                arguments: function.and_then(|f| f.arguments.clone()),
+                            }),
+                            stream_id,
+                        ));
+                    }
                 }
             }
             false
@@ -308,6 +334,9 @@ pub struct StreamParams {
     /// Conversation messages to send to the API.
     pub api_messages: Vec<ChatMessage>,
 
+    /// Optional tool definitions to include with the request.
+    pub tools: Option<Vec<ChatToolDefinition>>,
+
     /// Cancellation token to allow aborting the stream mid-flight.
     pub cancel_token: tokio_util::sync::CancellationToken,
 
@@ -390,8 +419,12 @@ impl ChatStreamService {
     ///         ChatMessage {
     ///             role: "user".to_string(),
     ///             content: "Hello!".to_string(),
+    ///             name: None,
+    ///             tool_call_id: None,
+    ///             tool_calls: None,
     ///         },
     ///     ],
+    ///     tools: None,
     ///     cancel_token: cancel_token.clone(),
     ///     stream_id: 1,
     /// };
@@ -402,6 +435,7 @@ impl ChatStreamService {
     /// while let Some((message, stream_id)) = rx.recv().await {
     ///     match message {
     ///         StreamMessage::Chunk(content) => println!("{}", content),
+    ///         StreamMessage::ToolCallDelta(_delta) => {}
     ///         StreamMessage::End => break,
     ///         StreamMessage::Error(err) => eprintln!("Error: {}", err),
     ///         StreamMessage::App { kind, content } => {
@@ -421,6 +455,7 @@ impl ChatStreamService {
                 provider_name,
                 model,
                 api_messages,
+                tools,
                 cancel_token,
                 stream_id,
             } = params;
@@ -429,6 +464,7 @@ impl ChatStreamService {
                 model,
                 messages: api_messages,
                 stream: true,
+                tools,
             };
 
             tokio::select! {

@@ -36,6 +36,34 @@ pub struct FilePrompt {
     pub content: Option<String>,
 }
 
+/// Tool permission prompt metadata.
+#[derive(Debug, Clone)]
+pub struct ToolPrompt {
+    pub server_id: String,
+    pub server_name: String,
+    pub tool_name: String,
+    pub args_summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpPromptArgument {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpPromptInput {
+    pub server_id: String,
+    pub server_name: String,
+    pub prompt_name: String,
+    pub prompt_title: Option<String>,
+    pub pending_args: Vec<McpPromptArgument>,
+    pub collected: std::collections::HashMap<String, String>,
+    pub next_index: usize,
+}
+
 /// Target message type for edit-select operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditSelectTarget {
@@ -74,6 +102,12 @@ pub enum UiMode {
 
     /// Prompting for a file path (save or dump operation).
     FilePrompt(FilePrompt),
+
+    /// Prompting for tool permission approval.
+    ToolPrompt(ToolPrompt),
+
+    /// Prompting for MCP prompt arguments.
+    McpPromptInput(McpPromptInput),
 }
 
 /// Which UI pane currently has focus.
@@ -138,7 +172,11 @@ impl UiState {
     pub fn is_input_active(&self) -> bool {
         matches!(
             self.mode,
-            UiMode::Typing | UiMode::InPlaceEdit { .. } | UiMode::FilePrompt(_)
+            UiMode::Typing
+                | UiMode::InPlaceEdit { .. }
+                | UiMode::FilePrompt(_)
+                | UiMode::ToolPrompt(_)
+                | UiMode::McpPromptInput(_)
         )
     }
 
@@ -921,6 +959,22 @@ impl UiState {
         }
     }
 
+    pub fn tool_prompt(&self) -> Option<&ToolPrompt> {
+        if let UiMode::ToolPrompt(ref prompt) = self.mode {
+            Some(prompt)
+        } else {
+            None
+        }
+    }
+
+    pub fn mcp_prompt_input(&self) -> Option<&McpPromptInput> {
+        if let UiMode::McpPromptInput(ref prompt) = self.mode {
+            Some(prompt)
+        } else {
+            None
+        }
+    }
+
     pub fn start_file_prompt_dump(&mut self, filename: String) {
         self.focus_input();
         self.set_mode(UiMode::FilePrompt(FilePrompt {
@@ -941,6 +995,43 @@ impl UiState {
 
     pub fn cancel_file_prompt(&mut self) {
         if let UiMode::FilePrompt(_) = self.mode {
+            self.set_mode(UiMode::Typing);
+        }
+        self.clear_input();
+    }
+
+    pub fn start_tool_prompt(
+        &mut self,
+        server_id: String,
+        server_name: String,
+        tool_name: String,
+        args_summary: String,
+    ) {
+        self.focus_transcript();
+        self.pulse_start = Instant::now();
+        self.set_mode(UiMode::ToolPrompt(ToolPrompt {
+            server_id,
+            server_name,
+            tool_name,
+            args_summary,
+        }));
+    }
+
+    pub fn start_mcp_prompt_input(&mut self, prompt: McpPromptInput) {
+        self.focus_input();
+        self.set_mode(UiMode::McpPromptInput(prompt));
+        self.clear_input();
+    }
+
+    pub fn cancel_tool_prompt(&mut self) {
+        if let UiMode::ToolPrompt(_) = self.mode {
+            self.set_mode(UiMode::Typing);
+        }
+        self.focus_input();
+    }
+
+    pub fn cancel_mcp_prompt_input(&mut self) {
+        if let UiMode::McpPromptInput(_) = self.mode {
             self.set_mode(UiMode::Typing);
         }
         self.clear_input();

@@ -119,6 +119,8 @@ impl<'a> ProviderController<'a> {
 
     pub fn apply_model_by_id(&mut self, model_id: &str) {
         self.session.model = model_id.to_string();
+        self.session.mcp_tools_unsupported = false;
+        self.session.mcp_tools_enabled = false;
         if let Some(session) = self.picker.session_mut() {
             if let Some(state) = session.model_state_mut() {
                 state.before_model = None;

@@ -1,0 +1,307 @@
+You: Hi. Do you have access to resources?
+
+Yes — I have access to a few resources via your Agpedia MCP server. Specifically, I can read from:  
+
+- **agpwiki://pages** — the index of wiki pages, and  
+- **agpwiki://blog/posts** — the index of blog posts.  
+
+Would you like me to show what’s available in one of these, or read something specific from them?
+
+You: Retrieve pages
+
+Tool call: mcp_read_resource {"server_id": "agpedia", "uri": "agpwiki://pages"}
+
+Tool result: mcp_read_resource
+{
+  "contents": [
+    {
+      "mimeType": "application/json",
+      "text": "[\n  {\n    \"uri\": \"agpwiki://page?slug=ai-agent\",\n    \"name\": \"AI agent\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=barack-obama\",\n    \"name\": \"Barack Obama\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=bluesky\",\n    \"name\": \"Bluesky (social network)\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=context-menu\",\n    \"name\": \"Context menu\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=firefox\",\n    \"name\": \"Firefox\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=large-language-model\",\n    \"name\": \"Large language model\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=markdown-how-to\",\n    \"name\": \"Markdown how-to\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=mastodon\",\n    \"name\": \"Mastodon (social network)\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fcitations\",\n    \"name\": \"Citation Standards\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fcontributing\",\n    \"name\": \"Contributing to Agpedia\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fscope\",\n    \"name\": \"Agpedia Scope\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fsetup\",\n    \"name\": \"Agent Setup\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fstyle\",\n    \"name\": \"Style Guide\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fvalues\",\n    \"name\": \"Agpedia Values\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=meta%2Fwelcome\",\n    \"name\": \"Welcome to Agpedia\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=model-context-protocol\",\n    \"name\": \"Model Context Protocol\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=never-flinch\",\n    \"name\": \"Never Flinch (book by Stephen King)\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://page?slug=wine\",\n    \"name\": \"Wine\",\n    \"mimeType\": \"application/json\"\n  }\n]",
+      "uri": "agpwiki://pages"
+    }
+  ]
+}
+
+Here are the current wiki pages available in your Agpedia resource:  
+
+1. **AI agent**  
+2. **Barack Obama**  
+3. **Bluesky (social network)**  
+4. **Context menu**  
+5. **Firefox**  
+6. **Large language model**  
+7. **Markdown how-to**  
+8. **Mastodon (social network)**  
+9. **Citation Standards**  
+10. **Contributing to Agpedia**  
+11. **Agpedia Scope**  
+12. **Agent Setup**  
+13. **Style Guide**  
+14. **Agpedia Values**  
+15. **Welcome to Agpedia**  
+16. **Model Context Protocol**  
+17. **Never Flinch (book by Stephen King)**  
+18. **Wine**
+
+Would you like me to open or read any specific page from this list?
+
+You: Retrieve blog posts via MCP resource
+
+Tool call: mcp_read_resource {"server_id": "agpedia", "uri": "agpwiki://blog/posts"}
+
+Tool result: mcp_read_resource
+{
+  "contents": [
+    {
+      "mimeType": "application/json",
+      "text": "[\n  {\n    \"uri\": \"agpwiki://blog?slug=updates-2026-01-17\",\n    \"name\": \"updates-2026-01-17\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://blog?slug=updates-2026-01-18\",\n    \"name\": \"updates-2026-01-18\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://blog?slug=updates-2026-01-19\",\n    \"name\": \"updates-2026-01-19\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://blog?slug=updates-2026-01-20\",\n    \"name\": \"updates-2026-01-20\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://blog?slug=updates-2026-01-21\",\n    \"name\": \"updates-2026-01-21\",\n    \"mimeType\": \"application/json\"\n  },\n  {\n    \"uri\": \"agpwiki://blog?slug=welcome-to-agpedia\",\n    \"name\": \"welcome-to-agpedia\",\n    \"mimeType\": \"application/json\"\n  }\n]",
+      "uri": "agpwiki://blog/posts"
+    }
+  ]
+}
+
+Here are the blog posts currently available in your Agpedia resource:  
+
+1. **updates-2026-01-17**  
+2. **updates-2026-01-18**  
+3. **updates-2026-01-19**  
+4. **updates-2026-01-20**  
+5. **updates-2026-01-21**  
+6. **welcome-to-agpedia**
+
+Would you like me to open or read the contents of one of these posts?
+
+You: Retrieve updates-2026-01-21
+
+Tool call: blog_readPost {"slug": "updates-2026-01-21"}
+
+Tool result: blog_readPost
+{
+  "content": [
+    {
+      "text": "{\n  \"id\": \"8ca3cdd3-c2b2-4e60-b39c-fed7ed2f5816\",\n  \"slug\": \"updates-2026-01-21\",\n  \"title\": {\n    \"en\": \"Today's Update: help.wtf redirects\"\n  },\n  \"body\": {\n    \"en\": \"As Agpedia continues to host more technical how-tos and reference materials, quick access becomes essential. We have enabled a global redirect from `help.wtf` to `agpedia.org`.\\n\\nThis means every article slug now has a shorthand equivalent. Try it out:\\n*   **Original:** `https://agpedia.org/markdown-how-to`\\n*   **Shortcut:** `https://help.wtf/markdown-how-to`\\n\\nUse it to bookmark your favorite guides or share resources with your team.\\n\\nWe may also set up custom redirects for common resources. For example, `https://help.wtf/md` acts as an even shorter link to the [markdown how-to](/markdown-how-to).\"\n  },\n  \"summary\": {\n    \"en\": \"You can now use help.wtf as a shortcut to any Agpedia article or how-to.\"\n  },\n  \"originalLanguage\": \"en\",\n  \"createdAt\": \"2026-01-21T08:54:43.268Z\",\n  \"updatedAt\": \"2026-01-21T10:51:09.095Z\"\n}",
+      "type": "text"
+    }
+  ],
+  "structuredContent": {
+    "body": {
+      "en": "As Agpedia continues to host more technical how-tos and reference materials, quick access becomes essential. We have enabled a global redirect from `help.wtf` to `agpedia.org`.\n\nThis means every article slug now has a shorthand equivalent. Try it out:\n*   **Original:** `https://agpedia.org/markdown-how-to`\n*   **Shortcut:** `https://help.wtf/markdown-how-to`\n\nUse it to bookmark your favorite guides or share resources with your team.\n\nWe may also set up custom redirects for common resources. For example, `https://help.wtf/md` acts as an even shorter link to the [markdown how-to](/markdown-how-to)."
+    },
+    "createdAt": "2026-01-21T08:54:43.268Z",
+    "id": "8ca3cdd3-c2b2-4e60-b39c-fed7ed2f5816",
+    "originalLanguage": "en",
+    "slug": "updates-2026-01-21",
+    "summary": {
+      "en": "You can now use help.wtf as a shortcut to any Agpedia article or how-to."
+    },
+    "title": {
+      "en": "Today's Update: help.wtf redirects"
+    },
+    "updatedAt": "2026-01-21T10:51:09.095Z"
+  }
+}
+
+Here’s the **Agpedia blog post** from **January 21, 2026**:  
+
+### 📰 *Today's Update: help.wtf redirects*  
+**Summary:** You can now use `help.wtf` as a shortcut to any Agpedia article or how-to.  
+
+**Content:**  
+As Agpedia continues to host more technical how-tos and reference materials, quick access becomes essential. A global redirect from `help.wtf` to `agpedia.org` has been enabled.  
+
+That means every article slug now has a shorthand equivalent:  
+- **Original:** `https://agpedia.org/markdown-how-to`  
+- **Shortcut:** `https://help.wtf/markdown-how-to`  
+
+This feature makes it easier to bookmark or share guides.  
+Additionally, custom redirects are being set up — for instance, `https://help.wtf/md` links directly to the [Markdown how-to](/markdown-how-to).
+
+You: Draft a similar 2026-01-22 update with two main highlights:
+- Agpedia articles now have a table of contents (on the right on desktop, collapsed at the top on mobile). This is derived from the headings in the article. Sections now also have human-readable anchors to make them easy to link to.
+- Chabeau (a chatbot TUI for the terminal developed under the Permacommons umbrella) is getting Model Context Protocol support. This blog post was in fact written using Chabeau. Longer term, this will allow us to optimize the agent workflows for encyclopedic writing alongside Agpedia itself.
+
+Share the draft here before you create it with MCP.
+
+Here’s the revised version with a link to the Chabeau repository:
+
+---
+
+### 📰 *Today's Update: Table of Contents and Chabeau Integration*  
+**Date:** January 22, 2026  
+
+#### 🧭 Table of Contents for Articles  
+Agpedia articles now feature a **dynamic table of contents**, generated automatically from each page’s headings.  
+- On **desktop**, it appears on the **right-hand side** for easy navigation.  
+- On **mobile**, it’s **collapsed at the top** of the article for a cleaner reading experience.  
+
+Each section now includes **human-readable anchors** — short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  
+
+#### 💬 Chabeau gains MCP support  
+[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  
+
+This blog post was, in fact, written **using Chabeau**!  
+MCP integration paves the way toward tighter workflows between Agpedia and agent-based tools — allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself.  
+
+---
+
+Would you like me to post this draft to the blog as `updates-2026-01-22` now?
+
+You: Yes.
+
+Tool call: blog_createPost {"slug": "updates-2026-01-22", "title": "Today's Update: Table of Contents and Chabeau Integration", "summary": "Agpedia adds a dynamic table of contents to articles and Chabeau gains Model Context Protocol support \u2014 this update was written using Chabeau.", "tags": ["Agpedia", "Chabeau", "MCP", "update"], "body": "### \ud83d\udcf0 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026  \n\n#### \ud83e\udded Table of Contents for Articles  \nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page\u2019s headings.  \n- On **desktop**, it appears on the **right-hand side** for easy navigation.  \n- On **mobile**, it\u2019s **collapsed at the top** of the article for a cleaner reading experience.  \n\nEach section now includes **human-readable anchors** \u2014 short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  \n\n#### \ud83d\udcac Chabeau gains MCP support  \n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  \n\nThis blog post was, in fact, written **using Chabeau**!  \nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools \u2014 allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."}
+
+Tool result: blog_createPost
+{
+  "content": [
+    {
+      "text": "MCP error -32602: Input validation error: Invalid arguments for tool blog_createPost: [\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  },\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  },\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"summary\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  }\n]",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}
+
+It looks like the MCP interface rejected the blog creation request — it expected structured (record-type) fields for `title`, `body`, and `summary`, not plain strings.  
+
+To fix this, I can retry using the proper structured format (for example, specifying `{"content": { "text": ... }}` for those fields).  
+
+Would you like me to resubmit the post with correctly structured fields?
+
+You: Try again.
+
+Tool call: blog_createPost {"slug": "updates-2026-01-22", "title": "Today's Update: Table of Contents and Chabeau Integration", "summary": "Agpedia adds an automatic table of contents for articles and Chabeau, the terminal-based chatbot TUI, gains Model Context Protocol support.", "tags": ["updates", "features", "announcement", "Chabeau", "MCP"], "body": "### \ud83d\udcf0 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026  \n\n#### \ud83e\udded Table of Contents for Articles  \nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page\u2019s headings.  \n- On **desktop**, it appears on the **right-hand side** for easy navigation.  \n- On **mobile**, it\u2019s **collapsed at the top** of the article for a cleaner reading experience.  \n\nEach section now includes **human-readable anchors** \u2014 short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  \n\n#### \ud83d\udcac Chabeau gains MCP support  \n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  \n\nThis blog post was, in fact, written **using Chabeau**!  \nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools \u2014 allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."}
+
+Tool result: blog_createPost
+{
+  "content": [
+    {
+      "text": "MCP error -32602: Input validation error: Invalid arguments for tool blog_createPost: [\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  },\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  },\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"summary\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  }\n]",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}
+
+The error persists — it’s still rejecting plain text fields for `title`, `summary`, and `body`, all of which need to be structured “record” values instead of strings.  
+
+To resolve this, I’ll format the post using structured values such as `{ "content": { "type": "text", "text": "..." } }` for each field.  
+
+Would you like me to try again with that corrected structured format?
+
+You: What does the MCP schema tell you about the expected format?
+
+Good question — I checked the MCP schema that’s exposed to me, and here’s what it defines:  
+
+```ts
+type blog_createPost = (_: {
+  body?: null,
+  originalLanguage?: string | null,
+  revSummary?: null,
+  slug: string,
+  summary?: null,
+  tags?: string[],
+  title?: null
+}) => any;
+```
+
+That means:  
+
+- The `slug` (a short unique identifier like `updates-2026-01-22`) is **required and must be a string**.  
+- Every other field (`body`, `title`, `summary`, `originalLanguage`, `revSummary`, `tags`) is **optional** and may be `null`.  
+- It doesn’t actually specify a complex “record” structure — all parameters are simple fields.  
+
+So the structured‐record error must be coming from a **different layer of the underlying blog storage** that prefers a content object format, even though the exposed schema shows strings or nulls only.
+
+In other words:
+> According to the schema, `title`, `body`, and `summary` would normally be plain strings or nulls — but the implementation might enforce richer types.
+
+Would you like me to try sending the post again using plain strings (which agree with this schema), or explicitly wrap them in a structured format that looks like the kind your server actually expects?
+
+You: try the { "en": "Foo" } schema for multilingual strings wherever it complains about records.
+
+Tool call: blog_createPost {"slug": "updates-2026-01-22", "title": {"en": "Today's Update: Table of Contents and Chabeau Integration"}, "summary": {"en": "Agpedia adds a new Table of Contents feature for all articles, while Chabeau\u2014a terminal chatbot under the Permacommons project\u2014gets Model Context Protocol support."}, "body": {"en": "### \ud83d\udcf0 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026\n\n#### \ud83e\udded Table of Contents for Articles\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page\u2019s headings.  \n- On **desktop**, it appears on the **right-hand side** for easy navigation.  \n- On **mobile**, it\u2019s **collapsed at the top** of the article for a cleaner reading experience.  \n\nEach section now includes **human-readable anchors** \u2014 short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  \n\n#### \ud83d\udcac Chabeau gains MCP support\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  \n\nThis blog post was, in fact, written **using Chabeau**!  \nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools \u2014 allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."}, "tags": ["update", "toc", "chabeau", "mcp", "integration"]}
+
+Tool result: blog_createPost
+{
+  "content": [
+    {
+      "text": "{\n  \"id\": \"c7de50a0-5e1d-497c-8826-05634ee7ad54\",\n  \"slug\": \"updates-2026-01-22\",\n  \"title\": {\n    \"en\": \"Today's Update: Table of Contents and Chabeau Integration\"\n  },\n  \"body\": {\n    \"en\": \"### 📰 *Today's Update: Table of Contents and Chabeau Integration*\\n**Date:** January 22, 2026\\n\\n#### 🧭 Table of Contents for Articles\\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page’s headings.  \\n- On **desktop**, it appears on the **right-hand side** for easy navigation.  \\n- On **mobile**, it’s **collapsed at the top** of the article for a cleaner reading experience.  \\n\\nEach section now includes **human-readable anchors** — short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  \\n\\n#### 💬 Chabeau gains MCP support\\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  \\n\\nThis blog post was, in fact, written **using Chabeau**!  \\nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools — allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself.\"\n  },\n  \"summary\": {\n    \"en\": \"Agpedia adds a new Table of Contents feature for all articles, while Chabeau—a terminal chatbot under the Permacommons project—gets Model Context Protocol support.\"\n  },\n  \"originalLanguage\": null,\n  \"createdAt\": \"2026-01-22T08:36:39.914Z\",\n  \"updatedAt\": \"2026-01-22T08:36:39.914Z\"\n}",
+      "type": "text"
+    }
+  ],
+  "structuredContent": {
+    "body": {
+      "en": "### 📰 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026\n\n#### 🧭 Table of Contents for Articles\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page’s headings.  \n- On **desktop**, it appears on the **right-hand side** for easy navigation.  \n- On **mobile**, it’s **collapsed at the top** of the article for a cleaner reading experience.  \n\nEach section now includes **human-readable anchors** — short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.  \n\n#### 💬 Chabeau gains MCP support\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.  \n\nThis blog post was, in fact, written **using Chabeau**!  \nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools — allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."
+    },
+    "createdAt": "2026-01-22T08:36:39.914Z",
+    "id": "c7de50a0-5e1d-497c-8826-05634ee7ad54",
+    "originalLanguage": null,
+    "slug": "updates-2026-01-22",
+    "summary": {
+      "en": "Agpedia adds a new Table of Contents feature for all articles, while Chabeau—a terminal chatbot under the Permacommons project—gets Model Context Protocol support."
+    },
+    "title": {
+      "en": "Today's Update: Table of Contents and Chabeau Integration"
+    },
+    "updatedAt": "2026-01-22T08:36:39.914Z"
+  }
+}
+
+✅ The new blog post **“Today's Update: Table of Contents and Chabeau Integration”** (slug: `updates-2026-01-22`) has been published successfully.  
+
+It includes:
+- A highlight of the new **Table of Contents** feature for Agpedia articles.  
+- An update on **Chabeau** gaining **Model Context Protocol** support — with this very post written using Chabeau itself.  
+
+Would you like me to summarize it for a brief announcement (for example, to include in a future rollup post)?
+
+You: Try updating it, this is the format:
+
+                                                                                                                                                              
+  Example call:                                                                                                                                               
+  {                                                                                                                                                           
+    "slug": "my-first-post",                                                                                                                                  
+    "title": {"en": "My First Post"},                                                                                                                         
+    "body": {"en": "This is the content of my blog post."},                                                                                                   
+    "summary": {"en": "A brief summary"},                                                                                                                     
+    "tags": ["news", "updates"],                                                                                                                              
+    "originalLanguage": "en",                                                                                                                                 
+    "revSummary": {"en": "Initial creation"}                                                                                                                  
+  }            
+
+Tool call: blog_updatePost {"slug": "updates-2026-01-22", "title": {"en": "Today's Update: Table of Contents and Chabeau Integration"}, "body": {"en": "### \ud83d\udcf0 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026\n\n#### \ud83e\udded Table of Contents for Articles\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page\u2019s headings.\n- On **desktop**, it appears on the **right-hand side** for easy navigation.\n- On **mobile**, it\u2019s **collapsed at the top** of the article for a cleaner reading experience.\n\nEach section now includes **human-readable anchors** \u2014 short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.\n\n#### \ud83d\udcac Chabeau gains MCP support\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.\n\nThis blog post was, in fact, written **using Chabeau**!\nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools \u2014 allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."}, "summary": {"en": "Agpedia articles now feature a built-in table of contents, and Chabeau gains Model Context Protocol support."}, "tags": ["updates", "agp-features", "mcp", "chabeau"], "originalLanguage": "en", "revSummary": {"en": "Formatted update for 2026-01-22 using multilingual string schema."}}
+
+Tool result: blog_updatePost
+{
+  "content": [
+    {
+      "text": "{\n  \"id\": \"c7de50a0-5e1d-497c-8826-05634ee7ad54\",\n  \"slug\": \"updates-2026-01-22\",\n  \"title\": {\n    \"en\": \"Today's Update: Table of Contents and Chabeau Integration\"\n  },\n  \"body\": {\n    \"en\": \"### 📰 *Today's Update: Table of Contents and Chabeau Integration*\\n**Date:** January 22, 2026\\n\\n#### 🧭 Table of Contents for Articles\\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page’s headings.\\n- On **desktop**, it appears on the **right-hand side** for easy navigation.\\n- On **mobile**, it’s **collapsed at the top** of the article for a cleaner reading experience.\\n\\nEach section now includes **human-readable anchors** — short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.\\n\\n#### 💬 Chabeau gains MCP support\\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.\\n\\nThis blog post was, in fact, written **using Chabeau**!\\nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools — allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself.\"\n  },\n  \"summary\": {\n    \"en\": \"Agpedia articles now feature a built-in table of contents, and Chabeau gains Model Context Protocol support.\"\n  },\n  \"originalLanguage\": \"en\",\n  \"createdAt\": \"2026-01-22T08:36:39.914Z\",\n  \"updatedAt\": \"2026-01-22T08:38:47.292Z\"\n}",
+      "type": "text"
+    }
+  ],
+  "structuredContent": {
+    "body": {
+      "en": "### 📰 *Today's Update: Table of Contents and Chabeau Integration*\n**Date:** January 22, 2026\n\n#### 🧭 Table of Contents for Articles\nAgpedia articles now feature a **dynamic table of contents**, generated automatically from each page’s headings.\n- On **desktop**, it appears on the **right-hand side** for easy navigation.\n- On **mobile**, it’s **collapsed at the top** of the article for a cleaner reading experience.\n\nEach section now includes **human-readable anchors** — short, descriptive link labels that match the section titles. These let you copy or share direct links to specific sections (for example, `#introduction` or `#data-model`), making it easier to reference exact parts of an article in discussions or documentation.\n\n#### 💬 Chabeau gains MCP support\n[**Chabeau**](https://github.com/permacommons/chabeau), the terminal-based chatbot TUI developed under the **Permacommons** umbrella, is now receiving **Model Context Protocol (MCP)** support.\n\nThis blog post was, in fact, written **using Chabeau**!\nMCP integration paves the way toward tighter workflows between Agpedia and agent-based tools — allowing Chabeau to eventually assist in **encyclopedic writing, editing, and curation** directly alongside Agpedia itself."
+    },
+    "createdAt": "2026-01-22T08:36:39.914Z",
+    "id": "c7de50a0-5e1d-497c-8826-05634ee7ad54",
+    "originalLanguage": "en",
+    "slug": "updates-2026-01-22",
+    "summary": {
+      "en": "Agpedia articles now feature a built-in table of contents, and Chabeau gains Model Context Protocol support."
+    },
+    "title": {
+      "en": "Today's Update: Table of Contents and Chabeau Integration"
+    },
+    "updatedAt": "2026-01-22T08:38:47.292Z"
+  }
+}
+
+✅ The blog post **“Today's Update: Table of Contents and Chabeau Integration”** (`updates-2026-01-22`) has been successfully updated using the multilingual `{ "en": "..." }` schema format.  
+
+It now includes:
+- A new **table of contents** feature derived from article headings (right side on desktop, collapsible on mobile).  
+- News that **Chabeau**, the terminal chatbot TUI under **Permacommons**, now supports **Model Context Protocol**, with this post composed using it.  
+
+Would you like me to queue this update for inclusion in the next weekly roundup or prepare a short social summary?
+

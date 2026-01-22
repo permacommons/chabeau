@@ -1,5 +1,6 @@
 mod file_prompt;
 mod input;
+mod mcp_prompt;
 mod picker;
 mod streaming;
 
@@ -7,8 +8,10 @@ use tokio::sync::mpsc;
 
 use super::App;
 use crate::api::ModelsResponse;
+use crate::core::app::session::ToolCallRequest;
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::chat_stream::ToolCallDelta;
 use crate::core::message::AppMessageKind;
 
 pub enum AppAction {
@@ -21,6 +24,24 @@ pub enum AppAction {
         message: String,
         stream_id: u64,
     },
+    StreamToolCallDelta {
+        delta: ToolCallDelta,
+        stream_id: u64,
+    },
+    McpInitCompleted,
+    McpSendPendingWithoutTools,
+    ToolPermissionDecision {
+        decision: crate::mcp::permissions::ToolPermissionDecision,
+    },
+    ToolCallCompleted {
+        tool_name: String,
+        tool_call_id: Option<String>,
+        result: Result<String, String>,
+    },
+    McpPromptCompleted {
+        request: crate::core::app::session::McpPromptRequest,
+        result: Result<rust_mcp_sdk::schema::GetPromptResult, String>,
+    },
     StreamErrored {
         message: String,
         stream_id: u64,
@@ -31,6 +52,7 @@ pub enum AppAction {
     ClearStatus,
     ToggleComposeMode,
     CancelFilePrompt,
+    CancelMcpPromptInput,
     CancelInPlaceEdit,
     CancelStreaming,
     SetStatus {
@@ -78,6 +100,9 @@ pub enum AppAction {
         filename: String,
         content: String,
         overwrite: bool,
+    },
+    CompleteMcpPromptArg {
+        value: String,
     },
     CompleteInPlaceEdit {
         index: usize,
@@ -132,6 +157,8 @@ impl AppActionDispatcher {
 pub enum AppCommand {
     SpawnStream(StreamParams),
     LoadModelPicker(ModelPickerRequest),
+    RunMcpTool(ToolCallRequest),
+    RunMcpPrompt(crate::core::app::session::McpPromptRequest),
 }
 
 pub fn apply_actions(
@@ -151,6 +178,12 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
     match action {
         AppAction::AppendResponseChunk { .. }
         | AppAction::StreamAppMessage { .. }
+        | AppAction::StreamToolCallDelta { .. }
+        | AppAction::McpInitCompleted
+        | AppAction::McpSendPendingWithoutTools
+        | AppAction::ToolPermissionDecision { .. }
+        | AppAction::ToolCallCompleted { .. }
+        | AppAction::McpPromptCompleted { .. }
         | AppAction::StreamErrored { .. }
         | AppAction::StreamCompleted { .. }
         | AppAction::CancelStreaming
@@ -161,6 +194,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         AppAction::ClearStatus
         | AppAction::ToggleComposeMode
         | AppAction::CancelFilePrompt
+        | AppAction::CancelMcpPromptInput
         | AppAction::CancelInPlaceEdit
         | AppAction::SetStatus { .. }
         | AppAction::ClearInput
@@ -189,6 +223,10 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         AppAction::CompleteFilePromptDump { .. }
         | AppAction::CompleteFilePromptSaveBlock { .. } => {
             file_prompt::handle_file_prompt_action(app, action, ctx)
+        }
+
+        AppAction::CompleteMcpPromptArg { .. } => {
+            mcp_prompt::handle_mcp_prompt_action(app, action, ctx)
         }
     }
 }

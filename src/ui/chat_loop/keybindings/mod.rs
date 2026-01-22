@@ -51,6 +51,11 @@ pub fn build_mode_aware_registry(
             Box::new(EscapeHandler),
         )
         .register_for_context(
+            KeyContext::McpPromptInput,
+            KeyPattern::simple(KeyCode::Esc),
+            Box::new(EscapeHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('l')),
             Box::new(CtrlLHandler),
@@ -117,6 +122,11 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::simple(KeyCode::Home),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::End),
             Box::new(NavigationHandler),
@@ -132,6 +142,11 @@ pub fn build_mode_aware_registry(
             Box::new(NavigationHandler),
         )
         .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::simple(KeyCode::End),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::PageUp),
             Box::new(NavigationHandler),
@@ -143,6 +158,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::PageUp),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::simple(KeyCode::PageUp),
             Box::new(NavigationHandler),
         )
@@ -158,6 +178,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::PageDown),
+            Box::new(NavigationHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::simple(KeyCode::PageDown),
             Box::new(NavigationHandler),
         )
@@ -178,6 +203,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::simple(KeyCode::Up),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::Down),
             Box::new(ArrowKeyHandler),
@@ -193,6 +223,11 @@ pub fn build_mode_aware_registry(
             Box::new(ArrowKeyHandler),
         )
         .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::simple(KeyCode::Down),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
             KeyContext::Typing,
             KeyPattern::simple(KeyCode::Left),
             Box::new(ArrowKeyHandler),
@@ -204,6 +239,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::Left),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::simple(KeyCode::Left),
             Box::new(ArrowKeyHandler),
         )
@@ -219,6 +259,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::simple(KeyCode::Right),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::simple(KeyCode::Right),
             Box::new(ArrowKeyHandler),
         )
@@ -234,6 +279,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Up, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::with_modifiers(KeyCode::Up, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -249,6 +299,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::with_modifiers(KeyCode::Down, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -264,6 +319,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Left, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::with_modifiers(KeyCode::Left, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -279,6 +339,11 @@ pub fn build_mode_aware_registry(
         )
         .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
+            Box::new(ArrowKeyHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
             KeyPattern::with_modifiers(KeyCode::Right, KeyModifiers::SHIFT),
             Box::new(ArrowKeyHandler),
         )
@@ -372,7 +437,21 @@ pub fn build_mode_aware_registry(
             }),
         )
         .register_for_context(
+            KeyContext::McpPromptInput,
+            KeyPattern::simple(KeyCode::Enter),
+            Box::new(EnterHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
             KeyContext::FilePrompt,
+            KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
+            Box::new(AltEnterHandler {
+                stream_service: stream_service.clone(),
+            }),
+        )
+        .register_for_context(
+            KeyContext::McpPromptInput,
             KeyPattern::with_modifiers(KeyCode::Enter, KeyModifiers::ALT),
             Box::new(AltEnterHandler {
                 stream_service: stream_service.clone(),
@@ -441,6 +520,16 @@ pub fn build_mode_aware_registry(
             KeyPattern::ctrl(KeyCode::Char('c')),
             Box::new(CtrlCHandler),
         )
+        .register_for_context(
+            KeyContext::McpPromptInput,
+            KeyPattern::ctrl(KeyCode::Char('c')),
+            Box::new(CtrlCHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::ctrl(KeyCode::Char('c')),
+            Box::new(CtrlCHandler),
+        )
         // Mode-specific catch-all handlers (register last)
         .register_for_context(
             KeyContext::EditSelect,
@@ -456,6 +545,11 @@ pub fn build_mode_aware_registry(
             KeyContext::Picker,
             KeyPattern::any(),
             Box::new(PickerHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::any(),
+            Box::new(ToolPromptDecisionHandler),
         )
         .build()
 }

@@ -1,4 +1,4 @@
-use super::{session::SessionContext, ui_state::UiState};
+use super::{session::PendingToolCall, session::SessionContext, ui_state::UiState};
 use crate::character::card::CharacterCard;
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::utils::scroll::ScrollCalculator;
@@ -84,6 +84,7 @@ impl<'a> ConversationController<'a> {
         self.session.last_refine_prompt = None;
         self.session.has_received_assistant_message = false;
         self.session.character_greeting_shown = false;
+        self.session.pending_mcp_message = None;
     }
 
     pub fn remove_trailing_empty_assistant_messages(&mut self) {
@@ -146,6 +147,9 @@ impl<'a> ConversationController<'a> {
             api_messages.push(crate::api::ChatMessage {
                 role: "system".to_string(),
                 content: final_system_prompt,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
             });
         }
 
@@ -158,6 +162,9 @@ impl<'a> ConversationController<'a> {
                 api_messages.push(crate::api::ChatMessage {
                     role: msg.role.clone(),
                     content: msg.content.clone(),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
                 });
             }
         }
@@ -171,6 +178,14 @@ impl<'a> ConversationController<'a> {
         self.apply_preset_to_messages(&mut api_messages);
 
         api_messages
+    }
+
+    pub fn api_messages_from_history(&self) -> Vec<crate::api::ChatMessage> {
+        self.assemble_api_messages(self.ui.messages.iter(), None)
+    }
+
+    pub fn add_message(&mut self, message: Message) {
+        self.ui.messages.push_back(message);
     }
 
     pub fn add_user_message(&mut self, content: String) -> Vec<crate::api::ChatMessage> {
@@ -214,6 +229,20 @@ impl<'a> ConversationController<'a> {
         self.assemble_api_messages(self.ui.messages.iter().take(history_len), None)
     }
 
+    pub fn add_assistant_placeholder(&mut self) {
+        let assistant_message = Message {
+            role: ROLE_ASSISTANT.to_string(),
+            content: String::new(),
+        };
+        self.ui.messages.push_back(assistant_message);
+        self.ui.current_response.clear();
+
+        self.session.retrying_message_index = None;
+        self.session.original_refining_content = None;
+        self.session.is_refining = false;
+        self.session.has_received_assistant_message = false;
+    }
+
     pub fn add_app_message(&mut self, kind: AppMessageKind, content: String) {
         // Log app/log messages to the file
         if kind == AppMessageKind::Log {
@@ -229,6 +258,41 @@ impl<'a> ConversationController<'a> {
 
         let message = Message::app(kind, content);
         self.ui.messages.push_back(message);
+    }
+
+    pub fn take_pending_tool_calls(&mut self) -> Vec<(u32, PendingToolCall)> {
+        if self.session.pending_tool_calls.is_empty() {
+            return Vec::new();
+        }
+
+        let has_assistant_content = !self.ui.current_response.trim().is_empty();
+        if !has_assistant_content {
+            self.remove_trailing_empty_assistant_messages();
+        }
+
+        let pending_map = std::mem::take(&mut self.session.pending_tool_calls);
+        let pending: Vec<(u32, PendingToolCall)> = pending_map.into_iter().collect();
+
+        for (_, tool_call) in pending.iter() {
+            let arguments = tool_call.arguments.trim();
+            let content = match (tool_call.name.as_deref(), arguments.is_empty()) {
+                (Some(name), false) => format!("{name} {arguments}"),
+                (Some(name), true) => name.to_string(),
+                (None, false) => arguments.to_string(),
+                (None, true) => "Unknown tool call".to_string(),
+            };
+            self.ui.messages.push_back(Message::tool_call(content));
+        }
+
+        pending
+    }
+
+    pub fn clear_pending_tool_calls(&mut self) {
+        self.session.pending_tool_calls.clear();
+    }
+
+    pub fn add_tool_result_message(&mut self, content: String) {
+        self.ui.messages.push_back(Message::tool_result(content));
     }
 
     pub fn set_status<S: Into<String>>(&mut self, s: S) {
@@ -363,6 +427,14 @@ impl<'a> ConversationController<'a> {
 
     pub fn start_new_stream(&mut self) -> (CancellationToken, u64) {
         self.cancel_current_stream();
+        self.clear_pending_tool_calls();
+        self.session.pending_tool_queue.clear();
+        self.session.active_tool_request = None;
+        self.session.tool_call_records.clear();
+        self.session.tool_results.clear();
+        self.session.last_stream_api_messages = None;
+        self.session.last_stream_api_messages_base = None;
+        self.session.mcp_tools_enabled = false;
 
         self.session.current_stream_id += 1;
 
@@ -491,6 +563,9 @@ impl<'a> ConversationController<'a> {
                     Some(crate::api::ChatMessage {
                         role: "system".to_string(),
                         content: instructions,
+                        name: None,
+                        tool_call_id: None,
+                        tool_calls: None,
                     })
                 }
             })
@@ -517,6 +592,7 @@ impl<'a> ConversationController<'a> {
             api_key: self.session.api_key.clone(),
             base_url: self.session.base_url.clone(),
             provider_name: self.session.provider_name.clone(),
+            tools: None,
             cancel_token,
             stream_id,
         }
@@ -531,6 +607,7 @@ impl<'a> ConversationController<'a> {
 
     fn start_new_stream_headless(&mut self) -> (CancellationToken, u64) {
         self.cancel_current_stream_headless();
+        self.clear_pending_tool_calls();
         self.session.current_stream_id += 1;
         let token = CancellationToken::new();
         self.session.stream_cancel_token = Some(token.clone());
@@ -613,6 +690,9 @@ impl<'a> ConversationController<'a> {
             api_messages.push(crate::api::ChatMessage {
                 role: ROLE_USER.to_string(),
                 content: format!("{} {}", prefix, prompt),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
             });
             Some(api_messages)
         } else {

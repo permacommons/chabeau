@@ -15,12 +15,18 @@ mod registry;
 
 pub use registry::{all_commands, matching_commands, CommandInvocation};
 
+use crate::core::app::session::McpPromptRequest;
 use crate::core::app::App;
+use crate::core::mcp_auth::McpTokenStore;
 use crate::core::message::{self, AppMessageKind};
 use chrono::Utc;
 use registry::DispatchOutcome;
+use rust_mcp_sdk::schema::PromptArgument;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use tokio::runtime::Handle;
+use tokio::task;
 
 /// Result of processing a command or user input.
 ///
@@ -57,6 +63,9 @@ pub enum CommandResult {
 
     /// Refine or edit the contained text before sending to the model.
     Refine(String),
+
+    /// Run an MCP prompt request.
+    RunMcpPrompt(McpPromptRequest),
 }
 
 /// Processes user input and dispatches commands.
@@ -122,12 +131,171 @@ pub enum CommandResult {
 pub fn process_input(app: &mut App, input: &str) -> CommandResult {
     match registry::registry().dispatch(input) {
         DispatchOutcome::NotACommand | DispatchOutcome::UnknownCommand => {
+            if let Some(result) = handle_mcp_prompt_invocation(app, input) {
+                return result;
+            }
             CommandResult::ProcessAsMessage(input.to_string())
         }
         DispatchOutcome::Invocation(invocation) => {
             let handler = invocation.command.handler;
             handler(app, invocation)
         }
+    }
+}
+
+fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandResult> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+
+    let without_slash = trimmed.trim_start_matches('/');
+    let mut parts = without_slash.splitn(2, char::is_whitespace);
+    let command = parts.next().unwrap_or("");
+    let args_str = parts.next().unwrap_or("").trim();
+
+    let (server_id, prompt_name) = command.split_once(':')?;
+    if server_id.is_empty() || prompt_name.is_empty() {
+        return None;
+    }
+
+    let (server_id_label, server_name, prompts) = match app.mcp.server(server_id) {
+        Some(server) => (
+            server.config.id.clone(),
+            server.config.display_name.clone(),
+            server.cached_prompts.clone(),
+        ),
+        None => {
+            app.conversation()
+                .set_status(format!("No MCP server '{}'.", server_id));
+            return Some(CommandResult::Continue);
+        }
+    };
+
+    let Some(prompts) = prompts else {
+        app.conversation().set_status(format!(
+            "No cached prompts for MCP server '{}'.",
+            server_id_label
+        ));
+        return Some(CommandResult::Continue);
+    };
+    let prompt = prompts
+        .prompts
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(prompt_name));
+
+    let Some(prompt) = prompt else {
+        app.conversation().set_status(format!(
+            "No MCP prompt '{}' on server '{}'.",
+            prompt_name, server_id_label
+        ));
+        return Some(CommandResult::Continue);
+    };
+
+    let parsed_args = match parse_kv_args(args_str) {
+        Ok(map) => map,
+        Err(err) => {
+            app.conversation().set_status(err);
+            return Some(CommandResult::Continue);
+        }
+    };
+
+    let collected = parsed_args;
+    let mut missing = Vec::new();
+    for arg in &prompt.arguments {
+        if !arg.required.unwrap_or(false) {
+            continue;
+        }
+        if collected.contains_key(&arg.name) {
+            continue;
+        }
+        missing.push(prompt_argument_from_schema(arg));
+    }
+
+    if !missing.is_empty() {
+        app.ui
+            .start_mcp_prompt_input(crate::core::app::ui_state::McpPromptInput {
+                server_id: server_id_label.clone(),
+                server_name,
+                prompt_name: prompt.name.clone(),
+                prompt_title: prompt.title.clone(),
+                pending_args: missing,
+                collected,
+                next_index: 0,
+            });
+        return Some(CommandResult::Continue);
+    }
+
+    Some(CommandResult::RunMcpPrompt(McpPromptRequest {
+        server_id: server_id_label,
+        prompt_name: prompt.name.clone(),
+        arguments: collected,
+    }))
+}
+
+fn parse_kv_args(input: &str) -> Result<HashMap<String, String>, String> {
+    if input.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quote: Option<char> = None;
+    for ch in input.chars() {
+        match ch {
+            '"' | '\'' => {
+                if let Some(q) = in_quote {
+                    if q == ch {
+                        in_quote = None;
+                    } else {
+                        current.push(ch);
+                    }
+                } else {
+                    in_quote = Some(ch);
+                }
+            }
+            c if c.is_whitespace() && in_quote.is_none() => {
+                if !current.is_empty() {
+                    tokens.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if let Some(q) = in_quote {
+        return Err(format!("Unclosed quote ({}) in prompt arguments.", q));
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    let mut args = HashMap::new();
+    for token in tokens {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(format!(
+                "Invalid prompt argument '{}'. Use key=value.",
+                token
+            ));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("Prompt argument name cannot be empty.".to_string());
+        }
+        args.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(args)
+}
+
+fn prompt_argument_from_schema(
+    arg: &PromptArgument,
+) -> crate::core::app::ui_state::McpPromptArgument {
+    crate::core::app::ui_state::McpPromptArgument {
+        name: arg.name.clone(),
+        title: arg.title.clone(),
+        description: arg.description.clone(),
+        required: arg.required.unwrap_or(false),
     }
 }
 
@@ -156,6 +324,24 @@ pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) ->
         conversation.set_status("Transcript cleared".to_string());
     }
     CommandResult::Continue
+}
+
+pub(super) fn handle_mcp(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    let command = invocation.arg(0);
+    if command.is_none() {
+        return handle_mcp_list(app);
+    }
+
+    match command.unwrap().to_ascii_lowercase().as_str() {
+        "tools" => handle_mcp_assets(app, invocation, McpAssetKind::Tools),
+        "resources" => handle_mcp_assets(app, invocation, McpAssetKind::Resources),
+        "prompts" => handle_mcp_assets(app, invocation, McpAssetKind::Prompts),
+        _ => {
+            app.conversation()
+                .set_status("Usage: /mcp [tools|resources|prompts] <server>".to_string());
+            CommandResult::Continue
+        }
+    }
 }
 
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
@@ -210,6 +396,213 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
             app.conversation().set_status("Usage: /log [filename]");
             CommandResult::Continue
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum McpAssetKind {
+    Tools,
+    Resources,
+    Prompts,
+}
+
+fn handle_mcp_list(app: &mut App) -> CommandResult {
+    let keyring_enabled = !cfg!(test) && !app.session.startup_env_only;
+    let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
+    let mut errors = Vec::new();
+
+    connect_mcp_all_blocking(app, &token_store);
+
+    let servers: Vec<_> = app.mcp.servers().collect();
+    let mut output = String::from("## MCP servers\n");
+    if servers.is_empty() {
+        output.push_str("No MCP servers configured. Add `[[mcp_servers]]` to config.toml.\n");
+        app.conversation()
+            .add_app_message(AppMessageKind::Info, output);
+        return CommandResult::ContinueWithTranscriptFocus;
+    }
+
+    for server in servers {
+        let enabled = if server.config.is_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let transport = server
+            .config
+            .transport
+            .as_deref()
+            .unwrap_or("streamable-http");
+        let connected = if server.connected { "yes" } else { "no" };
+        let token_status = if keyring_enabled {
+            match token_store.get_token(&server.config.id) {
+                Ok(Some(_)) => "present".to_string(),
+                Ok(None) => "missing".to_string(),
+                Err(err) => {
+                    errors.push(format!(
+                        "Token lookup failed for {}: {}",
+                        server.config.display_name, err
+                    ));
+                    "error".to_string()
+                }
+            }
+        } else {
+            "unknown (keyring disabled)".to_string()
+        };
+
+        output.push_str(&format!(
+            "- **{}** ({}) — {}, transport: {}, token: {}, connected: {}\n",
+            server.config.id,
+            server.config.display_name,
+            enabled,
+            transport,
+            token_status,
+            connected
+        ));
+        if std::env::var("CHABEAU_MCP_DEBUG").is_ok() {
+            let session_id = server.session_id.as_deref().unwrap_or("none");
+            output.push_str(&format!("  - session id: {}\n", session_id));
+        }
+        if let Some(err) = &server.last_error {
+            output.push_str(&format!("  - last error: {}\n", err));
+        }
+    }
+
+    if !errors.is_empty() {
+        output.push('\n');
+        output.push_str("### Token lookup warnings\n");
+        for err in errors {
+            output.push_str(&format!("- {}\n", err));
+        }
+    }
+
+    app.conversation()
+        .add_app_message(AppMessageKind::Info, output);
+    CommandResult::ContinueWithTranscriptFocus
+}
+
+fn handle_mcp_assets(
+    app: &mut App,
+    invocation: CommandInvocation<'_>,
+    kind: McpAssetKind,
+) -> CommandResult {
+    let Some(server_id) = invocation.arg(1) else {
+        app.conversation()
+            .set_status("Usage: /mcp [tools|resources|prompts] <server>".to_string());
+        return CommandResult::Continue;
+    };
+
+    let keyring_enabled = !cfg!(test) && !app.session.startup_env_only;
+    let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
+
+    connect_mcp_server_blocking(app, server_id, &token_store);
+    refresh_mcp_asset_blocking(app, server_id, kind);
+
+    let Some(server) = app.mcp.server(server_id) else {
+        app.conversation()
+            .set_status(format!("Unknown MCP server: {}", server_id));
+        return CommandResult::Continue;
+    };
+
+    let title = match kind {
+        McpAssetKind::Tools => "MCP tools",
+        McpAssetKind::Resources => "MCP resources",
+        McpAssetKind::Prompts => "MCP prompts",
+    };
+
+    let mut output = format!("## {} for {}\n", title, server.config.display_name);
+    output.push_str(&format!("Server id: `{}`\n", server.config.id));
+
+    if matches!(kind, McpAssetKind::Tools) {
+        match server.config.allowed_tools.as_ref() {
+            Some(allowed) if allowed.is_empty() => {
+                output.push_str("Allowed tools (config): none\n");
+            }
+            Some(allowed) => {
+                output.push_str(&format!("Allowed tools (config): {}\n", allowed.join(", ")));
+            }
+            None => {
+                output.push_str("Allowed tools (config): all\n");
+            }
+        }
+    }
+
+    match kind {
+        McpAssetKind::Tools => {
+            if let Some(list) = &server.cached_tools {
+                if list.tools.is_empty() {
+                    output.push_str("No tools reported by server.\n");
+                } else {
+                    output.push_str("Tools:\n");
+                    for tool in &list.tools {
+                        output.push_str(&format!("- {}\n", tool.name));
+                    }
+                }
+            } else {
+                output.push_str("No cached tool listing yet.\n");
+            }
+        }
+        McpAssetKind::Resources => {
+            if let Some(list) = &server.cached_resources {
+                if list.resources.is_empty() {
+                    output.push_str("No resources reported by server.\n");
+                } else {
+                    output.push_str("Resources:\n");
+                    for resource in &list.resources {
+                        output.push_str(&format!("- {}\n", resource.uri));
+                    }
+                }
+            } else {
+                output.push_str("No cached resource listing yet.\n");
+            }
+        }
+        McpAssetKind::Prompts => {
+            if let Some(list) = &server.cached_prompts {
+                if list.prompts.is_empty() {
+                    output.push_str("No prompts reported by server.\n");
+                } else {
+                    output.push_str("Prompts:\n");
+                    for prompt in &list.prompts {
+                        output.push_str(&format!("- {}\n", prompt.name));
+                    }
+                }
+            } else {
+                output.push_str("No cached prompt listing yet.\n");
+            }
+        }
+    }
+
+    if let Some(err) = &server.last_error {
+        output.push_str(&format!("\nLast error: {}\n", err));
+    }
+    app.conversation()
+        .add_app_message(AppMessageKind::Info, output);
+    CommandResult::ContinueWithTranscriptFocus
+}
+
+fn connect_mcp_all_blocking(app: &mut App, token_store: &McpTokenStore) {
+    if let Ok(handle) = Handle::try_current() {
+        task::block_in_place(|| {
+            handle.block_on(app.mcp.connect_all(token_store));
+        });
+    }
+}
+
+fn connect_mcp_server_blocking(app: &mut App, server_id: &str, token_store: &McpTokenStore) {
+    if let Ok(handle) = Handle::try_current() {
+        task::block_in_place(|| {
+            handle.block_on(app.mcp.connect_server(server_id, token_store));
+        });
+    }
+}
+
+fn refresh_mcp_asset_blocking(app: &mut App, server_id: &str, kind: McpAssetKind) {
+    if let Ok(handle) = Handle::try_current() {
+        task::block_in_place(|| match kind {
+            McpAssetKind::Tools => handle.block_on(app.mcp.refresh_tools(server_id)),
+            McpAssetKind::Resources => handle.block_on(app.mcp.refresh_resources(server_id)),
+            McpAssetKind::Prompts => handle.block_on(app.mcp.refresh_prompts(server_id)),
+        });
     }
 }
 
@@ -532,6 +925,8 @@ pub fn dump_conversation_with_overwrite(
         match msg.role.as_str() {
             "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
             message::ROLE_APP_LOG => writeln!(writer, "## {}", msg.content)?,
+            message::ROLE_TOOL_CALL => writeln!(writer, "Tool call: {}", msg.content)?,
+            message::ROLE_TOOL_RESULT => writeln!(writer, "Tool result: {}", msg.content)?,
             _ => writeln!(writer, "{}", msg.content)?, // For assistant messages
         }
         writeln!(writer)?; // Empty line for spacing
@@ -1158,5 +1553,53 @@ mod tests {
 
         assert!(matches!(res, CommandResult::Continue));
         assert_eq!(app.ui.user_display_name, "Alice");
+    }
+
+    #[test]
+    fn mcp_command_lists_empty_config() {
+        let mut app = create_test_app();
+        let res = process_input(&mut app, "/mcp");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("MCP servers"));
+        assert!(last.content.contains("No MCP servers configured"));
+    }
+
+    #[test]
+    fn mcp_tools_command_includes_allowed_tools() {
+        let mut app = create_test_app();
+        app.config
+            .mcp_servers
+            .push(crate::core::config::data::McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: "https://mcp.example.com".to_string(),
+                transport: Some("sse".to_string()),
+                allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
+                protocol_version: Some("2024-11-05".to_string()),
+                enabled: Some(true),
+            });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let res = process_input(&mut app, "/mcp tools alpha");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("MCP tools"));
+        assert!(last
+            .content
+            .contains("Allowed tools (config): weather.lookup, time.now"));
+    }
+
+    #[test]
+    fn parse_kv_args_supports_quotes() {
+        let args = parse_kv_args("topic=\"soil health\" lang=en").expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
+        assert_eq!(args.get("lang").map(String::as_str), Some("en"));
+    }
+
+    #[test]
+    fn parse_kv_args_rejects_missing_equals() {
+        let err = parse_kv_args("topic").unwrap_err();
+        assert!(err.contains("key=value"));
     }
 }

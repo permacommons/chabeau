@@ -580,6 +580,23 @@ pub async fn handle_enter_key(
 ) -> Result<Option<KeyLoopAction>, Box<dyn Error>> {
     let modifiers = key.modifiers;
 
+    let mcp_prompt_action = app
+        .read(|app| {
+            app.ui
+                .mcp_prompt_input()
+                .map(|_| app.ui.get_input_text().to_string())
+        })
+        .await;
+
+    if let Some(value) = mcp_prompt_action {
+        let ctx = AppActionContext {
+            term_width,
+            term_height,
+        };
+        dispatcher.dispatch_many([AppAction::CompleteMcpPromptArg { value }], ctx);
+        return Ok(Some(KeyLoopAction::Continue));
+    }
+
     let file_prompt_action = app
         .read(|app| {
             app.ui.file_prompt().cloned().map(|prompt| {
@@ -649,6 +666,25 @@ pub async fn handle_enter_key(
         return Ok(Some(KeyLoopAction::Continue));
     }
 
+    let should_send_without_tools = app
+        .read(|app| {
+            app.session.mcp_init_in_progress
+                && app.session.pending_mcp_message.is_some()
+                && app.ui.get_input_text().trim().is_empty()
+        })
+        .await;
+
+    if should_send_without_tools {
+        dispatcher.dispatch_many(
+            [AppAction::McpSendPendingWithoutTools],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        return Ok(Some(KeyLoopAction::Continue));
+    }
+
     let in_place_edit = app
         .read(|app| {
             app.ui
@@ -699,6 +735,25 @@ pub async fn handle_ctrl_j_shortcut(
         })
         .await;
         *last_input_layout_update = Instant::now();
+        return Ok(Some(KeyLoopAction::Continue));
+    }
+
+    let should_send_without_tools = app
+        .read(|app| {
+            app.session.mcp_init_in_progress
+                && app.session.pending_mcp_message.is_some()
+                && app.ui.get_input_text().trim().is_empty()
+        })
+        .await;
+
+    if should_send_without_tools {
+        dispatcher.dispatch_many(
+            [AppAction::McpSendPendingWithoutTools],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
         return Ok(Some(KeyLoopAction::Continue));
     }
 

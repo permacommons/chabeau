@@ -68,6 +68,17 @@ pub struct Preset {
     pub post: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub id: String,
+    pub display_name: String,
+    pub base_url: String,
+    pub transport: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub protocol_version: Option<String>,
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     pub default_provider: Option<String>,
@@ -112,6 +123,8 @@ pub struct Config {
     pub presets: Vec<Preset>,
     pub refine_instructions: Option<String>,
     pub refine_prefix: Option<String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 pub const DEFAULT_REFINE_INSTRUCTIONS: &str = r#"
@@ -185,6 +198,16 @@ impl Config {
         self.custom_themes.iter().collect()
     }
 
+    pub fn get_mcp_server(&self, id: &str) -> Option<&McpServerConfig> {
+        self.mcp_servers
+            .iter()
+            .find(|server| server.id.eq_ignore_ascii_case(id))
+    }
+
+    pub fn list_mcp_servers(&self) -> Vec<&McpServerConfig> {
+        self.mcp_servers.iter().collect()
+    }
+
     pub fn refine_instructions(&self) -> Cow<'_, str> {
         self.refine_instructions
             .as_deref()
@@ -197,6 +220,12 @@ impl Config {
             .as_deref()
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Borrowed(DEFAULT_REFINE_PREFIX))
+    }
+}
+
+impl McpServerConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
     }
 }
 

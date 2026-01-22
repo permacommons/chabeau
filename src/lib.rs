@@ -4,5 +4,6 @@ pub mod character;
 pub mod cli;
 pub mod commands;
 pub mod core;
+pub mod mcp;
 pub mod ui;
 pub mod utils;

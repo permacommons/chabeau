@@ -7,11 +7,13 @@
 //! Session metadata allows downstream components to act without re-querying
 //! configuration or authentication state during the conversation lifecycle.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
+use crate::api::{ChatMessage, ChatToolCall};
 use crate::auth::AuthManager;
 use crate::character::card::CharacterCard;
 use crate::character::service::CharacterService;
@@ -50,6 +52,41 @@ pub struct SessionContext {
     pub active_character: Option<CharacterCard>,
     pub character_greeting_shown: bool,
     pub has_received_assistant_message: bool,
+    pub pending_tool_calls: BTreeMap<u32, PendingToolCall>,
+    pub mcp_init_in_progress: bool,
+    pub mcp_init_complete: bool,
+    pub pending_mcp_message: Option<String>,
+    pub pending_tool_queue: VecDeque<ToolCallRequest>,
+    pub active_tool_request: Option<ToolCallRequest>,
+    pub tool_call_records: Vec<ChatToolCall>,
+    pub tool_results: Vec<ChatMessage>,
+    pub last_stream_api_messages: Option<Vec<ChatMessage>>,
+    pub last_stream_api_messages_base: Option<Vec<ChatMessage>>,
+    pub mcp_tools_enabled: bool,
+    pub mcp_tools_unsupported: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingToolCall {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolCallRequest {
+    pub server_id: String,
+    pub tool_name: String,
+    pub arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    pub raw_arguments: String,
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpPromptRequest {
+    pub server_id: String,
+    pub prompt_name: String,
+    pub arguments: std::collections::HashMap<String, String>,
 }
 
 pub struct SessionBootstrap {
@@ -302,6 +339,18 @@ pub(crate) async fn prepare_with_auth(
         active_character,
         character_greeting_shown: false,
         has_received_assistant_message: false,
+        pending_tool_calls: BTreeMap::new(),
+        mcp_init_in_progress: false,
+        mcp_init_complete: false,
+        pending_mcp_message: None,
+        pending_tool_queue: VecDeque::new(),
+        active_tool_request: None,
+        tool_call_records: Vec::new(),
+        tool_results: Vec::new(),
+        last_stream_api_messages: None,
+        last_stream_api_messages_base: None,
+        mcp_tools_enabled: false,
+        mcp_tools_unsupported: false,
     };
 
     Ok(SessionBootstrap {
@@ -342,6 +391,18 @@ pub(crate) async fn prepare_uninitialized(
         active_character: None,
         character_greeting_shown: false,
         has_received_assistant_message: false,
+        pending_tool_calls: BTreeMap::new(),
+        mcp_init_in_progress: false,
+        mcp_init_complete: false,
+        pending_mcp_message: None,
+        pending_tool_queue: VecDeque::new(),
+        active_tool_request: None,
+        tool_call_records: Vec::new(),
+        tool_results: Vec::new(),
+        last_stream_api_messages: None,
+        last_stream_api_messages_base: None,
+        mcp_tools_enabled: false,
+        mcp_tools_unsupported: false,
     };
 
     Ok(UninitializedSessionBootstrap {
@@ -502,6 +563,18 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         let card = CharacterCard {
@@ -573,6 +646,18 @@ mod tests {
             }),
             character_greeting_shown: true,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         session.clear_character();
@@ -623,6 +708,18 @@ mod tests {
             }),
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         // Should show greeting when character is active and greeting not shown
@@ -676,6 +773,18 @@ mod tests {
             }),
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         // Should not show empty/whitespace greeting
@@ -883,6 +992,18 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         assert!(session.get_character().is_none());
@@ -914,6 +1035,18 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         // Initially no greeting
@@ -983,6 +1116,18 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         let card = CharacterCard {
@@ -1044,6 +1189,18 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
+            pending_tool_calls: BTreeMap::new(),
+            mcp_init_in_progress: false,
+            mcp_init_complete: false,
+            pending_mcp_message: None,
+            pending_tool_queue: VecDeque::new(),
+            active_tool_request: None,
+            tool_call_records: Vec::new(),
+            tool_results: Vec::new(),
+            last_stream_api_messages: None,
+            last_stream_api_messages_base: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
         };
 
         let card1 = CharacterCard {

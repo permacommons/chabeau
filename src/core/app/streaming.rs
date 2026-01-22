@@ -124,7 +124,6 @@ impl App {
                     },
                 });
             }
-
         }
 
         if has_resources {

@@ -528,16 +528,28 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         let inspect_mode = app.inspect_state().map(|state| state.mode);
         let in_picker = app.picker_session().is_some();
-        let (line1, line2) = match inspect_mode {
-            Some(InspectMode::ToolResults { .. }) => (
-                "Esc=Close • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
-                "Home/End=Jump",
-            ),
+        let (line1, line2): (String, String) = match inspect_mode {
+            Some(InspectMode::ToolResults { view, .. }) => {
+                let toggle_label = match view {
+                    crate::core::app::ToolInspectView::Result => "Tab=Show request",
+                    crate::core::app::ToolInspectView::Request => "Tab=Show result",
+                };
+                (
+                    format!(
+                        "Esc=Close • {} • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
+                        toggle_label
+                    ),
+                    "Home/End=Jump".to_string(),
+                )
+            }
             _ if in_picker => (
-                "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Faster",
-                "Home/End=Jump",
+                "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Faster".to_string(),
+                "Home/End=Jump".to_string(),
             ),
-            _ => ("Esc=Close • ↑/↓=Scroll • PgUp/PgDn=Faster", "Home/End=Jump"),
+            _ => (
+                "Esc=Close • ↑/↓=Scroll • PgUp/PgDn=Faster".to_string(),
+                "Home/End=Jump".to_string(),
+            ),
         };
         let help_lines = vec![
             Line::from(Span::styled(line1, theme.system_text_style)),

@@ -2,7 +2,7 @@ use super::{streaming, App, AppAction, AppActionContext, AppCommand};
 use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::build_inspect_text;
 use crate::core::app::session::ToolResultRecord;
-use crate::core::app::InspectMode;
+use crate::core::app::{InspectMode, ToolInspectView};
 
 pub(super) fn handle_input_action(
     app: &mut App,
@@ -52,6 +52,10 @@ pub(super) fn handle_input_action(
         }
         AppAction::InspectToolResults => {
             open_latest_tool_result_inspect(app, ctx);
+            None
+        }
+        AppAction::InspectToolResultsToggleView => {
+            toggle_tool_result_inspect_view(app, ctx);
             None
         }
         AppAction::InspectToolResultsStep { delta } => {
@@ -166,14 +170,14 @@ fn open_latest_tool_result_inspect(app: &mut App, ctx: AppActionContext) {
         return;
     }
     let index = app.session.tool_result_history.len().saturating_sub(1);
-    open_tool_result_inspect_at(app, index, ctx);
+    open_tool_result_inspect_at(app, index, ToolInspectView::Result, ctx);
 }
 
 fn step_tool_result_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
     let Some(state) = app.inspect_state() else {
         return;
     };
-    let InspectMode::ToolResults { index } = state.mode else {
+    let InspectMode::ToolResults { index, view } = state.mode else {
         return;
     };
     let total = app.session.tool_result_history.len();
@@ -186,19 +190,48 @@ fn step_tool_result_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
         total.saturating_sub(1)
     };
     let next = (index + step) % total;
-    open_tool_result_inspect_at(app, next, ctx);
+    open_tool_result_inspect_at(app, next, view, ctx);
 }
 
-fn open_tool_result_inspect_at(app: &mut App, index: usize, ctx: AppActionContext) {
+fn toggle_tool_result_inspect_view(app: &mut App, ctx: AppActionContext) {
+    let Some(state) = app.inspect_state() else {
+        return;
+    };
+    let InspectMode::ToolResults { index, view } = state.mode else {
+        return;
+    };
+    open_tool_result_inspect_at(app, index, view.toggle(), ctx);
+}
+
+fn open_tool_result_inspect_at(
+    app: &mut App,
+    index: usize,
+    view: ToolInspectView,
+    ctx: AppActionContext,
+) {
     let Some(record) = app.session.tool_result_history.get(index).cloned() else {
         set_status_message(app, "Tool result unavailable.".to_string(), ctx);
         return;
     };
 
-    let title = build_tool_result_title(&record, index, app.session.tool_result_history.len());
-    let content = build_tool_result_content(&record);
-    app.open_tool_result_inspect(title, content, index);
-    set_status_message(app, "Inspecting tool result (Esc=Close)".to_string(), ctx);
+    let title = match view {
+        ToolInspectView::Result => {
+            build_tool_result_title(&record, index, app.session.tool_result_history.len())
+        }
+        ToolInspectView::Request => {
+            build_tool_request_title(&record, index, app.session.tool_result_history.len())
+        }
+    };
+    let content = match view {
+        ToolInspectView::Result => build_tool_result_content(&record),
+        ToolInspectView::Request => build_tool_request_content(&record),
+    };
+    app.open_tool_result_inspect(title, content, index, view);
+    set_status_message(
+        app,
+        "Inspecting tool result (Tab=Toggle • Esc=Close)".to_string(),
+        ctx,
+    );
 }
 
 fn build_tool_result_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
@@ -236,8 +269,77 @@ fn build_tool_result_content(record: &ToolResultRecord) -> String {
     build_inspect_text(lines)
 }
 
+fn build_tool_request_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
+    let position = format!("{}/{}", index + 1, total.max(1));
+    format!("Tool request ({position}) – {}", record.tool_name)
+}
+
+fn build_tool_request_content(record: &ToolResultRecord) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("Tool: {}", record.tool_name));
+
+    let server_label = record
+        .server_name
+        .as_ref()
+        .or(record.server_id.as_ref())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if let Some(server) = server_label.as_ref() {
+        lines.push(format!("Server: {}", server));
+    }
+
+    if let (Some(server_id), Some(server_label)) =
+        (record.server_id.as_ref(), server_label.as_ref())
+    {
+        if server_id.trim() != server_label.trim() {
+            lines.push(format!("Server ID: {}", server_id));
+        }
+    }
+
+    if let Some(tool_call_id) = record.tool_call_id.as_ref() {
+        if !tool_call_id.trim().is_empty() {
+            lines.push(format!("Tool call id: {}", tool_call_id));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Arguments:".to_string());
+
+    let args_text = record
+        .raw_arguments
+        .as_deref()
+        .map(format_tool_arguments_for_inspect)
+        .unwrap_or_default();
+    if args_text.trim().is_empty() {
+        if record.raw_arguments.is_some() {
+            lines.push("  (none)".to_string());
+        } else {
+            lines.push("  (unavailable)".to_string());
+        }
+    } else {
+        for line in args_text.lines() {
+            lines.push(format!("  {}", line));
+        }
+    }
+
+    build_inspect_text(lines)
+}
+
 fn format_tool_payload_for_inspect(payload: &str) -> String {
     let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn format_tool_arguments_for_inspect(raw_arguments: &str) -> String {
+    let trimmed = raw_arguments.trim();
     if trimmed.is_empty() {
         return String::new();
     }
@@ -251,6 +353,7 @@ fn format_tool_payload_for_inspect(payload: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::session::ToolResultStatus;
     use crate::utils::test_utils::create_test_app;
 
     fn default_ctx() -> AppActionContext {
@@ -307,5 +410,38 @@ mod tests {
 
         assert!(cmd.is_none());
         assert!(app.ui.is_transcript_focused());
+    }
+
+    #[test]
+    fn tool_request_inspect_formats_arguments() {
+        let record = ToolResultRecord {
+            tool_name: "mcp_read_resource".to_string(),
+            server_name: Some("Example Server".to_string()),
+            server_id: Some("example".to_string()),
+            status: ToolResultStatus::Success,
+            content: "{\"ok\":true}".to_string(),
+            tool_call_id: Some("tool-call-1".to_string()),
+            raw_arguments: Some("{\"uri\":\"mcp://example/resource\"}".to_string()),
+        };
+
+        let content = build_tool_request_content(&record);
+        assert!(content.contains("Arguments:"));
+        assert!(content.contains("\"uri\": \"mcp://example/resource\""));
+    }
+
+    #[test]
+    fn tool_request_inspect_handles_missing_arguments() {
+        let record = ToolResultRecord {
+            tool_name: "no_args".to_string(),
+            server_name: None,
+            server_id: None,
+            status: ToolResultStatus::Success,
+            content: "{}".to_string(),
+            tool_call_id: None,
+            raw_arguments: None,
+        };
+
+        let content = build_tool_request_content(&record);
+        assert!(content.contains("(unavailable)"));
     }
 }

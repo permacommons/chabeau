@@ -35,6 +35,7 @@ pub enum AppAction {
     },
     ToolPromptInspect,
     InspectToolResults,
+    InspectToolResultsToggleView,
     InspectToolResultsStep {
         delta: i32,
     },
@@ -209,6 +210,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::CompleteInPlaceEdit { .. }
         | AppAction::CompleteAssistantEdit { .. }
         | AppAction::InspectToolResults
+        | AppAction::InspectToolResultsToggleView
         | AppAction::InspectToolResultsStep { .. } => input::handle_input_action(app, action, ctx),
 
         AppAction::PickerEscape

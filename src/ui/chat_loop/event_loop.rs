@@ -25,7 +25,7 @@ use crate::api::models::fetch_models;
 use crate::character::CharacterService;
 use crate::core::app::{
     apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
-    ModelPickerRequest,
+    InspectMode, ModelPickerRequest,
 };
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
@@ -411,6 +411,25 @@ async fn route_keyboard_event(
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
+
+    if key.code == event::KeyCode::Tab && key.modifiers.is_empty() {
+        let inspect_mode = app
+            .read(|app| app.inspect_state().map(|state| state.mode))
+            .await;
+        if matches!(inspect_mode, Some(InspectMode::ToolResults { .. })) {
+            dispatcher.dispatch_many(
+                [AppAction::InspectToolResultsToggleView],
+                AppActionContext {
+                    term_width: term_size.width,
+                    term_height: term_size.height,
+                },
+            );
+            return Ok(KeyboardEventOutcome {
+                request_redraw: true,
+                exit_requested: false,
+            });
+        }
+    }
 
     if key.code == event::KeyCode::Tab
         && !matches!(context, KeyContext::Picker)

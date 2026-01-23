@@ -106,9 +106,11 @@ impl ToolResultStatus {
 pub struct ToolResultRecord {
     pub tool_name: String,
     pub server_name: Option<String>,
+    pub server_id: Option<String>,
     pub status: ToolResultStatus,
     pub content: String,
     pub tool_call_id: Option<String>,
+    pub raw_arguments: Option<String>,
 }
 
 #[derive(Debug, Clone)]

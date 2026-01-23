@@ -31,7 +31,22 @@ impl InspectState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectMode {
     Static,
-    ToolResults { index: usize },
+    ToolResults { index: usize, view: ToolInspectView },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInspectView {
+    Result,
+    Request,
+}
+
+impl ToolInspectView {
+    pub fn toggle(self) -> Self {
+        match self {
+            ToolInspectView::Result => ToolInspectView::Request,
+            ToolInspectView::Request => ToolInspectView::Result,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -56,11 +71,17 @@ impl InspectController {
         self.state = Some(InspectState::new(title, content));
     }
 
-    pub fn open_tool_results(&mut self, title: String, content: String, index: usize) {
+    pub fn open_tool_results(
+        &mut self,
+        title: String,
+        content: String,
+        index: usize,
+        view: ToolInspectView,
+    ) {
         self.state = Some(InspectState::with_mode(
             title,
             content,
-            InspectMode::ToolResults { index },
+            InspectMode::ToolResults { index, view },
         ));
     }
 
@@ -106,8 +127,14 @@ impl App {
         self.inspect.open(title, content);
     }
 
-    pub fn open_tool_result_inspect(&mut self, title: String, content: String, index: usize) {
-        self.inspect.open_tool_results(title, content, index);
+    pub fn open_tool_result_inspect(
+        &mut self,
+        title: String,
+        content: String,
+        index: usize,
+        view: ToolInspectView,
+    ) {
+        self.inspect.open_tool_results(title, content, index, view);
     }
 
     pub fn close_inspect(&mut self) {

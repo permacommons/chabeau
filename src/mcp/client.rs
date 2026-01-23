@@ -10,10 +10,12 @@ use rust_mcp_sdk::schema::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, GetPromptRequestParams,
     GetPromptResult, Implementation, InitializeRequestParams, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-    ReadResourceResult, LATEST_PROTOCOL_VERSION,
+    ReadResourceResult, RpcError, LATEST_PROTOCOL_VERSION,
 };
 use rust_mcp_sdk::{ClientSseTransport, ClientSseTransportOptions, McpClient, ToMcpClientHandler};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::error::Error;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -770,7 +772,7 @@ pub async fn execute_tool_call(
             let result = client
                 .request_tool_call(params)
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| format_error_chain(&err))?;
             context.session_id = client.session_id().await;
             Ok(result)
         }
@@ -803,7 +805,7 @@ pub async fn execute_resource_read(
             let result = client
                 .request_resource_read(params)
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| format_error_chain(&err))?;
             context.session_id = client.session_id().await;
             Ok(result)
         }
@@ -845,7 +847,7 @@ pub async fn execute_prompt(
             let result = client
                 .request_prompt(params)
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| format_error_chain(&err))?;
             context.session_id = client.session_id().await;
             Ok(result)
         }
@@ -993,8 +995,7 @@ fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
 }
 
 fn parse_initialize(message: ServerMessage) -> Result<(), String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     if value.get("protocolVersion").is_none() && value.get("protocol_version").is_none() {
         return Err("Unexpected initialize response.".to_string());
     }
@@ -1002,45 +1003,140 @@ fn parse_initialize(message: ServerMessage) -> Result<(), String> {
 }
 
 fn parse_list_tools(message: ServerMessage) -> Result<ListToolsResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<ListToolsResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_list_resources(message: ServerMessage) -> Result<ListResourcesResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<ListResourcesResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_list_resource_templates(
     message: ServerMessage,
 ) -> Result<ListResourceTemplatesResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<ListResourceTemplatesResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_list_prompts(message: ServerMessage) -> Result<ListPromptsResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<ListPromptsResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_get_prompt(message: ServerMessage) -> Result<GetPromptResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<GetPromptResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_read_resource(message: ServerMessage) -> Result<ReadResourceResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<ReadResourceResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_call_tool(message: ServerMessage) -> Result<CallToolResult, String> {
-    let response = message.as_response().map_err(|err| err.to_string())?;
-    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    let value = parse_response_value(message)?;
     serde_json::from_value::<CallToolResult>(value).map_err(|err| err.to_string())
+}
+
+fn parse_response_value(message: ServerMessage) -> Result<Value, String> {
+    match message {
+        ServerMessage::Response(response) => {
+            serde_json::to_value(&response.result).map_err(|err| err.to_string())
+        }
+        ServerMessage::Error(error) => Err(format_rpc_error(&error.error)),
+        other => Err(format_unexpected_server_message(&other)),
+    }
+}
+
+fn format_unexpected_server_message(message: &ServerMessage) -> String {
+    format!("Unexpected MCP server message: {message:?}")
+}
+
+fn format_rpc_error(error: &RpcError) -> String {
+    let mut output = format!("MCP error {}: {}", error.code, error.message);
+    if let Some(data) = &error.data {
+        let details = data
+            .get("details")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .or_else(|| data.as_str().map(|value| value.to_string()))
+            .or_else(|| serde_json::to_string_pretty(data).ok());
+
+        if let Some(details) = details {
+            if !details.is_empty() {
+                output.push('\n');
+                output.push_str(&details);
+            }
+        }
+    }
+    output
+}
+
+fn format_error_chain(err: &dyn Error) -> String {
+    let mut output = err.to_string();
+    let mut source = err.source();
+    while let Some(next) = source {
+        let message = next.to_string();
+        if !message.is_empty() {
+            output.push('\n');
+            output.push_str("Caused by: ");
+            output.push_str(&message);
+        }
+        source = next.source();
+    }
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct TestError {
+        message: &'static str,
+        source: Option<Box<dyn Error>>,
+    }
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.message)
+        }
+    }
+
+    impl Error for TestError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source.as_deref()
+        }
+    }
+
+    #[test]
+    fn format_error_chain_includes_sources() {
+        let root = TestError {
+            message: "root",
+            source: None,
+        };
+        let mid = TestError {
+            message: "mid",
+            source: Some(Box::new(root)),
+        };
+        let top = TestError {
+            message: "top",
+            source: Some(Box::new(mid)),
+        };
+
+        let formatted = format_error_chain(&top);
+        assert_eq!(formatted, "top\nCaused by: mid\nCaused by: root");
+    }
+
+    #[test]
+    fn format_error_chain_without_sources() {
+        let err = TestError {
+            message: "solo",
+            source: None,
+        };
+        let formatted = format_error_chain(&err);
+        assert_eq!(formatted, "solo");
+    }
 }

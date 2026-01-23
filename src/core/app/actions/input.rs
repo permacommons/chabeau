@@ -119,6 +119,10 @@ fn handle_process_command(
             streaming::handle_streaming_action(app, action, ctx)
         }
         CommandResult::RunMcpPrompt(request) => Some(AppCommand::RunMcpPrompt(request)),
+        CommandResult::RefreshMcp { server_id } => {
+            update_scroll_after_command(app, ctx);
+            Some(AppCommand::RefreshMcp { server_id })
+        }
     }
 }
 

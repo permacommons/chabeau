@@ -6,7 +6,7 @@ use crate::core::chat_stream::StreamParams;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-const MCP_RESOURCES_MARKER: &str = "MCP resources (by server id):";
+const MCP_RESOURCES_MARKER: &str = "MCP resources and templates (by server id):";
 
 impl App {
     pub fn is_current_stream(&self, stream_id: u64) -> bool {
@@ -82,6 +82,11 @@ impl App {
                     has_resources = true;
                 }
             }
+            if let Some(templates) = &server.cached_resource_templates {
+                if !templates.resource_templates.is_empty() {
+                    has_resources = true;
+                }
+            }
             let Some(list) = &server.cached_tools else {
                 continue;
             };
@@ -132,7 +137,7 @@ impl App {
                 function: ChatToolFunction {
                     name: crate::mcp::MCP_READ_RESOURCE_TOOL.to_string(),
                     description: Some(
-                        "Read an MCP resource by server_id and uri from the MCP resources list."
+                        "Read an MCP resource by server_id and uri from the MCP resources list (including templates)."
                             .to_string(),
                     ),
                     parameters: json!({
@@ -167,21 +172,31 @@ impl App {
             if !server.config.is_enabled() {
                 continue;
             }
-            let Some(list) = &server.cached_resources else {
-                continue;
-            };
-            if list.resources.is_empty() {
-                continue;
+            if let Some(list) = &server.cached_resources {
+                for resource in &list.resources {
+                    let mut line = format!("- {}: {}", server.config.id, resource.uri);
+                    if let Some(title) = resource.title.as_ref().or(resource.description.as_ref()) {
+                        if !title.trim().is_empty() {
+                            line.push_str(&format!(" - {}", title.trim()));
+                        }
+                    }
+                    lines.push(line);
+                }
             }
 
-            for resource in &list.resources {
-                let mut line = format!("- {}: {}", server.config.id, resource.uri);
-                if let Some(title) = resource.title.as_ref().or(resource.description.as_ref()) {
-                    if !title.trim().is_empty() {
-                        line.push_str(&format!(" - {}", title.trim()));
+            if let Some(list) = &server.cached_resource_templates {
+                for template in &list.resource_templates {
+                    let mut line = format!(
+                        "- {}: template {} ({})",
+                        server.config.id, template.name, template.uri_template
+                    );
+                    if let Some(title) = template.title.as_ref().or(template.description.as_ref()) {
+                        if !title.trim().is_empty() {
+                            line.push_str(&format!(" - {}", title.trim()));
+                        }
                     }
+                    lines.push(line);
                 }
-                lines.push(line);
             }
         }
 

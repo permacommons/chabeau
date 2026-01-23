@@ -159,6 +159,7 @@ pub enum AppCommand {
     LoadModelPicker(ModelPickerRequest),
     RunMcpTool(ToolCallRequest),
     RunMcpPrompt(crate::core::app::session::McpPromptRequest),
+    RefreshMcp { server_id: String },
 }
 
 pub fn apply_actions(

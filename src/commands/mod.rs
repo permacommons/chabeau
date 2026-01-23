@@ -25,8 +25,6 @@ use rust_mcp_sdk::schema::PromptArgument;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use tokio::runtime::Handle;
-use tokio::task;
 
 /// Result of processing a command or user input.
 ///
@@ -66,6 +64,9 @@ pub enum CommandResult {
 
     /// Run an MCP prompt request.
     RunMcpPrompt(McpPromptRequest),
+
+    /// Refresh MCP listings for a server in the background.
+    RefreshMcp { server_id: String },
 }
 
 /// Processes user input and dispatches commands.
@@ -327,21 +328,18 @@ pub(super) fn handle_clear(app: &mut App, _invocation: CommandInvocation<'_>) ->
 }
 
 pub(super) fn handle_mcp(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
-    let command = invocation.arg(0);
-    if command.is_none() {
+    let server_id = invocation.arg(0);
+    if server_id.is_none() {
         return handle_mcp_list(app);
     }
 
-    match command.unwrap().to_ascii_lowercase().as_str() {
-        "tools" => handle_mcp_assets(app, invocation, McpAssetKind::Tools),
-        "resources" => handle_mcp_assets(app, invocation, McpAssetKind::Resources),
-        "prompts" => handle_mcp_assets(app, invocation, McpAssetKind::Prompts),
-        _ => {
-            app.conversation()
-                .set_status("Usage: /mcp [tools|resources|prompts] <server>".to_string());
-            CommandResult::Continue
-        }
+    if invocation.args_len() > 1 {
+        app.conversation()
+            .set_status("Usage: /mcp <server-id>".to_string());
+        return CommandResult::Continue;
     }
+
+    handle_mcp_server(app, server_id.unwrap())
 }
 
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
@@ -399,20 +397,7 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
     }
 }
 
-#[derive(Clone, Copy)]
-enum McpAssetKind {
-    Tools,
-    Resources,
-    Prompts,
-}
-
 fn handle_mcp_list(app: &mut App) -> CommandResult {
-    let keyring_enabled = !cfg!(test) && !app.session.startup_env_only;
-    let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
-    let mut errors = Vec::new();
-
-    connect_mcp_all_blocking(app, &token_store);
-
     let servers: Vec<_> = app.mcp.servers().collect();
     let mut output = String::from("## MCP servers\n");
     if servers.is_empty() {
@@ -423,187 +408,152 @@ fn handle_mcp_list(app: &mut App) -> CommandResult {
     }
 
     for server in servers {
-        let enabled = if server.config.is_enabled() {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let transport = server
-            .config
-            .transport
-            .as_deref()
-            .unwrap_or("streamable-http");
-        let connected = if server.connected { "yes" } else { "no" };
-        let token_status = if keyring_enabled {
-            match token_store.get_token(&server.config.id) {
-                Ok(Some(_)) => "present".to_string(),
-                Ok(None) => "missing".to_string(),
-                Err(err) => {
-                    errors.push(format!(
-                        "Token lookup failed for {}: {}",
-                        server.config.display_name, err
-                    ));
-                    "error".to_string()
-                }
-            }
-        } else {
-            "unknown (keyring disabled)".to_string()
-        };
-
         output.push_str(&format!(
-            "- **{}** ({}) — {}, transport: {}, token: {}, connected: {}\n",
-            server.config.id,
-            server.config.display_name,
-            enabled,
-            transport,
-            token_status,
-            connected
+            "- **{}** ({})\n",
+            server.config.id, server.config.display_name
         ));
-        if std::env::var("CHABEAU_MCP_DEBUG").is_ok() {
-            let session_id = server.session_id.as_deref().unwrap_or("none");
-            output.push_str(&format!("  - session id: {}\n", session_id));
-        }
-        if let Some(err) = &server.last_error {
-            output.push_str(&format!("  - last error: {}\n", err));
-        }
     }
-
-    if !errors.is_empty() {
-        output.push('\n');
-        output.push_str("### Token lookup warnings\n");
-        for err in errors {
-            output.push_str(&format!("- {}\n", err));
-        }
-    }
+    output
+        .push_str("\nUse `/mcp <server-id>` to fetch tools, resources, prompts, and templates.\n");
 
     app.conversation()
         .add_app_message(AppMessageKind::Info, output);
     CommandResult::ContinueWithTranscriptFocus
 }
 
-fn handle_mcp_assets(
-    app: &mut App,
-    invocation: CommandInvocation<'_>,
-    kind: McpAssetKind,
-) -> CommandResult {
-    let Some(server_id) = invocation.arg(1) else {
-        app.conversation()
-            .set_status("Usage: /mcp [tools|resources|prompts] <server>".to_string());
-        return CommandResult::Continue;
-    };
-
-    let keyring_enabled = !cfg!(test) && !app.session.startup_env_only;
-    let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
-
-    connect_mcp_server_blocking(app, server_id, &token_store);
-    refresh_mcp_asset_blocking(app, server_id, kind);
-
-    let Some(server) = app.mcp.server(server_id) else {
+fn handle_mcp_server(app: &mut App, server_id: &str) -> CommandResult {
+    if app.mcp.server(server_id).is_none() {
         app.conversation()
             .set_status(format!("Unknown MCP server: {}", server_id));
         return CommandResult::Continue;
-    };
+    }
 
-    let title = match kind {
-        McpAssetKind::Tools => "MCP tools",
-        McpAssetKind::Resources => "MCP resources",
-        McpAssetKind::Prompts => "MCP prompts",
-    };
+    app.conversation()
+        .set_status("Refreshing MCP data...".to_string());
+    app.ui
+        .begin_activity(crate::core::app::ActivityKind::McpRefresh);
+    CommandResult::RefreshMcp {
+        server_id: server_id.to_string(),
+    }
+}
 
-    let mut output = format!("## {} for {}\n", title, server.config.display_name);
+pub(crate) fn build_mcp_server_output(
+    server: &crate::mcp::client::McpServerState,
+    keyring_enabled: bool,
+    token_store: &McpTokenStore,
+) -> String {
+    let mut output = format!("## MCP for {}\n", server.config.display_name);
     output.push_str(&format!("Server id: `{}`\n", server.config.id));
+    output.push_str(&format!(
+        "Status: {}\n",
+        if server.config.is_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    ));
+    output.push_str(&format!(
+        "Transport: {}\n",
+        server
+            .config
+            .transport
+            .as_deref()
+            .unwrap_or("streamable-http")
+    ));
+    output.push_str(&format!(
+        "Connected: {}\n",
+        if server.connected { "yes" } else { "no" }
+    ));
+    if keyring_enabled {
+        match token_store.get_token(&server.config.id) {
+            Ok(Some(_)) => output.push_str("Token: present\n"),
+            Ok(None) => output.push_str("Token: missing\n"),
+            Err(err) => output.push_str(&format!("Token: error ({})\n", err)),
+        }
+    } else {
+        output.push_str("Token: unknown (keyring disabled)\n");
+    }
 
-    if matches!(kind, McpAssetKind::Tools) {
-        match server.config.allowed_tools.as_ref() {
-            Some(allowed) if allowed.is_empty() => {
-                output.push_str("Allowed tools (config): none\n");
-            }
-            Some(allowed) => {
-                output.push_str(&format!("Allowed tools (config): {}\n", allowed.join(", ")));
-            }
-            None => {
-                output.push_str("Allowed tools (config): all\n");
-            }
+    output.push('\n');
+    match server.config.allowed_tools.as_ref() {
+        Some(allowed) if allowed.is_empty() => {
+            output.push_str("**Allowed tools (config):** none\n");
+        }
+        Some(allowed) => {
+            output.push_str(&format!(
+                "**Allowed tools (config):** {}\n",
+                allowed.join(", ")
+            ));
+        }
+        None => {
+            output.push_str("**Allowed tools (config):** all\n");
         }
     }
 
-    match kind {
-        McpAssetKind::Tools => {
-            if let Some(list) = &server.cached_tools {
-                if list.tools.is_empty() {
-                    output.push_str("No tools reported by server.\n");
-                } else {
-                    output.push_str("Tools:\n");
-                    for tool in &list.tools {
-                        output.push_str(&format!("- {}\n", tool.name));
-                    }
-                }
-            } else {
-                output.push_str("No cached tool listing yet.\n");
+    output.push('\n');
+    if let Some(list) = &server.cached_tools {
+        if list.tools.is_empty() {
+            output.push_str("**Tools:** none reported by server.\n");
+        } else {
+            output.push_str("**Tools:**\n");
+            for tool in &list.tools {
+                output.push_str(&format!("- {}\n", tool.name));
             }
         }
-        McpAssetKind::Resources => {
-            if let Some(list) = &server.cached_resources {
-                if list.resources.is_empty() {
-                    output.push_str("No resources reported by server.\n");
-                } else {
-                    output.push_str("Resources:\n");
-                    for resource in &list.resources {
-                        output.push_str(&format!("- {}\n", resource.uri));
-                    }
-                }
-            } else {
-                output.push_str("No cached resource listing yet.\n");
+    } else {
+        output.push_str("**Tools:** no cached listing yet.\n");
+    }
+
+    output.push('\n');
+    if let Some(list) = &server.cached_resources {
+        if list.resources.is_empty() {
+            output.push_str("**Resources:** none reported by server.\n");
+        } else {
+            output.push_str("**Resources:**\n");
+            for resource in &list.resources {
+                output.push_str(&format!("- {}\n", resource.uri));
             }
         }
-        McpAssetKind::Prompts => {
-            if let Some(list) = &server.cached_prompts {
-                if list.prompts.is_empty() {
-                    output.push_str("No prompts reported by server.\n");
-                } else {
-                    output.push_str("Prompts:\n");
-                    for prompt in &list.prompts {
-                        output.push_str(&format!("- {}\n", prompt.name));
-                    }
-                }
-            } else {
-                output.push_str("No cached prompt listing yet.\n");
+    } else {
+        output.push_str("**Resources:** no cached listing yet.\n");
+    }
+
+    output.push('\n');
+    if let Some(list) = &server.cached_resource_templates {
+        if list.resource_templates.is_empty() {
+            output.push_str("**Resource templates:** none reported by server.\n");
+        } else {
+            output.push_str("**Resource templates:**\n");
+            for template in &list.resource_templates {
+                output.push_str(&format!(
+                    "- {} ({})\n",
+                    template.name, template.uri_template
+                ));
             }
         }
+    } else {
+        output.push_str("**Resource templates:** no cached listing yet.\n");
+    }
+
+    output.push('\n');
+    if let Some(list) = &server.cached_prompts {
+        if list.prompts.is_empty() {
+            output.push_str("**Prompts:** none reported by server.\n");
+        } else {
+            output.push_str("**Prompts:**\n");
+            for prompt in &list.prompts {
+                output.push_str(&format!("- {}\n", prompt.name));
+            }
+        }
+    } else {
+        output.push_str("**Prompts:** no cached listing yet.\n");
     }
 
     if let Some(err) = &server.last_error {
         output.push_str(&format!("\nLast error: {}\n", err));
     }
-    app.conversation()
-        .add_app_message(AppMessageKind::Info, output);
-    CommandResult::ContinueWithTranscriptFocus
-}
 
-fn connect_mcp_all_blocking(app: &mut App, token_store: &McpTokenStore) {
-    if let Ok(handle) = Handle::try_current() {
-        task::block_in_place(|| {
-            handle.block_on(app.mcp.connect_all(token_store));
-        });
-    }
-}
-
-fn connect_mcp_server_blocking(app: &mut App, server_id: &str, token_store: &McpTokenStore) {
-    if let Ok(handle) = Handle::try_current() {
-        task::block_in_place(|| {
-            handle.block_on(app.mcp.connect_server(server_id, token_store));
-        });
-    }
-}
-
-fn refresh_mcp_asset_blocking(app: &mut App, server_id: &str, kind: McpAssetKind) {
-    if let Ok(handle) = Handle::try_current() {
-        task::block_in_place(|| match kind {
-            McpAssetKind::Tools => handle.block_on(app.mcp.refresh_tools(server_id)),
-            McpAssetKind::Resources => handle.block_on(app.mcp.refresh_resources(server_id)),
-            McpAssetKind::Prompts => handle.block_on(app.mcp.refresh_prompts(server_id)),
-        });
-    }
+    output
 }
 
 pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
@@ -1566,7 +1516,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tools_command_includes_allowed_tools() {
+    fn mcp_command_includes_allowed_tools() {
         let mut app = create_test_app();
         app.config
             .mcp_servers
@@ -1581,13 +1531,18 @@ mod tests {
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 
-        let res = process_input(&mut app, "/mcp tools alpha");
-        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
-        let last = app.ui.messages.back().expect("app message");
-        assert!(last.content.contains("MCP tools"));
-        assert!(last
-            .content
-            .contains("Allowed tools (config): weather.lookup, time.now"));
+        let res = process_input(&mut app, "/mcp alpha");
+        assert!(matches!(
+            res,
+            CommandResult::RefreshMcp {
+                server_id: ref id
+            } if id == "alpha"
+        ));
+        assert_eq!(app.ui.status.as_deref(), Some("Refreshing MCP data..."));
+        assert_eq!(
+            app.ui.activity_indicator,
+            Some(crate::core::app::ActivityKind::McpRefresh)
+        );
     }
 
     #[test]

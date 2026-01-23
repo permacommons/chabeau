@@ -4,7 +4,10 @@ use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::picker::{PickerItem, PickerState};
 use crate::utils::test_utils::{create_test_app, create_test_message};
-use rust_mcp_sdk::schema::{ListResourcesResult, ListToolsResult, Resource, Tool, ToolInputSchema};
+use rust_mcp_sdk::schema::{
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, Resource, ResourceTemplate,
+    Tool, ToolInputSchema,
+};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -324,9 +327,24 @@ fn build_stream_params_includes_mcp_resources() {
             uri: "mcp://alpha/doc".to_string(),
         }],
     };
+    let resource_templates = ListResourceTemplatesResult {
+        meta: None,
+        next_cursor: None,
+        resource_templates: vec![ResourceTemplate {
+            annotations: None,
+            description: Some("Alpha template".to_string()),
+            icons: Vec::new(),
+            meta: None,
+            mime_type: None,
+            name: "alpha-template".to_string(),
+            title: Some("Alpha Template".to_string()),
+            uri_template: "mcp://alpha/{doc}".to_string(),
+        }],
+    };
 
     if let Some(server) = app.mcp.server_mut("alpha") {
         server.cached_resources = Some(resources);
+        server.cached_resource_templates = Some(resource_templates);
     } else {
         panic!("missing MCP server state");
     }
@@ -355,8 +373,9 @@ fn build_stream_params_includes_mcp_resources() {
         .expect("missing system message");
     assert!(system_message
         .content
-        .contains("MCP resources (by server id):"));
+        .contains("MCP resources and templates (by server id):"));
     assert!(system_message.content.contains("mcp://alpha/doc"));
+    assert!(system_message.content.contains("mcp://alpha/{doc}"));
 }
 
 #[test]

@@ -29,6 +29,7 @@ use crate::core::app::{
 };
 use crate::core::chat_stream::{ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
+use crate::core::message::AppMessageKind;
 use crate::ui::renderer::ui;
 
 use super::keybindings::{build_mode_aware_registry, KeyContext, KeyResult, ModeAwareRegistry};
@@ -97,6 +98,7 @@ fn spawn_mcp_initializer(app: AppHandle, dispatcher: AppActionDispatcher) {
             mcp.refresh_tools(&server_id).await;
             mcp.refresh_prompts(&server_id).await;
             mcp.refresh_resources(&server_id).await;
+            mcp.refresh_resource_templates(&server_id).await;
         }
 
         app.update(|app| {
@@ -237,6 +239,52 @@ fn spawn_mcp_prompt_call(
         .await;
 
         dispatcher.dispatch_many([AppAction::McpPromptCompleted { request, result }], ctx);
+    });
+}
+
+fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id: String) {
+    tokio::spawn(async move {
+        let keyring_enabled = app
+            .read(|app| !cfg!(test) && !app.session.startup_env_only)
+            .await;
+        let token_store = McpTokenStore::new_with_keyring(keyring_enabled);
+
+        let mut mcp = app.read(|app| app.mcp.clone()).await;
+        mcp.connect_server(&server_id, &token_store).await;
+        mcp.refresh_tools(&server_id).await;
+        mcp.refresh_resources(&server_id).await;
+        mcp.refresh_resource_templates(&server_id).await;
+        mcp.refresh_prompts(&server_id).await;
+
+        let output = mcp.server(&server_id).map(|server| {
+            crate::commands::build_mcp_server_output(server, keyring_enabled, &token_store)
+        });
+
+        app.update(|app| {
+            app.mcp = mcp;
+            if let Some(message) = output {
+                app.conversation()
+                    .add_app_message(AppMessageKind::Info, message);
+                app.ui.focus_transcript();
+                let term_size = app.ui.last_term_size;
+                if term_size.width > 0 && term_size.height > 0 {
+                    let input_area_height = app.input_area_height(term_size.width);
+                    let mut conversation = app.conversation();
+                    let available_height = conversation
+                        .calculate_available_height(term_size.height, input_area_height);
+                    conversation.update_scroll_position(available_height, term_size.width);
+                }
+            } else {
+                app.conversation()
+                    .set_status(format!("Unknown MCP server: {}", server_id));
+            }
+            app.clear_status();
+            app.ui
+                .end_activity(crate::core::app::ActivityKind::McpRefresh);
+        })
+        .await;
+
+        dispatcher.dispatch_many([AppAction::ClearStatus], AppActionContext::default());
     });
 }
 
@@ -597,6 +645,9 @@ async fn drain_action_queue(
             }
             AppCommand::RunMcpPrompt(request) => {
                 spawn_mcp_prompt_call(app.clone(), dispatcher.clone(), request);
+            }
+            AppCommand::RefreshMcp { server_id } => {
+                spawn_mcp_refresh(app.clone(), dispatcher.clone(), server_id);
             }
         }
     }

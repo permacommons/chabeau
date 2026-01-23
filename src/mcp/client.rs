@@ -9,8 +9,8 @@ use rust_mcp_sdk::schema::RequestId;
 use rust_mcp_sdk::schema::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, GetPromptRequestParams,
     GetPromptResult, Implementation, InitializeRequestParams, ListPromptsResult,
-    ListResourcesResult, ListToolsResult, ReadResourceRequestParams, ReadResourceResult,
-    LATEST_PROTOCOL_VERSION,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
+    ReadResourceResult, LATEST_PROTOCOL_VERSION,
 };
 use rust_mcp_sdk::{ClientSseTransport, ClientSseTransportOptions, McpClient, ToMcpClientHandler};
 use std::collections::HashMap;
@@ -44,6 +44,7 @@ pub struct McpServerState {
     pub last_error: Option<String>,
     pub cached_tools: Option<ListToolsResult>,
     pub cached_resources: Option<ListResourcesResult>,
+    pub cached_resource_templates: Option<ListResourceTemplatesResult>,
     pub cached_prompts: Option<ListPromptsResult>,
     pub session_id: Option<String>,
     pub auth_header: Option<String>,
@@ -59,6 +60,7 @@ impl McpServerState {
             last_error: None,
             cached_tools: None,
             cached_resources: None,
+            cached_resource_templates: None,
             cached_prompts: None,
             session_id: None,
             auth_header: None,
@@ -72,7 +74,7 @@ impl McpServerState {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct McpClientManager {
     servers: HashMap<String, McpServerState>,
 }
@@ -321,6 +323,34 @@ impl McpClientManager {
         }
     }
 
+    pub async fn refresh_resource_templates(&mut self, id: &str) {
+        if self.uses_streamable_http(id) {
+            self.refresh_resource_templates_streamable_http(id).await;
+            return;
+        }
+
+        let Some(client) = self
+            .servers
+            .get(&id.to_ascii_lowercase())
+            .and_then(|server| server.client.clone())
+        else {
+            return;
+        };
+
+        if let Some(server) = self.server_mut(id) {
+            match client.request_resource_template_list(None).await {
+                Ok(list) => {
+                    server.cached_resource_templates = Some(list);
+                    server.last_error = None;
+                    server.session_id = client.session_id().await;
+                }
+                Err(err) => {
+                    server.last_error = Some(format!("Resource templates listing failed: {}", err));
+                }
+            }
+        }
+    }
+
     pub async fn refresh_prompts(&mut self, id: &str) {
         if self.uses_streamable_http(id) {
             self.refresh_prompts_streamable_http(id).await;
@@ -411,6 +441,33 @@ impl McpClientManager {
             Err(err) => {
                 if let Some(server) = self.server_mut(id) {
                     server.last_error = Some(format!("Resources listing failed: {}", err));
+                }
+            }
+        }
+    }
+
+    async fn refresh_resource_templates_streamable_http(&mut self, id: &str) {
+        if let Err(err) = self.ensure_streamable_http_session(id).await {
+            if let Some(server) = self.server_mut(id) {
+                server.last_error = Some(err);
+            }
+            return;
+        }
+
+        let response = self
+            .send_streamable_http_request(id, RequestFromClient::ListResourceTemplatesRequest(None))
+            .await;
+
+        match response.and_then(parse_list_resource_templates) {
+            Ok(list) => {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_resource_templates = Some(list);
+                    server.last_error = None;
+                }
+            }
+            Err(err) => {
+                if let Some(server) = self.server_mut(id) {
+                    server.last_error = Some(format!("Resource templates listing failed: {}", err));
                 }
             }
         }
@@ -954,6 +1011,14 @@ fn parse_list_resources(message: ServerMessage) -> Result<ListResourcesResult, S
     let response = message.as_response().map_err(|err| err.to_string())?;
     let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
     serde_json::from_value::<ListResourcesResult>(value).map_err(|err| err.to_string())
+}
+
+fn parse_list_resource_templates(
+    message: ServerMessage,
+) -> Result<ListResourceTemplatesResult, String> {
+    let response = message.as_response().map_err(|err| err.to_string())?;
+    let value = serde_json::to_value(&response.result).map_err(|err| err.to_string())?;
+    serde_json::from_value::<ListResourceTemplatesResult>(value).map_err(|err| err.to_string())
 }
 
 fn parse_list_prompts(message: ServerMessage) -> Result<ListPromptsResult, String> {

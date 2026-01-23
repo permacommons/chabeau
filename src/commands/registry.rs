@@ -247,19 +247,11 @@ const COMMANDS: &[Command] = &[
         usages: &[
             CommandUsage {
                 syntax: "/mcp",
-                description: "List configured MCP servers and status.",
+                description: "List configured MCP servers.",
             },
             CommandUsage {
-                syntax: "/mcp tools <server>",
-                description: "List MCP tools for a configured server.",
-            },
-            CommandUsage {
-                syntax: "/mcp resources <server>",
-                description: "List MCP resources for a configured server.",
-            },
-            CommandUsage {
-                syntax: "/mcp prompts <server>",
-                description: "List MCP prompts for a configured server.",
+                syntax: "/mcp <server-id>",
+                description: "List MCP tools, resources, templates, and prompts.",
             },
         ],
         extra_help: &[],

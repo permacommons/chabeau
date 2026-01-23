@@ -417,7 +417,7 @@ pub async fn handle_picker_key_event(
 ) {
     let mut actions = Vec::new();
 
-    let inspect_active = app.read(|app| app.picker_inspect_state().is_some()).await;
+    let inspect_active = app.read(|app| app.inspect_state().is_some()).await;
 
     if inspect_active {
         let page_lines = term_height.saturating_sub(8).max(1) as i32;

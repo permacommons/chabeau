@@ -17,6 +17,7 @@ use crate::mcp::permissions::ToolPermissionStore;
 
 pub mod actions;
 pub mod conversation;
+pub mod inspect;
 pub mod picker;
 pub mod session;
 pub mod settings;
@@ -35,13 +36,13 @@ pub use actions::{
 };
 #[allow(unused_imports)]
 pub use conversation::ConversationController;
+pub use inspect::{InspectController, InspectMode, InspectState};
 #[cfg(test)]
 pub use picker::PickerData;
 #[allow(unused_imports)]
 pub use picker::{
-    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController,
-    PickerInspectState, PickerMode, PickerSession, PresetPickerState, ProviderPickerState,
-    ThemePickerState,
+    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
+    PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
 };
 pub use pickers::ModelPickerRequest;
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
@@ -96,6 +97,7 @@ fn build_app(
         session,
         ui,
         picker,
+        inspect: InspectController::new(),
         character_service,
         persona_manager,
         preset_manager,
@@ -336,6 +338,9 @@ pub struct App {
 
     /// Picker controller (theme, provider, model, character pickers).
     pub picker: PickerController,
+
+    /// Inspect overlay controller for full-screen metadata views.
+    pub inspect: InspectController,
 
     /// Character card service for loading and caching character cards.
     pub character_service: CharacterService,

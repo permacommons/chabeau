@@ -10,6 +10,7 @@
 
 use crate::core::app::ui_state::{EditSelectTarget, ToolPrompt};
 use crate::core::app::App;
+use crate::core::app::InspectMode;
 use crate::core::message::{AppMessageKind, ROLE_ASSISTANT, ROLE_TOOL_CALL};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::layout::{LayoutConfig, LayoutEngine, TableOverflowPolicy};
@@ -25,6 +26,8 @@ use ratatui::{
 };
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     // Paint full-frame background based on theme to ensure readable contrast
@@ -107,19 +110,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         if let Some(insert_at) =
             tool_prompt_insert_index(&app.ui.messages, prompt, spans, lines.len())
         {
-            const TOOL_PROMPT_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
-            const TOOL_PROMPT_ROTATIONS_PER_SECOND: f32 = 1.5;
-            let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
-            let total_frames =
-                (elapsed * TOOL_PROMPT_ROTATIONS_PER_SECOND * TOOL_PROMPT_FRAMES.len() as f32)
-                    .floor() as usize;
-            let frame = TOOL_PROMPT_FRAMES[total_frames % TOOL_PROMPT_FRAMES.len()];
             let info_style = app.ui.theme.app_message_style(AppMessageKind::Info);
             let text_style = info_style
                 .text_style
                 .add_modifier(Modifier::DIM | Modifier::ITALIC);
             let line = Line::from(Span::styled(
-                format!("❓ Tool permission pending {frame} (A/S/D/B)"),
+                "(waiting for permission)".to_string(),
                 text_style,
             ));
             lines.insert(insert_at, line);
@@ -235,14 +231,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
         }
     } else if let Some(prompt) = app.ui.tool_prompt() {
-        let mut title = format!(
-            "Allow tool {} on {}? (A=once • S=session • D/Esc=deny • B=block)",
-            prompt.tool_name, prompt.server_name
-        );
-        if !prompt.args_summary.trim().is_empty() {
-            title.push_str(" • Args: ");
-            title.push_str(prompt.args_summary.trim());
-        }
+        let tool_prompt_frame = {
+            const TOOL_PROMPT_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+            const TOOL_PROMPT_ROTATIONS_PER_SECOND: f32 = 1.5;
+            let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
+            let total_frames =
+                (elapsed * TOOL_PROMPT_ROTATIONS_PER_SECOND * TOOL_PROMPT_FRAMES.len() as f32)
+                    .floor() as usize;
+            TOOL_PROMPT_FRAMES[total_frames % TOOL_PROMPT_FRAMES.len()]
+        };
+        let title = tool_prompt_title(prompt, chunks[1].width, tool_prompt_frame);
         Cow::Owned(title)
     } else if let Some(prompt) = app.ui.mcp_prompt_input() {
         let label = prompt
@@ -477,10 +475,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 
     // Render modal picker or inspect overlay if present
-    if app.picker_inspect_state().is_some() {
+    if app.inspect_state().is_some() {
         let theme = app.ui.theme.clone();
         let inspect_title = app
-            .picker_inspect_state()
+            .inspect_state()
             .map(|state| state.title.clone())
             .unwrap_or_else(|| "Inspect".to_string());
         let area = centered_rect(80, 80, f.area());
@@ -504,7 +502,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let body_area = inset_rect(chunks[0], 1, 1);
         let help_area = chunks[1];
 
-        if let Some(inspect_state) = app.picker_inspect_state_mut() {
+        if let Some(inspect_state) = app.inspect_state_mut() {
             let wrap_width = body_area.width as usize;
             let wrap_config = WrapConfig::new(wrap_width);
             let wrapped_text = TextWrapper::wrap_text(&inspect_state.content, &wrap_config);
@@ -528,12 +526,22 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(paragraph, body_area);
         }
 
-        let help_lines = vec![
-            Line::from(Span::styled(
+        let inspect_mode = app.inspect_state().map(|state| state.mode);
+        let in_picker = app.picker_session().is_some();
+        let (line1, line2) = match inspect_mode {
+            Some(InspectMode::ToolResults { .. }) => (
+                "Esc=Close • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
+                "Home/End=Jump",
+            ),
+            _ if in_picker => (
                 "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Faster",
-                theme.system_text_style,
-            )),
-            Line::from(Span::styled("Home/End=Jump", theme.system_text_style)),
+                "Home/End=Jump",
+            ),
+            _ => ("Esc=Close • ↑/↓=Scroll • PgUp/PgDn=Faster", "Home/End=Jump"),
+        };
+        let help_lines = vec![
+            Line::from(Span::styled(line1, theme.system_text_style)),
+            Line::from(Span::styled(line2, theme.system_text_style)),
         ];
         let help = Paragraph::new(help_lines).style(theme.system_text_style);
         f.render_widget(help, help_area);
@@ -621,24 +629,102 @@ fn tool_prompt_insert_index(
         return None;
     }
 
-    let mut fallback = None;
+    let mut last_tool_call = None;
     for (idx, message) in messages.iter().enumerate().rev() {
-        if message.role != ROLE_TOOL_CALL {
-            continue;
-        }
-        fallback = Some(idx);
-        if message.content.starts_with(&prompt.tool_name) {
+        if message.role == ROLE_TOOL_CALL {
+            last_tool_call = Some(idx);
             break;
         }
     }
 
-    let target_idx = fallback?;
+    let last_tool_call = last_tool_call?;
+    let mut first_in_batch = last_tool_call;
+    for idx in (0..=last_tool_call).rev() {
+        let message = &messages[idx];
+        if message.role == ROLE_TOOL_CALL {
+            first_in_batch = idx;
+        } else {
+            break;
+        }
+    }
+
+    let batch_offset = prompt.batch_index;
+    let target_idx = first_in_batch
+        .saturating_add(batch_offset)
+        .min(last_tool_call);
     let span = spans.get(target_idx)?;
     if span.len == 0 {
         return Some(span.start.min(line_count));
     }
     let insert_at = span.start.saturating_add(span.len.saturating_sub(1));
     Some(insert_at.min(line_count))
+}
+
+fn tool_prompt_title(prompt: &ToolPrompt, width: u16, frame: &str) -> String {
+    let available = width.saturating_sub(2) as usize;
+    let frame_suffix = if frame.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", frame)
+    };
+
+    let tool = prompt.tool_name.as_str();
+    let server = if prompt.server_name.trim().is_empty() {
+        prompt.server_id.as_str()
+    } else {
+        prompt.server_name.as_str()
+    };
+
+    let mut candidates = Vec::new();
+    candidates.push(format!(
+        "❓ Allow {} on {}? (A=once • S=session • D/Esc=deny • B=block • I=inspect){}",
+        tool, server, frame_suffix
+    ));
+    candidates.push(format!(
+        "❓ Allow {} on {}? (A=once • S=session • D=deny • B=block • I=inspect){}",
+        tool, server, frame_suffix
+    ));
+    candidates.push(format!(
+        "❓ Allow {} on {}? (A/S/D/B/I){}",
+        tool, server, frame_suffix
+    ));
+    candidates.push(format!(
+        "❓ {} on {}? (A/S/D/B/I){}",
+        tool, server, frame_suffix
+    ));
+    candidates.push(format!("❓ {}? (A/S/D/B/I){}", tool, frame_suffix));
+    candidates.push(format!("❓ Tool permission (A/S/D/B/I){}", frame_suffix));
+    candidates.push("❓ Tool permission (A/S/D/B/I)".to_string());
+    candidates.push("❓ Tool permission".to_string());
+
+    for candidate in candidates {
+        if UnicodeWidthStr::width(candidate.as_str()) <= available {
+            return candidate;
+        }
+    }
+
+    truncate_to_width("❓ Tool permission", available)
+}
+
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+
+    let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(text, true).collect();
+    let mut truncated = String::new();
+    for grapheme in graphemes {
+        let next = format!("{}{}", truncated, grapheme);
+        if UnicodeWidthStr::width(next.as_str()) > max_width.saturating_sub(1) {
+            truncated.push('…');
+            return truncated;
+        }
+        truncated.push_str(grapheme);
+    }
+    truncated
 }
 
 /// Generate help text for picker dialogs with appropriate shortcuts

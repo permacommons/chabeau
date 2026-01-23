@@ -1,5 +1,8 @@
 use super::{streaming, App, AppAction, AppActionContext, AppCommand};
 use crate::commands::{process_input, CommandResult};
+use crate::core::app::picker::build_inspect_text;
+use crate::core::app::session::ToolResultRecord;
+use crate::core::app::InspectMode;
 
 pub(super) fn handle_input_action(
     app: &mut App,
@@ -45,6 +48,14 @@ pub(super) fn handle_input_action(
             if !text.is_empty() {
                 app.insert_into_input(&text, ctx.term_width);
             }
+            None
+        }
+        AppAction::InspectToolResults => {
+            open_latest_tool_result_inspect(app, ctx);
+            None
+        }
+        AppAction::InspectToolResultsStep { delta } => {
+            step_tool_result_inspect(app, delta, ctx);
             None
         }
         AppAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
@@ -147,6 +158,94 @@ fn update_scroll_after_command(app: &mut App, ctx: AppActionContext) {
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
+}
+
+fn open_latest_tool_result_inspect(app: &mut App, ctx: AppActionContext) {
+    if app.session.tool_result_history.is_empty() {
+        set_status_message(app, "No tool results to inspect yet.".to_string(), ctx);
+        return;
+    }
+    let index = app.session.tool_result_history.len().saturating_sub(1);
+    open_tool_result_inspect_at(app, index, ctx);
+}
+
+fn step_tool_result_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
+    let Some(state) = app.inspect_state() else {
+        return;
+    };
+    let InspectMode::ToolResults { index } = state.mode else {
+        return;
+    };
+    let total = app.session.tool_result_history.len();
+    if total < 2 {
+        return;
+    }
+    let step = if delta >= 0 {
+        1usize
+    } else {
+        total.saturating_sub(1)
+    };
+    let next = (index + step) % total;
+    open_tool_result_inspect_at(app, next, ctx);
+}
+
+fn open_tool_result_inspect_at(app: &mut App, index: usize, ctx: AppActionContext) {
+    let Some(record) = app.session.tool_result_history.get(index).cloned() else {
+        set_status_message(app, "Tool result unavailable.".to_string(), ctx);
+        return;
+    };
+
+    let title = build_tool_result_title(&record, index, app.session.tool_result_history.len());
+    let content = build_tool_result_content(&record);
+    app.open_tool_result_inspect(title, content, index);
+    set_status_message(app, "Inspecting tool result (Esc=Close)".to_string(), ctx);
+}
+
+fn build_tool_result_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
+    let position = format!("{}/{}", index + 1, total.max(1));
+    let status = record.status.display();
+    format!("Tool result ({position}) – {} ({status})", record.tool_name)
+}
+
+fn build_tool_result_content(record: &ToolResultRecord) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("Tool: {}", record.tool_name));
+    lines.push(format!("Status: {}", record.status.display()));
+    if let Some(server) = record.server_name.as_ref() {
+        if !server.trim().is_empty() {
+            lines.push(format!("Server: {}", server));
+        }
+    }
+    if let Some(tool_call_id) = record.tool_call_id.as_ref() {
+        if !tool_call_id.trim().is_empty() {
+            lines.push(format!("Tool call id: {}", tool_call_id));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Result:".to_string());
+
+    let payload = format_tool_payload_for_inspect(&record.content);
+    if payload.trim().is_empty() {
+        lines.push("  (empty)".to_string());
+    } else {
+        for line in payload.lines() {
+            lines.push(format!("  {}", line));
+        }
+    }
+
+    build_inspect_text(lines)
+}
+
+fn format_tool_payload_for_inspect(payload: &str) -> String {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
+    }
 }
 
 #[cfg(test)]

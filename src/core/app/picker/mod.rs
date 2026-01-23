@@ -10,6 +10,7 @@ use crate::ui::picker::{PickerItem, PickerState, SortMode};
 use crate::ui::theme::Theme;
 
 mod inspect;
+pub(crate) use inspect::build_inspect_text;
 use inspect::{
     character_inspect, provider_metadata_builtin, provider_metadata_custom, theme_metadata,
     ThemeSource,
@@ -191,23 +192,6 @@ pub struct PickerSession {
     pub data: PickerData,
 }
 
-#[derive(Debug, Clone)]
-pub struct PickerInspectState {
-    pub title: String,
-    pub content: String,
-    pub scroll_offset: u16,
-}
-
-impl PickerInspectState {
-    pub fn new(title: String, content: String) -> Self {
-        Self {
-            title,
-            content,
-            scroll_offset: 0,
-        }
-    }
-}
-
 macro_rules! picker_state_accessors {
     ($(($variant:ident, $getter:ident, $getter_mut:ident, $state:ty)),+ $(,)?) => {
         impl PickerData {
@@ -294,7 +278,6 @@ pub struct PickerController {
     pub startup_requires_provider: bool,
     pub startup_requires_model: bool,
     pub startup_multiple_providers_available: bool,
-    inspect_state: Option<PickerInspectState>,
 }
 
 impl PickerController {
@@ -306,7 +289,6 @@ impl PickerController {
             startup_requires_provider: false,
             startup_requires_model: false,
             startup_multiple_providers_available: false,
-            inspect_state: None,
         }
     }
 
@@ -330,49 +312,8 @@ impl PickerController {
         self.session_mut().map(|session| &mut session.state)
     }
 
-    pub fn inspect_state(&self) -> Option<&PickerInspectState> {
-        self.inspect_state.as_ref()
-    }
-
-    pub fn inspect_state_mut(&mut self) -> Option<&mut PickerInspectState> {
-        self.inspect_state.as_mut()
-    }
-
-    pub fn open_inspect(&mut self, title: String, content: String) {
-        self.inspect_state = Some(PickerInspectState::new(title, content));
-    }
-
-    pub fn close_inspect(&mut self) {
-        self.inspect_state = None;
-    }
-
-    pub fn scroll_inspect(&mut self, lines: i32) {
-        if let Some(state) = self.inspect_state.as_mut() {
-            if lines.is_negative() {
-                let magnitude = lines.saturating_abs() as u16;
-                state.scroll_offset = state.scroll_offset.saturating_sub(magnitude);
-            } else {
-                let magnitude = lines.saturating_abs() as u16;
-                state.scroll_offset = state.scroll_offset.saturating_add(magnitude);
-            }
-        }
-    }
-
-    pub fn scroll_inspect_to_start(&mut self) {
-        if let Some(state) = self.inspect_state.as_mut() {
-            state.scroll_offset = 0;
-        }
-    }
-
-    pub fn scroll_inspect_to_end(&mut self) {
-        if let Some(state) = self.inspect_state.as_mut() {
-            state.scroll_offset = u16::MAX;
-        }
-    }
-
     pub fn close(&mut self) {
         self.picker_session = None;
-        self.close_inspect();
     }
 
     fn start_picker_session(
@@ -380,7 +321,6 @@ impl PickerController {
         mut session: PickerSession,
         preferred_selection: Option<String>,
     ) {
-        self.close_inspect();
         let mode = session.mode();
         session.state.sort_mode = session.default_sort_mode();
         self.picker_session = Some(session);
@@ -615,8 +555,6 @@ impl PickerController {
     }
 
     fn filter_session_items(&mut self, expected_mode: PickerMode, special_ids: &[&str]) {
-        self.close_inspect();
-
         let Some(session) = self.session_mut() else {
             return;
         };

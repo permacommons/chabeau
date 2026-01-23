@@ -61,6 +61,11 @@ pub fn build_mode_aware_registry(
             Box::new(CtrlLHandler),
         )
         .register_for_context(
+            KeyContext::Typing,
+            KeyPattern::ctrl(KeyCode::Char('o')),
+            Box::new(CtrlOHandler),
+        )
+        .register_for_context(
             KeyContext::EditSelect,
             KeyPattern::ctrl(KeyCode::Char('l')),
             Box::new(CtrlLHandler),
@@ -81,6 +86,11 @@ pub fn build_mode_aware_registry(
             Box::new(F4Handler),
         )
         .register_for_context(
+            KeyContext::InPlaceEdit,
+            KeyPattern::ctrl(KeyCode::Char('o')),
+            Box::new(CtrlOHandler),
+        )
+        .register_for_context(
             KeyContext::EditSelect,
             KeyPattern::simple(KeyCode::F(4)),
             Box::new(F4Handler),
@@ -94,6 +104,11 @@ pub fn build_mode_aware_registry(
             KeyContext::Typing,
             KeyPattern::ctrl(KeyCode::Char('d')),
             Box::new(CtrlDHandler),
+        )
+        .register_for_context(
+            KeyContext::ToolPrompt,
+            KeyPattern::ctrl(KeyCode::Char('o')),
+            Box::new(CtrlOHandler),
         )
         .register_for_context(
             KeyContext::EditSelect,

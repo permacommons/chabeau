@@ -46,6 +46,8 @@ pub struct ToolPrompt {
     pub server_name: String,
     pub tool_name: String,
     pub args_summary: String,
+    pub raw_arguments: String,
+    pub batch_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1009,6 +1011,8 @@ impl UiState {
         server_name: String,
         tool_name: String,
         args_summary: String,
+        raw_arguments: String,
+        batch_index: usize,
     ) {
         self.focus_transcript();
         self.pulse_start = Instant::now();
@@ -1017,6 +1021,8 @@ impl UiState {
             server_name,
             tool_name,
             args_summary,
+            raw_arguments,
+            batch_index,
         }));
     }
 

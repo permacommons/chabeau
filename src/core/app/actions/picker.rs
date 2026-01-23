@@ -50,15 +50,15 @@ pub(super) fn handle_picker_action(
             None
         }
         AppAction::PickerInspectScroll { lines } => {
-            app.scroll_picker_inspect(lines);
+            app.scroll_inspect(lines);
             None
         }
         AppAction::PickerInspectScrollToStart => {
-            app.scroll_picker_inspect_to_start();
+            app.scroll_inspect_to_start();
             None
         }
         AppAction::PickerInspectScrollToEnd => {
-            app.scroll_picker_inspect_to_end();
+            app.scroll_inspect_to_end();
             None
         }
         AppAction::ModelPickerLoaded {
@@ -89,7 +89,7 @@ enum PickerMovement {
 }
 
 fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
-    if app.picker_inspect_state().is_some() {
+    if app.inspect_state().is_some() {
         return;
     }
     let mode = app.current_picker_mode();
@@ -114,7 +114,7 @@ fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
 }
 
 fn handle_picker_cycle_sort_mode(app: &mut App) {
-    if app.picker_inspect_state().is_some() {
+    if app.inspect_state().is_some() {
         return;
     }
     if let Some(state) = app.picker_state_mut() {
@@ -125,7 +125,7 @@ fn handle_picker_cycle_sort_mode(app: &mut App) {
 }
 
 fn handle_picker_backspace(app: &mut App) {
-    if app.picker_inspect_state().is_some() {
+    if app.inspect_state().is_some() {
         return;
     }
     match app.current_picker_mode() {
@@ -182,7 +182,7 @@ fn handle_picker_backspace(app: &mut App) {
 }
 
 fn handle_picker_type_char(app: &mut App, ch: char) {
-    if app.picker_inspect_state().is_some() {
+    if app.inspect_state().is_some() {
         return;
     }
     if ch.is_control() {
@@ -261,7 +261,7 @@ fn handle_picker_inspect(app: &mut App, ctx: AppActionContext) {
             input::set_status_message(app, "Nothing to inspect for this item".to_string(), ctx);
         }
         Some(text) => {
-            app.open_picker_inspect(title, text);
+            app.open_inspect(title, text);
             input::set_status_message(
                 app,
                 "Inspecting selection (Esc=Back to picker)".to_string(),
@@ -275,13 +275,17 @@ fn handle_picker_inspect(app: &mut App, ctx: AppActionContext) {
 }
 
 fn handle_picker_escape(app: &mut App, ctx: AppActionContext) {
-    if app.picker_inspect_state().is_some() {
-        app.close_picker_inspect();
-        input::set_status_message(
-            app,
-            "Returned to picker (Ctrl+O=Inspect again)".to_string(),
-            ctx,
-        );
+    if app.inspect_state().is_some() {
+        app.close_inspect();
+        if app.picker_session().is_some() {
+            input::set_status_message(
+                app,
+                "Returned to picker (Ctrl+O=Inspect again)".to_string(),
+                ctx,
+            );
+        } else {
+            input::set_status_message(app, "Closed inspection".to_string(), ctx);
+        }
         return;
     }
     match app.current_picker_mode() {

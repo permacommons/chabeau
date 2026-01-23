@@ -60,6 +60,7 @@ pub struct SessionContext {
     pub active_tool_request: Option<ToolCallRequest>,
     pub tool_call_records: Vec<ChatToolCall>,
     pub tool_results: Vec<ChatMessage>,
+    pub tool_result_history: Vec<ToolResultRecord>,
     pub last_stream_api_messages: Option<Vec<ChatMessage>>,
     pub last_stream_api_messages_base: Option<Vec<ChatMessage>>,
     pub mcp_tools_enabled: bool,
@@ -71,6 +72,43 @@ pub struct PendingToolCall {
     pub id: Option<String>,
     pub name: Option<String>,
     pub arguments: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolResultStatus {
+    Success,
+    Error,
+    Denied,
+    Blocked,
+}
+
+impl ToolResultStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolResultStatus::Success => "success",
+            ToolResultStatus::Error => "failed",
+            ToolResultStatus::Denied => "denied",
+            ToolResultStatus::Blocked => "blocked",
+        }
+    }
+
+    pub fn display(self) -> &'static str {
+        match self {
+            ToolResultStatus::Success => "Success",
+            ToolResultStatus::Error => "Failed",
+            ToolResultStatus::Denied => "Denied",
+            ToolResultStatus::Blocked => "Blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolResultRecord {
+    pub tool_name: String,
+    pub server_name: Option<String>,
+    pub status: ToolResultStatus,
+    pub content: String,
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -347,6 +385,7 @@ pub(crate) async fn prepare_with_auth(
         active_tool_request: None,
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
+        tool_result_history: Vec::new(),
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
@@ -399,6 +438,7 @@ pub(crate) async fn prepare_uninitialized(
         active_tool_request: None,
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
+        tool_result_history: Vec::new(),
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
@@ -571,6 +611,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -654,6 +695,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -716,6 +758,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -781,6 +824,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1000,6 +1044,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1043,6 +1088,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1124,6 +1170,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1197,6 +1244,7 @@ mod tests {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,

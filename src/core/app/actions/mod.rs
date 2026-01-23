@@ -33,6 +33,11 @@ pub enum AppAction {
     ToolPermissionDecision {
         decision: crate::mcp::permissions::ToolPermissionDecision,
     },
+    ToolPromptInspect,
+    InspectToolResults,
+    InspectToolResultsStep {
+        delta: i32,
+    },
     ToolCallCompleted {
         tool_name: String,
         tool_call_id: Option<String>,
@@ -202,7 +207,9 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::InsertIntoInput { .. }
         | AppAction::ProcessCommand { .. }
         | AppAction::CompleteInPlaceEdit { .. }
-        | AppAction::CompleteAssistantEdit { .. } => input::handle_input_action(app, action, ctx),
+        | AppAction::CompleteAssistantEdit { .. }
+        | AppAction::InspectToolResults
+        | AppAction::InspectToolResultsStep { .. } => input::handle_input_action(app, action, ctx),
 
         AppAction::PickerEscape
         | AppAction::PickerMoveUp
@@ -229,5 +236,7 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         AppAction::CompleteMcpPromptArg { .. } => {
             mcp_prompt::handle_mcp_prompt_action(app, action, ctx)
         }
+
+        AppAction::ToolPromptInspect => streaming::handle_streaming_action(app, action, ctx),
     }
 }

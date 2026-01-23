@@ -13,6 +13,39 @@ use crate::mcp::permissions::ToolPermissionDecision;
 use rust_mcp_sdk::schema::{ContentBlock, PromptMessage};
 use serde_json::{Map, Value};
 
+#[derive(Debug, Clone)]
+struct ToolResultMeta {
+    server_label: Option<String>,
+    server_id: Option<String>,
+    tool_call_id: Option<String>,
+    raw_arguments: Option<String>,
+}
+
+impl ToolResultMeta {
+    fn new(
+        server_label: Option<String>,
+        server_id: Option<String>,
+        tool_call_id: Option<String>,
+        raw_arguments: Option<String>,
+    ) -> Self {
+        Self {
+            server_label,
+            server_id,
+            tool_call_id,
+            raw_arguments,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingToolError {
+    tool_name: String,
+    server_id: Option<String>,
+    tool_call_id: Option<String>,
+    raw_arguments: Option<String>,
+    error: String,
+}
+
 pub(super) fn handle_streaming_action(
     app: &mut App,
     action: AppAction,
@@ -415,11 +448,16 @@ fn handle_tool_permission_decision(
             ToolPermissionDecision::Block => ToolResultStatus::Blocked,
             _ => ToolResultStatus::Denied,
         };
+        let meta = ToolResultMeta::new(
+            Some(server_label),
+            Some(request.server_id.clone()),
+            request.tool_call_id.clone(),
+            Some(request.raw_arguments.clone()),
+        );
         record_tool_result(
             app,
             &request.tool_name,
-            Some(server_label),
-            request.tool_call_id.clone(),
+            meta,
             message.to_string(),
             status,
             ctx,
@@ -447,22 +485,32 @@ fn handle_tool_call_completed(
 
     match result {
         Ok(payload) => {
+            let meta = ToolResultMeta::new(
+                server_label,
+                request.as_ref().map(|req| req.server_id.clone()),
+                tool_call_id.clone(),
+                request.as_ref().map(|req| req.raw_arguments.clone()),
+            );
             record_tool_result(
                 app,
                 &tool_name,
-                server_label,
-                tool_call_id,
+                meta,
                 payload,
                 ToolResultStatus::Success,
                 ctx,
             );
         }
         Err(err) => {
+            let meta = ToolResultMeta::new(
+                server_label,
+                request.as_ref().map(|req| req.server_id.clone()),
+                tool_call_id,
+                request.as_ref().map(|req| req.raw_arguments.clone()),
+            );
             record_tool_result(
                 app,
                 &tool_name,
-                server_label,
-                tool_call_id,
+                meta,
                 format!("Tool error: {err}"),
                 ToolResultStatus::Error,
                 ctx,
@@ -571,7 +619,7 @@ fn prepare_tool_flow(
 ) -> Option<AppCommand> {
     let mut tool_call_records = Vec::new();
     let mut pending_queue = VecDeque::new();
-    let mut pending_errors: Vec<(String, Option<String>, String)> = Vec::new();
+    let mut pending_errors: Vec<PendingToolError> = Vec::new();
 
     for (index, call) in pending_tool_calls {
         let tool_name = call.name.clone().unwrap_or_else(|| "unknown".to_string());
@@ -591,11 +639,13 @@ fn prepare_tool_flow(
         });
 
         if call.name.is_none() {
-            pending_errors.push((
-                tool_name.clone(),
-                Some(tool_call_id.clone()),
-                "Missing tool name.".to_string(),
-            ));
+            pending_errors.push(PendingToolError {
+                tool_name: tool_name.clone(),
+                server_id: None,
+                tool_call_id: Some(tool_call_id.clone()),
+                raw_arguments: Some(raw_arguments.clone()),
+                error: "Missing tool name.".to_string(),
+            });
             continue;
         }
 
@@ -605,19 +655,23 @@ fn prepare_tool_flow(
                     match app.mcp.server(&server_id) {
                         Some(server) if server.config.is_enabled() => {}
                         Some(_) => {
-                            pending_errors.push((
-                                tool_name.clone(),
-                                Some(tool_call_id.clone()),
-                                format!("MCP server is disabled: {server_id}."),
-                            ));
+                            pending_errors.push(PendingToolError {
+                                tool_name: tool_name.clone(),
+                                server_id: Some(server_id.clone()),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                raw_arguments: Some(raw_arguments.clone()),
+                                error: format!("MCP server is disabled: {server_id}."),
+                            });
                             continue;
                         }
                         None => {
-                            pending_errors.push((
-                                tool_name.clone(),
-                                Some(tool_call_id.clone()),
-                                format!("Unknown MCP server id: {server_id}."),
-                            ));
+                            pending_errors.push(PendingToolError {
+                                tool_name: tool_name.clone(),
+                                server_id: Some(server_id.clone()),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                raw_arguments: Some(raw_arguments.clone()),
+                                error: format!("Unknown MCP server id: {server_id}."),
+                            });
                             continue;
                         }
                     }
@@ -631,7 +685,13 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push((tool_name.clone(), Some(tool_call_id.clone()), err));
+                    pending_errors.push(PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: err,
+                    });
                     continue;
                 }
             }
@@ -639,7 +699,13 @@ fn prepare_tool_flow(
             let server_id = match resolve_tool_server(app, &tool_name) {
                 Ok((server_id, _)) => server_id,
                 Err(err) => {
-                    pending_errors.push((tool_name.clone(), Some(tool_call_id.clone()), err));
+                    pending_errors.push(PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: err,
+                    });
                     continue;
                 }
             };
@@ -656,11 +722,13 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push((
-                        tool_name.clone(),
-                        Some(tool_call_id.clone()),
-                        format!("Invalid tool arguments: {err}"),
-                    ));
+                    pending_errors.push(PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: format!("Invalid tool arguments: {err}"),
+                    });
                     continue;
                 }
             }
@@ -672,13 +740,21 @@ fn prepare_tool_flow(
     app.session.active_tool_request = None;
     app.session.tool_results.clear();
 
-    for (tool_name, tool_call_id, error) in pending_errors {
+    for error in pending_errors {
+        let meta = ToolResultMeta::new(
+            error
+                .server_id
+                .as_ref()
+                .map(|id| resolve_server_label(app, id)),
+            error.server_id.clone(),
+            error.tool_call_id.clone(),
+            error.raw_arguments.clone(),
+        );
         record_tool_result(
             app,
-            &tool_name,
-            None,
-            tool_call_id,
-            error,
+            &error.tool_name,
+            meta,
+            error.error,
             ToolResultStatus::Error,
             ctx,
         );
@@ -702,11 +778,16 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
     {
         if decision == ToolPermissionDecision::Block {
             let server_label = resolve_server_label(app, &request.server_id);
+            let meta = ToolResultMeta::new(
+                Some(server_label),
+                Some(request.server_id.clone()),
+                request.tool_call_id.clone(),
+                Some(request.raw_arguments.clone()),
+            );
             record_tool_result(
                 app,
                 &request.tool_name,
-                Some(server_label),
-                request.tool_call_id.clone(),
+                meta,
                 "Tool blocked by user.".to_string(),
                 ToolResultStatus::Blocked,
                 ctx,
@@ -909,14 +990,13 @@ fn summarize_tool_arguments(raw: &str) -> String {
 fn record_tool_result(
     app: &mut App,
     tool_name: &str,
-    server_label: Option<String>,
-    tool_call_id: Option<String>,
+    meta: ToolResultMeta,
     payload: String,
     status: ToolResultStatus,
     ctx: AppActionContext,
 ) {
     let mut transcript_payload = tool_name.to_string();
-    if let Some(server) = server_label.as_ref() {
+    if let Some(server) = meta.server_label.as_ref() {
         if !server.trim().is_empty() {
             transcript_payload.push_str(" on ");
             transcript_payload.push_str(server);
@@ -939,16 +1019,18 @@ fn record_tool_result(
         role: "tool".to_string(),
         content: payload.clone(),
         name: None,
-        tool_call_id: tool_call_id.clone(),
+        tool_call_id: meta.tool_call_id.clone(),
         tool_calls: None,
     });
 
     app.session.tool_result_history.push(ToolResultRecord {
         tool_name: tool_name.to_string(),
-        server_name: server_label,
+        server_name: meta.server_label,
+        server_id: meta.server_id,
         status,
         content: payload,
-        tool_call_id,
+        tool_call_id: meta.tool_call_id,
+        raw_arguments: meta.raw_arguments,
     });
 }
 

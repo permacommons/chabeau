@@ -42,8 +42,7 @@ pub(super) fn theme_metadata(
 
     append_theme_sections(&mut lines, spec);
 
-    let inspect =
-        sanitize_picker_metadata_for_inspect(&trim_trailing_blank_lines(lines).join("\n"));
+    let inspect = build_inspect_text(lines);
     (summary, inspect)
 }
 
@@ -202,6 +201,10 @@ fn trim_trailing_blank_lines(mut lines: Vec<String>) -> Vec<String> {
     lines
 }
 
+pub(crate) fn build_inspect_text(lines: Vec<String>) -> String {
+    sanitize_picker_metadata_for_inspect(&trim_trailing_blank_lines(lines).join("\n"))
+}
+
 pub(super) fn provider_metadata_builtin(
     provider: &BuiltinProvider,
     is_default: bool,
@@ -263,7 +266,7 @@ fn provider_metadata(
         lines.push("Status: Default provider from config".to_string());
     }
 
-    let inspect = sanitize_picker_metadata_for_inspect(&lines.join("\n"));
+    let inspect = build_inspect_text(lines);
     (summary, inspect)
 }
 
@@ -320,7 +323,7 @@ pub(super) fn character_inspect(card: &CharacterCard) -> String {
         }
     }
 
-    sanitize_picker_metadata_for_inspect(&trim_trailing_blank_lines(lines).join("\n"))
+    build_inspect_text(lines)
 }
 
 fn append_character_block(lines: &mut Vec<String>, heading: &str, content: &str) {

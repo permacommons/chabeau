@@ -3,6 +3,8 @@ use super::settings::{ProviderController, ThemeController};
 use super::App;
 
 #[cfg(any(test, feature = "bench"))]
+use super::inspect::InspectController;
+#[cfg(any(test, feature = "bench"))]
 use super::picker::PickerController;
 #[cfg(any(test, feature = "bench"))]
 use super::session::SessionContext;
@@ -79,6 +81,7 @@ impl App {
             active_tool_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
+            tool_result_history: Vec::new(),
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -99,6 +102,7 @@ impl App {
             session,
             ui,
             picker: PickerController::new(),
+            inspect: InspectController::new(),
             character_service: CharacterService::new(),
             persona_manager,
             preset_manager,

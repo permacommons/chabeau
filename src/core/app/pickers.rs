@@ -1,6 +1,6 @@
 use super::picker::{
-    self, CharacterPickerState, ModelPickerState, PersonaPickerState, PickerInspectState,
-    PickerMode, PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
+    self, CharacterPickerState, ModelPickerState, PersonaPickerState, PickerMode, PickerSession,
+    PresetPickerState, ProviderPickerState, ThemePickerState,
 };
 use super::ui_state::ActivityKind;
 use super::App;
@@ -40,34 +40,6 @@ impl App {
         self.picker.state_mut()
     }
 
-    pub fn picker_inspect_state(&self) -> Option<&PickerInspectState> {
-        self.picker.inspect_state()
-    }
-
-    pub fn picker_inspect_state_mut(&mut self) -> Option<&mut PickerInspectState> {
-        self.picker.inspect_state_mut()
-    }
-
-    pub fn open_picker_inspect(&mut self, title: String, content: String) {
-        self.picker.open_inspect(title, content);
-    }
-
-    pub fn close_picker_inspect(&mut self) {
-        self.picker.close_inspect();
-    }
-
-    pub fn scroll_picker_inspect(&mut self, lines: i32) {
-        self.picker.scroll_inspect(lines);
-    }
-
-    pub fn scroll_picker_inspect_to_start(&mut self) {
-        self.picker.scroll_inspect_to_start();
-    }
-
-    pub fn scroll_picker_inspect_to_end(&mut self) {
-        self.picker.scroll_inspect_to_end();
-    }
-
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
         self.picker.session().and_then(PickerSession::theme_state)
     }
@@ -102,10 +74,12 @@ impl App {
 
     pub fn close_picker(&mut self) {
         self.picker.close();
+        self.close_inspect();
     }
 
     /// Open a theme picker modal with built-in and custom themes
     pub fn open_theme_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.close_inspect();
         self.picker.open_theme_picker(&mut self.ui)
     }
 
@@ -123,6 +97,7 @@ impl App {
 
     /// Open a model picker modal with available models from current provider
     pub async fn open_model_picker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.close_inspect();
         let request = self.prepare_model_picker_request()?;
         let ModelPickerRequest {
             client,
@@ -205,6 +180,7 @@ impl App {
 
     /// Open a provider picker modal with available providers
     pub fn open_provider_picker(&mut self) {
+        self.close_inspect();
         if let Err(message) = self.picker.open_provider_picker(&self.session) {
             self.conversation().set_status(message);
         }
@@ -222,6 +198,7 @@ impl App {
 
     /// Open a character picker modal with available character cards
     pub fn open_character_picker(&mut self) {
+        self.close_inspect();
         match self.character_service.list_metadata() {
             Ok(metadata) => {
                 let mut cards = Vec::with_capacity(metadata.len());
@@ -251,6 +228,7 @@ impl App {
 
     /// Open a persona picker modal with available personas
     pub fn open_persona_picker(&mut self) {
+        self.close_inspect();
         if let Err(message) = self
             .picker
             .open_persona_picker(&self.persona_manager, &self.session)
@@ -409,6 +387,7 @@ impl App {
 
     /// Open a preset picker modal with available presets
     pub fn open_preset_picker(&mut self) {
+        self.close_inspect();
         if let Err(message) = self
             .picker
             .open_preset_picker(&self.preset_manager, &self.session)

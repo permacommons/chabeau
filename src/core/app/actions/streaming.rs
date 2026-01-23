@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use super::{App, AppAction, AppActionContext, AppCommand};
+use super::{input, App, AppAction, AppActionContext, AppCommand};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
-use crate::core::app::session::{McpPromptRequest, PendingToolCall, ToolCallRequest};
+use crate::core::app::picker::build_inspect_text;
+use crate::core::app::session::{
+    McpPromptRequest, PendingToolCall, ToolCallRequest, ToolResultRecord, ToolResultStatus,
+};
 use crate::core::chat_stream::StreamParams;
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::mcp::permissions::ToolPermissionDecision;
@@ -46,6 +49,7 @@ pub(super) fn handle_streaming_action(
         AppAction::ToolPermissionDecision { decision } => {
             handle_tool_permission_decision(app, decision, ctx)
         }
+        AppAction::ToolPromptInspect => handle_tool_prompt_inspect(app, ctx),
         AppAction::ToolCallCompleted {
             tool_name,
             tool_call_id,
@@ -74,6 +78,52 @@ pub(super) fn handle_streaming_action(
         AppAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
         AppAction::RetryLastMessage => retry_last_message(app, ctx),
         _ => unreachable!("non-streaming action routed to streaming handler"),
+    }
+}
+
+fn handle_tool_prompt_inspect(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
+    let prompt = app.ui.tool_prompt().cloned()?;
+
+    let server_label = if prompt.server_name.trim().is_empty() {
+        prompt.server_id.clone()
+    } else {
+        prompt.server_name.clone()
+    };
+
+    let mut lines = Vec::new();
+    lines.push(format!("Tool: {}", prompt.tool_name));
+    lines.push(format!("Server: {}", server_label));
+    if prompt.server_id.trim() != server_label.trim() {
+        lines.push(format!("Server ID: {}", prompt.server_id));
+    }
+    lines.push(String::new());
+    lines.push("Arguments:".to_string());
+
+    let args_text = format_tool_arguments_for_inspect(&prompt.raw_arguments);
+    if args_text.trim().is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for line in args_text.lines() {
+            lines.push(format!("  {}", line));
+        }
+    }
+
+    let title = format!("Tool call – {} on {}", prompt.tool_name, server_label);
+    let content = build_inspect_text(lines);
+    app.open_inspect(title, content);
+    input::set_status_message(app, "Inspecting tool call (Esc=Close)".to_string(), ctx);
+    None
+}
+
+fn format_tool_arguments_for_inspect(raw_arguments: &str) -> String {
+    let trimmed = raw_arguments.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
     }
 }
 
@@ -360,11 +410,18 @@ fn handle_tool_permission_decision(
             ToolPermissionDecision::Block => "Tool blocked by user.",
             _ => "Tool denied by user.",
         };
+        let server_label = resolve_server_label(app, &request.server_id);
+        let status = match decision {
+            ToolPermissionDecision::Block => ToolResultStatus::Blocked,
+            _ => ToolResultStatus::Denied,
+        };
         record_tool_result(
             app,
             &request.tool_name,
+            Some(server_label),
             request.tool_call_id.clone(),
             message.to_string(),
+            status,
             ctx,
         );
         return advance_tool_queue(app, ctx);
@@ -382,19 +439,32 @@ fn handle_tool_call_completed(
     result: Result<String, String>,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    app.session.active_tool_request = None;
+    let request = app.session.active_tool_request.take();
+    let server_label = request
+        .as_ref()
+        .map(|req| resolve_server_label(app, &req.server_id));
     app.clear_status();
 
     match result {
         Ok(payload) => {
-            record_tool_result(app, &tool_name, tool_call_id, payload, ctx);
+            record_tool_result(
+                app,
+                &tool_name,
+                server_label,
+                tool_call_id,
+                payload,
+                ToolResultStatus::Success,
+                ctx,
+            );
         }
         Err(err) => {
             record_tool_result(
                 app,
                 &tool_name,
+                server_label,
                 tool_call_id,
                 format!("Tool error: {err}"),
+                ToolResultStatus::Error,
                 ctx,
             );
         }
@@ -603,7 +673,15 @@ fn prepare_tool_flow(
     app.session.tool_results.clear();
 
     for (tool_name, tool_call_id, error) in pending_errors {
-        record_tool_result(app, &tool_name, tool_call_id, error, ctx);
+        record_tool_result(
+            app,
+            &tool_name,
+            None,
+            tool_call_id,
+            error,
+            ToolResultStatus::Error,
+            ctx,
+        );
     }
 
     advance_tool_queue(app, ctx)
@@ -623,11 +701,14 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         .decision_for(&request.server_id, &request.tool_name)
     {
         if decision == ToolPermissionDecision::Block {
+            let server_label = resolve_server_label(app, &request.server_id);
             record_tool_result(
                 app,
                 &request.tool_name,
+                Some(server_label),
                 request.tool_call_id.clone(),
                 "Tool blocked by user.".to_string(),
+                ToolResultStatus::Blocked,
                 ctx,
             );
             return advance_tool_queue(app, ctx);
@@ -653,9 +734,26 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
     let args_summary = summarize_tool_arguments(&request.raw_arguments);
     let server_id = request.server_id.clone();
     let tool_name = request.tool_name.clone();
+    let raw_arguments = request.raw_arguments.clone();
+    let batch_index = request
+        .tool_call_id
+        .as_ref()
+        .and_then(|id| {
+            app.session
+                .tool_call_records
+                .iter()
+                .position(|record| record.id.as_str() == id.as_str())
+        })
+        .unwrap_or(0);
     app.session.active_tool_request = Some(request);
-    app.ui
-        .start_tool_prompt(server_id, server_name, tool_name, args_summary);
+    app.ui.start_tool_prompt(
+        server_id,
+        server_name,
+        tool_name,
+        args_summary,
+        raw_arguments,
+        batch_index,
+    );
     None
 }
 
@@ -811,15 +909,22 @@ fn summarize_tool_arguments(raw: &str) -> String {
 fn record_tool_result(
     app: &mut App,
     tool_name: &str,
+    server_label: Option<String>,
     tool_call_id: Option<String>,
     payload: String,
+    status: ToolResultStatus,
     ctx: AppActionContext,
 ) {
-    let transcript_payload = if payload.trim().is_empty() {
-        tool_name.to_string()
-    } else {
-        format!("{tool_name}\n{payload}")
-    };
+    let mut transcript_payload = tool_name.to_string();
+    if let Some(server) = server_label.as_ref() {
+        if !server.trim().is_empty() {
+            transcript_payload.push_str(" on ");
+            transcript_payload.push_str(server);
+        }
+    }
+    transcript_payload.push_str(" (");
+    transcript_payload.push_str(status.label());
+    transcript_payload.push(')');
 
     let input_area_height = app.input_area_height(ctx.term_width);
     {
@@ -832,26 +937,24 @@ fn record_tool_result(
 
     app.session.tool_results.push(ChatMessage {
         role: "tool".to_string(),
-        content: payload,
+        content: payload.clone(),
         name: None,
-        tool_call_id,
+        tool_call_id: tool_call_id.clone(),
         tool_calls: None,
+    });
+
+    app.session.tool_result_history.push(ToolResultRecord {
+        tool_name: tool_name.to_string(),
+        server_name: server_label,
+        status,
+        content: payload,
+        tool_call_id,
     });
 }
 
 fn set_status_for_tool_run(app: &mut App, request: &ToolCallRequest, ctx: AppActionContext) {
     let input_area_height = app.input_area_height(ctx.term_width);
-    let server_name = app
-        .mcp
-        .server(&request.server_id)
-        .map(|server| {
-            if server.config.display_name.trim().is_empty() {
-                server.config.id.clone()
-            } else {
-                server.config.display_name.clone()
-            }
-        })
-        .unwrap_or_else(|| request.server_id.clone());
+    let server_name = resolve_server_label(app, &request.server_id);
     let mut conversation = app.conversation();
     conversation.set_status(format!(
         "Running MCP tool {} on {}...",
@@ -860,6 +963,19 @@ fn set_status_for_tool_run(app: &mut App, request: &ToolCallRequest, ctx: AppAct
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
+}
+
+fn resolve_server_label(app: &App, server_id: &str) -> String {
+    app.mcp
+        .server(server_id)
+        .map(|server| {
+            if server.config.display_name.trim().is_empty() {
+                server.config.id.clone()
+            } else {
+                server.config.display_name.clone()
+            }
+        })
+        .unwrap_or_else(|| server_id.to_string())
 }
 
 fn prepare_stream_params_for_message(

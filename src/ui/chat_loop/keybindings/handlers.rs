@@ -9,7 +9,7 @@
 //! - Mode-specific handlers (picker, edit select, block select)
 
 use crate::core::app::ui_state::{EditSelectTarget, VerticalCursorDirection};
-use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher};
+use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher, InspectMode};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
 use crate::mcp::permissions::ToolPermissionDecision;
@@ -138,6 +138,31 @@ impl KeyHandler for CtrlLHandler {
     }
 }
 
+/// Handler for Ctrl+O (inspect latest tool result).
+pub struct CtrlOHandler;
+
+#[async_trait::async_trait]
+impl KeyHandler for CtrlOHandler {
+    async fn handle(
+        &self,
+        _app: &AppHandle,
+        dispatcher: &AppActionDispatcher,
+        _key: &KeyEvent,
+        term_width: u16,
+        term_height: u16,
+        _last_input_layout_update: Option<std::time::Instant>,
+    ) -> KeyResult {
+        dispatcher.dispatch_many(
+            [AppAction::InspectToolResults],
+            AppActionContext {
+                term_width,
+                term_height,
+            },
+        );
+        KeyResult::Handled
+    }
+}
+
 /// Handler for F4 (toggle compose mode)
 pub struct F4Handler;
 
@@ -178,7 +203,9 @@ impl KeyHandler for EscapeHandler {
         let actions = app
             .read(|app| {
                 let mut actions = Vec::new();
-                if app.ui.file_prompt().is_some() {
+                if app.inspect_state().is_some() {
+                    actions.push(AppAction::PickerEscape);
+                } else if app.ui.file_prompt().is_some() {
                     actions.push(AppAction::CancelFilePrompt);
                 } else if app.ui.mcp_prompt_input().is_some() {
                     actions.push(AppAction::CancelMcpPromptInput);
@@ -255,13 +282,32 @@ impl KeyHandler for NavigationHandler {
     async fn handle(
         &self,
         app: &AppHandle,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
+        let inspect_active = app.read(|app| app.inspect_state().is_some()).await;
+        if inspect_active {
+            let page_lines = term_height.saturating_sub(8).max(1) as i32;
+            let action = match key.code {
+                KeyCode::PageUp => AppAction::PickerInspectScroll { lines: -page_lines },
+                KeyCode::PageDown => AppAction::PickerInspectScroll { lines: page_lines },
+                KeyCode::Home => AppAction::PickerInspectScrollToStart,
+                KeyCode::End => AppAction::PickerInspectScrollToEnd,
+                _ => return KeyResult::NotHandled,
+            };
+            dispatcher.dispatch_many(
+                [action],
+                AppActionContext {
+                    term_width,
+                    term_height,
+                },
+            );
+            return KeyResult::Handled;
+        }
 
         app.update(|app| match key.code {
             KeyCode::Home => {
@@ -343,13 +389,50 @@ impl KeyHandler for ArrowKeyHandler {
     async fn handle(
         &self,
         app: &AppHandle,
-        _dispatcher: &AppActionDispatcher,
+        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         let mut last_update = last_input_layout_update.unwrap_or_else(Instant::now);
+        let inspect_mode = app
+            .read(|app| app.inspect_state().map(|state| state.mode))
+            .await;
+        if let Some(mode) = inspect_mode {
+            let action = match key.code {
+                KeyCode::Up => Some(AppAction::PickerInspectScroll { lines: -1 }),
+                KeyCode::Down => Some(AppAction::PickerInspectScroll { lines: 1 }),
+                KeyCode::Left => match mode {
+                    InspectMode::ToolResults { .. } => {
+                        Some(AppAction::InspectToolResultsStep { delta: -1 })
+                    }
+                    InspectMode::Static => None,
+                },
+                KeyCode::Right => match mode {
+                    InspectMode::ToolResults { .. } => {
+                        Some(AppAction::InspectToolResultsStep { delta: 1 })
+                    }
+                    InspectMode::Static => None,
+                },
+                _ => None,
+            };
+            if let Some(action) = action {
+                dispatcher.dispatch_many(
+                    [action],
+                    AppActionContext {
+                        term_width,
+                        term_height,
+                    },
+                );
+            }
+            if matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+            ) {
+                return KeyResult::Handled;
+            }
+        }
 
         app.update(|app| match key.code {
             KeyCode::Left => {
@@ -968,39 +1051,128 @@ pub struct ToolPromptDecisionHandler;
 impl KeyHandler for ToolPromptDecisionHandler {
     async fn handle(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         term_width: u16,
         term_height: u16,
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
+        let inspect_active = app.read(|app| app.inspect_state().is_some()).await;
+        if inspect_active {
+            let page_lines = term_height.saturating_sub(8).max(1) as i32;
+            let action = match key.code {
+                KeyCode::Esc => AppAction::PickerEscape,
+                KeyCode::Up => AppAction::PickerInspectScroll { lines: -1 },
+                KeyCode::Down => AppAction::PickerInspectScroll { lines: 1 },
+                KeyCode::PageUp => AppAction::PickerInspectScroll { lines: -page_lines },
+                KeyCode::PageDown => AppAction::PickerInspectScroll { lines: page_lines },
+                KeyCode::Home => AppAction::PickerInspectScrollToStart,
+                KeyCode::End => AppAction::PickerInspectScrollToEnd,
+                _ => return KeyResult::NotHandled,
+            };
+            dispatcher.dispatch_many(
+                [action],
+                AppActionContext {
+                    term_width,
+                    term_height,
+                },
+            );
+            return KeyResult::Handled;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return KeyResult::NotHandled;
         }
 
-        let decision = match key.code {
-            KeyCode::Enter => ToolPermissionDecision::AllowOnce,
-            KeyCode::Esc => ToolPermissionDecision::DenyOnce,
+        match key.code {
+            KeyCode::Enter => {
+                dispatcher.dispatch_many(
+                    [AppAction::ToolPermissionDecision {
+                        decision: ToolPermissionDecision::AllowOnce,
+                    }],
+                    AppActionContext {
+                        term_width,
+                        term_height,
+                    },
+                );
+                KeyResult::Handled
+            }
+            KeyCode::Esc => {
+                dispatcher.dispatch_many(
+                    [AppAction::ToolPermissionDecision {
+                        decision: ToolPermissionDecision::DenyOnce,
+                    }],
+                    AppActionContext {
+                        term_width,
+                        term_height,
+                    },
+                );
+                KeyResult::Handled
+            }
             KeyCode::Char(ch) => match ch.to_ascii_lowercase() {
-                'a' => ToolPermissionDecision::AllowOnce,
-                's' => ToolPermissionDecision::AllowSession,
-                'd' => ToolPermissionDecision::DenyOnce,
-                'b' => ToolPermissionDecision::Block,
-                _ => return KeyResult::NotHandled,
+                'a' => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolPermissionDecision {
+                            decision: ToolPermissionDecision::AllowOnce,
+                        }],
+                        AppActionContext {
+                            term_width,
+                            term_height,
+                        },
+                    );
+                    KeyResult::Handled
+                }
+                's' => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolPermissionDecision {
+                            decision: ToolPermissionDecision::AllowSession,
+                        }],
+                        AppActionContext {
+                            term_width,
+                            term_height,
+                        },
+                    );
+                    KeyResult::Handled
+                }
+                'd' => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolPermissionDecision {
+                            decision: ToolPermissionDecision::DenyOnce,
+                        }],
+                        AppActionContext {
+                            term_width,
+                            term_height,
+                        },
+                    );
+                    KeyResult::Handled
+                }
+                'b' => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolPermissionDecision {
+                            decision: ToolPermissionDecision::Block,
+                        }],
+                        AppActionContext {
+                            term_width,
+                            term_height,
+                        },
+                    );
+                    KeyResult::Handled
+                }
+                'i' => {
+                    dispatcher.dispatch_many(
+                        [AppAction::ToolPromptInspect],
+                        AppActionContext {
+                            term_width,
+                            term_height,
+                        },
+                    );
+                    KeyResult::Handled
+                }
+                _ => KeyResult::NotHandled,
             },
-            _ => return KeyResult::NotHandled,
-        };
-
-        dispatcher.dispatch_many(
-            [AppAction::ToolPermissionDecision { decision }],
-            AppActionContext {
-                term_width,
-                term_height,
-            },
-        );
-
-        KeyResult::Handled
+            _ => KeyResult::NotHandled,
+        }
     }
 }
 

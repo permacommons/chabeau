@@ -196,7 +196,18 @@ impl ModeAwareRegistry {
                         // These have dedicated handlers
                         return !matches!(
                             c,
-                            'c' | 'l' | 'd' | 'b' | 'p' | 'j' | 'r' | 't' | 'a' | 'e' | 'n' | 'x'
+                            'c' | 'l'
+                                | 'd'
+                                | 'b'
+                                | 'p'
+                                | 'j'
+                                | 'r'
+                                | 't'
+                                | 'a'
+                                | 'e'
+                                | 'n'
+                                | 'o'
+                                | 'x'
                         );
                     }
                     // All other character input (regular chars, Shift+chars, Alt+chars, etc.)
@@ -210,9 +221,10 @@ impl ModeAwareRegistry {
                 match key.code {
                     KeyCode::Esc => false,
                     KeyCode::Enter => false,
-                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'x')
-                    }
+                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => !matches!(
+                        c,
+                        'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'o' | 'x'
+                    ),
                     KeyCode::F(4) => false,
                     _ if key.modifiers.contains(KeyModifiers::ALT)
                         && key.code == KeyCode::Enter =>
@@ -236,9 +248,10 @@ impl ModeAwareRegistry {
                     | KeyCode::PageDown => false,
                     KeyCode::Esc => false,
                     KeyCode::Enter => false,
-                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        !matches!(c, 'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'x')
-                    }
+                    KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => !matches!(
+                        c,
+                        'b' | 'p' | 'j' | 'r' | 't' | 'c' | 'l' | 'd' | 'n' | 'o' | 'x'
+                    ),
                     KeyCode::F(4) => false,
                     _ if key.modifiers.contains(KeyModifiers::ALT)
                         && key.code == KeyCode::Enter =>

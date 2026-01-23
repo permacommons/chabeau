@@ -18,6 +18,9 @@ pub enum ActivityKind {
 
     /// Fetching the list of available models from the provider.
     ModelRequest,
+
+    /// Refreshing MCP tools/resources/prompts.
+    McpRefresh,
 }
 
 /// Type of file operation prompt being displayed.

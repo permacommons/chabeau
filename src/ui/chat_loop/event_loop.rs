@@ -72,6 +72,12 @@ fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPick
 
 fn spawn_mcp_initializer(app: AppHandle, dispatcher: AppActionDispatcher) {
     tokio::spawn(async move {
+        let mcp_disabled = app.read(|app| app.session.mcp_disabled).await;
+        if mcp_disabled {
+            dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+            return;
+        }
+
         let has_enabled_servers = app
             .read(|app| app.mcp.servers().any(|server| server.config.is_enabled()))
             .await;
@@ -244,6 +250,23 @@ fn spawn_mcp_prompt_call(
 
 fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id: String) {
     tokio::spawn(async move {
+        let mcp_disabled = app.read(|app| app.session.mcp_disabled).await;
+        if mcp_disabled {
+            app.update(|app| {
+                app.conversation().add_app_message(
+                    AppMessageKind::Info,
+                    "MCP: **disabled for this session**\nMCP refresh skipped.".to_string(),
+                );
+                app.ui.focus_transcript();
+                app.clear_status();
+                app.ui
+                    .end_activity(crate::core::app::ActivityKind::McpRefresh);
+            })
+            .await;
+            dispatcher.dispatch_many([AppAction::ClearStatus], AppActionContext::default());
+            return;
+        }
+
         let keyring_enabled = app
             .read(|app| !cfg!(test) && !app.session.startup_env_only)
             .await;
@@ -703,6 +726,7 @@ pub async fn run_chat(
     character: Option<String>,
     persona: Option<String>,
     preset: Option<String>,
+    disable_mcp: bool,
     character_service: CharacterService,
 ) -> Result<(), Box<dyn Error>> {
     let app = bootstrap_app(
@@ -713,6 +737,7 @@ pub async fn run_chat(
         character,
         persona,
         preset,
+        disable_mcp,
         character_service,
     )
     .await?;

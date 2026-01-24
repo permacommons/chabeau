@@ -264,6 +264,7 @@ pub async fn run_say(
     character: Option<String>,
     persona: Option<String>,
     preset: Option<String>,
+    disable_mcp: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut stdin = io::stdin();
     let stdin_is_terminal = stdin.is_terminal();
@@ -309,6 +310,7 @@ pub async fn run_say(
             character,
             persona,
             preset,
+            disable_mcp,
         },
         &config,
         character_service,

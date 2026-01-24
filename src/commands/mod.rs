@@ -106,6 +106,7 @@ pub enum CommandResult {
 /// #     character: None,
 /// #     persona: None,
 /// #     preset: None,
+/// #     disable_mcp: false,
 /// # };
 /// # let mut app = chabeau::core::app::new_with_auth(init_config, &config, character_service).await?;
 /// // Process a command
@@ -148,6 +149,12 @@ fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandRes
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
         return None;
+    }
+
+    if app.session.mcp_disabled {
+        app.conversation()
+            .set_status("MCP: **disabled for this session**".to_string());
+        return Some(CommandResult::Continue);
     }
 
     let without_slash = trimmed.trim_start_matches('/');
@@ -400,6 +407,12 @@ pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> Co
 fn handle_mcp_list(app: &mut App) -> CommandResult {
     let servers: Vec<_> = app.mcp.servers().collect();
     let mut output = String::from("## MCP servers\n");
+    if app.session.mcp_disabled {
+        output.push_str("MCP: **disabled for this session**\n");
+    } else {
+        output.push_str("MCP: enabled\n");
+    }
+    output.push('\n');
     if servers.is_empty() {
         output.push_str("No MCP servers configured. Add `[[mcp_servers]]` to config.toml.\n");
         app.conversation()
@@ -428,6 +441,19 @@ fn handle_mcp_server(app: &mut App, server_id: &str) -> CommandResult {
         return CommandResult::Continue;
     }
 
+    if app.session.mcp_disabled {
+        if let Some(server) = app.mcp.server(server_id) {
+            let mut output = format!("## MCP for {}\n", server.config.display_name);
+            output.push_str("MCP: **disabled for this session**\n");
+            output.push_str(&format!("Server id: `{}`\n", server.config.id));
+            output.push('\n');
+            app.conversation()
+                .add_app_message(AppMessageKind::Info, output);
+            app.ui.focus_transcript();
+            return CommandResult::ContinueWithTranscriptFocus;
+        }
+    }
+
     app.conversation()
         .set_status("Refreshing MCP data...".to_string());
     app.ui
@@ -443,6 +469,11 @@ pub(crate) fn build_mcp_server_output(
     token_store: &McpTokenStore,
 ) -> String {
     let mut output = format!("## MCP for {}\n", server.config.display_name);
+    if server.config.is_enabled() {
+        output.push_str("MCP: enabled\n");
+    } else {
+        output.push_str("MCP: **disabled**\n");
+    }
     output.push_str(&format!("Server id: `{}`\n", server.config.id));
     output.push_str(&format!(
         "Status: {}\n",
@@ -1515,6 +1546,16 @@ mod tests {
         let last = app.ui.messages.back().expect("app message");
         assert!(last.content.contains("MCP servers"));
         assert!(last.content.contains("No MCP servers configured"));
+    }
+
+    #[test]
+    fn mcp_command_highlights_disabled_state() {
+        let mut app = create_test_app();
+        app.session.mcp_disabled = true;
+        let res = process_input(&mut app, "/mcp");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("MCP: **disabled for this session**"));
     }
 
     #[test]

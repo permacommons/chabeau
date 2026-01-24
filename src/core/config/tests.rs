@@ -3,6 +3,7 @@ use super::data::{path_display, Config, CustomProvider, CustomTheme, McpServerCo
 use super::orchestrator::ConfigOrchestrator;
 use crate::core::persona::PersonaManager;
 use directories::ProjectDirs;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -655,7 +656,10 @@ fn test_mcp_server_config_persistence() {
         mcp_servers: vec![McpServerConfig {
             id: "alpha".to_string(),
             display_name: "Alpha MCP".to_string(),
-            base_url: "https://mcp.example.com".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
             transport: Some("sse".to_string()),
             allowed_tools: Some(vec!["alpha.tool".to_string()]),
             protocol_version: Some("2024-11-05".to_string()),
@@ -674,7 +678,7 @@ fn test_mcp_server_config_persistence() {
     let server = &loaded_config.mcp_servers[0];
     assert_eq!(server.id, "alpha");
     assert_eq!(server.display_name, "Alpha MCP");
-    assert_eq!(server.base_url, "https://mcp.example.com");
+    assert_eq!(server.base_url.as_deref(), Some("https://mcp.example.com"));
     assert_eq!(server.transport.as_deref(), Some("sse"));
     assert_eq!(
         server.allowed_tools.as_ref().map(|tools| tools.as_slice()),
@@ -682,6 +686,54 @@ fn test_mcp_server_config_persistence() {
     );
     assert_eq!(server.protocol_version.as_deref(), Some("2024-11-05"));
     assert_eq!(server.enabled, Some(false));
+}
+
+#[test]
+fn test_mcp_server_stdio_config_persistence() {
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let config_path = temp_dir.path().join("test_mcp_stdio.toml");
+
+    let mut env = HashMap::new();
+    env.insert("MCP_TOKEN".to_string(), "local-dev".to_string());
+
+    let config = Config {
+        mcp_servers: vec![McpServerConfig {
+            id: "stdio".to_string(),
+            display_name: "Stdio MCP".to_string(),
+            base_url: None,
+            command: Some("mcp-server".to_string()),
+            args: Some(vec!["--mode".to_string(), "stdio".to_string()]),
+            env: Some(env),
+            transport: Some("stdio".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+        }],
+        ..Default::default()
+    };
+
+    config
+        .save_to_path(&config_path)
+        .expect("Failed to save config");
+
+    let loaded_config = Config::load_from_path(&config_path).expect("Failed to load config");
+    assert_eq!(loaded_config.mcp_servers.len(), 1);
+
+    let server = &loaded_config.mcp_servers[0];
+    assert_eq!(server.id, "stdio");
+    assert_eq!(server.display_name, "Stdio MCP");
+    assert!(server.base_url.is_none());
+    assert_eq!(server.command.as_deref(), Some("mcp-server"));
+    assert_eq!(
+        server.args.as_ref().map(|args| args.as_slice()),
+        Some(&["--mode".to_string(), "stdio".to_string()][..])
+    );
+    assert_eq!(
+        server.env.as_ref().and_then(|env| env.get("MCP_TOKEN")),
+        Some(&"local-dev".to_string())
+    );
+    assert_eq!(server.transport.as_deref(), Some("stdio"));
+    assert_eq!(server.enabled, Some(true));
 }
 
 #[test]

@@ -167,13 +167,14 @@ Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.
 
 ## MCP Servers
 
-Chabeau can track MCP-over-HTTP server definitions in `config.toml` and surface them in the TUI.
+Chabeau can track MCP servers over HTTP (streamable HTTP or SSE) or stdio and surface them in the TUI.
 
 - Configure MCP servers with `[[mcp_servers]]` entries (see `examples/config.toml.sample`).
+- Pick a `transport` of `streamable-http`, `sse`, or `stdio`. HTTP transports require `base_url`; stdio transports require `command` and optional `args`/`env`.
 - Use `/mcp` to list configured servers; `/mcp <server-id>` connects on demand and fetches tools, resources, templates, and prompts.
-- Store bearer tokens with `chabeau mcp token <server>` (tokens are saved in the system keyring under the server id).
+- Store bearer tokens with `chabeau mcp token <server>` (tokens are saved in the system keyring under the server id) for HTTP transports; stdio transports read auth from their environment.
 - For transport debugging, run `chabeau --debug-mcp` to enable verbose MCP logs on stderr.
-- MCP token storage uses the system keyring keyed by server id. Chabeau warms tool listings in the background and may pause the first send until tools are ready. When MCP tool listings are cached, Chabeau includes tool schemas in chat requests and adds a short MCP tool-use preamble to the system prompt; when models request tools, Chabeau prompts for permission in the input area (Allow once / Allow for session / Deny / Block). Press `I` to inspect the full tool arguments, and the transcript shows a brief waiting note until a decision is made. Approved tools run immediately and their calls render in the transcript, while results appear as short status summaries; press Ctrl+O to inspect the latest tool result (use ←/→ to cycle), including full MCP error details when a call fails.
+- For HTTP transports, MCP token storage uses the system keyring keyed by server id. Chabeau warms tool listings in the background and may pause the first send until tools are ready. When MCP tool listings are cached, Chabeau includes tool schemas in chat requests and adds a short MCP tool-use preamble to the system prompt; when models request tools, Chabeau prompts for permission in the input area (Allow once / Allow for session / Deny / Block). Press `I` to inspect the full tool arguments, and the transcript shows a brief waiting note until a decision is made. Approved tools run immediately and their calls render in the transcript, while results appear as short status summaries; press Ctrl+O to inspect the latest tool result (use ←/→ to cycle), including full MCP error details when a call fails.
 - When MCP resources or templates are cached, Chabeau injects them into the system prompt and exposes a `mcp_read_resource` tool so models can fetch resource URIs.
 - Invoke MCP prompt templates with `/<server-id>:<prompt-id>` (e.g. `/agpedia:article-outline topic="soil health"`). If required arguments are missing, Chabeau will prompt for them in the input area before fetching the prompt and continuing the conversation.
 

@@ -72,7 +72,10 @@ pub struct Preset {
 pub struct McpServerConfig {
     pub id: String,
     pub display_name: String,
-    pub base_url: String,
+    pub base_url: Option<String>,
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub env: Option<HashMap<String, String>>,
     pub transport: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub protocol_version: Option<String>,

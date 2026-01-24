@@ -464,14 +464,16 @@ pub(crate) fn build_mcp_server_output(
         "Connected: {}\n",
         if server.connected { "yes" } else { "no" }
     ));
-    if keyring_enabled {
-        match token_store.get_token(&server.config.id) {
+    match crate::mcp::client::McpTransportKind::from_config(&server.config) {
+        Ok(crate::mcp::client::McpTransportKind::Stdio) => {
+            output.push_str("Token: not used (stdio)\n");
+        }
+        _ if keyring_enabled => match token_store.get_token(&server.config.id) {
             Ok(Some(_)) => output.push_str("Token: present\n"),
             Ok(None) => output.push_str("Token: missing\n"),
             Err(err) => output.push_str(&format!("Token: error ({})\n", err)),
-        }
-    } else {
-        output.push_str("Token: unknown (keyring disabled)\n");
+        },
+        _ => output.push_str("Token: unknown (keyring disabled)\n"),
     }
 
     output.push('\n');
@@ -1523,7 +1525,10 @@ mod tests {
             .push(crate::core::config::data::McpServerConfig {
                 id: "alpha".to_string(),
                 display_name: "Alpha".to_string(),
-                base_url: "https://mcp.example.com".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
                 transport: Some("sse".to_string()),
                 allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
                 protocol_version: Some("2024-11-05".to_string()),

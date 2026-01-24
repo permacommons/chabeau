@@ -222,7 +222,10 @@ fn build_stream_params_includes_mcp_tools() {
         .push(crate::core::config::data::McpServerConfig {
             id: "alpha".to_string(),
             display_name: "Alpha MCP".to_string(),
-            base_url: "https://mcp.example.com".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
             transport: Some("streamable-http".to_string()),
             allowed_tools: Some(vec!["search".to_string()]),
             protocol_version: None,
@@ -304,7 +307,10 @@ fn build_stream_params_includes_mcp_resources() {
         .push(crate::core::config::data::McpServerConfig {
             id: "alpha".to_string(),
             display_name: "Alpha MCP".to_string(),
-            base_url: "https://mcp.example.com".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
             transport: Some("streamable-http".to_string()),
             allowed_tools: None,
             protocol_version: None,

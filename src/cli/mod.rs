@@ -164,6 +164,10 @@ pub struct Args {
     /// Enable verbose MCP debug logging
     #[arg(long = "debug-mcp", global = true, action = clap::ArgAction::SetTrue)]
     pub debug_mcp: bool,
+
+    /// Disable MCP even if configured
+    #[arg(short = 'd', long = "disable-mcp", global = true, action = clap::ArgAction::SetTrue)]
+    pub disable_mcp: bool,
 }
 
 #[derive(Subcommand)]
@@ -635,6 +639,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_for_operations,
                                 args.persona,
                                 preset_for_operations.clone(),
+                                args.disable_mcp,
                                 service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
@@ -651,6 +656,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_for_operations,
                                 args.persona,
                                 preset_for_operations,
+                                args.disable_mcp,
                                 service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
@@ -686,6 +692,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                 args.character,
                 args.persona,
                 args.preset,
+                args.disable_mcp,
             )
             .await
         }
@@ -816,6 +823,15 @@ mod tests {
 
         let args = Args::try_parse_from(["chabeau"]).unwrap();
         assert_eq!(args.preset, None);
+    }
+
+    #[test]
+    fn test_disable_mcp_flag_parsing() {
+        let args = Args::try_parse_from(["chabeau", "-d"]).unwrap();
+        assert!(args.disable_mcp);
+
+        let args = Args::try_parse_from(["chabeau", "--disable-mcp"]).unwrap();
+        assert!(args.disable_mcp);
     }
 
     #[test]

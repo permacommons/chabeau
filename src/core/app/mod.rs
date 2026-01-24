@@ -80,6 +80,9 @@ pub struct AppInitConfig {
 
     /// Preset ID to activate for this session.
     pub preset: Option<String>,
+
+    /// Disable MCP for this session even if configured.
+    pub disable_mcp: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -157,6 +160,7 @@ fn build_app(
 ///     character: None,
 ///     persona: None,
 ///     preset: None,
+///     disable_mcp: false,
 /// };
 ///
 /// let app = new_with_auth(init_config, &config, character_service).await?;
@@ -168,6 +172,13 @@ pub async fn new_with_auth(
     config: &Config,
     mut character_service: CharacterService,
 ) -> Result<App, Box<dyn std::error::Error>> {
+    let mut effective_config = config.clone();
+    if init_config.disable_mcp {
+        for server in &mut effective_config.mcp_servers {
+            server.enabled = Some(false);
+        }
+    }
+
     let SessionBootstrap {
         session,
         theme,
@@ -178,7 +189,7 @@ pub async fn new_with_auth(
         init_config.log_file,
         init_config.provider,
         init_config.env_only,
-        config,
+        &effective_config,
         init_config.pre_resolved_session,
         init_config.character,
         &mut character_service,
@@ -186,7 +197,8 @@ pub async fn new_with_auth(
     .await?;
 
     // Initialize PersonaManager and apply CLI persona if provided
-    let mut persona_manager = crate::core::persona::PersonaManager::load_personas(config)?;
+    let mut persona_manager =
+        crate::core::persona::PersonaManager::load_personas(&effective_config)?;
     if let Some(persona_id) = init_config.persona {
         persona_manager.set_active_persona(&persona_id)?;
     } else {
@@ -205,7 +217,7 @@ pub async fn new_with_auth(
     }
 
     // Initialize PresetManager and apply CLI preset if provided
-    let mut preset_manager = crate::core::preset::PresetManager::load_presets(config)?;
+    let mut preset_manager = crate::core::preset::PresetManager::load_presets(&effective_config)?;
     if let Some(preset_id) = init_config.preset {
         preset_manager.set_active_preset(&preset_id)?;
     } else if let Some(default_preset_id) =
@@ -220,9 +232,9 @@ pub async fn new_with_auth(
         }
     }
 
-    let ui = UiState::from_config(theme, config);
+    let ui = UiState::from_config(theme, &effective_config);
     let picker = PickerController::new();
-    let mcp = McpClientManager::from_config(config);
+    let mcp = McpClientManager::from_config(&effective_config);
 
     let mut app = build_app(
         session,
@@ -231,9 +243,10 @@ pub async fn new_with_auth(
         character_service,
         persona_manager,
         preset_manager,
-        config.clone(),
+        effective_config.clone(),
         mcp,
     );
+    app.session.mcp_disabled = init_config.disable_mcp;
 
     // Add log startup message if logging is active
     if app.session.logging.is_active() {
@@ -272,6 +285,7 @@ pub async fn new_with_auth(
 /// # Arguments
 ///
 /// * `log_file` - Optional path to a log file for recording API interactions
+/// * `disable_mcp` - If true, treat all MCP servers as disabled
 /// * `character_service` - Service for loading and caching character cards
 ///
 /// # Errors
@@ -279,14 +293,21 @@ pub async fn new_with_auth(
 /// Returns an error if session bootstrap or configuration loading fails.
 pub async fn new_uninitialized(
     log_file: Option<String>,
+    disable_mcp: bool,
     mut character_service: CharacterService,
 ) -> Result<App, Box<dyn std::error::Error>> {
     let UninitializedSessionBootstrap {
         session,
         theme,
-        config,
+        mut config,
         startup_requires_provider,
     } = session::prepare_uninitialized(log_file, &mut character_service).await?;
+
+    if disable_mcp {
+        for server in &mut config.mcp_servers {
+            server.enabled = Some(false);
+        }
+    }
 
     // Initialize PersonaManager (no CLI persona for uninitialized app)
     let persona_manager = crate::core::persona::PersonaManager::load_personas(&config)?;
@@ -306,6 +327,7 @@ pub async fn new_uninitialized(
         config.clone(),
         mcp,
     );
+    app.session.mcp_disabled = disable_mcp;
 
     if startup_requires_provider {
         app.picker.startup_requires_provider = true;

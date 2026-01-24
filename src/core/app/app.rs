@@ -70,6 +70,7 @@ impl App {
             refine_instructions: DEFAULT_REFINE_INSTRUCTIONS.to_string(),
             refine_prefix: DEFAULT_REFINE_PREFIX.to_string(),
             startup_env_only: false,
+            mcp_disabled: false,
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,

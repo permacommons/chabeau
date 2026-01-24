@@ -29,6 +29,7 @@ pub async fn bootstrap_app(
     character: Option<String>,
     persona: Option<String>,
     preset: Option<String>,
+    disable_mcp: bool,
     character_service: CharacterService,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
     let config = Config::load()?;
@@ -107,7 +108,7 @@ pub async fn bootstrap_app(
         let service = character_service
             .take()
             .expect("character service should be available");
-        let mut app = app::new_uninitialized(log.clone(), service)
+        let mut app = app::new_uninitialized(log.clone(), disable_mcp, service)
             .await
             .expect("init app");
         app.picker.startup_requires_provider = true;
@@ -145,6 +146,7 @@ pub async fn bootstrap_app(
                 character: character.clone(),
                 persona,
                 preset,
+                disable_mcp,
             },
             &config,
             service,

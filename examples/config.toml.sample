@@ -66,6 +66,16 @@ enabled = true
 allowed_tools = ["weather.lookup", "time.now"]
 # protocol_version = "2024-11-05"
 
+# Configure MCP servers that launch over stdio.
+[[mcp_servers]]
+id = "local-stdio"
+display_name = "Local MCP (stdio)"
+transport = "stdio"
+command = "mcp-server"
+args = ["--mode", "stdio"]
+# env = { MCP_TOKEN = "local-dev" }
+enabled = true
+
 # Add custom themes, each in its own [[custom_themes]] block.
 #
 # Select them with `/theme` in the app.

@@ -11,6 +11,10 @@ Items are removed when completed.
 - Lorebook/world info support for character cards — [OPEN]
 - Basic "push a file into context" support — [OPEN]
 - Microphone/speaker support? — [OPEN]
+- MCP: handle notifications (listChanged, progress, logging) for streamable HTTP and stdio — [OPEN]
+- MCP: support long-lived SSE response streams within streamable HTTP — [OPEN]
+- MCP: expand capabilities negotiation (client capabilities + server capabilities tracking) — [OPEN]
+- MCP: add optional features (sampling/logging/roots/resource subscriptions) as needed — [OPEN]
 
 ## Code quality
 

@@ -21,7 +21,7 @@ use crate::core::mcp_auth::McpTokenStore;
 use crate::core::message::{self, AppMessageKind};
 use chrono::Utc;
 use registry::DispatchOutcome;
-use rust_mcp_sdk::schema::PromptArgument;
+use rust_mcp_schema::PromptArgument;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -1570,7 +1570,7 @@ mod tests {
                 command: None,
                 args: None,
                 env: None,
-                transport: Some("sse".to_string()),
+                transport: Some("streamable-http".to_string()),
                 allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
                 protocol_version: Some("2024-11-05".to_string()),
                 enabled: Some(true),

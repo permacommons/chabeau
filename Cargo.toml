@@ -17,7 +17,7 @@ default = []
 bench = []
 
 [dependencies]
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process"] }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -39,7 +39,7 @@ unicode-segmentation = "1.11"
 memchr = "2.7"
 base64 = "0.22"
 crc32fast = "1.4"
-rust-mcp-sdk = { version = "0.8.1", default-features = false, features = ["client", "streamable-http", "sse", "stdio"] }
+rust-mcp-schema = { version = "0.9.4", features = ["schema_utils", "2025_11_25"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

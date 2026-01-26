@@ -46,7 +46,7 @@ pub enum AppAction {
     },
     McpPromptCompleted {
         request: crate::core::app::session::McpPromptRequest,
-        result: Result<rust_mcp_sdk::schema::GetPromptResult, String>,
+        result: Result<rust_mcp_schema::GetPromptResult, String>,
     },
     StreamErrored {
         message: String,

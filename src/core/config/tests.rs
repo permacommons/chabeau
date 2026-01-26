@@ -660,7 +660,7 @@ fn test_mcp_server_config_persistence() {
             command: None,
             args: None,
             env: None,
-            transport: Some("sse".to_string()),
+            transport: Some("streamable-http".to_string()),
             allowed_tools: Some(vec!["alpha.tool".to_string()]),
             protocol_version: Some("2024-11-05".to_string()),
             enabled: Some(false),
@@ -679,7 +679,7 @@ fn test_mcp_server_config_persistence() {
     assert_eq!(server.id, "alpha");
     assert_eq!(server.display_name, "Alpha MCP");
     assert_eq!(server.base_url.as_deref(), Some("https://mcp.example.com"));
-    assert_eq!(server.transport.as_deref(), Some("sse"));
+    assert_eq!(server.transport.as_deref(), Some("streamable-http"));
     assert_eq!(
         server.allowed_tools.as_ref().map(|tools| tools.as_slice()),
         Some(&["alpha.tool".to_string()][..])

@@ -1,33 +1,30 @@
 use crate::core::app::session::ToolCallRequest;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
-use rust_mcp_sdk::mcp_client::{client_runtime, ClientHandler, McpClientOptions};
-use rust_mcp_sdk::schema::schema_utils::{
-    ClientMessage, FromMessage, MessageFromClient, RequestFromClient, ServerMessage,
+use rust_mcp_schema::schema_utils::{
+    ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
+    ServerMessage,
 };
-use rust_mcp_sdk::schema::RequestId;
-use rust_mcp_sdk::schema::{
+use rust_mcp_schema::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, GetPromptRequestParams,
     GetPromptResult, Implementation, InitializeRequestParams, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-    ReadResourceResult, RpcError, LATEST_PROTOCOL_VERSION,
-};
-use rust_mcp_sdk::{
-    ClientSseTransport, ClientSseTransportOptions, McpClient, StdioTransport, ToMcpClientHandler,
-    TransportOptions,
+    ReadResourceResult, RequestId, RpcError, LATEST_PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
-use std::future::Future;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStdin, Command};
+use tokio::sync::{oneshot, Mutex, RwLock};
+use tracing::debug;
 
 const MCP_METHOD_NOT_FOUND: i64 = -32601;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransportKind {
     StreamableHttp,
-    Sse,
     Stdio,
 }
 
@@ -40,7 +37,6 @@ impl McpTransportKind {
             .to_ascii_lowercase();
         match transport.as_str() {
             "streamable-http" | "streamable_http" | "http" => Ok(McpTransportKind::StreamableHttp),
-            "sse" => Ok(McpTransportKind::Sse),
             "stdio" => Ok(McpTransportKind::Stdio),
             other => Err(format!("Unsupported MCP transport: {}", other)),
         }
@@ -69,6 +65,192 @@ fn stdio_env(config: &McpServerConfig) -> Option<HashMap<String, String>> {
     config.env.clone()
 }
 
+const STDIO_REQUEST_TIMEOUT_SECONDS: u64 = 60;
+
+struct StdioClient {
+    stdin: Mutex<ChildStdin>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
+    next_request_id: AtomicI64,
+    server_details: RwLock<Option<rust_mcp_schema::InitializeResult>>,
+}
+
+impl StdioClient {
+    async fn connect(config: &McpServerConfig) -> Result<Arc<Self>, String> {
+        let command = require_stdio_command(config)?;
+        let args = stdio_args(config);
+        debug!(command = %command, args = ?args, "Starting MCP stdio server");
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        if let Some(env) = stdio_env(config) {
+            cmd.envs(env);
+        }
+
+        let mut child = cmd.spawn().map_err(|err| err.to_string())?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Unable to retrieve stdin.".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Unable to retrieve stdout.".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Unable to retrieve stderr.".to_string())?;
+
+        let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let client = Arc::new(Self {
+            stdin: Mutex::new(stdin),
+            pending: pending.clone(),
+            next_request_id: AtomicI64::new(0),
+            server_details: RwLock::new(None),
+        });
+
+        Self::spawn_stdout_reader(pending.clone(), stdout);
+        Self::spawn_stderr_drain(stderr);
+
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            let mut pending = pending.lock().await;
+            pending.clear();
+        });
+
+        Ok(client)
+    }
+
+    fn spawn_stdout_reader(
+        pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
+        stdout: tokio::process::ChildStdout,
+    ) {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let value = match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                if let Some(items) = value.as_array() {
+                    for item in items {
+                        if let Ok(message) = serde_json::from_value::<ServerMessage>(item.clone()) {
+                            Self::dispatch_message(&pending, message).await;
+                        }
+                    }
+                } else if let Ok(message) = serde_json::from_value::<ServerMessage>(value) {
+                    Self::dispatch_message(&pending, message).await;
+                }
+            }
+        });
+    }
+
+    fn spawn_stderr_drain(stderr: tokio::process::ChildStderr) {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(_)) = reader.next_line().await {}
+        });
+    }
+
+    async fn dispatch_message(
+        pending: &Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
+        message: ServerMessage,
+    ) {
+        match &message {
+            ServerMessage::Response(response) => {
+                if let Some(tx) = pending.lock().await.remove(&response.id) {
+                    let _ = tx.send(message);
+                }
+            }
+            ServerMessage::Error(error) => {
+                if let Some(id) = error.id.as_ref() {
+                    if let Some(tx) = pending.lock().await.remove(id) {
+                        let _ = tx.send(message);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        RequestId::Integer(id)
+    }
+
+    async fn send_request(&self, request: RequestFromClient) -> Result<ServerMessage, String> {
+        let request_id = self.next_request_id();
+        debug!(request_id = ?request_id, "Sending MCP stdio request");
+        let message = ClientMessage::from_message(
+            MessageFromClient::RequestFromClient(request),
+            Some(request_id.clone()),
+        )
+        .map_err(|err| err.to_string())?;
+
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending.lock().await;
+            pending.insert(request_id, tx);
+        }
+
+        let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|err| err.to_string())?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+
+        let timeout = tokio::time::Duration::from_secs(STDIO_REQUEST_TIMEOUT_SECONDS);
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(message)) => Ok(message),
+            Ok(Err(_)) => Err("MCP stdio response channel closed.".to_string()),
+            Err(_) => Err("MCP stdio request timed out.".to_string()),
+        }
+    }
+
+    async fn send_notification(&self, notification: NotificationFromClient) -> Result<(), String> {
+        let message = ClientMessage::from_message(
+            MessageFromClient::NotificationFromClient(notification),
+            None,
+        )
+        .map_err(|err| err.to_string())?;
+        let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|err| err.to_string())?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    async fn initialize(&self, details: InitializeRequestParams) -> Result<(), String> {
+        let response = self
+            .send_request(RequestFromClient::InitializeRequest(details))
+            .await?;
+        parse_initialize(response.clone())?;
+        let initialize = parse_response_value(response)?;
+        let result = serde_json::from_value::<rust_mcp_schema::InitializeResult>(initialize)
+            .map_err(|err| err.to_string())?;
+        *self.server_details.write().await = Some(result);
+        self.send_notification(NotificationFromClient::InitializedNotification(None))
+            .await?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct McpServerState {
     pub config: McpServerConfig,
@@ -81,7 +263,7 @@ pub struct McpServerState {
     pub session_id: Option<String>,
     pub auth_header: Option<String>,
     pub streamable_http_request_id: u64,
-    client: Option<Arc<rust_mcp_sdk::mcp_client::ClientRuntime>>,
+    client: Option<Arc<StdioClient>>,
 }
 
 impl McpServerState {
@@ -146,37 +328,6 @@ impl McpClientManager {
         }
     }
 
-    async fn refresh_client_list<T, E, F, Fut>(
-        &mut self,
-        id: &str,
-        client: Arc<rust_mcp_sdk::mcp_client::ClientRuntime>,
-        label: &str,
-        empty: impl FnOnce() -> T,
-        set: impl FnOnce(&mut McpServerState, T),
-        request: F,
-    ) where
-        E: ToString,
-        F: FnOnce(Arc<rust_mcp_sdk::mcp_client::ClientRuntime>) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
-    {
-        let session_id = client.session_id().await;
-        let result = request(client).await;
-        let fetch = match result {
-            Ok(list) => ListFetch::Ok(list, session_id),
-            Err(err) => {
-                let message = err.to_string();
-                if is_method_not_found_error_message(&message) {
-                    ListFetch::MethodNotFound(session_id)
-                } else {
-                    ListFetch::Err(message)
-                }
-            }
-        };
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(server, fetch, label, empty, set);
-        }
-    }
-
     pub fn from_config(config: &Config) -> Self {
         let servers = config
             .mcp_servers
@@ -212,7 +363,7 @@ impl McpClientManager {
     }
 
     pub async fn connect_server(&mut self, id: &str, token_store: &McpTokenStore) {
-        let (config, transport_kind, headers, client_details, auth_header) = {
+        let (config, transport_kind, auth_header) = {
             let Some(server) = self.server_mut(id) else {
                 return;
             };
@@ -237,8 +388,8 @@ impl McpClientManager {
                 }
             };
 
-            let (auth_header, headers) = match transport_kind {
-                McpTransportKind::StreamableHttp | McpTransportKind::Sse => {
+            let auth_header = match transport_kind {
+                McpTransportKind::StreamableHttp => {
                     if let Err(err) = require_http_base_url(&server.config) {
                         server.last_error = Some(err);
                         server.connected = false;
@@ -256,20 +407,7 @@ impl McpClientManager {
                         }
                     };
 
-                    let auth_header = token.map(|token| format!("Bearer {}", token));
-
-                    let headers = auth_header.as_ref().map(|token| {
-                        let mut map = HashMap::new();
-                        map.insert("Authorization".to_string(), token.clone());
-                        map.insert(
-                            "Accept".to_string(),
-                            "application/json, text/event-stream".to_string(),
-                        );
-                        map.insert("Content-Type".to_string(), "application/json".to_string());
-                        map
-                    });
-
-                    (auth_header, headers)
+                    token.map(|token| format!("Bearer {}", token))
                 }
                 McpTransportKind::Stdio => {
                     if let Err(err) = require_stdio_command(&server.config) {
@@ -278,41 +416,15 @@ impl McpClientManager {
                         server.client = None;
                         return;
                     }
-                    (None, None)
+                    None
                 }
             };
 
-            let protocol_version = server
-                .config
-                .protocol_version
-                .clone()
-                .unwrap_or_else(|| LATEST_PROTOCOL_VERSION.to_string());
-
-            let client_details = InitializeRequestParams {
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "chabeau".to_string(),
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    title: Some("Chabeau MCP Client".to_string()),
-                    description: Some("Chabeau MCP client runtime".to_string()),
-                    icons: Vec::new(),
-                    website_url: Some("https://github.com/permacommons/chabeau".to_string()),
-                },
-                meta: None,
-                protocol_version,
-            };
-
             server.auth_header = auth_header.clone();
-            (
-                server.config.clone(),
-                transport_kind,
-                headers,
-                client_details,
-                auth_header,
-            )
+            (server.config.clone(), transport_kind, auth_header)
         };
 
-        let client = match transport_kind {
+        match transport_kind {
             McpTransportKind::StreamableHttp => {
                 match self.ensure_streamable_http_session(id).await {
                     Ok(()) => {
@@ -330,48 +442,10 @@ impl McpClientManager {
                         }
                     }
                 }
-                return;
-            }
-            McpTransportKind::Sse => {
-                let base_url = match require_http_base_url(&config) {
-                    Ok(base_url) => base_url,
-                    Err(err) => {
-                        if let Some(server) = self.server_mut(id) {
-                            server.last_error = Some(err);
-                            server.connected = false;
-                            server.client = None;
-                        }
-                        return;
-                    }
-                };
-                let transport = match ClientSseTransport::new(
-                    &base_url,
-                    ClientSseTransportOptions {
-                        custom_headers: headers,
-                        ..ClientSseTransportOptions::default()
-                    },
-                ) {
-                    Ok(transport) => transport,
-                    Err(err) => {
-                        if let Some(server) = self.server_mut(id) {
-                            server.last_error = Some(err.to_string());
-                            server.connected = false;
-                            server.client = None;
-                        }
-                        return;
-                    }
-                };
-                client_runtime::create_client(McpClientOptions {
-                    client_details,
-                    transport,
-                    handler: ChabeauMcpClientHandler.to_mcp_client_handler(),
-                    task_store: None,
-                    server_task_store: None,
-                })
             }
             McpTransportKind::Stdio => {
-                let command = match require_stdio_command(&config) {
-                    Ok(command) => command,
+                let client = match StdioClient::connect(&config).await {
+                    Ok(client) => client,
                     Err(err) => {
                         if let Some(server) = self.server_mut(id) {
                             server.last_error = Some(err);
@@ -381,52 +455,29 @@ impl McpClientManager {
                         return;
                     }
                 };
-                let transport = match StdioTransport::create_with_server_launch(
-                    command,
-                    stdio_args(&config),
-                    stdio_env(&config),
-                    TransportOptions::default(),
-                ) {
-                    Ok(transport) => transport,
-                    Err(err) => {
-                        if let Some(server) = self.server_mut(id) {
-                            server.last_error = Some(err.to_string());
-                            server.connected = false;
-                            server.client = None;
-                        }
-                        return;
+
+                let client_details = client_details_for(&config);
+                if let Err(err) = client.initialize(client_details).await {
+                    if let Some(server) = self.server_mut(id) {
+                        server.last_error = Some(err);
+                        server.connected = false;
+                        server.client = None;
                     }
-                };
-                client_runtime::create_client(McpClientOptions {
-                    client_details,
-                    transport,
-                    handler: ChabeauMcpClientHandler.to_mcp_client_handler(),
-                    task_store: None,
-                    server_task_store: None,
-                })
-            }
-        };
+                    return;
+                }
 
-        if let Err(err) = client.clone().start().await {
-            if let Some(server) = self.server_mut(id) {
-                server.last_error = Some(err.to_string());
-                server.connected = false;
-                server.client = None;
+                if let Some(server) = self.server_mut(id) {
+                    server.connected = true;
+                    server.client = Some(client.clone());
+                    server.last_error = None;
+                    server.auth_header = auth_header;
+                }
             }
-            return;
-        }
-
-        if let Some(server) = self.server_mut(id) {
-            server.connected = client.is_initialized();
-            server.client = Some(client.clone());
-            server.last_error = None;
-            server.session_id = client.session_id().await;
-            server.auth_header = auth_header;
         }
     }
 
     pub async fn refresh_tools(&mut self, id: &str) {
-        if self.uses_streamable_http(id) {
+        if self.uses_http(id) {
             self.refresh_tools_streamable_http(id).await;
             return;
         }
@@ -439,23 +490,26 @@ impl McpClientManager {
             return;
         };
 
-        if !client.server_has_tools().unwrap_or(true) {
-            return;
+        let response = client
+            .send_request(RequestFromClient::ListToolsRequest(None))
+            .await;
+        let fetch = match response {
+            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
+            Ok(message) => match parse_list_tools(message) {
+                Ok(list) => ListFetch::Ok(list, None),
+                Err(err) => ListFetch::Err(err),
+            },
+            Err(err) => ListFetch::Err(err),
+        };
+        if let Some(server) = self.server_mut(id) {
+            Self::apply_list_fetch(server, fetch, "Tools", empty_list_tools, |server, list| {
+                server.cached_tools = Some(list)
+            });
         }
-
-        self.refresh_client_list(
-            id,
-            client.clone(),
-            "Tools",
-            empty_list_tools,
-            |server, list| server.cached_tools = Some(list),
-            |client| async move { client.request_tool_list(None).await },
-        )
-        .await;
     }
 
     pub async fn refresh_resources(&mut self, id: &str) {
-        if self.uses_streamable_http(id) {
+        if self.uses_http(id) {
             self.refresh_resources_streamable_http(id).await;
             return;
         }
@@ -468,23 +522,30 @@ impl McpClientManager {
             return;
         };
 
-        if !client.server_has_resources().unwrap_or(true) {
-            return;
+        let response = client
+            .send_request(RequestFromClient::ListResourcesRequest(None))
+            .await;
+        let fetch = match response {
+            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
+            Ok(message) => match parse_list_resources(message) {
+                Ok(list) => ListFetch::Ok(list, None),
+                Err(err) => ListFetch::Err(err),
+            },
+            Err(err) => ListFetch::Err(err),
+        };
+        if let Some(server) = self.server_mut(id) {
+            Self::apply_list_fetch(
+                server,
+                fetch,
+                "Resources",
+                empty_list_resources,
+                |server, list| server.cached_resources = Some(list),
+            );
         }
-
-        self.refresh_client_list(
-            id,
-            client.clone(),
-            "Resources",
-            empty_list_resources,
-            |server, list| server.cached_resources = Some(list),
-            |client| async move { client.request_resource_list(None).await },
-        )
-        .await;
     }
 
     pub async fn refresh_resource_templates(&mut self, id: &str) {
-        if self.uses_streamable_http(id) {
+        if self.uses_http(id) {
             self.refresh_resource_templates_streamable_http(id).await;
             return;
         }
@@ -497,19 +558,30 @@ impl McpClientManager {
             return;
         };
 
-        self.refresh_client_list(
-            id,
-            client.clone(),
-            "Resource templates",
-            empty_list_resource_templates,
-            |server, list| server.cached_resource_templates = Some(list),
-            |client| async move { client.request_resource_template_list(None).await },
-        )
-        .await;
+        let response = client
+            .send_request(RequestFromClient::ListResourceTemplatesRequest(None))
+            .await;
+        let fetch = match response {
+            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
+            Ok(message) => match parse_list_resource_templates(message) {
+                Ok(list) => ListFetch::Ok(list, None),
+                Err(err) => ListFetch::Err(err),
+            },
+            Err(err) => ListFetch::Err(err),
+        };
+        if let Some(server) = self.server_mut(id) {
+            Self::apply_list_fetch(
+                server,
+                fetch,
+                "Resource templates",
+                empty_list_resource_templates,
+                |server, list| server.cached_resource_templates = Some(list),
+            );
+        }
     }
 
     pub async fn refresh_prompts(&mut self, id: &str) {
-        if self.uses_streamable_http(id) {
+        if self.uses_http(id) {
             self.refresh_prompts_streamable_http(id).await;
             return;
         }
@@ -522,22 +594,29 @@ impl McpClientManager {
             return;
         };
 
-        if !client.server_has_prompts().unwrap_or(true) {
-            return;
+        let response = client
+            .send_request(RequestFromClient::ListPromptsRequest(None))
+            .await;
+        let fetch = match response {
+            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
+            Ok(message) => match parse_list_prompts(message) {
+                Ok(list) => ListFetch::Ok(list, None),
+                Err(err) => ListFetch::Err(err),
+            },
+            Err(err) => ListFetch::Err(err),
+        };
+        if let Some(server) = self.server_mut(id) {
+            Self::apply_list_fetch(
+                server,
+                fetch,
+                "Prompts",
+                empty_list_prompts,
+                |server, list| server.cached_prompts = Some(list),
+            );
         }
-
-        self.refresh_client_list(
-            id,
-            client.clone(),
-            "Prompts",
-            empty_list_prompts,
-            |server, list| server.cached_prompts = Some(list),
-            |client| async move { client.request_prompt_list(None).await },
-        )
-        .await;
     }
 
-    fn uses_streamable_http(&self, id: &str) -> bool {
+    fn uses_http(&self, id: &str) -> bool {
         self.server(id).is_some_and(|server| {
             matches!(
                 McpTransportKind::from_config(&server.config),
@@ -700,6 +779,12 @@ impl McpClientManager {
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
 
         let client = reqwest::Client::new();
+        debug!(
+            server_id = %id,
+            request_id,
+            url = %base_url,
+            "Sending MCP HTTP request"
+        );
         let mut request = client
             .post(base_url)
             .header("Content-Type", "application/json")
@@ -714,6 +799,11 @@ impl McpClientManager {
         }
 
         let response = request.send().await.map_err(|err| err.to_string())?;
+        debug!(
+            server_id = %id,
+            status = %response.status(),
+            "Received MCP HTTP response"
+        );
         if !response.status().is_success() {
             return Err(format!("HTTP error: {}", response.status()));
         }
@@ -756,23 +846,23 @@ impl McpClientManager {
 
 #[derive(Clone)]
 pub struct McpToolCallContext {
-    pub server_id: String,
-    pub config: McpServerConfig,
-    pub transport_kind: McpTransportKind,
-    pub auth_header: Option<String>,
-    pub session_id: Option<String>,
-    pub client: Option<Arc<rust_mcp_sdk::mcp_client::ClientRuntime>>,
-    pub streamable_http_request_id: u64,
+    pub(crate) server_id: String,
+    config: McpServerConfig,
+    transport_kind: McpTransportKind,
+    auth_header: Option<String>,
+    pub(crate) session_id: Option<String>,
+    client: Option<Arc<StdioClient>>,
+    streamable_http_request_id: u64,
 }
 
 pub struct McpPromptContext {
-    pub server_id: String,
-    pub config: McpServerConfig,
-    pub transport_kind: McpTransportKind,
-    pub auth_header: Option<String>,
-    pub session_id: Option<String>,
-    pub client: Option<Arc<rust_mcp_sdk::mcp_client::ClientRuntime>>,
-    pub streamable_http_request_id: u64,
+    pub(crate) server_id: String,
+    config: McpServerConfig,
+    transport_kind: McpTransportKind,
+    auth_header: Option<String>,
+    pub(crate) session_id: Option<String>,
+    client: Option<Arc<StdioClient>>,
+    streamable_http_request_id: u64,
 }
 
 trait StreamableHttpContext {
@@ -905,16 +995,14 @@ pub async fn execute_tool_call(
     }
 
     match context.transport_kind {
-        McpTransportKind::Sse | McpTransportKind::Stdio => {
+        McpTransportKind::Stdio => {
             let Some(client) = context.client.clone() else {
                 return Err("MCP client not connected.".to_string());
             };
-            let result = client
-                .request_tool_call(params)
-                .await
-                .map_err(|err| format_error_chain(&err))?;
-            context.session_id = client.session_id().await;
-            Ok(result)
+            let response = client
+                .send_request(RequestFromClient::CallToolRequest(params))
+                .await?;
+            parse_call_tool(response)
         }
         McpTransportKind::StreamableHttp => {
             ensure_streamable_http_session_context(context).await?;
@@ -938,16 +1026,14 @@ pub async fn execute_resource_read(
     };
 
     match context.transport_kind {
-        McpTransportKind::Sse | McpTransportKind::Stdio => {
+        McpTransportKind::Stdio => {
             let Some(client) = context.client.clone() else {
                 return Err("MCP client not connected.".to_string());
             };
-            let result = client
-                .request_resource_read(params)
-                .await
-                .map_err(|err| format_error_chain(&err))?;
-            context.session_id = client.session_id().await;
-            Ok(result)
+            let response = client
+                .send_request(RequestFromClient::ReadResourceRequest(params))
+                .await?;
+            parse_read_resource(response)
         }
         McpTransportKind::StreamableHttp => {
             ensure_streamable_http_session_context(context).await?;
@@ -980,16 +1066,14 @@ pub async fn execute_prompt(
     };
 
     match context.transport_kind {
-        McpTransportKind::Sse | McpTransportKind::Stdio => {
+        McpTransportKind::Stdio => {
             let Some(client) = context.client.clone() else {
                 return Err("MCP client not connected.".to_string());
             };
-            let result = client
-                .request_prompt(params)
-                .await
-                .map_err(|err| format_error_chain(&err))?;
-            context.session_id = client.session_id().await;
-            Ok(result)
+            let response = client
+                .send_request(RequestFromClient::GetPromptRequest(params))
+                .await?;
+            parse_get_prompt(response)
         }
         McpTransportKind::StreamableHttp => {
             ensure_prompt_streamable_http_session_context(context).await?;
@@ -1060,6 +1144,12 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
 
     let client = reqwest::Client::new();
     let base_url = require_http_base_url(context.config())?;
+    debug!(
+        server_id = %context.config().id,
+        request_id,
+        url = %base_url,
+        "Sending MCP HTTP request"
+    );
     let mut request = client
         .post(base_url)
         .header("Content-Type", "application/json")
@@ -1074,6 +1164,11 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
     }
 
     let response = request.send().await.map_err(|err| err.to_string())?;
+    debug!(
+        server_id = %context.config().id,
+        status = %response.status(),
+        "Received MCP HTTP response"
+    );
     if !response.status().is_success() {
         return Err(format!("HTTP error: {}", response.status()));
     }
@@ -1110,10 +1205,6 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
 
     Ok(server_message)
 }
-
-struct ChabeauMcpClientHandler;
-
-impl ClientHandler for ChabeauMcpClientHandler {}
 
 fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
     let protocol_version = config
@@ -1243,13 +1334,6 @@ fn empty_list_prompts() -> ListPromptsResult {
     }
 }
 
-fn is_method_not_found_error_message(message: &str) -> bool {
-    message.contains("\"code\":-32601")
-        || message.contains("\"code\": -32601")
-        || message.contains("code=-32601")
-        || message.contains("code: -32601")
-}
-
 fn format_unexpected_server_message(message: &ServerMessage) -> String {
     format!("Unexpected MCP server message: {message:?}")
 }
@@ -1272,72 +1356,4 @@ fn format_rpc_error(error: &RpcError) -> String {
         }
     }
     output
-}
-
-fn format_error_chain(err: &dyn Error) -> String {
-    let mut output = err.to_string();
-    let mut source = err.source();
-    while let Some(next) = source {
-        let message = next.to_string();
-        if !message.is_empty() {
-            output.push('\n');
-            output.push_str("Caused by: ");
-            output.push_str(&message);
-        }
-        source = next.source();
-    }
-    output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fmt;
-
-    #[derive(Debug)]
-    struct TestError {
-        message: &'static str,
-        source: Option<Box<dyn Error>>,
-    }
-
-    impl fmt::Display for TestError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.message)
-        }
-    }
-
-    impl Error for TestError {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            self.source.as_deref()
-        }
-    }
-
-    #[test]
-    fn format_error_chain_includes_sources() {
-        let root = TestError {
-            message: "root",
-            source: None,
-        };
-        let mid = TestError {
-            message: "mid",
-            source: Some(Box::new(root)),
-        };
-        let top = TestError {
-            message: "top",
-            source: Some(Box::new(mid)),
-        };
-
-        let formatted = format_error_chain(&top);
-        assert_eq!(formatted, "top\nCaused by: mid\nCaused by: root");
-    }
-
-    #[test]
-    fn format_error_chain_without_sources() {
-        let err = TestError {
-            message: "solo",
-            source: None,
-        };
-        let formatted = format_error_chain(&err);
-        assert_eq!(formatted, "solo");
-    }
 }

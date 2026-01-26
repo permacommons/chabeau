@@ -10,7 +10,7 @@ use crate::core::app::session::{
 use crate::core::chat_stream::StreamParams;
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::mcp::permissions::ToolPermissionDecision;
-use rust_mcp_sdk::schema::{ContentBlock, PromptMessage};
+use rust_mcp_schema::{ContentBlock, PromptMessage, Role};
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone)]
@@ -524,7 +524,7 @@ fn handle_tool_call_completed(
 fn handle_mcp_prompt_completed(
     app: &mut App,
     request: McpPromptRequest,
-    result: Result<rust_mcp_sdk::schema::GetPromptResult, String>,
+    result: Result<rust_mcp_schema::GetPromptResult, String>,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     app.clear_status();
@@ -567,8 +567,8 @@ fn handle_mcp_prompt_completed(
         for message in prompt_result.messages.iter() {
             let content = prompt_message_content_to_string(message);
             let role = match message.role {
-                rust_mcp_sdk::schema::Role::User => ROLE_USER,
-                rust_mcp_sdk::schema::Role::Assistant => ROLE_ASSISTANT,
+                Role::User => ROLE_USER,
+                Role::Assistant => ROLE_ASSISTANT,
             };
             conversation.add_message(Message {
                 role: role.to_string(),

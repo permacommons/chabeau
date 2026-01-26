@@ -14,7 +14,13 @@ Items are removed when completed.
 - MCP: handle notifications (listChanged, progress, logging) for streamable HTTP and stdio — [OPEN]
 - MCP: support long-lived SSE response streams within streamable HTTP — [OPEN]
 - MCP: expand capabilities negotiation (advertise client caps + surface server caps) — [OPEN]
-- MCP: add optional features (sampling/logging/roots/resource subscriptions) as needed — [OPEN]
+- MCP: add optional features — [OPEN]
+  - Client roots capability (`roots/list` + list_changed) — [OPEN]
+  - Client sampling capability (`sampling/createMessage`) — [OPEN]
+  - Client elicitation capability (`elicitation/create`) — [OPEN]
+  - Experimental task support (`tasks/*`) — [OPEN]
+  - Client logging capability — [OPEN]
+  - Resource subscriptions/watch notifications — [OPEN]
 
 ## Code quality
 

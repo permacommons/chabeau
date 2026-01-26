@@ -9,6 +9,8 @@ pub mod say;
 pub mod theme_list;
 
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use clap::{Parser, Subcommand};
@@ -323,14 +325,39 @@ fn init_mcp_debugging(enabled: bool) {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var(
             "RUST_LOG",
-            "rust_mcp_sdk=trace,rust_mcp_transport=trace,rust_mcp_schema=trace,reqwest=debug",
+            "chabeau::mcp=trace,rust_mcp_schema=trace,reqwest=debug",
         );
     }
     std::env::set_var("CHABEAU_MCP_DEBUG", "1");
 
+    let log_path = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("mcp.log");
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!(
+                "❌ Failed to open MCP log file {}: {err}",
+                log_path.display()
+            );
+            return;
+        }
+    };
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_target(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_ansi(false)
+        .with_writer(tracing_subscriber::fmt::writer::BoxMakeWriter::new(file))
         .try_init();
 }
 

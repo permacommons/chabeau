@@ -138,7 +138,7 @@ impl KeyHandler for CtrlLHandler {
     }
 }
 
-/// Handler for Ctrl+O (inspect latest tool result).
+/// Handler for Ctrl+O (inspect tool calls/results).
 pub struct CtrlOHandler;
 
 #[async_trait::async_trait]
@@ -404,13 +404,13 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyCode::Up => Some(AppAction::PickerInspectScroll { lines: -1 }),
                 KeyCode::Down => Some(AppAction::PickerInspectScroll { lines: 1 }),
                 KeyCode::Left => match mode {
-                    InspectMode::ToolResults { .. } => {
+                    InspectMode::ToolCalls { .. } => {
                         Some(AppAction::InspectToolResultsStep { delta: -1 })
                     }
                     InspectMode::Static => None,
                 },
                 KeyCode::Right => match mode {
-                    InspectMode::ToolResults { .. } => {
+                    InspectMode::ToolCalls { .. } => {
                         Some(AppAction::InspectToolResultsStep { delta: 1 })
                     }
                     InspectMode::Static => None,
@@ -1152,16 +1152,6 @@ impl KeyHandler for ToolPromptDecisionHandler {
                         [AppAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::Block,
                         }],
-                        AppActionContext {
-                            term_width,
-                            term_height,
-                        },
-                    );
-                    KeyResult::Handled
-                }
-                'i' => {
-                    dispatcher.dispatch_many(
-                        [AppAction::ToolPromptInspect],
                         AppActionContext {
                             term_width,
                             term_height,

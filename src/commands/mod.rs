@@ -21,7 +21,7 @@ use crate::core::mcp_auth::McpTokenStore;
 use crate::core::message::{self, AppMessageKind};
 use chrono::Utc;
 use registry::DispatchOutcome;
-use rust_mcp_sdk::schema::PromptArgument;
+use rust_mcp_schema::PromptArgument;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -200,13 +200,18 @@ fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandRes
         return Some(CommandResult::Continue);
     };
 
-    let parsed_args = match parse_kv_args(args_str) {
+    let parsed_args = match parse_prompt_args(args_str, &prompt.arguments) {
         Ok(map) => map,
         Err(err) => {
             app.conversation().set_status(err);
             return Some(CommandResult::Continue);
         }
     };
+
+    if let Err(err) = validate_prompt_args(&parsed_args, &prompt.arguments) {
+        app.conversation().set_status(err);
+        return Some(CommandResult::Continue);
+    }
 
     let collected = parsed_args;
     let mut missing = Vec::new();
@@ -241,11 +246,94 @@ fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandRes
     }))
 }
 
+fn parse_prompt_args(
+    input: &str,
+    prompt_args: &[PromptArgument],
+) -> Result<HashMap<String, String>, String> {
+    if input.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    if prompt_args.len() == 1 {
+        match parse_kv_args(input) {
+            Ok(map) => return Ok(map),
+            Err(_) => {
+                let value = parse_single_prompt_value(input)?;
+                let mut args = HashMap::new();
+                args.insert(prompt_args[0].name.clone(), value);
+                return Ok(args);
+            }
+        }
+    }
+
+    parse_kv_args(input)
+}
+
+fn parse_single_prompt_value(input: &str) -> Result<String, String> {
+    let tokens = tokenize_prompt_args(input)?;
+    if tokens.is_empty() {
+        return Ok(String::new());
+    }
+    if tokens.len() == 1 {
+        return Ok(tokens[0].clone());
+    }
+    Ok(tokens.join(" "))
+}
+
 fn parse_kv_args(input: &str) -> Result<HashMap<String, String>, String> {
     if input.trim().is_empty() {
         return Ok(HashMap::new());
     }
 
+    let tokens = tokenize_prompt_args(input)?;
+
+    let mut args = HashMap::new();
+    for token in tokens {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(format!(
+                "Invalid prompt argument '{}'. Use key=value.",
+                token
+            ));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("Prompt argument name cannot be empty.".to_string());
+        }
+        args.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(args)
+}
+
+fn validate_prompt_args(
+    args: &HashMap<String, String>,
+    prompt_args: &[PromptArgument],
+) -> Result<(), String> {
+    let mut allowed = Vec::new();
+    for arg in prompt_args {
+        allowed.push(arg.name.as_str());
+    }
+
+    for key in args.keys() {
+        if !allowed.iter().any(|name| name == key) {
+            let mut allowed_sorted: Vec<&str> = allowed.clone();
+            allowed_sorted.sort();
+            let allowed_list = if allowed_sorted.is_empty() {
+                "none".to_string()
+            } else {
+                allowed_sorted.join(", ")
+            };
+            return Err(format!(
+                "Unknown prompt argument '{}'. Allowed: {}.",
+                key, allowed_list
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn tokenize_prompt_args(input: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quote: Option<char> = None;
@@ -277,23 +365,7 @@ fn parse_kv_args(input: &str) -> Result<HashMap<String, String>, String> {
     if !current.is_empty() {
         tokens.push(current);
     }
-
-    let mut args = HashMap::new();
-    for token in tokens {
-        let Some((key, value)) = token.split_once('=') else {
-            return Err(format!(
-                "Invalid prompt argument '{}'. Use key=value.",
-                token
-            ));
-        };
-        let key = key.trim();
-        if key.is_empty() {
-            return Err("Prompt argument name cannot be empty.".to_string());
-        }
-        args.insert(key.to_string(), value.to_string());
-    }
-
-    Ok(args)
+    Ok(tokens)
 }
 
 fn prompt_argument_from_schema(
@@ -507,6 +579,8 @@ pub(crate) fn build_mcp_server_output(
         _ => output.push_str("Token: unknown (keyring disabled)\n"),
     }
 
+    let (tools_cap, resources_cap, prompts_cap, cap_reported) = server_capability_statuses(server);
+
     output.push('\n');
     match server.config.allowed_tools.as_ref() {
         Some(allowed) if allowed.is_empty() => {
@@ -526,7 +600,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_tools {
         if list.tools.is_empty() {
-            output.push_str("**Tools:** none reported by server.\n");
+            output.push_str(match (tools_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Tools:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Tools:** unknown (server did not report capabilities).\n",
+                _ => "**Tools:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Tools:**\n");
             for tool in &list.tools {
@@ -540,7 +620,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_resources {
         if list.resources.is_empty() {
-            output.push_str("**Resources:** none reported by server.\n");
+            output.push_str(match (resources_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Resources:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Resources:** unknown (server did not report capabilities).\n",
+                _ => "**Resources:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Resources:**\n");
             for resource in &list.resources {
@@ -554,7 +640,15 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_resource_templates {
         if list.resource_templates.is_empty() {
-            output.push_str("**Resource templates:** none reported by server.\n");
+            output.push_str(match (resources_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Resource templates:** not supported (per server capabilities).\n"
+                }
+                (_, false) => {
+                    "**Resource templates:** unknown (server did not report capabilities).\n"
+                }
+                _ => "**Resource templates:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Resource templates:**\n");
             for template in &list.resource_templates {
@@ -571,7 +665,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_prompts {
         if list.prompts.is_empty() {
-            output.push_str("**Prompts:** none reported by server.\n");
+            output.push_str(match (prompts_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Prompts:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Prompts:** unknown (server did not report capabilities).\n",
+                _ => "**Prompts:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Prompts:**\n");
             for prompt in &list.prompts {
@@ -587,6 +687,42 @@ pub(crate) fn build_mcp_server_output(
     }
 
     output
+}
+
+#[derive(Clone, Copy)]
+enum CapabilityStatus {
+    Supported,
+    Unsupported,
+}
+
+fn server_capability_statuses(
+    server: &crate::mcp::client::McpServerState,
+) -> (CapabilityStatus, CapabilityStatus, CapabilityStatus, bool) {
+    let Some(details) = server.server_details.as_ref() else {
+        return (
+            CapabilityStatus::Supported,
+            CapabilityStatus::Supported,
+            CapabilityStatus::Supported,
+            false,
+        );
+    };
+    let caps = &details.capabilities;
+    let tools = if caps.tools.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    let resources = if caps.resources.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    let prompts = if caps.prompts.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    (tools, resources, prompts, true)
 }
 
 pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
@@ -1570,7 +1706,7 @@ mod tests {
                 command: None,
                 args: None,
                 env: None,
-                transport: Some("sse".to_string()),
+                transport: Some("streamable-http".to_string()),
                 allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
                 protocol_version: Some("2024-11-05".to_string()),
                 enabled: Some(true),
@@ -1602,5 +1738,76 @@ mod tests {
     fn parse_kv_args_rejects_missing_equals() {
         let err = parse_kv_args("topic").unwrap_err();
         assert!(err.contains("key=value"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_bare_value() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("soil", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_quoted_value() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("\"soil health\"", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_unquoted_spaces() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("soil health", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
+    }
+
+    #[test]
+    fn parse_prompt_args_multiple_arguments_requires_key_value() {
+        let prompt_args = vec![
+            PromptArgument {
+                name: "topic".to_string(),
+                title: None,
+                description: None,
+                required: Some(true),
+            },
+            PromptArgument {
+                name: "lang".to_string(),
+                title: None,
+                description: None,
+                required: Some(true),
+            },
+        ];
+        let err = parse_prompt_args("soil", &prompt_args).unwrap_err();
+        assert!(err.contains("key=value"));
+    }
+
+    #[test]
+    fn validate_prompt_args_rejects_unknown_keys() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let mut args = HashMap::new();
+        args.insert("foo".to_string(), "bar".to_string());
+        let err = validate_prompt_args(&args, &prompt_args).unwrap_err();
+        assert!(err.contains("Unknown prompt argument"));
+        assert!(err.contains("topic"));
     }
 }

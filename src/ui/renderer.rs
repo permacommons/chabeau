@@ -529,15 +529,25 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let inspect_mode = app.inspect_state().map(|state| state.mode);
         let in_picker = app.picker_session().is_some();
         let (line1, line2): (String, String) = match inspect_mode {
-            Some(InspectMode::ToolResults { view, .. }) => {
-                let toggle_label = match view {
-                    crate::core::app::ToolInspectView::Result => "Tab=Show request",
-                    crate::core::app::ToolInspectView::Request => "Tab=Show result",
+            Some(InspectMode::ToolCalls { view, kind, .. }) => {
+                let toggle_label = match (kind, view) {
+                    (
+                        crate::core::app::ToolInspectKind::Result,
+                        crate::core::app::ToolInspectView::Result,
+                    ) => Some("Tab=Show request"),
+                    (
+                        crate::core::app::ToolInspectKind::Result,
+                        crate::core::app::ToolInspectView::Request,
+                    ) => Some("Tab=Show result"),
+                    _ => None,
                 };
+                let toggle = toggle_label
+                    .map(|label| format!(" • {}", label))
+                    .unwrap_or_default();
                 (
                     format!(
-                        "Esc=Close • {} • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
-                        toggle_label
+                        "Esc=Close{} • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
+                        toggle
                     ),
                     "Home/End=Jump".to_string(),
                 )
@@ -689,24 +699,27 @@ fn tool_prompt_title(prompt: &ToolPrompt, width: u16, frame: &str) -> String {
 
     let mut candidates = Vec::new();
     candidates.push(format!(
-        "❓ Allow {} on {}? (A=once • S=session • D/Esc=deny • B=block • I=inspect){}",
+        "❓ Allow {} on {}? (A=once • S=session • D/Esc=deny • B=block • Ctrl+O=inspect){}",
         tool, server, frame_suffix
     ));
     candidates.push(format!(
-        "❓ Allow {} on {}? (A=once • S=session • D=deny • B=block • I=inspect){}",
+        "❓ Allow {} on {}? (A=once • S=session • D=deny • B=block • Ctrl+O=inspect){}",
         tool, server, frame_suffix
     ));
     candidates.push(format!(
-        "❓ Allow {} on {}? (A/S/D/B/I){}",
+        "❓ Allow {} on {}? (A/S/D/B • Ctrl+O){}",
         tool, server, frame_suffix
     ));
     candidates.push(format!(
-        "❓ {} on {}? (A/S/D/B/I){}",
+        "❓ {} on {}? (A/S/D/B • Ctrl+O){}",
         tool, server, frame_suffix
     ));
-    candidates.push(format!("❓ {}? (A/S/D/B/I){}", tool, frame_suffix));
-    candidates.push(format!("❓ Tool permission (A/S/D/B/I){}", frame_suffix));
-    candidates.push("❓ Tool permission (A/S/D/B/I)".to_string());
+    candidates.push(format!("❓ {}? (A/S/D/B • Ctrl+O){}", tool, frame_suffix));
+    candidates.push(format!(
+        "❓ Tool permission (A/S/D/B • Ctrl+O){}",
+        frame_suffix
+    ));
+    candidates.push("❓ Tool permission (A/S/D/B • Ctrl+O)".to_string());
     candidates.push("❓ Tool permission".to_string());
 
     for candidate in candidates {

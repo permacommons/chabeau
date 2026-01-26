@@ -69,7 +69,7 @@ impl App {
         }
 
         if cursor > command_end {
-            return false;
+            return self.complete_mcp_server_argument(term_width, &chars, cursor, command_end);
         }
 
         let typed: String = chars[1..cursor].iter().collect();
@@ -195,6 +195,102 @@ impl App {
         self.session.logging.get_status_string()
     }
 
+    fn complete_mcp_server_argument(
+        &mut self,
+        term_width: u16,
+        chars: &[char],
+        cursor: usize,
+        command_end: usize,
+    ) -> bool {
+        let command: String = chars[1..command_end].iter().collect();
+        if !command.eq_ignore_ascii_case("mcp") {
+            return false;
+        }
+
+        let mut arg_start = command_end;
+        while arg_start < chars.len() && chars[arg_start].is_whitespace() {
+            arg_start += 1;
+        }
+
+        if arg_start == chars.len() || cursor < arg_start {
+            arg_start = cursor;
+        }
+
+        let mut arg_end = arg_start;
+        while arg_end < chars.len() && !chars[arg_end].is_whitespace() {
+            arg_end += 1;
+        }
+
+        if cursor > arg_end {
+            return false;
+        }
+
+        let prefix: String = chars[arg_start..cursor].iter().collect();
+
+        let mut server_ids: Vec<String> = self
+            .mcp
+            .servers()
+            .map(|server| server.config.id.clone())
+            .collect();
+        server_ids.sort();
+        server_ids.dedup();
+
+        if server_ids.is_empty() {
+            self.conversation()
+                .set_status("No MCP servers configured.".to_string());
+            return true;
+        }
+
+        let mut matches: Vec<&str> = server_ids
+            .iter()
+            .map(String::as_str)
+            .filter(|name| name.starts_with(&prefix))
+            .collect();
+        matches.sort();
+
+        if matches.is_empty() {
+            if !prefix.is_empty() {
+                self.conversation()
+                    .set_status(format!("No MCP server matches '{}'", prefix));
+                return true;
+            }
+            return false;
+        }
+
+        let before_arg: String = chars[..arg_start].iter().collect();
+        let remainder: String = chars[arg_end..].iter().collect();
+
+        if matches.len() == 1 {
+            apply_argument_completion(
+                &mut self.ui,
+                &before_arg,
+                matches[0],
+                &remainder,
+                true,
+                term_width,
+            );
+            return true;
+        }
+
+        let common = longest_common_prefix(&matches);
+        if common.len() > prefix.len() {
+            apply_argument_completion(
+                &mut self.ui,
+                &before_arg,
+                &common,
+                &remainder,
+                false,
+                term_width,
+            );
+            return true;
+        }
+
+        let suggestions = format_mcp_server_suggestions(&matches);
+        self.conversation()
+            .set_status(format!("MCP servers: {}", suggestions));
+        true
+    }
+
     fn matching_mcp_prompt_commands(&self, prefix: &str) -> Vec<String> {
         let mut commands = Vec::new();
         for server in self.mcp.servers() {
@@ -224,6 +320,43 @@ fn apply_command_completion(
     new_input.push_str(completion);
 
     let mut cursor_chars = 1 + completion.chars().count();
+
+    match remainder.chars().next() {
+        Some(ch) if ch.is_whitespace() => {
+            new_input.push_str(remainder);
+        }
+        Some(_) => {
+            if add_space {
+                new_input.push(' ');
+                cursor_chars += 1;
+            }
+            new_input.push_str(remainder);
+        }
+        None => {
+            if add_space {
+                new_input.push(' ');
+                cursor_chars += 1;
+            }
+        }
+    }
+
+    ui.set_input_text_with_cursor(new_input, cursor_chars);
+    ui.recompute_input_layout_after_edit(term_width);
+}
+
+fn apply_argument_completion(
+    ui: &mut crate::core::app::ui_state::UiState,
+    prefix: &str,
+    completion: &str,
+    remainder: &str,
+    add_space: bool,
+    term_width: u16,
+) {
+    let mut new_input = String::new();
+    new_input.push_str(prefix);
+    new_input.push_str(completion);
+
+    let mut cursor_chars = prefix.chars().count() + completion.chars().count();
 
     match remainder.chars().next() {
         Some(ch) if ch.is_whitespace() => {
@@ -283,6 +416,23 @@ fn format_command_suggestions(names: &[&str]) -> String {
         .iter()
         .take(max_display)
         .map(|name| format!("/{}", name))
+        .collect();
+    if names.len() > max_display {
+        pieces.push("…".to_string());
+    }
+    pieces.join(", ")
+}
+
+fn format_mcp_server_suggestions(names: &[&str]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+
+    let max_display = 6;
+    let mut pieces: Vec<String> = names
+        .iter()
+        .take(max_display)
+        .map(|name| name.to_string())
         .collect();
     if names.len() > max_display {
         pieces.push("…".to_string());

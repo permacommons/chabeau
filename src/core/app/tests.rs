@@ -1,10 +1,11 @@
 use super::*;
 use crate::api::ChatMessage;
+use crate::core::config::data::McpServerConfig;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::picker::{PickerItem, PickerState};
 use crate::utils::test_utils::{create_test_app, create_test_message};
-use rust_mcp_sdk::schema::{
+use rust_mcp_schema::{
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, Resource, ResourceTemplate,
     Tool, ToolInputSchema,
 };
@@ -1030,6 +1031,76 @@ fn complete_slash_command_reports_unknown_prefix() {
     assert!(handled);
     assert_eq!(app.ui.get_input_text(), "/zzz");
     assert_eq!(app.ui.status.as_deref(), Some("No command matches '/zzz'"));
+}
+
+#[test]
+fn complete_slash_command_completes_mcp_server() {
+    let mut app = create_test_app();
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "agpedia".to_string(),
+        display_name: "Agpedia".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+    });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    app.ui.set_input_text("/mcp agp".into());
+    app.ui.set_cursor_position("/mcp agp".chars().count());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/mcp agpedia ");
+    assert_eq!(
+        app.ui.get_input_cursor_position(),
+        "/mcp agpedia ".chars().count()
+    );
+}
+
+#[test]
+fn complete_slash_command_lists_mcp_servers() {
+    let mut app = create_test_app();
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "agpedia".to_string(),
+        display_name: "Agpedia".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+    });
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "alpha".to_string(),
+        display_name: "Alpha".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+    });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    app.ui.set_input_text("/mcp a".into());
+    app.ui.set_cursor_position("/mcp a".chars().count());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/mcp a");
+    assert_eq!(
+        app.ui.status.as_deref(),
+        Some("MCP servers: agpedia, alpha")
+    );
 }
 
 #[test]

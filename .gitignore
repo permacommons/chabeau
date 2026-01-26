@@ -2,3 +2,6 @@
 .kiro
 __pycache__/
 tapes/recordings
+.browser-data
+mcp.log
+chabeau-log-*

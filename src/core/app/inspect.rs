@@ -31,13 +31,23 @@ impl InspectState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectMode {
     Static,
-    ToolResults { index: usize, view: ToolInspectView },
+    ToolCalls {
+        index: usize,
+        view: ToolInspectView,
+        kind: ToolInspectKind,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolInspectView {
     Result,
     Request,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInspectKind {
+    Result,
+    Pending,
 }
 
 impl ToolInspectView {
@@ -71,17 +81,18 @@ impl InspectController {
         self.state = Some(InspectState::new(title, content));
     }
 
-    pub fn open_tool_results(
+    pub fn open_tool_calls(
         &mut self,
         title: String,
         content: String,
         index: usize,
         view: ToolInspectView,
+        kind: ToolInspectKind,
     ) {
         self.state = Some(InspectState::with_mode(
             title,
             content,
-            InspectMode::ToolResults { index, view },
+            InspectMode::ToolCalls { index, view, kind },
         ));
     }
 
@@ -127,14 +138,16 @@ impl App {
         self.inspect.open(title, content);
     }
 
-    pub fn open_tool_result_inspect(
+    pub fn open_tool_call_inspect(
         &mut self,
         title: String,
         content: String,
         index: usize,
         view: ToolInspectView,
+        kind: ToolInspectKind,
     ) {
-        self.inspect.open_tool_results(title, content, index, view);
+        self.inspect
+            .open_tool_calls(title, content, index, view, kind);
     }
 
     pub fn close_inspect(&mut self) {

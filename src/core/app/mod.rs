@@ -36,7 +36,7 @@ pub use actions::{
 };
 #[allow(unused_imports)]
 pub use conversation::ConversationController;
-pub use inspect::{InspectController, InspectMode, InspectState, ToolInspectView};
+pub use inspect::{InspectController, InspectMode, InspectState, ToolInspectKind, ToolInspectView};
 #[cfg(test)]
 pub use picker::PickerData;
 #[allow(unused_imports)]

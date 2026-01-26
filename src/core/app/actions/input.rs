@@ -1,8 +1,8 @@
 use super::{streaming, App, AppAction, AppActionContext, AppCommand};
 use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::build_inspect_text;
-use crate::core::app::session::ToolResultRecord;
-use crate::core::app::{InspectMode, ToolInspectView};
+use crate::core::app::session::{ToolCallRequest, ToolResultRecord};
+use crate::core::app::{InspectMode, ToolInspectKind, ToolInspectView};
 
 pub(super) fn handle_input_action(
     app: &mut App,
@@ -51,15 +51,15 @@ pub(super) fn handle_input_action(
             None
         }
         AppAction::InspectToolResults => {
-            open_latest_tool_result_inspect(app, ctx);
+            open_latest_tool_call_inspect(app, ctx);
             None
         }
         AppAction::InspectToolResultsToggleView => {
-            toggle_tool_result_inspect_view(app, ctx);
+            toggle_tool_call_inspect_view(app, ctx);
             None
         }
         AppAction::InspectToolResultsStep { delta } => {
-            step_tool_result_inspect(app, delta, ctx);
+            step_tool_call_inspect(app, delta, ctx);
             None
         }
         AppAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
@@ -165,23 +165,60 @@ fn update_scroll_after_command(app: &mut App, ctx: AppActionContext) {
     conversation.update_scroll_position(available_height, ctx.term_width);
 }
 
-fn open_latest_tool_result_inspect(app: &mut App, ctx: AppActionContext) {
-    if app.session.tool_result_history.is_empty() {
-        set_status_message(app, "No tool results to inspect yet.".to_string(), ctx);
-        return;
-    }
-    let index = app.session.tool_result_history.len().saturating_sub(1);
-    open_tool_result_inspect_at(app, index, ToolInspectView::Result, ctx);
+struct ToolInspectSnapshot {
+    results: Vec<ToolResultRecord>,
+    pending: Vec<ToolCallRequest>,
 }
 
-fn step_tool_result_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
+impl ToolInspectSnapshot {
+    fn total(&self) -> usize {
+        self.results.len().saturating_add(self.pending.len())
+    }
+}
+
+fn tool_inspect_snapshot(app: &App) -> ToolInspectSnapshot {
+    let mut pending = Vec::new();
+    if let Some(request) = app.session.active_tool_request.clone() {
+        pending.push(request);
+    }
+    pending.extend(app.session.pending_tool_queue.iter().cloned());
+    ToolInspectSnapshot {
+        results: app.session.tool_result_history.clone(),
+        pending,
+    }
+}
+
+fn open_latest_tool_call_inspect(app: &mut App, ctx: AppActionContext) {
+    let snapshot = tool_inspect_snapshot(app);
+    if snapshot.total() == 0 {
+        set_status_message(app, "No tool calls to inspect yet.".to_string(), ctx);
+        return;
+    }
+
+    if app.ui.tool_prompt().is_some() && !snapshot.pending.is_empty() {
+        let index = snapshot.results.len();
+        open_tool_call_inspect_at(app, index, ToolInspectView::Request, ctx);
+        return;
+    }
+
+    if !snapshot.results.is_empty() {
+        let index = snapshot.results.len().saturating_sub(1);
+        open_tool_call_inspect_at(app, index, ToolInspectView::Result, ctx);
+        return;
+    }
+
+    open_tool_call_inspect_at(app, snapshot.results.len(), ToolInspectView::Request, ctx);
+}
+
+fn step_tool_call_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
     let Some(state) = app.inspect_state() else {
         return;
     };
-    let InspectMode::ToolResults { index, view } = state.mode else {
+    let InspectMode::ToolCalls { index, view, .. } = state.mode else {
         return;
     };
-    let total = app.session.tool_result_history.len();
+    let snapshot = tool_inspect_snapshot(app);
+    let total = snapshot.total();
     if total < 2 {
         return;
     }
@@ -191,54 +228,101 @@ fn step_tool_result_inspect(app: &mut App, delta: i32, ctx: AppActionContext) {
         total.saturating_sub(1)
     };
     let next = (index + step) % total;
-    open_tool_result_inspect_at(app, next, view, ctx);
+    open_tool_call_inspect_at(app, next, view, ctx);
 }
 
-fn toggle_tool_result_inspect_view(app: &mut App, ctx: AppActionContext) {
+fn toggle_tool_call_inspect_view(app: &mut App, ctx: AppActionContext) {
     let Some(state) = app.inspect_state() else {
         return;
     };
-    let InspectMode::ToolResults { index, view } = state.mode else {
+    let InspectMode::ToolCalls { index, view, kind } = state.mode else {
         return;
     };
-    open_tool_result_inspect_at(app, index, view.toggle(), ctx);
+    if matches!(kind, ToolInspectKind::Pending) {
+        set_status_message(
+            app,
+            "Pending tool calls have no result to show yet.".to_string(),
+            ctx,
+        );
+        return;
+    }
+    open_tool_call_inspect_at(app, index, view.toggle(), ctx);
 }
 
-fn open_tool_result_inspect_at(
+fn open_tool_call_inspect_at(
     app: &mut App,
     index: usize,
     view: ToolInspectView,
     ctx: AppActionContext,
 ) {
-    let Some(record) = app.session.tool_result_history.get(index).cloned() else {
-        set_status_message(app, "Tool result unavailable.".to_string(), ctx);
+    let snapshot = tool_inspect_snapshot(app);
+    if snapshot.total() == 0 {
+        set_status_message(app, "No tool calls to inspect yet.".to_string(), ctx);
         return;
+    }
+
+    let (title, content, kind, view) = if index < snapshot.results.len() {
+        let record = snapshot
+            .results
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| snapshot.results.last().cloned().unwrap());
+        let title = match view {
+            ToolInspectView::Result => build_tool_result_title(
+                &record,
+                index.min(snapshot.results.len().saturating_sub(1)),
+                snapshot.results.len(),
+            ),
+            ToolInspectView::Request => build_tool_request_title(
+                &record,
+                index.min(snapshot.results.len().saturating_sub(1)),
+                snapshot.results.len(),
+            ),
+        };
+        let content = match view {
+            ToolInspectView::Result => build_tool_result_content(&record),
+            ToolInspectView::Request => build_tool_request_content(&record),
+        };
+        (title, content, ToolInspectKind::Result, view)
+    } else {
+        let pending_index = index.saturating_sub(snapshot.results.len());
+        let request = snapshot
+            .pending
+            .get(pending_index)
+            .cloned()
+            .unwrap_or_else(|| snapshot.pending.last().cloned().unwrap());
+        let title = build_tool_pending_title(
+            &request,
+            pending_index.min(snapshot.pending.len().saturating_sub(1)),
+            snapshot.pending.len(),
+            app,
+        );
+        let content = build_tool_pending_content(&request, app);
+        (
+            title,
+            content,
+            ToolInspectKind::Pending,
+            ToolInspectView::Request,
+        )
     };
 
-    let title = match view {
-        ToolInspectView::Result => {
-            build_tool_result_title(&record, index, app.session.tool_result_history.len())
+    app.open_tool_call_inspect(title, content, index, view, kind);
+    let status = match kind {
+        ToolInspectKind::Pending => {
+            "Inspecting tool call (permission pending • Esc=Close)".to_string()
         }
-        ToolInspectView::Request => {
-            build_tool_request_title(&record, index, app.session.tool_result_history.len())
-        }
+        ToolInspectKind::Result => "Inspecting tool result (Tab=Toggle • Esc=Close)".to_string(),
     };
-    let content = match view {
-        ToolInspectView::Result => build_tool_result_content(&record),
-        ToolInspectView::Request => build_tool_request_content(&record),
-    };
-    app.open_tool_result_inspect(title, content, index, view);
-    set_status_message(
-        app,
-        "Inspecting tool result (Tab=Toggle • Esc=Close)".to_string(),
-        ctx,
-    );
+    set_status_message(app, status, ctx);
 }
 
 fn build_tool_result_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
     let position = format!("{}/{}", index + 1, total.max(1));
     let status = record.status.display();
-    format!("Tool result ({position}) – {} ({status})", record.tool_name)
+    format!(
+        "Tool call (completed, {position}) – {} ({status})",
+        record.tool_name
+    )
 }
 
 fn build_tool_result_content(record: &ToolResultRecord) -> String {
@@ -272,7 +356,7 @@ fn build_tool_result_content(record: &ToolResultRecord) -> String {
 
 fn build_tool_request_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
     let position = format!("{}/{}", index + 1, total.max(1));
-    format!("Tool request ({position}) – {}", record.tool_name)
+    format!("Tool call (completed, {position}) – {}", record.tool_name)
 }
 
 fn build_tool_request_content(record: &ToolResultRecord) -> String {
@@ -325,6 +409,59 @@ fn build_tool_request_content(record: &ToolResultRecord) -> String {
     }
 
     build_inspect_text(lines)
+}
+
+fn build_tool_pending_title(
+    request: &ToolCallRequest,
+    index: usize,
+    total: usize,
+    app: &App,
+) -> String {
+    let position = format!("{}/{}", index + 1, total.max(1));
+    let server_label = resolve_server_label(app, &request.server_id);
+    format!(
+        "Tool call (pending, {position}) – {} on {} (permission pending)",
+        request.tool_name, server_label
+    )
+}
+
+fn build_tool_pending_content(request: &ToolCallRequest, app: &App) -> String {
+    let mut lines = Vec::new();
+    let server_label = resolve_server_label(app, &request.server_id);
+    lines.push(format!("Tool: {}", request.tool_name));
+    lines.push(format!("Server: {}", server_label));
+    if request.server_id.trim() != server_label.trim() {
+        lines.push(format!("Server ID: {}", request.server_id));
+    }
+    if let Some(tool_call_id) = request.tool_call_id.as_ref() {
+        if !tool_call_id.trim().is_empty() {
+            lines.push(format!("Tool call id: {}", tool_call_id));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Arguments:".to_string());
+    let args_text = format_tool_arguments_for_inspect(&request.raw_arguments);
+    if args_text.trim().is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for line in args_text.lines() {
+            lines.push(format!("  {}", line));
+        }
+    }
+    build_inspect_text(lines)
+}
+
+fn resolve_server_label(app: &App, server_id: &str) -> String {
+    app.mcp
+        .server(server_id)
+        .map(|server| {
+            if server.config.display_name.trim().is_empty() {
+                server.config.id.clone()
+            } else {
+                server.config.display_name.clone()
+            }
+        })
+        .unwrap_or_else(|| server_id.to_string())
 }
 
 fn format_tool_payload_for_inspect(payload: &str) -> String {
@@ -477,5 +614,76 @@ mod tests {
 
         let content = build_tool_request_content(&record);
         assert!(content.contains("(unavailable)"));
+    }
+
+    #[test]
+    fn inspect_tool_calls_prefers_pending_prompt() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.session.tool_result_history.push(ToolResultRecord {
+            tool_name: "completed_tool".to_string(),
+            server_name: Some("Alpha MCP".to_string()),
+            server_id: Some("alpha".to_string()),
+            status: ToolResultStatus::Success,
+            content: "{}".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+            raw_arguments: Some("{\"ok\":true}".to_string()),
+        });
+        app.session.pending_tool_queue.push_back(ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "pending_tool".to_string(),
+            arguments: None,
+            raw_arguments: "{\"q\":\"pending\"}".to_string(),
+            tool_call_id: Some("call-2".to_string()),
+        });
+        app.ui.start_tool_prompt(
+            "alpha".to_string(),
+            "Alpha MCP".to_string(),
+            "pending_tool".to_string(),
+            "q=pending".to_string(),
+            "{\"q\":\"pending\"}".to_string(),
+            0,
+        );
+
+        let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
+
+        assert!(cmd.is_none());
+        let inspect = app.inspect_state().expect("expected inspect state");
+        assert!(inspect.title.contains("pending"));
+        assert!(matches!(
+            inspect.mode,
+            InspectMode::ToolCalls {
+                kind: ToolInspectKind::Pending,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inspect_tool_calls_labels_completed() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.session.tool_result_history.push(ToolResultRecord {
+            tool_name: "completed_tool".to_string(),
+            server_name: Some("Alpha MCP".to_string()),
+            server_id: Some("alpha".to_string()),
+            status: ToolResultStatus::Success,
+            content: "{}".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+            raw_arguments: Some("{\"ok\":true}".to_string()),
+        });
+
+        let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
+
+        assert!(cmd.is_none());
+        let inspect = app.inspect_state().expect("expected inspect state");
+        assert!(inspect.title.contains("completed"));
+        assert!(matches!(
+            inspect.mode,
+            InspectMode::ToolCalls {
+                kind: ToolInspectKind::Result,
+                ..
+            }
+        ));
     }
 }

@@ -439,7 +439,13 @@ async fn route_keyboard_event(
         let inspect_mode = app
             .read(|app| app.inspect_state().map(|state| state.mode))
             .await;
-        if matches!(inspect_mode, Some(InspectMode::ToolResults { .. })) {
+        if matches!(
+            inspect_mode,
+            Some(InspectMode::ToolCalls {
+                kind: crate::core::app::ToolInspectKind::Result,
+                ..
+            })
+        ) {
             dispatcher.dispatch_many(
                 [AppAction::InspectToolResultsToggleView],
                 AppActionContext {

@@ -33,7 +33,6 @@ pub enum AppAction {
     ToolPermissionDecision {
         decision: crate::mcp::permissions::ToolPermissionDecision,
     },
-    ToolPromptInspect,
     InspectToolResults,
     InspectToolResultsToggleView,
     InspectToolResultsStep {
@@ -238,7 +237,5 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         AppAction::CompleteMcpPromptArg { .. } => {
             mcp_prompt::handle_mcp_prompt_action(app, action, ctx)
         }
-
-        AppAction::ToolPromptInspect => streaming::handle_streaming_action(app, action, ctx),
     }
 }

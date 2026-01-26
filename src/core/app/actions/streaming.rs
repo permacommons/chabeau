@@ -1,9 +1,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use super::{input, App, AppAction, AppActionContext, AppCommand};
+use super::{App, AppAction, AppActionContext, AppCommand};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
-use crate::core::app::picker::build_inspect_text;
 use crate::core::app::session::{
     McpPromptRequest, PendingToolCall, ToolCallRequest, ToolResultRecord, ToolResultStatus,
 };
@@ -82,7 +81,6 @@ pub(super) fn handle_streaming_action(
         AppAction::ToolPermissionDecision { decision } => {
             handle_tool_permission_decision(app, decision, ctx)
         }
-        AppAction::ToolPromptInspect => handle_tool_prompt_inspect(app, ctx),
         AppAction::ToolCallCompleted {
             tool_name,
             tool_call_id,
@@ -111,52 +109,6 @@ pub(super) fn handle_streaming_action(
         AppAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
         AppAction::RetryLastMessage => retry_last_message(app, ctx),
         _ => unreachable!("non-streaming action routed to streaming handler"),
-    }
-}
-
-fn handle_tool_prompt_inspect(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
-    let prompt = app.ui.tool_prompt().cloned()?;
-
-    let server_label = if prompt.server_name.trim().is_empty() {
-        prompt.server_id.clone()
-    } else {
-        prompt.server_name.clone()
-    };
-
-    let mut lines = Vec::new();
-    lines.push(format!("Tool: {}", prompt.tool_name));
-    lines.push(format!("Server: {}", server_label));
-    if prompt.server_id.trim() != server_label.trim() {
-        lines.push(format!("Server ID: {}", prompt.server_id));
-    }
-    lines.push(String::new());
-    lines.push("Arguments:".to_string());
-
-    let args_text = format_tool_arguments_for_inspect(&prompt.raw_arguments);
-    if args_text.trim().is_empty() {
-        lines.push("  (none)".to_string());
-    } else {
-        for line in args_text.lines() {
-            lines.push(format!("  {}", line));
-        }
-    }
-
-    let title = format!("Tool call – {} on {}", prompt.tool_name, server_label);
-    let content = build_inspect_text(lines);
-    app.open_inspect(title, content);
-    input::set_status_message(app, "Inspecting tool call (Esc=Close)".to_string(), ctx);
-    None
-}
-
-fn format_tool_arguments_for_inspect(raw_arguments: &str) -> String {
-    let trimmed = raw_arguments.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| trimmed.to_string()),
-        Err(_) => trimmed.to_string(),
     }
 }
 

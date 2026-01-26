@@ -135,6 +135,7 @@ fn handle_process_command(
         }
         CommandResult::RunMcpPrompt(request) => Some(AppCommand::RunMcpPrompt(request)),
         CommandResult::RefreshMcp { server_id } => {
+            app.ui.focus_transcript();
             update_scroll_after_command(app, ctx);
             Some(AppCommand::RefreshMcp { server_id })
         }
@@ -409,6 +410,39 @@ mod tests {
         );
 
         assert!(cmd.is_none());
+        assert!(app.ui.is_transcript_focused());
+    }
+
+    #[test]
+    fn mcp_command_focuses_transcript() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.ui.focus_input();
+        app.config
+            .mcp_servers
+            .push(crate::core::config::data::McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha MCP".to_string(),
+                transport: None,
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                enabled: Some(true),
+                allowed_tools: None,
+                protocol_version: None,
+            });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let cmd = handle_input_action(
+            &mut app,
+            AppAction::ProcessCommand {
+                input: "/mcp alpha".into(),
+            },
+            ctx,
+        );
+
+        assert!(matches!(cmd, Some(AppCommand::RefreshMcp { .. })));
         assert!(app.ui.is_transcript_focused());
     }
 

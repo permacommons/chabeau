@@ -7,9 +7,9 @@ use rust_mcp_schema::schema_utils::{
 };
 use rust_mcp_schema::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, GetPromptRequestParams,
-    GetPromptResult, Implementation, InitializeRequestParams, ListPromptsResult,
+    GetPromptResult, Implementation, InitializeRequestParams, InitializeResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-    ReadResourceResult, RequestId, RpcError, LATEST_PROTOCOL_VERSION,
+    ReadResourceResult, RequestId, RpcError, ServerCapabilities, LATEST_PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -236,18 +236,18 @@ impl StdioClient {
         Ok(())
     }
 
-    async fn initialize(&self, details: InitializeRequestParams) -> Result<(), String> {
+    async fn initialize(
+        &self,
+        details: InitializeRequestParams,
+    ) -> Result<InitializeResult, String> {
         let response = self
             .send_request(RequestFromClient::InitializeRequest(details))
             .await?;
-        parse_initialize(response.clone())?;
-        let initialize = parse_response_value(response)?;
-        let result = serde_json::from_value::<rust_mcp_schema::InitializeResult>(initialize)
-            .map_err(|err| err.to_string())?;
-        *self.server_details.write().await = Some(result);
+        let result = parse_initialize_result(response)?;
+        *self.server_details.write().await = Some(result.clone());
         self.send_notification(NotificationFromClient::InitializedNotification(None))
             .await?;
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -262,6 +262,7 @@ pub struct McpServerState {
     pub cached_prompts: Option<ListPromptsResult>,
     pub session_id: Option<String>,
     pub auth_header: Option<String>,
+    pub server_details: Option<InitializeResult>,
     pub streamable_http_request_id: u64,
     client: Option<Arc<StdioClient>>,
 }
@@ -278,6 +279,7 @@ impl McpServerState {
             cached_prompts: None,
             session_id: None,
             auth_header: None,
+            server_details: None,
             streamable_http_request_id: 0,
             client: None,
         }
@@ -285,6 +287,30 @@ impl McpServerState {
 
     pub fn allowed_tools(&self) -> Option<&[String]> {
         self.config.allowed_tools.as_deref()
+    }
+
+    fn server_capabilities(&self) -> Option<&ServerCapabilities> {
+        self.server_details
+            .as_ref()
+            .map(|details| &details.capabilities)
+    }
+
+    fn supports_tools(&self) -> bool {
+        self.server_capabilities()
+            .map(|caps| caps.tools.is_some())
+            .unwrap_or(true)
+    }
+
+    fn supports_resources(&self) -> bool {
+        self.server_capabilities()
+            .map(|caps| caps.resources.is_some())
+            .unwrap_or(true)
+    }
+
+    fn supports_prompts(&self) -> bool {
+        self.server_capabilities()
+            .map(|caps| caps.prompts.is_some())
+            .unwrap_or(true)
     }
 }
 
@@ -457,13 +483,20 @@ impl McpClientManager {
                 };
 
                 let client_details = client_details_for(&config);
-                if let Err(err) = client.initialize(client_details).await {
-                    if let Some(server) = self.server_mut(id) {
-                        server.last_error = Some(err);
-                        server.connected = false;
-                        server.client = None;
+                match client.initialize(client_details).await {
+                    Ok(details) => {
+                        if let Some(server) = self.server_mut(id) {
+                            server.server_details = Some(details);
+                        }
                     }
-                    return;
+                    Err(err) => {
+                        if let Some(server) = self.server_mut(id) {
+                            server.last_error = Some(err);
+                            server.connected = false;
+                            server.client = None;
+                        }
+                        return;
+                    }
                 }
 
                 if let Some(server) = self.server_mut(id) {
@@ -477,6 +510,16 @@ impl McpClientManager {
     }
 
     pub async fn refresh_tools(&mut self, id: &str) {
+        if let Some(server) = self.server(id) {
+            if !server.supports_tools() {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_tools = Some(empty_list_tools());
+                    server.last_error = None;
+                }
+                return;
+            }
+        }
+
         if self.uses_http(id) {
             self.refresh_tools_streamable_http(id).await;
             return;
@@ -509,6 +552,16 @@ impl McpClientManager {
     }
 
     pub async fn refresh_resources(&mut self, id: &str) {
+        if let Some(server) = self.server(id) {
+            if !server.supports_resources() {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_resources = Some(empty_list_resources());
+                    server.last_error = None;
+                }
+                return;
+            }
+        }
+
         if self.uses_http(id) {
             self.refresh_resources_streamable_http(id).await;
             return;
@@ -545,6 +598,16 @@ impl McpClientManager {
     }
 
     pub async fn refresh_resource_templates(&mut self, id: &str) {
+        if let Some(server) = self.server(id) {
+            if !server.supports_resources() {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_resource_templates = Some(empty_list_resource_templates());
+                    server.last_error = None;
+                }
+                return;
+            }
+        }
+
         if self.uses_http(id) {
             self.refresh_resource_templates_streamable_http(id).await;
             return;
@@ -581,6 +644,16 @@ impl McpClientManager {
     }
 
     pub async fn refresh_prompts(&mut self, id: &str) {
+        if let Some(server) = self.server(id) {
+            if !server.supports_prompts() {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_prompts = Some(empty_list_prompts());
+                    server.last_error = None;
+                }
+                return;
+            }
+        }
+
         if self.uses_http(id) {
             self.refresh_prompts_streamable_http(id).await;
             return;
@@ -734,7 +807,11 @@ impl McpClientManager {
         let response = self
             .send_streamable_http_request(id, RequestFromClient::InitializeRequest(client_details))
             .await?;
-        parse_initialize(response)?;
+        let initialize = parse_initialize_result(response)?;
+
+        if let Some(server) = self.server_mut(id) {
+            server.server_details = Some(initialize);
+        }
 
         if self
             .server(id)
@@ -1119,7 +1196,7 @@ async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
         RequestFromClient::InitializeRequest(client_details),
     )
     .await?;
-    parse_initialize(response)?;
+    parse_initialize_result(response)?;
 
     if context.session_id().is_none() {
         return Err("Missing session id on initialize response.".to_string());
@@ -1226,12 +1303,83 @@ fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
     }
 }
 
-fn parse_initialize(message: ServerMessage) -> Result<(), String> {
+fn parse_initialize_result(message: ServerMessage) -> Result<InitializeResult, String> {
     let value = parse_response_value(message)?;
-    if value.get("protocolVersion").is_none() && value.get("protocol_version").is_none() {
+    let result =
+        serde_json::from_value::<InitializeResult>(value).map_err(|err| err.to_string())?;
+    if result.protocol_version.trim().is_empty() {
         return Err("Unexpected initialize response.".to_string());
     }
-    Ok(())
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_config() -> McpServerConfig {
+        McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha MCP".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+        }
+    }
+
+    fn init_with_caps(caps: ServerCapabilities) -> InitializeResult {
+        InitializeResult {
+            capabilities: caps,
+            instructions: None,
+            meta: None,
+            protocol_version: "2025-11-25".to_string(),
+            server_info: Implementation {
+                name: "server".to_string(),
+                version: "0.1.0".to_string(),
+                title: None,
+                description: None,
+                icons: Vec::new(),
+                website_url: None,
+            },
+        }
+    }
+
+    #[test]
+    fn server_capability_defaults_to_supported() {
+        let mut state = McpServerState::new(sample_config());
+        state.server_details = None;
+        assert!(state.supports_tools());
+        assert!(state.supports_resources());
+        assert!(state.supports_prompts());
+    }
+
+    #[test]
+    fn server_capability_flags_disable_missing_lists() {
+        let mut state = McpServerState::new(sample_config());
+        let caps = ServerCapabilities::default();
+        state.server_details = Some(init_with_caps(caps));
+        assert!(!state.supports_tools());
+        assert!(!state.supports_resources());
+        assert!(!state.supports_prompts());
+    }
+
+    #[test]
+    fn server_capability_flags_enable_present_lists() {
+        let mut state = McpServerState::new(sample_config());
+        let mut caps = ServerCapabilities::default();
+        caps.tools = Some(rust_mcp_schema::ServerCapabilitiesTools::default());
+        caps.resources = Some(rust_mcp_schema::ServerCapabilitiesResources::default());
+        caps.prompts = Some(rust_mcp_schema::ServerCapabilitiesPrompts::default());
+        state.server_details = Some(init_with_caps(caps));
+        assert!(state.supports_tools());
+        assert!(state.supports_resources());
+        assert!(state.supports_prompts());
+    }
 }
 
 fn parse_list_tools(message: ServerMessage) -> Result<ListToolsResult, String> {

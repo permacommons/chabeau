@@ -579,6 +579,8 @@ pub(crate) fn build_mcp_server_output(
         _ => output.push_str("Token: unknown (keyring disabled)\n"),
     }
 
+    let (tools_cap, resources_cap, prompts_cap, cap_reported) = server_capability_statuses(server);
+
     output.push('\n');
     match server.config.allowed_tools.as_ref() {
         Some(allowed) if allowed.is_empty() => {
@@ -598,7 +600,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_tools {
         if list.tools.is_empty() {
-            output.push_str("**Tools:** none reported by server.\n");
+            output.push_str(match (tools_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Tools:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Tools:** unknown (server did not report capabilities).\n",
+                _ => "**Tools:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Tools:**\n");
             for tool in &list.tools {
@@ -612,7 +620,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_resources {
         if list.resources.is_empty() {
-            output.push_str("**Resources:** none reported by server.\n");
+            output.push_str(match (resources_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Resources:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Resources:** unknown (server did not report capabilities).\n",
+                _ => "**Resources:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Resources:**\n");
             for resource in &list.resources {
@@ -626,7 +640,15 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_resource_templates {
         if list.resource_templates.is_empty() {
-            output.push_str("**Resource templates:** none reported by server.\n");
+            output.push_str(match (resources_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Resource templates:** not supported (per server capabilities).\n"
+                }
+                (_, false) => {
+                    "**Resource templates:** unknown (server did not report capabilities).\n"
+                }
+                _ => "**Resource templates:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Resource templates:**\n");
             for template in &list.resource_templates {
@@ -643,7 +665,13 @@ pub(crate) fn build_mcp_server_output(
     output.push('\n');
     if let Some(list) = &server.cached_prompts {
         if list.prompts.is_empty() {
-            output.push_str("**Prompts:** none reported by server.\n");
+            output.push_str(match (prompts_cap, cap_reported) {
+                (CapabilityStatus::Unsupported, true) => {
+                    "**Prompts:** not supported (per server capabilities).\n"
+                }
+                (_, false) => "**Prompts:** unknown (server did not report capabilities).\n",
+                _ => "**Prompts:** none in cached listing.\n",
+            });
         } else {
             output.push_str("**Prompts:**\n");
             for prompt in &list.prompts {
@@ -659,6 +687,42 @@ pub(crate) fn build_mcp_server_output(
     }
 
     output
+}
+
+#[derive(Clone, Copy)]
+enum CapabilityStatus {
+    Supported,
+    Unsupported,
+}
+
+fn server_capability_statuses(
+    server: &crate::mcp::client::McpServerState,
+) -> (CapabilityStatus, CapabilityStatus, CapabilityStatus, bool) {
+    let Some(details) = server.server_details.as_ref() else {
+        return (
+            CapabilityStatus::Supported,
+            CapabilityStatus::Supported,
+            CapabilityStatus::Supported,
+            false,
+        );
+    };
+    let caps = &details.capabilities;
+    let tools = if caps.tools.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    let resources = if caps.resources.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    let prompts = if caps.prompts.is_some() {
+        CapabilityStatus::Supported
+    } else {
+        CapabilityStatus::Unsupported
+    };
+    (tools, resources, prompts, true)
 }
 
 pub(super) fn handle_dump(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {

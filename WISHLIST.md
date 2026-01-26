@@ -13,7 +13,7 @@ Items are removed when completed.
 - Microphone/speaker support? — [OPEN]
 - MCP: handle notifications (listChanged, progress, logging) for streamable HTTP and stdio — [OPEN]
 - MCP: support long-lived SSE response streams within streamable HTTP — [OPEN]
-- MCP: expand capabilities negotiation (client capabilities + server capabilities tracking) — [OPEN]
+- MCP: expand capabilities negotiation (advertise client caps + surface server caps) — [OPEN]
 - MCP: add optional features (sampling/logging/roots/resource subscriptions) as needed — [OPEN]
 
 ## Code quality

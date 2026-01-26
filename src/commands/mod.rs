@@ -200,13 +200,18 @@ fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandRes
         return Some(CommandResult::Continue);
     };
 
-    let parsed_args = match parse_kv_args(args_str) {
+    let parsed_args = match parse_prompt_args(args_str, &prompt.arguments) {
         Ok(map) => map,
         Err(err) => {
             app.conversation().set_status(err);
             return Some(CommandResult::Continue);
         }
     };
+
+    if let Err(err) = validate_prompt_args(&parsed_args, &prompt.arguments) {
+        app.conversation().set_status(err);
+        return Some(CommandResult::Continue);
+    }
 
     let collected = parsed_args;
     let mut missing = Vec::new();
@@ -241,11 +246,94 @@ fn handle_mcp_prompt_invocation(app: &mut App, input: &str) -> Option<CommandRes
     }))
 }
 
+fn parse_prompt_args(
+    input: &str,
+    prompt_args: &[PromptArgument],
+) -> Result<HashMap<String, String>, String> {
+    if input.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    if prompt_args.len() == 1 {
+        match parse_kv_args(input) {
+            Ok(map) => return Ok(map),
+            Err(_) => {
+                let value = parse_single_prompt_value(input)?;
+                let mut args = HashMap::new();
+                args.insert(prompt_args[0].name.clone(), value);
+                return Ok(args);
+            }
+        }
+    }
+
+    parse_kv_args(input)
+}
+
+fn parse_single_prompt_value(input: &str) -> Result<String, String> {
+    let tokens = tokenize_prompt_args(input)?;
+    if tokens.is_empty() {
+        return Ok(String::new());
+    }
+    if tokens.len() == 1 {
+        return Ok(tokens[0].clone());
+    }
+    Ok(tokens.join(" "))
+}
+
 fn parse_kv_args(input: &str) -> Result<HashMap<String, String>, String> {
     if input.trim().is_empty() {
         return Ok(HashMap::new());
     }
 
+    let tokens = tokenize_prompt_args(input)?;
+
+    let mut args = HashMap::new();
+    for token in tokens {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(format!(
+                "Invalid prompt argument '{}'. Use key=value.",
+                token
+            ));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("Prompt argument name cannot be empty.".to_string());
+        }
+        args.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(args)
+}
+
+fn validate_prompt_args(
+    args: &HashMap<String, String>,
+    prompt_args: &[PromptArgument],
+) -> Result<(), String> {
+    let mut allowed = Vec::new();
+    for arg in prompt_args {
+        allowed.push(arg.name.as_str());
+    }
+
+    for key in args.keys() {
+        if !allowed.iter().any(|name| name == key) {
+            let mut allowed_sorted: Vec<&str> = allowed.clone();
+            allowed_sorted.sort();
+            let allowed_list = if allowed_sorted.is_empty() {
+                "none".to_string()
+            } else {
+                allowed_sorted.join(", ")
+            };
+            return Err(format!(
+                "Unknown prompt argument '{}'. Allowed: {}.",
+                key, allowed_list
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn tokenize_prompt_args(input: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quote: Option<char> = None;
@@ -277,23 +365,7 @@ fn parse_kv_args(input: &str) -> Result<HashMap<String, String>, String> {
     if !current.is_empty() {
         tokens.push(current);
     }
-
-    let mut args = HashMap::new();
-    for token in tokens {
-        let Some((key, value)) = token.split_once('=') else {
-            return Err(format!(
-                "Invalid prompt argument '{}'. Use key=value.",
-                token
-            ));
-        };
-        let key = key.trim();
-        if key.is_empty() {
-            return Err("Prompt argument name cannot be empty.".to_string());
-        }
-        args.insert(key.to_string(), value.to_string());
-    }
-
-    Ok(args)
+    Ok(tokens)
 }
 
 fn prompt_argument_from_schema(
@@ -1602,5 +1674,76 @@ mod tests {
     fn parse_kv_args_rejects_missing_equals() {
         let err = parse_kv_args("topic").unwrap_err();
         assert!(err.contains("key=value"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_bare_value() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("soil", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_quoted_value() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("\"soil health\"", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
+    }
+
+    #[test]
+    fn parse_prompt_args_single_argument_accepts_unquoted_spaces() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let args = parse_prompt_args("soil health", &prompt_args).expect("parse");
+        assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
+    }
+
+    #[test]
+    fn parse_prompt_args_multiple_arguments_requires_key_value() {
+        let prompt_args = vec![
+            PromptArgument {
+                name: "topic".to_string(),
+                title: None,
+                description: None,
+                required: Some(true),
+            },
+            PromptArgument {
+                name: "lang".to_string(),
+                title: None,
+                description: None,
+                required: Some(true),
+            },
+        ];
+        let err = parse_prompt_args("soil", &prompt_args).unwrap_err();
+        assert!(err.contains("key=value"));
+    }
+
+    #[test]
+    fn validate_prompt_args_rejects_unknown_keys() {
+        let prompt_args = vec![PromptArgument {
+            name: "topic".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        }];
+        let mut args = HashMap::new();
+        args.insert("foo".to_string(), "bar".to_string());
+        let err = validate_prompt_args(&args, &prompt_args).unwrap_err();
+        assert!(err.contains("Unknown prompt argument"));
+        assert!(err.contains("topic"));
     }
 }

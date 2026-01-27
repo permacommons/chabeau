@@ -15,22 +15,31 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Default budget for MCP sampling when the server does not provide a timeout hint.
+const MCP_SAMPLING_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+const MCP_SAMPLING_SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
 use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
 use serde::Serialize;
 use serde_json;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::api::models::fetch_models;
+use crate::api::ChatRequest;
 use crate::character::CharacterService;
 use crate::core::app::{
     apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
     InspectMode, ModelPickerRequest,
 };
-use crate::core::chat_stream::{ChatStreamService, StreamMessage};
+use crate::core::chat_stream::{request_chat_completion, ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
+use crate::core::mcp_sampling::map_finish_reason;
 use crate::core::message::AppMessageKind;
 use crate::ui::renderer::ui;
+use rust_mcp_schema::schema_utils::ResultFromClient;
+use rust_mcp_schema::{CreateMessageContent, CreateMessageResult, Role, TextContent};
 
 use super::keybindings::{build_mode_aware_registry, KeyContext, KeyResult, ModeAwareRegistry};
 use super::lifecycle::{
@@ -70,7 +79,11 @@ fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPick
     });
 }
 
-fn spawn_mcp_initializer(app: AppHandle, dispatcher: AppActionDispatcher) {
+fn spawn_mcp_initializer(
+    app: AppHandle,
+    dispatcher: AppActionDispatcher,
+    request_tx: mpsc::UnboundedSender<crate::mcp::events::McpServerRequest>,
+) {
     tokio::spawn(async move {
         let mcp_disabled = app.read(|app| app.session.mcp_disabled).await;
         if mcp_disabled {
@@ -92,6 +105,7 @@ fn spawn_mcp_initializer(app: AppHandle, dispatcher: AppActionDispatcher) {
 
         let config = app.read(|app| app.config.clone()).await;
         let mut mcp = crate::mcp::client::McpClientManager::from_config(&config);
+        mcp.set_request_sender(request_tx.clone());
         mcp.connect_all(&token_store).await;
 
         let server_ids: Vec<String> = mcp
@@ -245,6 +259,259 @@ fn spawn_mcp_prompt_call(
         .await;
 
         dispatcher.dispatch_many([AppAction::McpPromptCompleted { request, result }], ctx);
+    });
+}
+
+fn spawn_mcp_sampling_call(
+    app: AppHandle,
+    dispatcher: AppActionDispatcher,
+    request: crate::core::app::session::McpSamplingRequest,
+) {
+    tokio::spawn(async move {
+        let start = std::time::Instant::now();
+        let term_size = app.read(|app| app.ui.last_term_size).await;
+        let ctx = AppActionContext {
+            term_width: term_size.width,
+            term_height: term_size.height,
+        };
+
+        let (client, base_url, api_key, provider_name, model) = app
+            .read(|app| {
+                (
+                    app.session.client.clone(),
+                    app.session.base_url.clone(),
+                    app.session.api_key.clone(),
+                    app.session.provider_name.clone(),
+                    app.session.model.clone(),
+                )
+            })
+            .await;
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            "Starting MCP sampling request"
+        );
+
+        let messages = request.messages;
+
+        let stop = if request.request.params.stop_sequences.is_empty() {
+            None
+        } else {
+            Some(request.request.params.stop_sequences.clone())
+        };
+
+        let chat_request = ChatRequest {
+            model: model.clone(),
+            messages,
+            stream: false,
+            tools: None,
+            max_tokens: Some(request.request.params.max_tokens),
+            temperature: request.request.params.temperature,
+            stop,
+        };
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            "Fetching MCP sampling response context"
+        );
+        let mut context = match app
+            .read(|app| app.mcp.server_request_context(&request.server_id))
+            .await
+        {
+            Some(context) => {
+                debug!(
+                    server_id = %request.server_id,
+                    request_id = ?request.request.id,
+                    "MCP sampling context acquired"
+                );
+                context
+            }
+            None => {
+                debug!(
+                    server_id = %request.server_id,
+                    request_id = ?request.request.id,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "MCP sampling context missing; aborting response"
+                );
+                dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+                return;
+            }
+        };
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            provider = %provider_name,
+            model = %model,
+            max_tokens = request.request.params.max_tokens,
+            temperature = ?request.request.params.temperature,
+            "Dispatching MCP sampling completion"
+        );
+        let default_sampling_timeout = MCP_SAMPLING_DEFAULT_TIMEOUT;
+        let sampling_timeout =
+            crate::core::mcp_sampling::sampling_timeout_for_request(&request.request)
+                .unwrap_or(default_sampling_timeout);
+        if sampling_timeout != default_sampling_timeout {
+            debug!(
+                server_id = %request.server_id,
+                request_id = ?request.request.id,
+                timeout_secs = sampling_timeout.as_secs(),
+                "Using MCP sampling timeout hint"
+            );
+        }
+        let completion = match tokio::time::timeout(
+            sampling_timeout,
+            request_chat_completion(&client, &base_url, &api_key, &provider_name, chat_request),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                debug!(
+                    server_id = %request.server_id,
+                    request_id = ?request.request.id,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    timeout_secs = sampling_timeout.as_secs(),
+                    "MCP sampling completion timed out"
+                );
+                Err(format!(
+                    "Sampling timed out after {}s",
+                    sampling_timeout.as_secs()
+                ))
+            }
+        };
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "Sending MCP sampling response"
+        );
+        let send_timeout = MCP_SAMPLING_SEND_TIMEOUT;
+        let send_result = match tokio::time::timeout(send_timeout, async {
+            match completion {
+                Ok(result) => {
+                    let preview: String = result.content.chars().take(300).collect();
+                    debug!(
+                        server_id = %request.server_id,
+                        request_id = ?request.request.id,
+                        finish_reason = ?result.finish_reason,
+                        elapsed_ms = start.elapsed().as_millis(),
+                        content_chars = result.content.len(),
+                        content_preview = %preview,
+                        "MCP sampling completion received"
+                    );
+                    let content =
+                        CreateMessageContent::from(TextContent::new(result.content, None, None));
+                    let create_result = CreateMessageResult {
+                        content,
+                        meta: None,
+                        model: model.clone(),
+                        role: Role::Assistant,
+                        stop_reason: map_finish_reason(result.finish_reason),
+                    };
+                    crate::mcp::client::send_client_result(
+                        &mut context,
+                        request.request.id.clone(),
+                        ResultFromClient::CreateMessageResult(create_result),
+                    )
+                    .await
+                }
+                Err(err) => {
+                    debug!(
+                        server_id = %request.server_id,
+                        request_id = ?request.request.id,
+                        error = %err,
+                        elapsed_ms = start.elapsed().as_millis(),
+                        "MCP sampling completion failed"
+                    );
+                    crate::mcp::client::send_client_error(
+                        &mut context,
+                        request.request.id.clone(),
+                        rust_mcp_schema::RpcError::internal_error().with_message(&err),
+                    )
+                    .await
+                }
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err("Timed out sending MCP sampling response.".to_string()),
+        };
+        if let Err(error) = &send_result {
+            debug!(
+                server_id = %request.server_id,
+                request_id = ?request.request.id,
+                error = %error,
+                elapsed_ms = start.elapsed().as_millis(),
+                "MCP sampling response send failed"
+            );
+        }
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "MCP sampling response send complete"
+        );
+
+        let session_id = context.session_id.clone();
+        let error = send_result.err();
+        app.update(|app| {
+            app.mcp
+                .update_server_request_session(&context.server_id, session_id, error);
+        })
+        .await;
+
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "Finished MCP sampling flow"
+        );
+        dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+    });
+}
+
+fn spawn_mcp_server_error(
+    app: AppHandle,
+    dispatcher: AppActionDispatcher,
+    server_id: String,
+    request_id: rust_mcp_schema::RequestId,
+    error: rust_mcp_schema::RpcError,
+) {
+    tokio::spawn(async move {
+        let term_size = app.read(|app| app.ui.last_term_size).await;
+        let ctx = AppActionContext {
+            term_width: term_size.width,
+            term_height: term_size.height,
+        };
+
+        let mut context = match app
+            .read(|app| app.mcp.server_request_context(&server_id))
+            .await
+        {
+            Some(context) => context,
+            None => {
+                dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+                return;
+            }
+        };
+
+        let send_result =
+            crate::mcp::client::send_client_error(&mut context, request_id, error).await;
+        let session_id = context.session_id.clone();
+        let error = send_result.err();
+        app.update(|app| {
+            app.mcp
+                .update_server_request_session(&context.server_id, session_id, error);
+        })
+        .await;
+
+        dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
     });
 }
 
@@ -694,6 +961,22 @@ async fn drain_action_queue(
             AppCommand::RunMcpPrompt(request) => {
                 spawn_mcp_prompt_call(app.clone(), dispatcher.clone(), request);
             }
+            AppCommand::RunMcpSampling(request) => {
+                spawn_mcp_sampling_call(app.clone(), dispatcher.clone(), *request);
+            }
+            AppCommand::SendMcpServerError {
+                server_id,
+                request_id,
+                error,
+            } => {
+                spawn_mcp_server_error(
+                    app.clone(),
+                    dispatcher.clone(),
+                    server_id,
+                    request_id,
+                    error,
+                );
+            }
             AppCommand::RefreshMcp { server_id } => {
                 spawn_mcp_refresh(app.clone(), dispatcher.clone(), server_id);
             }
@@ -755,6 +1038,31 @@ pub async fn run_chat(
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     let action_dispatcher = AppActionDispatcher::new(action_tx);
+    let (mcp_request_tx, mut mcp_request_rx) =
+        mpsc::unbounded_channel::<crate::mcp::events::McpServerRequest>();
+    app.update(|app| {
+        app.mcp.set_request_sender(mcp_request_tx.clone());
+    })
+    .await;
+    {
+        let app = app.clone();
+        let dispatcher = action_dispatcher.clone();
+        tokio::spawn(async move {
+            while let Some(request) = mcp_request_rx.recv().await {
+                let term_size = app.read(|app| app.ui.last_term_size).await;
+                let ctx = AppActionContext {
+                    term_width: term_size.width,
+                    term_height: term_size.height,
+                };
+                dispatcher.dispatch_many(
+                    [AppAction::McpServerRequestReceived {
+                        request: Box::new(request),
+                    }],
+                    ctx,
+                );
+            }
+        });
+    }
     let has_enabled_mcp = app
         .read(|app| app.mcp.servers().any(|server| server.config.is_enabled()))
         .await;
@@ -765,7 +1073,11 @@ pub async fn run_chat(
         })
         .await;
     }
-    spawn_mcp_initializer(app.clone(), action_dispatcher.clone());
+    spawn_mcp_initializer(
+        app.clone(),
+        action_dispatcher.clone(),
+        mcp_request_tx.clone(),
+    );
 
     println!(
         "Chabeau is in the public domain, forever. Contribute: https://github.com/permacommons/chabeau"

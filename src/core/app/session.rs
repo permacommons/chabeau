@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use reqwest::Client;
+use rust_mcp_schema::CreateMessageRequest;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{ChatMessage, ChatToolCall};
@@ -59,6 +60,8 @@ pub struct SessionContext {
     pub pending_mcp_message: Option<String>,
     pub pending_tool_queue: VecDeque<ToolCallRequest>,
     pub active_tool_request: Option<ToolCallRequest>,
+    pub pending_sampling_queue: VecDeque<McpSamplingRequest>,
+    pub active_sampling_request: Option<McpSamplingRequest>,
     pub tool_call_records: Vec<ChatToolCall>,
     pub tool_results: Vec<ChatMessage>,
     pub tool_result_history: Vec<ToolResultRecord>,
@@ -121,6 +124,13 @@ pub struct ToolCallRequest {
     pub arguments: Option<serde_json::Map<String, serde_json::Value>>,
     pub raw_arguments: String,
     pub tool_call_id: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct McpSamplingRequest {
+    pub server_id: String,
+    pub request: CreateMessageRequest,
+    pub messages: Vec<ChatMessage>,
 }
 
 #[derive(Debug, Clone)]
@@ -387,6 +397,8 @@ pub(crate) async fn prepare_with_auth(
         pending_mcp_message: None,
         pending_tool_queue: VecDeque::new(),
         active_tool_request: None,
+        pending_sampling_queue: VecDeque::new(),
+        active_sampling_request: None,
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
@@ -441,6 +453,8 @@ pub(crate) async fn prepare_uninitialized(
         pending_mcp_message: None,
         pending_tool_queue: VecDeque::new(),
         active_tool_request: None,
+        pending_sampling_queue: VecDeque::new(),
+        active_sampling_request: None,
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
@@ -615,6 +629,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -700,6 +716,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -764,6 +782,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -831,6 +851,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -1052,6 +1074,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -1097,6 +1121,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -1180,6 +1206,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
@@ -1255,6 +1283,8 @@ mod tests {
             pending_mcp_message: None,
             pending_tool_queue: VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),

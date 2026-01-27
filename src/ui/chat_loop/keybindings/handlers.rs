@@ -23,6 +23,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tracing::debug;
 use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 
 // ============================================================================
@@ -1087,6 +1088,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
 
         match key.code {
             KeyCode::Enter => {
+                debug!("Tool prompt decision: allow once (enter)");
                 dispatcher.dispatch_many(
                     [AppAction::ToolPermissionDecision {
                         decision: ToolPermissionDecision::AllowOnce,
@@ -1099,6 +1101,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                 KeyResult::Handled
             }
             KeyCode::Esc => {
+                debug!("Tool prompt decision: deny once (esc)");
                 dispatcher.dispatch_many(
                     [AppAction::ToolPermissionDecision {
                         decision: ToolPermissionDecision::DenyOnce,
@@ -1112,6 +1115,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
             }
             KeyCode::Char(ch) => match ch.to_ascii_lowercase() {
                 'a' => {
+                    debug!("Tool prompt decision: allow once (a)");
                     dispatcher.dispatch_many(
                         [AppAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::AllowOnce,
@@ -1124,6 +1128,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                     KeyResult::Handled
                 }
                 's' => {
+                    debug!("Tool prompt decision: allow session (s)");
                     dispatcher.dispatch_many(
                         [AppAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::AllowSession,
@@ -1136,6 +1141,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                     KeyResult::Handled
                 }
                 'd' => {
+                    debug!("Tool prompt decision: deny once (d)");
                     dispatcher.dispatch_many(
                         [AppAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::DenyOnce,
@@ -1148,6 +1154,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                     KeyResult::Handled
                 }
                 'b' => {
+                    debug!("Tool prompt decision: block (b)");
                     dispatcher.dispatch_many(
                         [AppAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::Block,

@@ -16,7 +16,6 @@ Items are removed when completed.
 - MCP: expand capabilities negotiation (advertise client caps + surface server caps) — [OPEN]
 - MCP: add optional features — [OPEN]
   - Client roots capability (`roots/list` + list_changed) — [OPEN]
-  - Client sampling capability (`sampling/createMessage`) — [OPEN]
   - Client elicitation capability (`elicitation/create`) — [OPEN]
   - Experimental task support (`tasks/*`) — [OPEN]
   - Client logging capability — [OPEN]

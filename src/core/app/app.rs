@@ -80,6 +80,8 @@ impl App {
             pending_mcp_message: None,
             pending_tool_queue: std::collections::VecDeque::new(),
             active_tool_request: None,
+            pending_sampling_queue: std::collections::VecDeque::new(),
+            active_sampling_request: None,
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),

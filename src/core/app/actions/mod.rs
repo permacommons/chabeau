@@ -13,6 +13,7 @@ use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
 use crate::core::chat_stream::ToolCallDelta;
 use crate::core::message::AppMessageKind;
+use crate::mcp::events::McpServerRequest;
 
 pub enum AppAction {
     AppendResponseChunk {
@@ -47,6 +48,10 @@ pub enum AppAction {
         request: crate::core::app::session::McpPromptRequest,
         result: Result<rust_mcp_schema::GetPromptResult, String>,
     },
+    McpServerRequestReceived {
+        request: Box<McpServerRequest>,
+    },
+    McpSamplingFinished,
     StreamErrored {
         message: String,
         stream_id: u64,
@@ -164,7 +169,15 @@ pub enum AppCommand {
     LoadModelPicker(ModelPickerRequest),
     RunMcpTool(ToolCallRequest),
     RunMcpPrompt(crate::core::app::session::McpPromptRequest),
-    RefreshMcp { server_id: String },
+    RunMcpSampling(Box<crate::core::app::session::McpSamplingRequest>),
+    SendMcpServerError {
+        server_id: String,
+        request_id: rust_mcp_schema::RequestId,
+        error: rust_mcp_schema::RpcError,
+    },
+    RefreshMcp {
+        server_id: String,
+    },
 }
 
 pub fn apply_actions(
@@ -190,6 +203,8 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::ToolPermissionDecision { .. }
         | AppAction::ToolCallCompleted { .. }
         | AppAction::McpPromptCompleted { .. }
+        | AppAction::McpServerRequestReceived { .. }
+        | AppAction::McpSamplingFinished
         | AppAction::StreamErrored { .. }
         | AppAction::StreamCompleted { .. }
         | AppAction::CancelStreaming

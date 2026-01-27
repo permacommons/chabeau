@@ -1,15 +1,18 @@
 use crate::core::app::session::ToolCallRequest;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
+use crate::mcp::events::McpServerRequest;
+use futures_util::StreamExt;
 use rust_mcp_schema::schema_utils::{
     ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
-    ServerMessage,
+    ResultFromClient, ServerMessage,
 };
 use rust_mcp_schema::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, GetPromptRequestParams,
-    GetPromptResult, Implementation, InitializeRequestParams, InitializeResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-    ReadResourceResult, RequestId, RpcError, ServerCapabilities, LATEST_PROTOCOL_VERSION,
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientSampling,
+    GetPromptRequestParams, GetPromptResult, Implementation, InitializeRequestParams,
+    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, ReadResourceRequestParams, ReadResourceResult, RequestId, RpcError,
+    ServerCapabilities, LATEST_PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -17,7 +20,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
 const MCP_METHOD_NOT_FOUND: i64 = -32601;
@@ -66,16 +69,79 @@ fn stdio_env(config: &McpServerConfig) -> Option<HashMap<String, String>> {
 }
 
 const STDIO_REQUEST_TIMEOUT_SECONDS: u64 = 60;
+const STDIO_SAMPLING_TIMEOUT_MULTIPLIER: u64 = 5;
 
 struct StdioClient {
     stdin: Mutex<ChildStdin>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
     next_request_id: AtomicI64,
     server_details: RwLock<Option<rust_mcp_schema::InitializeResult>>,
+    server_id: String,
+    request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
+    activity_notify: Arc<Notify>,
+    inflight_server_requests: Arc<AtomicI64>,
+}
+
+#[derive(Default)]
+struct SseLineBuffer {
+    buffer: Vec<u8>,
+}
+
+impl SseLineBuffer {
+    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.buffer.extend_from_slice(chunk);
+        self.drain_lines(false)
+    }
+
+    fn finish(&mut self) -> Vec<String> {
+        self.drain_lines(true)
+    }
+
+    fn drain_lines(&mut self, flush: bool) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut search_index = 0;
+
+        while let Some(relative_pos) = self.buffer[search_index..].iter().position(|b| *b == b'\n')
+        {
+            let newline_index = search_index + relative_pos;
+            let mut line_end = newline_index;
+            if line_end > search_index && self.buffer[line_end - 1] == b'\r' {
+                line_end -= 1;
+            }
+
+            let line_bytes = &self.buffer[search_index..line_end];
+            if let Ok(text) = std::str::from_utf8(line_bytes) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    lines.push(trimmed.to_string());
+                }
+            }
+
+            search_index = newline_index + 1;
+        }
+
+        if flush {
+            if let Ok(text) = std::str::from_utf8(&self.buffer[search_index..]) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    lines.push(trimmed.to_string());
+                }
+            }
+            self.buffer.clear();
+        } else if search_index > 0 {
+            self.buffer.drain(..search_index);
+        }
+
+        lines
+    }
 }
 
 impl StdioClient {
-    async fn connect(config: &McpServerConfig) -> Result<Arc<Self>, String> {
+    async fn connect(
+        server_id: String,
+        config: &McpServerConfig,
+        request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
+    ) -> Result<Arc<Self>, String> {
         let command = require_stdio_command(config)?;
         let args = stdio_args(config);
         debug!(command = %command, args = ?args, "Starting MCP stdio server");
@@ -110,9 +176,20 @@ impl StdioClient {
             pending: pending.clone(),
             next_request_id: AtomicI64::new(0),
             server_details: RwLock::new(None),
+            server_id,
+            request_tx,
+            activity_notify: Arc::new(Notify::new()),
+            inflight_server_requests: Arc::new(AtomicI64::new(0)),
         });
 
-        Self::spawn_stdout_reader(pending.clone(), stdout);
+        Self::spawn_stdout_reader(
+            pending.clone(),
+            stdout,
+            client.server_id.clone(),
+            client.request_tx.clone(),
+            client.activity_notify.clone(),
+            client.inflight_server_requests.clone(),
+        );
         Self::spawn_stderr_drain(stderr);
 
         tokio::spawn(async move {
@@ -127,6 +204,10 @@ impl StdioClient {
     fn spawn_stdout_reader(
         pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
         stdout: tokio::process::ChildStdout,
+        server_id: String,
+        request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
+        activity_notify: Arc<Notify>,
+        inflight_server_requests: Arc<AtomicI64>,
     ) {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
@@ -138,11 +219,27 @@ impl StdioClient {
                 if let Some(items) = value.as_array() {
                     for item in items {
                         if let Ok(message) = serde_json::from_value::<ServerMessage>(item.clone()) {
-                            Self::dispatch_message(&pending, message).await;
+                            Self::dispatch_message(
+                                &pending,
+                                message,
+                                &server_id,
+                                request_tx.as_ref(),
+                                &activity_notify,
+                                &inflight_server_requests,
+                            )
+                            .await;
                         }
                     }
                 } else if let Ok(message) = serde_json::from_value::<ServerMessage>(value) {
-                    Self::dispatch_message(&pending, message).await;
+                    Self::dispatch_message(
+                        &pending,
+                        message,
+                        &server_id,
+                        request_tx.as_ref(),
+                        &activity_notify,
+                        &inflight_server_requests,
+                    )
+                    .await;
                 }
             }
         });
@@ -158,24 +255,89 @@ impl StdioClient {
     async fn dispatch_message(
         pending: &Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
         message: ServerMessage,
+        server_id: &str,
+        request_tx: Option<&mpsc::UnboundedSender<McpServerRequest>>,
+        activity_notify: &Notify,
+        inflight_server_requests: &AtomicI64,
     ) {
         match &message {
             ServerMessage::Response(response) => {
+                debug!(
+                    server_id = %server_id,
+                    response_id = ?response.id,
+                    "Received MCP stdio response"
+                );
                 if let Some(tx) = pending.lock().await.remove(&response.id) {
                     let _ = tx.send(message);
                 }
             }
             ServerMessage::Error(error) => {
+                debug!(
+                    server_id = %server_id,
+                    error_id = ?error.id,
+                    error_code = error.error.code,
+                    "Received MCP stdio error"
+                );
                 if let Some(id) = error.id.as_ref() {
                     if let Some(tx) = pending.lock().await.remove(id) {
                         let _ = tx.send(message);
                     }
                 }
             }
-            _ => {}
+            ServerMessage::Request(request) => {
+                let inflight = inflight_server_requests.fetch_add(1, Ordering::SeqCst) + 1;
+                debug!(
+                    server_id = %server_id,
+                    method = %request.method(),
+                    request_id = ?request.request_id(),
+                    inflight_server_requests = inflight,
+                    "Received MCP stdio request"
+                );
+                activity_notify.notify_waiters();
+                if let Some(tx) = request_tx {
+                    let _ = tx.send(McpServerRequest {
+                        server_id: server_id.to_string(),
+                        request: request.clone(),
+                    });
+                }
+            }
+            ServerMessage::Notification(_) => {
+                debug!(server_id = %server_id, "Received MCP stdio notification");
+                activity_notify.notify_waiters();
+            }
         }
     }
+}
 
+impl StdioClient {
+    fn timeout_for_wait(&self) -> tokio::time::Duration {
+        let inflight = self.inflight_server_requests.load(Ordering::SeqCst);
+        let multiplier = if inflight > 0 {
+            STDIO_SAMPLING_TIMEOUT_MULTIPLIER
+        } else {
+            1
+        };
+        tokio::time::Duration::from_secs(STDIO_REQUEST_TIMEOUT_SECONDS * multiplier)
+    }
+
+    fn decrement_inflight(&self) -> i64 {
+        let mut current = self.inflight_server_requests.load(Ordering::SeqCst);
+        while current > 0 {
+            match self.inflight_server_requests.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return current - 1,
+                Err(next) => current = next,
+            }
+        }
+        current
+    }
+}
+
+impl StdioClient {
     fn next_request_id(&self) -> RequestId {
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         RequestId::Integer(id)
@@ -193,26 +355,94 @@ impl StdioClient {
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(request_id, tx);
+            pending.insert(request_id.clone(), tx);
         }
 
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(payload.as_bytes())
+        let lock_timeout = tokio::time::Duration::from_secs(10);
+        let write_timeout = tokio::time::Duration::from_secs(10);
+        let lock_start = std::time::Instant::now();
+        debug!(request_id = ?request_id, "Awaiting MCP stdio stdin lock for request");
+        let mut stdin = match tokio::time::timeout(lock_timeout, self.stdin.lock()).await {
+            Ok(stdin) => stdin,
+            Err(_) => {
+                return Err("Timed out waiting for MCP stdio stdin lock.".to_string());
+            }
+        };
+        debug!(
+            request_id = ?request_id,
+            elapsed_ms = lock_start.elapsed().as_millis(),
+            bytes = payload.len(),
+            "Writing MCP stdio request"
+        );
+        tokio::time::timeout(write_timeout, stdin.write_all(payload.as_bytes()))
             .await
+            .map_err(|_| "Timed out writing MCP stdio request.".to_string())?
             .map_err(|err| err.to_string())?;
-        stdin
-            .write_all(b"\n")
+        tokio::time::timeout(write_timeout, stdin.write_all(b"\n"))
             .await
+            .map_err(|_| "Timed out writing MCP stdio request newline.".to_string())?
             .map_err(|err| err.to_string())?;
-        stdin.flush().await.map_err(|err| err.to_string())?;
+        tokio::time::timeout(write_timeout, stdin.flush())
+            .await
+            .map_err(|_| "Timed out flushing MCP stdio request.".to_string())?
+            .map_err(|err| err.to_string())?;
+        debug!(request_id = ?request_id, "MCP stdio request sent");
+        drop(stdin);
 
-        let timeout = tokio::time::Duration::from_secs(STDIO_REQUEST_TIMEOUT_SECONDS);
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(message)) => Ok(message),
-            Ok(Err(_)) => Err("MCP stdio response channel closed.".to_string()),
-            Err(_) => Err("MCP stdio request timed out.".to_string()),
+        let mut timeout = self.timeout_for_wait();
+        let mut deadline = tokio::time::Instant::now() + timeout;
+        let mut rx = rx;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                debug!(
+                    request_id = ?request_id,
+                    timeout_secs = timeout.as_secs(),
+                    "MCP stdio request timed out (deadline reached)"
+                );
+                return Err("MCP stdio request timed out.".to_string());
+            }
+            let remaining = deadline - now;
+            debug!(
+                request_id = ?request_id,
+                remaining_ms = remaining.as_millis(),
+                inflight_server_requests = self.inflight_server_requests.load(Ordering::SeqCst),
+                timeout_secs = timeout.as_secs(),
+                "Awaiting MCP stdio response"
+            );
+            tokio::select! {
+                result = &mut rx => {
+                    return match result {
+                        Ok(message) => {
+                            debug!(request_id = ?request_id, "MCP stdio response received");
+                            Ok(message)
+                        }
+                        Err(_) => {
+                            debug!(request_id = ?request_id, "MCP stdio response channel closed");
+                            Err("MCP stdio response channel closed.".to_string())
+                        }
+                    };
+                }
+                _ = tokio::time::sleep(remaining) => {
+                    debug!(
+                        request_id = ?request_id,
+                        timeout_secs = timeout.as_secs(),
+                        "MCP stdio request timed out (sleep elapsed)"
+                    );
+                    return Err("MCP stdio request timed out.".to_string());
+                }
+                _ = self.activity_notify.notified() => {
+                    timeout = self.timeout_for_wait();
+                    debug!(
+                        request_id = ?request_id,
+                        timeout_secs = timeout.as_secs(),
+                        inflight_server_requests = self.inflight_server_requests.load(Ordering::SeqCst),
+                        "MCP stdio timeout reset after server activity"
+                    );
+                    deadline = tokio::time::Instant::now() + timeout;
+                }
+            }
         }
     }
 
@@ -223,16 +453,35 @@ impl StdioClient {
         )
         .map_err(|err| err.to_string())?;
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(payload.as_bytes())
+        let lock_timeout = tokio::time::Duration::from_secs(10);
+        let write_timeout = tokio::time::Duration::from_secs(10);
+        let lock_start = std::time::Instant::now();
+        debug!(server_id = %self.server_id, "Awaiting MCP stdio stdin lock for notification");
+        let mut stdin = match tokio::time::timeout(lock_timeout, self.stdin.lock()).await {
+            Ok(stdin) => stdin,
+            Err(_) => {
+                return Err("Timed out waiting for MCP stdio stdin lock.".to_string());
+            }
+        };
+        debug!(
+            server_id = %self.server_id,
+            elapsed_ms = lock_start.elapsed().as_millis(),
+            bytes = payload.len(),
+            "Writing MCP stdio notification"
+        );
+        tokio::time::timeout(write_timeout, stdin.write_all(payload.as_bytes()))
             .await
+            .map_err(|_| "Timed out writing MCP stdio notification.".to_string())?
             .map_err(|err| err.to_string())?;
-        stdin
-            .write_all(b"\n")
+        tokio::time::timeout(write_timeout, stdin.write_all(b"\n"))
             .await
+            .map_err(|_| "Timed out writing MCP stdio notification newline.".to_string())?
             .map_err(|err| err.to_string())?;
-        stdin.flush().await.map_err(|err| err.to_string())?;
+        tokio::time::timeout(write_timeout, stdin.flush())
+            .await
+            .map_err(|_| "Timed out flushing MCP stdio notification.".to_string())?
+            .map_err(|err| err.to_string())?;
+        debug!(server_id = %self.server_id, "MCP stdio notification sent");
         Ok(())
     }
 
@@ -249,6 +498,84 @@ impl StdioClient {
             .await?;
         Ok(result)
     }
+
+    async fn send_result(
+        &self,
+        request_id: RequestId,
+        result: ResultFromClient,
+    ) -> Result<(), String> {
+        debug!(
+            server_id = %self.server_id,
+            request_id = ?request_id,
+            "Preparing MCP stdio result"
+        );
+        let message = ClientMessage::from_message(
+            MessageFromClient::ResultFromClient(result),
+            Some(request_id.clone()),
+        )
+        .map_err(|err| err.to_string())?;
+        let result = self.send_client_message(&message).await;
+        if result.is_ok() {
+            let inflight = self.decrement_inflight();
+            debug!(
+                request_id = ?request_id,
+                inflight_server_requests = inflight,
+                "Sent MCP stdio result"
+            );
+            self.activity_notify.notify_waiters();
+        }
+        result
+    }
+
+    async fn send_error(&self, request_id: RequestId, error: RpcError) -> Result<(), String> {
+        debug!(
+            server_id = %self.server_id,
+            request_id = ?request_id,
+            "Preparing MCP stdio error response"
+        );
+        let message =
+            ClientMessage::from_message(MessageFromClient::Error(error), Some(request_id.clone()))
+                .map_err(|err| err.to_string())?;
+        let result = self.send_client_message(&message).await;
+        if result.is_ok() {
+            let inflight = self.decrement_inflight();
+            debug!(
+                request_id = ?request_id,
+                inflight_server_requests = inflight,
+                "Sent MCP stdio error response"
+            );
+            self.activity_notify.notify_waiters();
+        }
+        result
+    }
+
+    async fn send_client_message(&self, message: &ClientMessage) -> Result<(), String> {
+        let lock_timeout = tokio::time::Duration::from_secs(10);
+        debug!(server_id = %self.server_id, "Awaiting MCP stdio stdin lock");
+        let payload = serde_json::to_string(message).map_err(|err| err.to_string())?;
+        let mut stdin = match tokio::time::timeout(lock_timeout, self.stdin.lock()).await {
+            Ok(stdin) => stdin,
+            Err(_) => {
+                return Err("Timed out waiting for MCP stdio stdin lock.".to_string());
+            }
+        };
+        debug!(server_id = %self.server_id, bytes = payload.len(), "Writing MCP stdio client message");
+        let write_timeout = tokio::time::Duration::from_secs(10);
+        tokio::time::timeout(write_timeout, stdin.write_all(payload.as_bytes()))
+            .await
+            .map_err(|_| "Timed out writing MCP stdio client message.".to_string())?
+            .map_err(|err| err.to_string())?;
+        tokio::time::timeout(write_timeout, stdin.write_all(b"\n"))
+            .await
+            .map_err(|_| "Timed out writing MCP stdio newline.".to_string())?
+            .map_err(|err| err.to_string())?;
+        tokio::time::timeout(write_timeout, stdin.flush())
+            .await
+            .map_err(|_| "Timed out flushing MCP stdio client message.".to_string())?
+            .map_err(|err| err.to_string())?;
+        debug!(server_id = %self.server_id, "MCP stdio client message sent");
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -264,6 +591,7 @@ pub struct McpServerState {
     pub auth_header: Option<String>,
     pub server_details: Option<InitializeResult>,
     pub streamable_http_request_id: u64,
+    pub event_listener_started: bool,
     client: Option<Arc<StdioClient>>,
 }
 
@@ -281,6 +609,7 @@ impl McpServerState {
             auth_header: None,
             server_details: None,
             streamable_http_request_id: 0,
+            event_listener_started: false,
             client: None,
         }
     }
@@ -317,6 +646,7 @@ impl McpServerState {
 #[derive(Default, Clone)]
 pub struct McpClientManager {
     servers: HashMap<String, McpServerState>,
+    server_request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
 }
 
 enum ListFetch<T> {
@@ -326,6 +656,10 @@ enum ListFetch<T> {
 }
 
 impl McpClientManager {
+    pub fn set_request_sender(&mut self, sender: mpsc::UnboundedSender<McpServerRequest>) {
+        self.server_request_tx = Some(sender);
+    }
+
     fn apply_list_fetch<T>(
         server: &mut McpServerState,
         fetch: ListFetch<T>,
@@ -361,7 +695,10 @@ impl McpClientManager {
             .cloned()
             .map(|server| (server.id.to_ascii_lowercase(), McpServerState::new(server)))
             .collect();
-        Self { servers }
+        Self {
+            servers,
+            server_request_tx: None,
+        }
     }
 
     pub fn servers(&self) -> impl Iterator<Item = &McpServerState> {
@@ -450,6 +787,8 @@ impl McpClientManager {
             (server.config.clone(), transport_kind, auth_header)
         };
 
+        let request_tx = self.server_request_tx.clone();
+
         match transport_kind {
             McpTransportKind::StreamableHttp => {
                 match self.ensure_streamable_http_session(id).await {
@@ -458,6 +797,20 @@ impl McpClientManager {
                             server.connected = true;
                             server.last_error = None;
                             server.auth_header = auth_header;
+                        }
+                        if let Some(tx) = request_tx.clone() {
+                            if let Some(server) = self.server_mut(id) {
+                                if !server.event_listener_started {
+                                    server.event_listener_started = true;
+                                    spawn_streamable_http_listener(
+                                        server.config.id.clone(),
+                                        server.config.base_url.clone(),
+                                        server.auth_header.clone(),
+                                        server.session_id.clone(),
+                                        tx,
+                                    );
+                                }
+                            }
                         }
                     }
                     Err(err) => {
@@ -470,7 +823,13 @@ impl McpClientManager {
                 }
             }
             McpTransportKind::Stdio => {
-                let client = match StdioClient::connect(&config).await {
+                let client = match StdioClient::connect(
+                    config.id.clone(),
+                    &config,
+                    request_tx.clone(),
+                )
+                .await
+                {
                     Ok(client) => client,
                     Err(err) => {
                         if let Some(server) = self.server_mut(id) {
@@ -898,16 +1257,11 @@ impl McpClientManager {
             .unwrap_or("")
             .to_string();
 
-        let body = response.bytes().await.map_err(|err| err.to_string())?;
+        let request_tx = self.server_request_tx.clone();
         let server_message = if content_type.starts_with("text/event-stream") {
-            let text = String::from_utf8_lossy(&body);
-            let data = text
-                .lines()
-                .find_map(|line| line.strip_prefix("data:"))
-                .map(|value| value.trim())
-                .ok_or_else(|| "Empty event-stream response.".to_string())?;
-            serde_json::from_str::<ServerMessage>(data).map_err(|err| err.to_string())?
+            read_sse_response_messages(response, id, request_tx).await?
         } else {
+            let body = response.bytes().await.map_err(|err| err.to_string())?;
             serde_json::from_slice::<ServerMessage>(&body).map_err(|err| err.to_string())?
         };
 
@@ -919,6 +1273,156 @@ impl McpClientManager {
 
         Ok(server_message)
     }
+}
+
+fn sse_data_payload(line: &str) -> Option<&str> {
+    line.strip_prefix("data:").map(str::trim)
+}
+
+async fn read_sse_response_messages(
+    response: reqwest::Response,
+    server_id: &str,
+    request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
+) -> Result<ServerMessage, String> {
+    let mut stream = response.bytes_stream();
+    let mut buffer = SseLineBuffer::default();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| err.to_string())?;
+        for line in buffer.push(&chunk) {
+            let Some(payload) = sse_data_payload(&line) else {
+                continue;
+            };
+            if payload.is_empty() {
+                continue;
+            }
+
+            let message =
+                serde_json::from_str::<ServerMessage>(payload).map_err(|err| err.to_string())?;
+            match message {
+                ServerMessage::Response(_) | ServerMessage::Error(_) => return Ok(message),
+                ServerMessage::Request(request) => {
+                    if let Some(tx) = request_tx.as_ref() {
+                        let _ = tx.send(McpServerRequest {
+                            server_id: server_id.to_string(),
+                            request,
+                        });
+                    }
+                }
+                ServerMessage::Notification(_) => {}
+            }
+        }
+    }
+
+    for line in buffer.finish() {
+        let Some(payload) = sse_data_payload(&line) else {
+            continue;
+        };
+        if payload.is_empty() {
+            continue;
+        }
+        let message =
+            serde_json::from_str::<ServerMessage>(payload).map_err(|err| err.to_string())?;
+        match message {
+            ServerMessage::Response(_) | ServerMessage::Error(_) => return Ok(message),
+            ServerMessage::Request(request) => {
+                if let Some(tx) = request_tx.as_ref() {
+                    let _ = tx.send(McpServerRequest {
+                        server_id: server_id.to_string(),
+                        request,
+                    });
+                }
+            }
+            ServerMessage::Notification(_) => {}
+        }
+    }
+
+    Err("Empty event-stream response.".to_string())
+}
+
+fn spawn_streamable_http_listener(
+    server_id: String,
+    base_url: Option<String>,
+    auth_header: Option<String>,
+    session_id: Option<String>,
+    request_tx: mpsc::UnboundedSender<McpServerRequest>,
+) {
+    let Some(base_url) = base_url else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let mut request = client.get(&base_url).header("Accept", "text/event-stream");
+
+        if let Some(auth) = auth_header {
+            request = request.header("Authorization", auth);
+        }
+        if let Some(session_id) = session_id {
+            request = request.header("mcp-session-id", session_id);
+        }
+
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(_) => return,
+        };
+
+        if !response.status().is_success() {
+            return;
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !content_type.starts_with("text/event-stream") {
+            return;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = SseLineBuffer::default();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => return,
+            };
+            for line in buffer.push(&chunk) {
+                let Some(payload) = sse_data_payload(&line) else {
+                    continue;
+                };
+                if payload.is_empty() {
+                    continue;
+                }
+                if let Ok(ServerMessage::Request(request)) =
+                    serde_json::from_str::<ServerMessage>(payload)
+                {
+                    let _ = request_tx.send(McpServerRequest {
+                        server_id: server_id.clone(),
+                        request,
+                    });
+                }
+            }
+        }
+
+        for line in buffer.finish() {
+            let Some(payload) = sse_data_payload(&line) else {
+                continue;
+            };
+            if payload.is_empty() {
+                continue;
+            }
+            if let Ok(ServerMessage::Request(request)) =
+                serde_json::from_str::<ServerMessage>(payload)
+            {
+                let _ = request_tx.send(McpServerRequest {
+                    server_id: server_id.clone(),
+                    request,
+                });
+            }
+        }
+    });
 }
 
 #[derive(Clone)]
@@ -940,6 +1444,16 @@ pub struct McpPromptContext {
     pub(crate) session_id: Option<String>,
     client: Option<Arc<StdioClient>>,
     streamable_http_request_id: u64,
+}
+
+#[derive(Clone)]
+pub struct McpServerRequestContext {
+    pub(crate) server_id: String,
+    config: McpServerConfig,
+    transport_kind: McpTransportKind,
+    auth_header: Option<String>,
+    pub(crate) session_id: Option<String>,
+    client: Option<Arc<StdioClient>>,
 }
 
 trait StreamableHttpContext {
@@ -1033,6 +1547,22 @@ impl McpClientManager {
         })
     }
 
+    pub fn server_request_context(&self, id: &str) -> Option<McpServerRequestContext> {
+        let server = self.server(id)?;
+        if !server.config.is_enabled() {
+            return None;
+        }
+        let transport_kind = McpTransportKind::from_config(&server.config).ok()?;
+        Some(McpServerRequestContext {
+            server_id: server.config.id.clone(),
+            config: server.config.clone(),
+            transport_kind,
+            auth_header: server.auth_header.clone(),
+            session_id: server.session_id.clone(),
+            client: server.client.clone(),
+        })
+    }
+
     pub fn update_tool_call_session(
         &mut self,
         id: &str,
@@ -1048,6 +1578,20 @@ impl McpClientManager {
     }
 
     pub fn update_prompt_session(
+        &mut self,
+        id: &str,
+        session_id: Option<String>,
+        last_error: Option<String>,
+    ) {
+        if let Some(server) = self.server_mut(id) {
+            if let Some(session_id) = session_id {
+                server.session_id = Some(session_id);
+            }
+            server.last_error = last_error;
+        }
+    }
+
+    pub fn update_server_request_session(
         &mut self,
         id: &str,
         session_id: Option<String>,
@@ -1164,6 +1708,62 @@ pub async fn execute_prompt(
     }
 }
 
+pub async fn send_client_result(
+    context: &mut McpServerRequestContext,
+    request_id: RequestId,
+    result: ResultFromClient,
+) -> Result<(), String> {
+    debug!(
+        server_id = %context.server_id,
+        request_id = ?request_id,
+        transport = ?context.transport_kind,
+        "Sending MCP client result"
+    );
+    match context.transport_kind {
+        McpTransportKind::Stdio => {
+            let Some(client) = context.client.clone() else {
+                return Err("MCP client not connected.".to_string());
+            };
+            client.send_result(request_id, result).await
+        }
+        McpTransportKind::StreamableHttp => {
+            let message = ClientMessage::from_message(
+                MessageFromClient::ResultFromClient(result),
+                Some(request_id),
+            )
+            .map_err(|err| err.to_string())?;
+            send_streamable_http_client_message(context, message).await
+        }
+    }
+}
+
+pub async fn send_client_error(
+    context: &mut McpServerRequestContext,
+    request_id: RequestId,
+    error: RpcError,
+) -> Result<(), String> {
+    debug!(
+        server_id = %context.server_id,
+        request_id = ?request_id,
+        transport = ?context.transport_kind,
+        "Sending MCP client error"
+    );
+    match context.transport_kind {
+        McpTransportKind::Stdio => {
+            let Some(client) = context.client.clone() else {
+                return Err("MCP client not connected.".to_string());
+            };
+            client.send_error(request_id, error).await
+        }
+        McpTransportKind::StreamableHttp => {
+            let message =
+                ClientMessage::from_message(MessageFromClient::Error(error), Some(request_id))
+                    .map_err(|err| err.to_string())?;
+            send_streamable_http_client_message(context, message).await
+        }
+    }
+}
+
 async fn ensure_streamable_http_session_context(
     context: &mut McpToolCallContext,
 ) -> Result<(), String> {
@@ -1181,6 +1781,43 @@ async fn ensure_prompt_streamable_http_session_context(
     context: &mut McpPromptContext,
 ) -> Result<(), String> {
     ensure_streamable_http_session_context_inner(context).await
+}
+
+async fn send_streamable_http_client_message(
+    context: &mut McpServerRequestContext,
+    message: ClientMessage,
+) -> Result<(), String> {
+    let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
+    let client = reqwest::Client::new();
+    let base_url = require_http_base_url(&context.config)?;
+    let mut request = client
+        .post(base_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(payload);
+
+    if let Some(auth) = context.auth_header.as_ref() {
+        request = request.header("Authorization", auth);
+    }
+    if let Some(session_id) = context.session_id.as_ref() {
+        request = request.header("mcp-session-id", session_id);
+    }
+
+    let response = request.send().await.map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    if let Some(session_id) = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+    {
+        context.session_id = Some(session_id);
+    }
+
+    Ok(())
 }
 
 async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
@@ -1263,16 +1900,10 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
         .unwrap_or("")
         .to_string();
 
-    let body = response.bytes().await.map_err(|err| err.to_string())?;
     let server_message = if content_type.starts_with("text/event-stream") {
-        let text = String::from_utf8_lossy(&body);
-        let data = text
-            .lines()
-            .find_map(|line| line.strip_prefix("data:"))
-            .map(|value| value.trim())
-            .ok_or_else(|| "Empty event-stream response.".to_string())?;
-        serde_json::from_str::<ServerMessage>(data).map_err(|err| err.to_string())?
+        read_sse_response_messages(response, &context.config().id, None).await?
     } else {
+        let body = response.bytes().await.map_err(|err| err.to_string())?;
         serde_json::from_slice::<ServerMessage>(&body).map_err(|err| err.to_string())?
     };
 
@@ -1288,8 +1919,12 @@ fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
         .protocol_version
         .clone()
         .unwrap_or_else(|| LATEST_PROTOCOL_VERSION.to_string());
+    let capabilities = ClientCapabilities {
+        sampling: Some(ClientSampling::default()),
+        ..ClientCapabilities::default()
+    };
     InitializeRequestParams {
-        capabilities: ClientCapabilities::default(),
+        capabilities,
         client_info: Implementation {
             name: "chabeau".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),

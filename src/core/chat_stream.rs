@@ -48,11 +48,84 @@ pub enum StreamMessage {
 }
 
 #[derive(Clone, Debug)]
+pub struct ChatCompletionResult {
+    pub content: String,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ToolCallDelta {
     pub index: u32,
     pub id: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
+}
+
+pub async fn request_chat_completion(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    provider_name: &str,
+    request: ChatRequest,
+) -> Result<ChatCompletionResult, String> {
+    let chat_url = construct_api_url(base_url, "chat/completions");
+    let http_request = client
+        .post(chat_url)
+        .header("Content-Type", "application/json");
+
+    let http_request = crate::utils::auth::add_auth_headers(http_request, provider_name, api_key);
+
+    let response = http_request
+        .json(&request)
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+
+    if !response.status().is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no body>".to_string());
+        return Err(format_api_error(&error_text));
+    }
+
+    let body = response.text().await.map_err(|err| err.to_string())?;
+    parse_completion_response(&body)
+}
+
+fn parse_completion_response(body: &str) -> Result<ChatCompletionResult, String> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let choices = value
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .ok_or_else(|| "Completion response missing choices.".to_string())?;
+    let first = choices
+        .first()
+        .ok_or_else(|| "Completion response missing choices.".to_string())?;
+
+    let content = first
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .or_else(|| {
+            first
+                .get("delta")
+                .and_then(|delta| delta.get("content"))
+                .and_then(|content| content.as_str())
+        })
+        .or_else(|| first.get("text").and_then(|text| text.as_str()))
+        .ok_or_else(|| "Completion response missing content.".to_string())?
+        .to_string();
+
+    let finish_reason = first
+        .get("finish_reason")
+        .and_then(|reason| reason.as_str())
+        .map(|reason| reason.to_string());
+
+    Ok(ChatCompletionResult {
+        content,
+        finish_reason,
+    })
 }
 
 fn extract_data_payload(line: &str) -> Option<&str> {
@@ -465,6 +538,9 @@ impl ChatStreamService {
                 messages: api_messages,
                 stream: true,
                 tools,
+                max_tokens: None,
+                temperature: None,
+                stop: None,
             };
 
             tokio::select! {

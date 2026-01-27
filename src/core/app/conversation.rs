@@ -430,6 +430,8 @@ impl<'a> ConversationController<'a> {
         self.clear_pending_tool_calls();
         self.session.pending_tool_queue.clear();
         self.session.active_tool_request = None;
+        self.session.pending_sampling_queue.clear();
+        self.session.active_sampling_request = None;
         self.session.tool_call_records.clear();
         self.session.tool_results.clear();
         self.session.last_stream_api_messages = None;

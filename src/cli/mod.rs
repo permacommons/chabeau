@@ -325,7 +325,7 @@ fn init_mcp_debugging(enabled: bool) {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var(
             "RUST_LOG",
-            "chabeau::mcp=trace,rust_mcp_schema=trace,reqwest=debug",
+            "chabeau::mcp=trace,chabeau::core::app::actions::streaming=debug,chabeau::ui::chat_loop::event_loop=debug,chabeau::ui::chat_loop::keybindings::handlers=debug,rust_mcp_schema=trace,reqwest=debug",
         );
     }
     std::env::set_var("CHABEAU_MCP_DEBUG", "1");

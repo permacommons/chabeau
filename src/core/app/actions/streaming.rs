@@ -4,13 +4,22 @@ use std::time::Instant;
 use super::{App, AppAction, AppActionContext, AppCommand};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::session::{
-    McpPromptRequest, PendingToolCall, ToolCallRequest, ToolResultRecord, ToolResultStatus,
+    McpPromptRequest, McpSamplingRequest, PendingToolCall, ToolCallRequest, ToolResultRecord,
+    ToolResultStatus,
 };
+use crate::core::app::ui_state::ToolPromptRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::mcp_sampling::{
+    build_sampling_messages, serialize_sampling_params, summarize_sampling_request,
+};
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::mcp::permissions::ToolPermissionDecision;
-use rust_mcp_schema::{ContentBlock, PromptMessage, Role};
+use rust_mcp_schema::schema_utils::ServerJsonrpcRequest;
+use rust_mcp_schema::{
+    ClientCapabilities, ClientSampling, ContentBlock, PromptMessage, Role, RpcError,
+};
 use serde_json::{Map, Value};
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 struct ToolResultMeta {
@@ -89,6 +98,10 @@ pub(super) fn handle_streaming_action(
         AppAction::McpPromptCompleted { request, result } => {
             handle_mcp_prompt_completed(app, request, result, ctx)
         }
+        AppAction::McpServerRequestReceived { request } => {
+            handle_mcp_server_request(app, *request, ctx)
+        }
+        AppAction::McpSamplingFinished => handle_mcp_sampling_finished(app, ctx),
         AppAction::StreamErrored { message, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
@@ -374,8 +387,172 @@ fn handle_tool_permission_decision(
     decision: ToolPermissionDecision,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    let request = app.session.active_tool_request.take()?;
+    let prompt_tool = app.ui.tool_prompt().map(|prompt| prompt.tool_name.clone());
+    debug!(
+        decision = ?decision,
+        prompt_tool = prompt_tool.as_deref().unwrap_or("<none>"),
+        "Tool permission decision received"
+    );
 
+    if prompt_tool.as_deref() == Some(crate::mcp::MCP_SAMPLING_TOOL) {
+        let request = app.session.active_sampling_request.take()?;
+        return handle_sampling_permission_decision(app, request, decision, ctx);
+    }
+
+    if let Some(request) = app.session.active_tool_request.take() {
+        app.ui.cancel_tool_prompt();
+        app.clear_status();
+
+        match decision {
+            ToolPermissionDecision::AllowOnce => {}
+            ToolPermissionDecision::AllowSession | ToolPermissionDecision::Block => app
+                .mcp_permissions
+                .record(&request.server_id, &request.tool_name, decision),
+            ToolPermissionDecision::DenyOnce => {}
+        }
+
+        if matches!(
+            decision,
+            ToolPermissionDecision::DenyOnce | ToolPermissionDecision::Block
+        ) {
+            let message = match decision {
+                ToolPermissionDecision::Block => "Tool blocked by user.",
+                _ => "Tool denied by user.",
+            };
+            let server_label = resolve_server_label(app, &request.server_id);
+            let status = match decision {
+                ToolPermissionDecision::Block => ToolResultStatus::Blocked,
+                _ => ToolResultStatus::Denied,
+            };
+            let meta = ToolResultMeta::new(
+                Some(server_label),
+                Some(request.server_id.clone()),
+                request.tool_call_id.clone(),
+                Some(request.raw_arguments.clone()),
+            );
+            record_tool_result(
+                app,
+                &request.tool_name,
+                meta,
+                message.to_string(),
+                status,
+                ctx,
+            );
+            return advance_tool_queue(app, ctx);
+        }
+
+        app.session.active_tool_request = Some(request.clone());
+        set_status_for_tool_run(app, &request, ctx);
+        return Some(AppCommand::RunMcpTool(request));
+    }
+
+    let request = app.session.active_sampling_request.take()?;
+    handle_sampling_permission_decision(app, request, decision, ctx)
+}
+
+fn handle_mcp_server_request(
+    app: &mut App,
+    request: crate::mcp::events::McpServerRequest,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    debug!(
+        server_id = %request.server_id,
+        request_id = ?request.request.request_id(),
+        method = %request.request.method(),
+        "Received MCP server request"
+    );
+    if app.session.mcp_disabled {
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.request_id(),
+            "MCP server request ignored (MCP disabled)"
+        );
+        return Some(AppCommand::SendMcpServerError {
+            server_id: request.server_id,
+            request_id: request.request.request_id().clone(),
+            error: RpcError::internal_error().with_message("MCP is disabled."),
+        });
+    }
+
+    let capabilities = ClientCapabilities {
+        sampling: Some(ClientSampling::default()),
+        ..ClientCapabilities::default()
+    };
+    if let Err(err) = capabilities.can_handle_request(&request.request) {
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request.request.request_id(),
+            error_code = err.code,
+            "MCP server request rejected (unsupported)"
+        );
+        return Some(AppCommand::SendMcpServerError {
+            server_id: request.server_id,
+            request_id: request.request.request_id().clone(),
+            error: err,
+        });
+    }
+
+    let request_id = request.request.request_id().clone();
+    let ServerJsonrpcRequest::CreateMessageRequest(create_request) = request.request else {
+        debug!(
+            server_id = %request.server_id,
+            request_id = ?request_id,
+            "MCP server request rejected (unexpected method)"
+        );
+        return Some(AppCommand::SendMcpServerError {
+            server_id: request.server_id,
+            request_id,
+            error: RpcError::method_not_found()
+                .with_message("Unsupported MCP request from server."),
+        });
+    };
+
+    let messages = match build_sampling_messages(&create_request) {
+        Ok(messages) => messages,
+        Err(err) => {
+            debug!(
+                server_id = %request.server_id,
+                request_id = ?create_request.id,
+                error = %err,
+                "MCP sampling request rejected (invalid params)"
+            );
+            return Some(AppCommand::SendMcpServerError {
+                server_id: request.server_id,
+                request_id: create_request.id.clone(),
+                error: RpcError::invalid_params().with_message(&err),
+            });
+        }
+    };
+
+    app.session
+        .pending_sampling_queue
+        .push_back(McpSamplingRequest {
+            server_id: request.server_id,
+            request: create_request,
+            messages,
+        });
+
+    debug!(
+        pending = app.session.pending_sampling_queue.len(),
+        active = app.session.active_sampling_request.is_some(),
+        "Queued MCP sampling request"
+    );
+
+    advance_sampling_queue(app, ctx)
+}
+
+fn handle_sampling_permission_decision(
+    app: &mut App,
+    request: McpSamplingRequest,
+    decision: ToolPermissionDecision,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    debug!(
+        server_id = %request.server_id,
+        request_id = ?request.request.id,
+        decision = ?decision,
+        "Sampling permission decision"
+    );
     app.ui.cancel_tool_prompt();
     app.clear_status();
 
@@ -383,7 +560,7 @@ fn handle_tool_permission_decision(
         ToolPermissionDecision::AllowOnce => {}
         ToolPermissionDecision::AllowSession | ToolPermissionDecision::Block => app
             .mcp_permissions
-            .record(&request.server_id, &request.tool_name, decision),
+            .record(&request.server_id, crate::mcp::MCP_SAMPLING_TOOL, decision),
         ToolPermissionDecision::DenyOnce => {}
     }
 
@@ -392,34 +569,33 @@ fn handle_tool_permission_decision(
         ToolPermissionDecision::DenyOnce | ToolPermissionDecision::Block
     ) {
         let message = match decision {
-            ToolPermissionDecision::Block => "Tool blocked by user.",
-            _ => "Tool denied by user.",
+            ToolPermissionDecision::Block => "Sampling blocked by user.",
+            _ => "Sampling denied by user.",
         };
-        let server_label = resolve_server_label(app, &request.server_id);
-        let status = match decision {
-            ToolPermissionDecision::Block => ToolResultStatus::Blocked,
-            _ => ToolResultStatus::Denied,
-        };
-        let meta = ToolResultMeta::new(
-            Some(server_label),
-            Some(request.server_id.clone()),
-            request.tool_call_id.clone(),
-            Some(request.raw_arguments.clone()),
-        );
-        record_tool_result(
-            app,
-            &request.tool_name,
-            meta,
-            message.to_string(),
-            status,
-            ctx,
-        );
-        return advance_tool_queue(app, ctx);
+        return Some(AppCommand::SendMcpServerError {
+            server_id: request.server_id,
+            request_id: request.request.id.clone(),
+            error: RpcError {
+                code: -1,
+                message: message.to_string(),
+                data: None,
+            },
+        });
     }
 
-    app.session.active_tool_request = Some(request.clone());
-    set_status_for_tool_run(app, &request, ctx);
-    Some(AppCommand::RunMcpTool(request))
+    app.session.active_sampling_request = Some(request.clone());
+    set_status_for_sampling_run(app, &request, ctx);
+    Some(AppCommand::RunMcpSampling(Box::new(request)))
+}
+
+fn handle_mcp_sampling_finished(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
+    app.session.active_sampling_request = None;
+    if let Some(request) = app.session.active_tool_request.clone() {
+        set_status_for_tool_run(app, &request, ctx);
+    } else {
+        app.clear_status();
+    }
+    advance_sampling_queue(app, ctx)
 }
 
 fn handle_tool_call_completed(
@@ -779,14 +955,91 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         })
         .unwrap_or(0);
     app.session.active_tool_request = Some(request);
-    app.ui.start_tool_prompt(
+    let display_name = format!("Allow {} to run {}?", server_name, tool_name);
+    app.ui.start_tool_prompt(ToolPromptRequest {
         server_id,
         server_name,
         tool_name,
+        display_name: Some(display_name),
         args_summary,
         raw_arguments,
         batch_index,
+    });
+    None
+}
+
+fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
+    debug!(
+        pending = app.session.pending_sampling_queue.len(),
+        active = app.session.active_sampling_request.is_some(),
+        "Advance MCP sampling queue"
     );
+    if app.session.active_sampling_request.is_some() {
+        return None;
+    }
+
+    if app.ui.tool_prompt().is_some() {
+        return None;
+    }
+
+    let request = app.session.pending_sampling_queue.pop_front()?;
+    debug!(
+        server_id = %request.server_id,
+        request_id = ?request.request.id,
+        pending = app.session.pending_sampling_queue.len(),
+        "Dequeued MCP sampling request"
+    );
+
+    if let Some(decision) = app
+        .mcp_permissions
+        .decision_for(&request.server_id, crate::mcp::MCP_SAMPLING_TOOL)
+    {
+        if decision == ToolPermissionDecision::Block {
+            return Some(AppCommand::SendMcpServerError {
+                server_id: request.server_id,
+                request_id: request.request.id.clone(),
+                error: RpcError {
+                    code: -1,
+                    message: "Sampling blocked by user.".to_string(),
+                    data: None,
+                },
+            });
+        }
+
+        if decision == ToolPermissionDecision::AllowSession {
+            debug!(
+                server_id = %request.server_id,
+                request_id = ?request.request.id,
+                "Auto-allowing sampling for session"
+            );
+            app.session.active_sampling_request = Some(request.clone());
+            set_status_for_sampling_run(app, &request, ctx);
+            return Some(AppCommand::RunMcpSampling(Box::new(request)));
+        }
+    }
+
+    let server_name = resolve_server_label(app, &request.server_id);
+    let args_summary = summarize_sampling_request(&request.request);
+    let raw_arguments = serialize_sampling_params(&request.request);
+    debug!(
+        server_id = %request.server_id,
+        request_id = ?request.request.id,
+        "Prompting user for sampling permission"
+    );
+    app.session.active_sampling_request = Some(request.clone());
+    let display_name = format!(
+        "Allow {} to generate text with {}?",
+        server_name, app.session.model
+    );
+    app.ui.start_tool_prompt(ToolPromptRequest {
+        server_id: request.server_id,
+        server_name,
+        tool_name: crate::mcp::MCP_SAMPLING_TOOL.to_string(),
+        display_name: Some(display_name),
+        args_summary,
+        raw_arguments,
+        batch_index: 0,
+    });
     None
 }
 
@@ -993,6 +1246,19 @@ fn set_status_for_tool_run(app: &mut App, request: &ToolCallRequest, ctx: AppAct
     conversation.set_status(format!(
         "Running MCP tool {} on {}...",
         request.tool_name, server_name
+    ));
+    let available_height =
+        conversation.calculate_available_height(ctx.term_height, input_area_height);
+    conversation.update_scroll_position(available_height, ctx.term_width);
+}
+
+fn set_status_for_sampling_run(app: &mut App, request: &McpSamplingRequest, ctx: AppActionContext) {
+    let input_area_height = app.input_area_height(ctx.term_width);
+    let server_name = resolve_server_label(app, &request.server_id);
+    let mut conversation = app.conversation();
+    conversation.set_status(format!(
+        "Generating text for MCP tool response on {}...",
+        server_name
     ));
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);

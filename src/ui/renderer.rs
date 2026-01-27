@@ -690,6 +690,30 @@ fn tool_prompt_title(prompt: &ToolPrompt, width: u16, frame: &str) -> String {
         format!(" {}", frame)
     };
 
+    if let Some(display_name) = prompt.display_name.as_deref() {
+        let mut candidates = Vec::new();
+        candidates.push(format!(
+            "❓ {} (A=once • S=session • D/Esc=deny • B=block • Ctrl+O=inspect){}",
+            display_name, frame_suffix
+        ));
+        candidates.push(format!(
+            "❓ {} (A=once • S=session • D=deny • B=block • Ctrl+O=inspect){}",
+            display_name, frame_suffix
+        ));
+        candidates.push(format!(
+            "❓ {} (A/S/D/B • Ctrl+O){}",
+            display_name, frame_suffix
+        ));
+        candidates.push(format!("❓ {} (A/S/D/B){}", display_name, frame_suffix));
+        candidates.push(format!("❓ {}{}", display_name, frame_suffix));
+
+        for candidate in candidates {
+            if UnicodeWidthStr::width(candidate.as_str()) <= available {
+                return candidate;
+            }
+        }
+    }
+
     let tool = prompt.tool_name.as_str();
     let server = if prompt.server_name.trim().is_empty() {
         prompt.server_id.as_str()

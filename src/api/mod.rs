@@ -20,6 +20,12 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ChatToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]

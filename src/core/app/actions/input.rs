@@ -636,14 +636,16 @@ mod tests {
             raw_arguments: "{\"q\":\"pending\"}".to_string(),
             tool_call_id: Some("call-2".to_string()),
         });
-        app.ui.start_tool_prompt(
-            "alpha".to_string(),
-            "Alpha MCP".to_string(),
-            "pending_tool".to_string(),
-            "q=pending".to_string(),
-            "{\"q\":\"pending\"}".to_string(),
-            0,
-        );
+        app.ui
+            .start_tool_prompt(crate::core::app::ui_state::ToolPromptRequest {
+                server_id: "alpha".to_string(),
+                server_name: "Alpha MCP".to_string(),
+                tool_name: "pending_tool".to_string(),
+                display_name: None,
+                args_summary: "q=pending".to_string(),
+                raw_arguments: "{\"q\":\"pending\"}".to_string(),
+                batch_index: 0,
+            });
 
         let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
 

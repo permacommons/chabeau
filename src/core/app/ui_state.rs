@@ -45,6 +45,18 @@ pub struct ToolPrompt {
     pub server_id: String,
     pub server_name: String,
     pub tool_name: String,
+    pub display_name: Option<String>,
+    pub args_summary: String,
+    pub raw_arguments: String,
+    pub batch_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolPromptRequest {
+    pub server_id: String,
+    pub server_name: String,
+    pub tool_name: String,
+    pub display_name: Option<String>,
     pub args_summary: String,
     pub raw_arguments: String,
     pub batch_index: usize,
@@ -1005,24 +1017,17 @@ impl UiState {
         self.clear_input();
     }
 
-    pub fn start_tool_prompt(
-        &mut self,
-        server_id: String,
-        server_name: String,
-        tool_name: String,
-        args_summary: String,
-        raw_arguments: String,
-        batch_index: usize,
-    ) {
+    pub fn start_tool_prompt(&mut self, request: ToolPromptRequest) {
         self.focus_transcript();
         self.pulse_start = Instant::now();
         self.set_mode(UiMode::ToolPrompt(ToolPrompt {
-            server_id,
-            server_name,
-            tool_name,
-            args_summary,
-            raw_arguments,
-            batch_index,
+            server_id: request.server_id,
+            server_name: request.server_name,
+            tool_name: request.tool_name,
+            display_name: request.display_name,
+            args_summary: request.args_summary,
+            raw_arguments: request.raw_arguments,
+            batch_index: request.batch_index,
         }));
     }
 

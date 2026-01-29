@@ -11,13 +11,22 @@
 use std::{
     error::Error,
     io,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
 // Default budget for MCP sampling when the server does not provide a timeout hint.
 const MCP_SAMPLING_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 const MCP_SAMPLING_SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const ACTIVE_POLL_INTERVAL_MS: u64 = 10;
+const ANIMATION_POLL_INTERVAL_MS: u64 = 16;
+const IDLE_POLL_INTERVAL_MS: u64 = 100;
+const IDLE_SLEEP_MS: u64 = 50;
+const INPUT_BURST_POLL_INTERVAL_MS: u64 = 1;
+const INPUT_BURST_WINDOW_MS: u64 = 200;
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
@@ -614,6 +623,7 @@ struct EventProcessingOutcome {
     events_processed: bool,
     request_redraw: bool,
     exit_requested: bool,
+    resized: bool,
 }
 
 async fn process_ui_events(
@@ -628,6 +638,7 @@ async fn process_ui_events(
         events_processed: false,
         request_redraw: false,
         exit_requested: false,
+        resized: false,
     };
 
     while let Ok(ev) = event_rx.try_recv() {
@@ -665,6 +676,7 @@ async fn process_ui_events(
             }
             UiEvent::Crossterm(Event::Resize(_, _)) => {
                 outcome.request_redraw = true;
+                outcome.resized = true;
             }
             UiEvent::Crossterm(_) => {}
         }
@@ -985,10 +997,14 @@ async fn drain_action_queue(
     true
 }
 
-fn spawn_event_reader(event_tx: mpsc::UnboundedSender<UiEvent>) -> tokio::task::JoinHandle<()> {
+fn spawn_event_reader(
+    event_tx: mpsc::UnboundedSender<UiEvent>,
+    poll_interval_ms: Arc<AtomicU64>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            if let Ok(true) = event::poll(Duration::from_millis(10)) {
+            let interval = poll_interval_ms.load(Ordering::Relaxed).max(1);
+            if let Ok(true) = event::poll(Duration::from_millis(interval)) {
                 match event::read() {
                     Ok(ev) => {
                         if event_tx.send(UiEvent::Crossterm(ev)).is_err() {
@@ -996,6 +1012,7 @@ fn spawn_event_reader(event_tx: mpsc::UnboundedSender<UiEvent>) -> tokio::task::
                         }
                     }
                     Err(_) => {
+                        tokio::task::yield_now().await;
                         continue;
                     }
                 }
@@ -1091,7 +1108,8 @@ pub async fn run_chat(
     let stream_service = Arc::new(stream_service);
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<UiEvent>();
-    let event_reader_handle = spawn_event_reader(event_tx.clone());
+    let poll_interval_ms = Arc::new(AtomicU64::new(ACTIVE_POLL_INTERVAL_MS));
+    let event_reader_handle = spawn_event_reader(event_tx.clone(), poll_interval_ms.clone());
 
     let mode_registry = build_mode_aware_registry(stream_service.clone(), terminal.clone());
 
@@ -1100,10 +1118,17 @@ pub async fn run_chat(
     let mut last_draw = Instant::now();
     let mut request_redraw = true;
     let mut last_input_layout_update = Instant::now();
+    let mut last_input_event = Instant::now() - Duration::from_millis(INPUT_BURST_WINDOW_MS);
     let mut indicator_visible = false;
     let mut last_indicator_frame = Instant::now() - frame_duration;
     let mut tool_prompt_visible = false;
     let mut last_tool_prompt_frame = Instant::now() - frame_duration;
+
+    let mut term_size = current_terminal_size(&terminal).await;
+    app.update(|app| {
+        app.ui.last_term_size = term_size;
+    })
+    .await;
 
     let result = 'main_loop: loop {
         if is_exit_requested(&app).await {
@@ -1119,12 +1144,6 @@ pub async fn run_chat(
         )
         .await?;
 
-        let term_size = current_terminal_size(&terminal).await;
-        app.update(|app| {
-            app.ui.last_term_size = term_size;
-        })
-        .await;
-
         let event_outcome = process_ui_events(
             &app,
             &mut event_rx,
@@ -1137,6 +1156,18 @@ pub async fn run_chat(
 
         if event_outcome.exit_requested {
             break 'main_loop Ok(());
+        }
+
+        if event_outcome.events_processed {
+            last_input_event = Instant::now();
+        }
+
+        if event_outcome.resized {
+            term_size = current_terminal_size(&terminal).await;
+            app.update(|app| {
+                app.ui.last_term_size = term_size;
+            })
+            .await;
         }
 
         if event_outcome.request_redraw {
@@ -1204,10 +1235,27 @@ pub async fn run_chat(
             }
         }
 
-        let idle = !event_outcome.events_processed && !received_any && !request_redraw;
+        let animating = indicator_visible || tool_prompt_visible;
+        let in_input_burst = Instant::now().duration_since(last_input_event)
+            < Duration::from_millis(INPUT_BURST_WINDOW_MS);
+        let idle = !event_outcome.events_processed
+            && !received_any
+            && !request_redraw
+            && !animating
+            && !in_input_burst;
+        let desired_poll_ms = if in_input_burst {
+            INPUT_BURST_POLL_INTERVAL_MS
+        } else if animating {
+            ANIMATION_POLL_INTERVAL_MS
+        } else if idle {
+            IDLE_POLL_INTERVAL_MS
+        } else {
+            ACTIVE_POLL_INTERVAL_MS
+        };
+        poll_interval_ms.store(desired_poll_ms, Ordering::Relaxed);
 
         if idle {
-            tokio::time::sleep(Duration::from_millis(16)).await;
+            tokio::time::sleep(Duration::from_millis(IDLE_SLEEP_MS)).await;
         }
     };
 

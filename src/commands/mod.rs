@@ -421,6 +421,100 @@ pub(super) fn handle_mcp(app: &mut App, invocation: CommandInvocation<'_>) -> Co
     handle_mcp_server(app, server_id.unwrap())
 }
 
+pub(super) fn handle_yolo(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
+    if invocation.args_len() == 0 {
+        app.conversation()
+            .set_status("Usage: /yolo <server-id> [on|off]".to_string());
+        return CommandResult::Continue;
+    }
+    if invocation.args_len() > 2 {
+        app.conversation()
+            .set_status("Usage: /yolo <server-id> [on|off]".to_string());
+        return CommandResult::Continue;
+    }
+
+    let server_id = invocation.arg(0).unwrap();
+    let Some(server) = app.mcp.server(server_id) else {
+        app.conversation()
+            .set_status(format!("Unknown MCP server: {}", server_id));
+        return CommandResult::Continue;
+    };
+    let server_label = server.config.id.clone();
+    let current_yolo = server.config.is_yolo();
+
+    if invocation.args_len() == 1 {
+        let mut output = format!("## MCP YOLO for {}\n", server.config.display_name);
+        output.push_str(&format!("Server id: `{}`\n", server_label));
+        output.push_str(&format!(
+            "YOLO: {}\n",
+            if current_yolo {
+                "**enabled**"
+            } else {
+                "disabled"
+            }
+        ));
+        output.push_str(&format!(
+            "Toggle with `/yolo {} on|off` (saved to config.toml).\n",
+            server_label
+        ));
+        app.conversation()
+            .add_app_message(AppMessageKind::Info, output);
+        app.ui.focus_transcript();
+        return CommandResult::ContinueWithTranscriptFocus;
+    }
+
+    let arg = invocation.arg(1).unwrap_or_default();
+    let new_state = match arg.to_ascii_lowercase().as_str() {
+        "on" => true,
+        "off" => false,
+        _ => {
+            app.conversation()
+                .set_status("Usage: /yolo <server-id> [on|off]".to_string());
+            return CommandResult::Continue;
+        }
+    };
+
+    if let Some(server) = app.mcp.server_mut(server_id) {
+        server.config.yolo = Some(new_state);
+    }
+    if let Some(server) = app
+        .config
+        .mcp_servers
+        .iter_mut()
+        .find(|server| server.id.eq_ignore_ascii_case(server_id))
+    {
+        server.yolo = Some(new_state);
+    }
+
+    let saved = match crate::core::config::data::Config::load() {
+        Ok(mut cfg) => {
+            if let Some(server) = cfg
+                .mcp_servers
+                .iter_mut()
+                .find(|server| server.id.eq_ignore_ascii_case(server_id))
+            {
+                server.yolo = Some(new_state);
+                cfg.save().is_ok()
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    };
+
+    let state_word = if new_state { "enabled" } else { "disabled" };
+    let persist_note = if saved {
+        "saved to config.toml"
+    } else {
+        "config.toml not saved"
+    };
+    app.conversation().set_status(format!(
+        "YOLO {} for {} ({})",
+        state_word, server_label, persist_note
+    ));
+    CommandResult::Continue
+}
+
 pub(super) fn handle_log(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
     match invocation.args_len() {
         0 => {
@@ -493,9 +587,14 @@ fn handle_mcp_list(app: &mut App) -> CommandResult {
     }
 
     for server in servers {
+        let yolo_marker = if server.config.is_yolo() {
+            " — **YOLO**"
+        } else {
+            ""
+        };
         output.push_str(&format!(
-            "- **{}** ({})\n",
-            server.config.id, server.config.display_name
+            "- **{}** ({}){}\n",
+            server.config.id, server.config.display_name, yolo_marker
         ));
     }
     output
@@ -518,6 +617,14 @@ fn handle_mcp_server(app: &mut App, server_id: &str) -> CommandResult {
             let mut output = format!("## MCP for {}\n", server.config.display_name);
             output.push_str("MCP: **disabled for this session**\n");
             output.push_str(&format!("Server id: `{}`\n", server.config.id));
+            output.push_str(&format!(
+                "YOLO: {}\n",
+                if server.config.is_yolo() {
+                    "**enabled**"
+                } else {
+                    "disabled"
+                }
+            ));
             output.push('\n');
             app.conversation()
                 .add_app_message(AppMessageKind::Info, output);
@@ -551,6 +658,14 @@ pub(crate) fn build_mcp_server_output(
         "Status: {}\n",
         if server.config.is_enabled() {
             "enabled"
+        } else {
+            "disabled"
+        }
+    ));
+    output.push_str(&format!(
+        "YOLO: {}\n",
+        if server.config.is_yolo() {
+            "**enabled** (permission prompts bypassed)"
         } else {
             "disabled"
         }
@@ -1081,7 +1196,7 @@ fn handle_dump_result(
 mod tests {
     use super::*;
     use crate::character::card::{CharacterCard, CharacterData};
-    use crate::core::config::data::{Config, Persona};
+    use crate::core::config::data::{Config, McpServerConfig, Persona};
     use crate::core::message::ROLE_ASSISTANT;
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
@@ -1695,6 +1810,30 @@ mod tests {
     }
 
     #[test]
+    fn mcp_command_highlights_yolo_servers() {
+        let mut app = create_test_app();
+        app.config.mcp_servers.push(McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+            yolo: Some(true),
+        });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let res = process_input(&mut app, "/mcp");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("**YOLO**"));
+    }
+
+    #[test]
     fn mcp_command_includes_allowed_tools() {
         let mut app = create_test_app();
         app.config
@@ -1710,6 +1849,7 @@ mod tests {
                 allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
                 protocol_version: Some("2024-11-05".to_string()),
                 enabled: Some(true),
+                yolo: None,
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 
@@ -1725,6 +1865,52 @@ mod tests {
             app.ui.activity_indicator,
             Some(crate::core::app::ActivityKind::McpRefresh)
         );
+    }
+
+    #[test]
+    fn yolo_command_shows_and_persists() {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
+            let mut config = Config::default();
+            config.mcp_servers.push(McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                yolo: None,
+            });
+            config.save().expect("save config");
+
+            let mut app = create_test_app();
+            app.config = config.clone();
+            app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+            let result = process_input(&mut app, "/yolo alpha");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let last = app.ui.messages.back().expect("app message");
+            assert!(last.content.contains("YOLO: disabled"));
+
+            let result = process_input(&mut app, "/yolo alpha on");
+            assert!(matches!(result, CommandResult::Continue));
+            let status = app.ui.status.as_deref().unwrap_or_default();
+            assert!(status.contains("YOLO enabled"));
+            assert!(status.contains("saved to config.toml"));
+
+            let config = read_config(&config_path);
+            let yolo = config
+                .get("mcp_servers")
+                .and_then(|servers| servers.as_array())
+                .and_then(|servers| servers.first())
+                .and_then(|server| server.get("yolo"))
+                .and_then(|value| value.as_bool());
+            assert_eq!(yolo, Some(true));
+        });
     }
 
     #[test]

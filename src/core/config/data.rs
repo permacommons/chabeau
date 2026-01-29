@@ -80,6 +80,8 @@ pub struct McpServerConfig {
     pub allowed_tools: Option<Vec<String>>,
     pub protocol_version: Option<String>,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub yolo: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -229,6 +231,10 @@ impl Config {
 impl McpServerConfig {
     pub fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
+    }
+
+    pub fn is_yolo(&self) -> bool {
+        self.yolo.unwrap_or(false)
     }
 }
 

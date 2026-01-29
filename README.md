@@ -173,6 +173,7 @@ Chabeau can track MCP servers over HTTP (streamable HTTP) or stdio and surface t
 - Pick a `transport` of `streamable-http` or `stdio`. HTTP transports use `base_url`; stdio transports require `command` and optional `args`/`env`.
 - Chabeau uses a built-in MCP client based on `rust-mcp-schema`; no extra MCP runtime is required.
 - Use `/mcp` to list configured servers; `/mcp <server-id>` connects on demand and writes server details to the transcript (tools, resources, templates, and prompts).
+- Tired of permission prompts? If you dare to live dangerously, use `/yolo <server-id>` to show the per-server YOLO setting, or `/yolo <server-id> on|off` to toggle it (YOLO skips permission prompts for that server).
 - Store bearer tokens with `chabeau mcp token <server>` (tokens are saved in the system keyring under the server id) for HTTP transports; stdio transports read auth from their environment.
 - For transport debugging, run `chabeau --debug-mcp` to write verbose MCP logs to `mcp.log` in the working directory.
 - To suppress MCP for a run even when configured, pass `--disable-mcp` (or `-d`).

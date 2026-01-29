@@ -231,6 +231,7 @@ fn build_stream_params_includes_mcp_tools() {
             allowed_tools: Some(vec!["search".to_string()]),
             protocol_version: None,
             enabled: Some(true),
+            yolo: None,
         });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 
@@ -316,6 +317,7 @@ fn build_stream_params_includes_mcp_resources() {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            yolo: None,
         });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 
@@ -1047,6 +1049,7 @@ fn complete_slash_command_completes_mcp_server() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 
@@ -1059,6 +1062,36 @@ fn complete_slash_command_completes_mcp_server() {
     assert_eq!(
         app.ui.get_input_cursor_position(),
         "/mcp agpedia ".chars().count()
+    );
+}
+
+#[test]
+fn complete_slash_command_completes_yolo_server() {
+    let mut app = create_test_app();
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "agpedia".to_string(),
+        display_name: "Agpedia".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+        yolo: None,
+    });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    app.ui.set_input_text("/yolo agp".into());
+    app.ui.set_cursor_position("/yolo agp".chars().count());
+
+    let handled = app.complete_slash_command(80);
+    assert!(handled);
+    assert_eq!(app.ui.get_input_text(), "/yolo agpedia ");
+    assert_eq!(
+        app.ui.get_input_cursor_position(),
+        "/yolo agpedia ".chars().count()
     );
 }
 
@@ -1076,6 +1109,7 @@ fn complete_slash_command_lists_mcp_servers() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        yolo: None,
     });
     app.config.mcp_servers.push(McpServerConfig {
         id: "alpha".to_string(),
@@ -1088,6 +1122,7 @@ fn complete_slash_command_lists_mcp_servers() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 

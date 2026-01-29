@@ -64,6 +64,7 @@ base_url = "http://localhost:3333"
 transport = "streamable-http"
 enabled = true
 allowed_tools = ["weather.lookup", "time.now"]
+# yolo = true  # Skip permission prompts for this server (use with care).
 # protocol_version = "2024-11-05"
 
 # Configure MCP servers that launch over stdio.
@@ -75,6 +76,7 @@ command = "mcp-server"
 args = ["--mode", "stdio"]
 # env = { MCP_TOKEN = "local-dev" }
 enabled = true
+# yolo = false
 
 # Add custom themes, each in its own [[custom_themes]] block.
 #

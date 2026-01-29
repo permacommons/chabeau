@@ -203,7 +203,7 @@ impl App {
         command_end: usize,
     ) -> bool {
         let command: String = chars[1..command_end].iter().collect();
-        if !command.eq_ignore_ascii_case("mcp") {
+        if !command.eq_ignore_ascii_case("mcp") && !command.eq_ignore_ascii_case("yolo") {
             return false;
         }
 

@@ -664,6 +664,7 @@ fn test_mcp_server_config_persistence() {
             allowed_tools: Some(vec!["alpha.tool".to_string()]),
             protocol_version: Some("2024-11-05".to_string()),
             enabled: Some(false),
+            yolo: Some(true),
         }],
         ..Default::default()
     };
@@ -686,6 +687,7 @@ fn test_mcp_server_config_persistence() {
     );
     assert_eq!(server.protocol_version.as_deref(), Some("2024-11-05"));
     assert_eq!(server.enabled, Some(false));
+    assert_eq!(server.yolo, Some(true));
 }
 
 #[test]
@@ -708,6 +710,7 @@ fn test_mcp_server_stdio_config_persistence() {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            yolo: None,
         }],
         ..Default::default()
     };

@@ -1964,6 +1964,7 @@ mod tests {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            yolo: None,
         }
     }
 

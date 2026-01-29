@@ -568,6 +568,7 @@ mod tests {
                 enabled: Some(true),
                 allowed_tools: None,
                 protocol_version: None,
+                yolo: None,
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
 

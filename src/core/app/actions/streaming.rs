@@ -900,6 +900,12 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         return spawn_stream_after_tools(app, ctx);
     };
 
+    if is_mcp_yolo_enabled(app, &request.server_id) {
+        app.session.active_tool_request = Some(request.clone());
+        set_status_for_tool_run(app, &request, ctx);
+        return Some(AppCommand::RunMcpTool(request));
+    }
+
     if let Some(decision) = app
         .mcp_permissions
         .decision_for(&request.server_id, &request.tool_name)
@@ -989,6 +995,12 @@ fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCom
         pending = app.session.pending_sampling_queue.len(),
         "Dequeued MCP sampling request"
     );
+
+    if is_mcp_yolo_enabled(app, &request.server_id) {
+        app.session.active_sampling_request = Some(request.clone());
+        set_status_for_sampling_run(app, &request, ctx);
+        return Some(AppCommand::RunMcpSampling(Box::new(request)));
+    }
 
     if let Some(decision) = app
         .mcp_permissions
@@ -1263,6 +1275,13 @@ fn set_status_for_sampling_run(app: &mut App, request: &McpSamplingRequest, ctx:
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
+}
+
+fn is_mcp_yolo_enabled(app: &App, server_id: &str) -> bool {
+    app.mcp
+        .server(server_id)
+        .map(|server| server.config.is_yolo())
+        .unwrap_or(false)
 }
 
 fn resolve_server_label(app: &App, server_id: &str) -> String {

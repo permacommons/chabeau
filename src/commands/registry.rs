@@ -258,6 +258,25 @@ const COMMANDS: &[Command] = &[
         handler: super::handle_mcp,
     },
     Command {
+        name: "yolo",
+        usages: &[
+            CommandUsage {
+                syntax: "/yolo <server-id>",
+                description: "Show MCP YOLO mode for a server.",
+            },
+            CommandUsage {
+                syntax: "/yolo <server-id> on",
+                description: "Enable MCP YOLO mode for a server.",
+            },
+            CommandUsage {
+                syntax: "/yolo <server-id> off",
+                description: "Disable MCP YOLO mode for a server.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handle_yolo,
+    },
+    Command {
         name: "log",
         usages: &[CommandUsage {
             syntax: "/log [filename]",

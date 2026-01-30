@@ -167,21 +167,17 @@ Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.
 
 ## MCP Servers
 
-Chabeau can track MCP servers over HTTP (streamable HTTP) or stdio and surface them in the TUI.
+Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resources from the TUI.
 
-- Configure MCP servers with `[[mcp_servers]]` entries (see `examples/config.toml.sample`).
-- Pick a `transport` of `streamable-http` or `stdio`. HTTP transports use `base_url`; stdio transports require `command` and optional `args`/`env`.
-- Chabeau uses a built-in MCP client based on `rust-mcp-schema`; no extra MCP runtime is required.
-- Use `/mcp` to list configured servers; `/mcp <server-id>` connects on demand and writes server details to the transcript (tools, resources, templates, and prompts).
-- Tired of permission prompts? If you dare to live dangerously, use `/yolo <server-id>` to show the per-server YOLO setting, or `/yolo <server-id> on|off` to toggle it (YOLO skips permission prompts for that server).
-- Store bearer tokens with `chabeau mcp token <server>` (tokens are saved in the system keyring under the server id) for HTTP transports; stdio transports read auth from their environment.
-- For transport debugging, run `chabeau --debug-mcp` to write verbose MCP logs to `mcp.log` in the working directory.
-- To suppress MCP for a run even when configured, pass `--disable-mcp` (or `-d`).
-- MCP capabilities: Chabeau advertises sampling support for text-only requests (no context inclusion, tool use, tasks, roots, or elicitation). It respects server capabilities for tools/resources/prompts when provided, and otherwise falls back to method-not-found handling.
-- For HTTP transports, MCP token storage uses the system keyring keyed by server id. Chabeau warms tool listings in the background and may pause the first send until tools are ready. When MCP tool listings are cached, Chabeau includes tool schemas in chat requests and adds a short MCP tool-use preamble to the system prompt; when models request tools, Chabeau prompts for permission in the input area (Allow once / Allow for session / Deny / Block). Press Ctrl+O to inspect the current tool call (including permission-pending requests), and use ←/→ to cycle through requests and results; full MCP error details are available when a call fails.
-- When an MCP server requests sampling (`sampling/createMessage`), Chabeau prompts for permission (Allow once / Allow for session / Deny / Block) before running a local model call and returning the response to the server.
-- When MCP resources or templates are cached, Chabeau injects them into the system prompt and exposes a `mcp_read_resource` tool so models can fetch resource URIs.
-- Invoke MCP prompt templates with `/<server-id>:<prompt-id>` (e.g. `/agpedia:article-outline topic="soil health"`). If required arguments are missing, Chabeau will prompt for them in the input area before fetching the prompt and continuing the conversation.
+- Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
+- HTTP servers use `base_url` and need a token: `chabeau mcp token <server-id>`.
+- Stdio servers run a local command with optional `args`/`env`.
+- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts.
+- If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
+- Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
+- Not supported yet: context inclusion, tasks, roots, or elicitation.
+- Need a clean run? `--disable-mcp` turns MCP off for a session. For verbose logs, use `--debug-mcp` (writes `mcp.log`).
+- Want fewer prompts? `/yolo <server-id> on|off` toggles per‑server YOLO.
 
 ## Character Cards
 

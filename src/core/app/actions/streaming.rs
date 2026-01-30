@@ -4,8 +4,8 @@ use std::time::Instant;
 use super::{App, AppAction, AppActionContext, AppCommand};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::session::{
-    McpPromptRequest, McpSamplingRequest, PendingToolCall, ToolCallRequest, ToolResultRecord,
-    ToolResultStatus,
+    McpPromptRequest, McpSamplingRequest, PendingToolCall, ToolCallRequest, ToolFailureKind,
+    ToolResultRecord, ToolResultStatus,
 };
 use crate::core::app::ui_state::ToolPromptRequest;
 use crate::core::chat_stream::StreamParams;
@@ -27,6 +27,7 @@ struct ToolResultMeta {
     server_id: Option<String>,
     tool_call_id: Option<String>,
     raw_arguments: Option<String>,
+    failure_kind: Option<ToolFailureKind>,
 }
 
 impl ToolResultMeta {
@@ -41,6 +42,7 @@ impl ToolResultMeta {
             server_id,
             tool_call_id,
             raw_arguments,
+            failure_kind: None,
         }
     }
 }
@@ -358,6 +360,13 @@ fn is_tool_unsupported_error(message: &str) -> bool {
         .any(|signal| lower.contains(signal))
 }
 
+fn is_tool_error_payload(payload: &str) -> bool {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .and_then(|value| value.get("isError").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
 fn finalize_stream(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     let input_area_height = app.input_area_height(ctx.term_width);
     let pending_tool_calls = {
@@ -613,33 +622,42 @@ fn handle_tool_call_completed(
 
     match result {
         Ok(payload) => {
-            let meta = ToolResultMeta::new(
+            let is_tool_error = is_tool_error_payload(&payload);
+            let mut meta = ToolResultMeta::new(
                 server_label,
                 request.as_ref().map(|req| req.server_id.clone()),
                 tool_call_id.clone(),
                 request.as_ref().map(|req| req.raw_arguments.clone()),
             );
+            if is_tool_error {
+                meta.failure_kind = Some(ToolFailureKind::ToolError);
+            }
             record_tool_result(
                 app,
                 &tool_name,
                 meta,
                 payload,
-                ToolResultStatus::Success,
+                if is_tool_error {
+                    ToolResultStatus::Error
+                } else {
+                    ToolResultStatus::Success
+                },
                 ctx,
             );
         }
         Err(err) => {
-            let meta = ToolResultMeta::new(
+            let mut meta = ToolResultMeta::new(
                 server_label,
                 request.as_ref().map(|req| req.server_id.clone()),
                 tool_call_id,
                 request.as_ref().map(|req| req.raw_arguments.clone()),
             );
+            meta.failure_kind = Some(ToolFailureKind::ToolCallFailure);
             record_tool_result(
                 app,
                 &tool_name,
                 meta,
-                format!("Tool error: {err}"),
+                format!("Tool call failure: {err}"),
                 ToolResultStatus::Error,
                 ctx,
             );
@@ -869,7 +887,7 @@ fn prepare_tool_flow(
     app.session.tool_results.clear();
 
     for error in pending_errors {
-        let meta = ToolResultMeta::new(
+        let mut meta = ToolResultMeta::new(
             error
                 .server_id
                 .as_ref()
@@ -878,6 +896,7 @@ fn prepare_tool_flow(
             error.tool_call_id.clone(),
             error.raw_arguments.clone(),
         );
+        meta.failure_kind = Some(ToolFailureKind::ToolCallFailure);
         record_tool_result(
             app,
             &error.tool_name,
@@ -1220,7 +1239,13 @@ fn record_tool_result(
         }
     }
     transcript_payload.push_str(" (");
-    transcript_payload.push_str(status.label());
+    let status_label = match status {
+        ToolResultStatus::Error => meta
+            .failure_kind
+            .map_or(status.label(), ToolFailureKind::label),
+        _ => status.label(),
+    };
+    transcript_payload.push_str(status_label);
     transcript_payload.push(')');
 
     let input_area_height = app.input_area_height(ctx.term_width);
@@ -1245,6 +1270,7 @@ fn record_tool_result(
         server_name: meta.server_label,
         server_id: meta.server_id,
         status,
+        failure_kind: meta.failure_kind,
         content: payload,
         tool_call_id: meta.tool_call_id,
         raw_arguments: meta.raw_arguments,
@@ -1564,7 +1590,7 @@ mod tests {
             .iter()
             .find(|msg| msg.role == ROLE_TOOL_CALL)
             .expect("missing tool call message");
-        assert_eq!(tool_call.content, "lookup {\"q\":\"mcp\"}");
+        assert_eq!(tool_call.content, "lookup | Arguments: q=\"mcp\"");
 
         let tool_result = app
             .ui
@@ -1573,6 +1599,76 @@ mod tests {
             .find(|msg| msg.role == ROLE_TOOL_RESULT)
             .expect("missing tool result message");
         assert!(tool_result.content.contains("lookup"));
+    }
+
+    #[test]
+    fn tool_call_completed_flags_tool_error_payloads() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.session.active_tool_request = Some(ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "lookup".to_string(),
+            arguments: None,
+            raw_arguments: "{}".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+        });
+
+        let payload = serde_json::json!({
+            "content": [],
+            "isError": true,
+        })
+        .to_string();
+
+        let result = handle_streaming_action(
+            &mut app,
+            AppAction::ToolCallCompleted {
+                tool_name: "lookup".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                result: Ok(payload),
+            },
+            ctx,
+        );
+        assert!(result.is_none());
+
+        let record = app
+            .session
+            .tool_result_history
+            .last()
+            .expect("missing tool result record");
+        assert_eq!(record.status, ToolResultStatus::Error);
+        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolError));
+    }
+
+    #[test]
+    fn tool_call_completed_flags_call_failures() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.session.active_tool_request = Some(ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "lookup".to_string(),
+            arguments: None,
+            raw_arguments: "{}".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+        });
+
+        let result = handle_streaming_action(
+            &mut app,
+            AppAction::ToolCallCompleted {
+                tool_name: "lookup".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                result: Err("timeout".to_string()),
+            },
+            ctx,
+        );
+        assert!(result.is_none());
+
+        let record = app
+            .session
+            .tool_result_history
+            .last()
+            .expect("missing tool result record");
+        assert_eq!(record.status, ToolResultStatus::Error);
+        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolCallFailure));
     }
 
     #[test]

@@ -56,7 +56,8 @@ base_url = "https://api.example.com/v1"
 
 # Configure MCP servers for MCP-over-HTTP access.
 #
-# Tokens are stored in the system keyring under each server id.
+# Tokens are stored in the system keyring under each server id. Set them with:
+#   chabeau mcp token <server-id>
 [[mcp_servers]]
 id = "local-mcp"
 display_name = "Local MCP"
@@ -74,7 +75,7 @@ display_name = "Local MCP (stdio)"
 transport = "stdio"
 command = "mcp-server"
 args = ["--mode", "stdio"]
-# env = { MCP_TOKEN = "local-dev" }
+# env = { MCP_SERVER_TOKEN = "local-dev" } # Passed to the MCP server process (not the client).
 enabled = true
 # yolo = false
 

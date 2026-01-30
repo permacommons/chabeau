@@ -39,6 +39,8 @@ pub enum AppAction {
     InspectToolResultsStep {
         delta: i32,
     },
+    InspectToolResultsCopy,
+    InspectToolResultsToggleDecode,
     ToolCallCompleted {
         tool_name: String,
         tool_call_id: Option<String>,
@@ -225,7 +227,9 @@ pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> 
         | AppAction::CompleteAssistantEdit { .. }
         | AppAction::InspectToolResults
         | AppAction::InspectToolResultsToggleView
-        | AppAction::InspectToolResultsStep { .. } => input::handle_input_action(app, action, ctx),
+        | AppAction::InspectToolResultsStep { .. }
+        | AppAction::InspectToolResultsCopy
+        | AppAction::InspectToolResultsToggleDecode => input::handle_input_action(app, action, ctx),
 
         AppAction::PickerEscape
         | AppAction::PickerMoveUp

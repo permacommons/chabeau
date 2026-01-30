@@ -6,6 +6,7 @@ pub struct InspectState {
     pub content: String,
     pub scroll_offset: u16,
     pub mode: InspectMode,
+    pub decoded: bool,
 }
 
 impl InspectState {
@@ -15,15 +16,17 @@ impl InspectState {
             content,
             scroll_offset: 0,
             mode: InspectMode::Static,
+            decoded: false,
         }
     }
 
-    pub fn with_mode(title: String, content: String, mode: InspectMode) -> Self {
+    pub fn with_mode(title: String, content: String, mode: InspectMode, decoded: bool) -> Self {
         Self {
             title,
             content,
             scroll_offset: 0,
             mode,
+            decoded,
         }
     }
 }
@@ -88,11 +91,13 @@ impl InspectController {
         index: usize,
         view: ToolInspectView,
         kind: ToolInspectKind,
+        decoded: bool,
     ) {
         self.state = Some(InspectState::with_mode(
             title,
             content,
             InspectMode::ToolCalls { index, view, kind },
+            decoded,
         ));
     }
 
@@ -145,9 +150,10 @@ impl App {
         index: usize,
         view: ToolInspectView,
         kind: ToolInspectKind,
+        decoded: bool,
     ) {
         self.inspect
-            .open_tool_calls(title, content, index, view, kind);
+            .open_tool_calls(title, content, index, view, kind, decoded);
     }
 
     pub fn close_inspect(&mut self) {

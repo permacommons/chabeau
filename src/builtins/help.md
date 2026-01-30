@@ -17,6 +17,7 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 - Ctrl+X: Edit assistant messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message
+- Ctrl+O: Inspect tool calls/results (Esc=Close, Tab=Toggle request/response, D=Decode, C=Copy payload)
 - Tab: Switch focus between transcript and input (`›` marks the active area, `·` the inactive) unless the current input starts with `/`, in which case it autocompletes slash commands. Tab stays on the transcript while you're in message-select (Ctrl+P/Ctrl+X) or block-select (Ctrl+B) mode until you exit or finish selecting.
 - Ctrl+T: Open in external editor (requires `$EDITOR` to be set)
 - Esc: Interrupt streaming / cancel modes

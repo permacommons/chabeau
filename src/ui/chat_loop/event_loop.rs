@@ -739,6 +739,54 @@ async fn route_keyboard_event(
         }
     }
 
+    if matches!(
+        key.code,
+        event::KeyCode::Char('c') | event::KeyCode::Char('C')
+    ) && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+    {
+        let inspect_mode = app
+            .read(|app| app.inspect_state().map(|state| state.mode))
+            .await;
+        if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
+            dispatcher.dispatch_many(
+                [AppAction::InspectToolResultsCopy],
+                AppActionContext {
+                    term_width: term_size.width,
+                    term_height: term_size.height,
+                },
+            );
+            return Ok(KeyboardEventOutcome {
+                request_redraw: true,
+                exit_requested: false,
+            });
+        }
+    }
+
+    if matches!(
+        key.code,
+        event::KeyCode::Char('d') | event::KeyCode::Char('D')
+    ) && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+    {
+        let inspect_mode = app
+            .read(|app| app.inspect_state().map(|state| state.mode))
+            .await;
+        if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
+            dispatcher.dispatch_many(
+                [AppAction::InspectToolResultsToggleDecode],
+                AppActionContext {
+                    term_width: term_size.width,
+                    term_height: term_size.height,
+                },
+            );
+            return Ok(KeyboardEventOutcome {
+                request_redraw: true,
+                exit_requested: false,
+            });
+        }
+    }
+
     if key.code == event::KeyCode::Tab
         && !matches!(context, KeyContext::Picker)
         && key.modifiers.is_empty()
@@ -781,6 +829,10 @@ async fn route_keyboard_event(
         if !input_focused && !is_plain_character {
             handle_as_text_input = false;
         }
+    }
+
+    if app.read(|app| app.inspect_state().is_some()).await {
+        handle_as_text_input = false;
     }
 
     if handle_as_text_input {

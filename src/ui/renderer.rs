@@ -526,7 +526,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(paragraph, body_area);
         }
 
-        let inspect_mode = app.inspect_state().map(|state| state.mode);
+        let inspect_state = app.inspect_state();
+        let inspect_mode = inspect_state.map(|state| state.mode);
+        let decoded = inspect_state.map(|state| state.decoded).unwrap_or(false);
         let in_picker = app.picker_session().is_some();
         let (line1, line2): (String, String) = match inspect_mode {
             Some(InspectMode::ToolCalls { view, kind, .. }) => {
@@ -546,10 +548,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     .unwrap_or_default();
                 (
                     format!(
-                        "Esc=Close{} • ←/→=Prev/Next • ↑/↓=Scroll • PgUp/PgDn=Faster",
+                        "Esc=Close • D={} • C=Copy{} • ←/→=Prev/Next",
+                        if decoded { "Raw" } else { "Decode" },
                         toggle
                     ),
-                    "Home/End=Jump".to_string(),
+                    "↑/↓=Scroll • PgUp/PgDn=Faster • Home/End=Jump".to_string(),
                 )
             }
             _ if in_picker => (

@@ -698,6 +698,9 @@ fn detect_nested_json_value(value: &serde_json::Value, depth: usize) -> bool {
     match value {
         serde_json::Value::String(text) => {
             if !looks_like_json(text) {
+                if let Some(fenced) = extract_fenced_json(text) {
+                    return serde_json::from_str::<serde_json::Value>(fenced).is_ok();
+                }
                 return false;
             }
             let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
@@ -725,6 +728,13 @@ fn decode_nested_json_value(value: serde_json::Value, depth: usize) -> (serde_js
     match value {
         serde_json::Value::String(text) => {
             if !looks_like_json(&text) {
+                if let Some(fenced) = extract_fenced_json(&text) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(fenced) {
+                        let (decoded, _) =
+                            decode_nested_json_value(parsed, depth.saturating_sub(1));
+                        return (decoded, true);
+                    }
+                }
                 return (serde_json::Value::String(text), false);
             }
             let parsed = serde_json::from_str::<serde_json::Value>(text.trim());
@@ -773,6 +783,21 @@ fn looks_like_json(text: &str) -> bool {
     let trimmed = text.trim();
     (trimmed.starts_with('{') && trimmed.ends_with('}'))
         || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+}
+
+fn extract_fenced_json(text: &str) -> Option<&str> {
+    let fence = "```";
+    let start = text.find(fence)?;
+    let lang_start = start + fence.len();
+    let after_lang = text[lang_start..].find('\n').map(|idx| lang_start + idx)?;
+    let lang = text[lang_start..after_lang].trim();
+    if !lang.eq_ignore_ascii_case("json") {
+        return None;
+    }
+    let content_start = after_lang + 1;
+    let rest = &text[content_start..];
+    let end = rest.find(fence)?;
+    Some(rest[..end].trim())
 }
 
 #[cfg(test)]
@@ -1063,5 +1088,11 @@ mod tests {
         assert!(!contains_nested_json(
             "{\"content\":[{\"text\":\"plain\"}]}"
         ));
+    }
+
+    #[test]
+    fn nested_json_detection_handles_fenced_json() {
+        let payload = r#"{"content":[{"text":"Error\n```json\n{\n  \"error\": {\"code\": \"bad\"}\n}\n```","type":"text"}]}"#;
+        assert!(contains_nested_json(payload));
     }
 }

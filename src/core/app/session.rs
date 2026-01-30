@@ -86,6 +86,28 @@ pub enum ToolResultStatus {
     Blocked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolFailureKind {
+    ToolError,
+    ToolCallFailure,
+}
+
+impl ToolFailureKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolFailureKind::ToolError => "tool error",
+            ToolFailureKind::ToolCallFailure => "tool call failure",
+        }
+    }
+
+    pub fn display(self) -> &'static str {
+        match self {
+            ToolFailureKind::ToolError => "Tool error",
+            ToolFailureKind::ToolCallFailure => "Tool call failure",
+        }
+    }
+}
+
 impl ToolResultStatus {
     pub fn label(self) -> &'static str {
         match self {
@@ -112,6 +134,7 @@ pub struct ToolResultRecord {
     pub server_name: Option<String>,
     pub server_id: Option<String>,
     pub status: ToolResultStatus,
+    pub failure_kind: Option<ToolFailureKind>,
     pub content: String,
     pub tool_call_id: Option<String>,
     pub raw_arguments: Option<String>,

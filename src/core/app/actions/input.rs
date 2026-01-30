@@ -1,7 +1,7 @@
 use super::{streaming, App, AppAction, AppActionContext, AppCommand};
 use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::build_inspect_text;
-use crate::core::app::session::{ToolCallRequest, ToolResultRecord};
+use crate::core::app::session::{ToolCallRequest, ToolResultRecord, ToolResultStatus};
 use crate::core::app::{InspectMode, ToolInspectKind, ToolInspectView};
 
 pub(super) fn handle_input_action(
@@ -439,17 +439,26 @@ fn tool_call_inspect_copy_data(app: &App) -> Option<ToolInspectCopyData> {
 
 fn build_tool_result_title(record: &ToolResultRecord, index: usize, total: usize) -> String {
     let position = format!("{}/{}", index + 1, total.max(1));
-    let status = record.status.display();
+    let status = tool_result_status_display(record);
     format!(
         "Tool call (completed, {position}) – {} ({status})",
         record.tool_name
     )
 }
 
+fn tool_result_status_display(record: &ToolResultRecord) -> &'static str {
+    if record.status == ToolResultStatus::Error {
+        if let Some(kind) = record.failure_kind {
+            return kind.display();
+        }
+    }
+    record.status.display()
+}
+
 fn build_tool_result_content(record: &ToolResultRecord, decoded: bool) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Tool: {}", record.tool_name));
-    lines.push(format!("Status: {}", record.status.display()));
+    lines.push(format!("Status: {}", tool_result_status_display(record)));
     if let Some(server) = record.server_name.as_ref() {
         if !server.trim().is_empty() {
             lines.push(format!("Server: {}", server));
@@ -903,6 +912,7 @@ mod tests {
             server_name: Some("Example Server".to_string()),
             server_id: Some("example".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{\"ok\":true}".to_string(),
             tool_call_id: Some("tool-call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://example/resource\"}".to_string()),
@@ -920,6 +930,7 @@ mod tests {
             server_name: None,
             server_id: None,
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{}".to_string(),
             tool_call_id: None,
             raw_arguments: None,
@@ -938,6 +949,7 @@ mod tests {
             server_name: Some("Alpha MCP".to_string()),
             server_id: Some("alpha".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{}".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"ok\":true}".to_string()),
@@ -983,6 +995,7 @@ mod tests {
             server_name: Some("Alpha MCP".to_string()),
             server_id: Some("alpha".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{}".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"ok\":true}".to_string()),
@@ -1010,6 +1023,7 @@ mod tests {
             server_name: Some("Alpha MCP".to_string()),
             server_id: Some("alpha".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{\"ok\":true}".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
@@ -1036,6 +1050,7 @@ mod tests {
             server_name: Some("Alpha MCP".to_string()),
             server_id: Some("alpha".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{\"ok\":true}".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
@@ -1062,6 +1077,7 @@ mod tests {
             server_name: Some("Alpha MCP".to_string()),
             server_id: Some("alpha".to_string()),
             status: ToolResultStatus::Success,
+            failure_kind: None,
             content: "{\"content\":[{\"text\":\"{\\\"ok\\\":true}\",\"type\":\"text\"}]}"
                 .to_string(),
             tool_call_id: Some("call-1".to_string()),

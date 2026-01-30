@@ -2,6 +2,7 @@ use super::{session::PendingToolCall, session::SessionContext, ui_state::UiState
 use crate::character::card::CharacterCard;
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::utils::scroll::ScrollCalculator;
+use serde_json::Value;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -275,11 +276,12 @@ impl<'a> ConversationController<'a> {
 
         for (_, tool_call) in pending.iter() {
             let arguments = tool_call.arguments.trim();
-            let content = match (tool_call.name.as_deref(), arguments.is_empty()) {
-                (Some(name), false) => format!("{name} {arguments}"),
-                (Some(name), true) => name.to_string(),
-                (None, false) => arguments.to_string(),
-                (None, true) => "Unknown tool call".to_string(),
+            let summary = summarize_tool_call_arguments(arguments);
+            let content = match (tool_call.name.as_deref(), summary.as_deref()) {
+                (Some(name), Some(summary)) => format!("{name} | Arguments: {summary}"),
+                (Some(name), None) => name.to_string(),
+                (None, Some(summary)) => format!("Arguments: {summary}"),
+                (None, None) => "Unknown tool call".to_string(),
             };
             self.ui.messages.push_back(Message::tool_call(content));
         }
@@ -701,6 +703,65 @@ impl<'a> ConversationController<'a> {
             None
         }
     }
+}
+
+fn summarize_tool_call_arguments(raw: &str) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+
+    let summary = match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => {
+            let mut parts = Vec::new();
+            for (key, value) in map.iter() {
+                let value_summary = summarize_tool_call_value(value);
+                parts.push(format!("{key}={value_summary}"));
+            }
+            parts.join(", ")
+        }
+        Ok(Value::Array(items)) => serde_json::to_string(&items).unwrap_or_else(|_| "[]".into()),
+        Ok(Value::String(value)) => serde_json::to_string(&value).unwrap_or(value),
+        Ok(Value::Number(value)) => value.to_string(),
+        Ok(Value::Bool(value)) => value.to_string(),
+        Ok(Value::Null) => "null".to_string(),
+        Err(_) => collapse_whitespace(raw),
+    };
+
+    let summary = collapse_whitespace(&summary);
+    if summary.is_empty() {
+        None
+    } else {
+        Some(summary)
+    }
+}
+
+fn summarize_tool_call_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| value.clone()),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => "null".to_string(),
+        Value::Array(items) => serde_json::to_string(items).unwrap_or_else(|_| "[]".into()),
+        Value::Object(map) => serde_json::to_string(map).unwrap_or_else(|_| "{}".into()),
+    }
+}
+
+fn collapse_whitespace(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            if last_was_space {
+                continue;
+            }
+            last_was_space = true;
+            out.push(' ');
+            continue;
+        }
+        last_was_space = false;
+        out.push(ch);
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]

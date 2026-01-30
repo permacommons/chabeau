@@ -1564,7 +1564,7 @@ mod tests {
             .iter()
             .find(|msg| msg.role == ROLE_TOOL_CALL)
             .expect("missing tool call message");
-        assert_eq!(tool_call.content, "lookup {\"q\":\"mcp\"}");
+        assert_eq!(tool_call.content, "lookup | Arguments: q=\"mcp\"");
 
         let tool_result = app
             .ui

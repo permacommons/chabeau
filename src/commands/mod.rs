@@ -412,13 +412,27 @@ pub(super) fn handle_mcp(app: &mut App, invocation: CommandInvocation<'_>) -> Co
         return handle_mcp_list(app);
     }
 
-    if invocation.args_len() > 1 {
-        app.conversation()
-            .set_status("Usage: /mcp <server-id>".to_string());
-        return CommandResult::Continue;
+    match invocation.args_len() {
+        1 => handle_mcp_server(app, server_id.unwrap()),
+        2 => {
+            let arg = invocation.arg(1).unwrap_or_default();
+            let new_state = match arg.to_ascii_lowercase().as_str() {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    app.conversation()
+                        .set_status("Usage: /mcp <server-id> [on|off]".to_string());
+                    return CommandResult::Continue;
+                }
+            };
+            handle_mcp_toggle(app, server_id.unwrap(), new_state)
+        }
+        _ => {
+            app.conversation()
+                .set_status("Usage: /mcp <server-id> [on|off]".to_string());
+            CommandResult::Continue
+        }
     }
-
-    handle_mcp_server(app, server_id.unwrap())
 }
 
 pub(super) fn handle_yolo(app: &mut App, invocation: CommandInvocation<'_>) -> CommandResult {
@@ -587,14 +601,19 @@ fn handle_mcp_list(app: &mut App) -> CommandResult {
     }
 
     for server in servers {
+        let disabled_marker = if server.config.is_enabled() {
+            ""
+        } else {
+            " — **disabled**"
+        };
         let yolo_marker = if server.config.is_yolo() {
             " — **YOLO**"
         } else {
             ""
         };
         output.push_str(&format!(
-            "- **{}** ({}){}\n",
-            server.config.id, server.config.display_name, yolo_marker
+            "- **{}** ({}){}{}\n",
+            server.config.id, server.config.display_name, disabled_marker, yolo_marker
         ));
     }
     output
@@ -633,6 +652,28 @@ fn handle_mcp_server(app: &mut App, server_id: &str) -> CommandResult {
         }
     }
 
+    if let Some(server) = app.mcp.server(server_id) {
+        if !server.config.is_enabled() {
+            let mut output = format!("## MCP for {}\n", server.config.display_name);
+            output.push_str("MCP: **disabled**\n");
+            output.push_str(&format!("Server id: `{}`\n", server.config.id));
+            output.push_str("Status: disabled\n");
+            output.push_str(&format!(
+                "YOLO: {}\n",
+                if server.config.is_yolo() {
+                    "**enabled**"
+                } else {
+                    "disabled"
+                }
+            ));
+            output.push('\n');
+            app.conversation()
+                .add_app_message(AppMessageKind::Info, output);
+            app.ui.focus_transcript();
+            return CommandResult::ContinueWithTranscriptFocus;
+        }
+    }
+
     app.conversation()
         .set_status("Refreshing MCP data...".to_string());
     app.ui
@@ -640,6 +681,55 @@ fn handle_mcp_server(app: &mut App, server_id: &str) -> CommandResult {
     CommandResult::RefreshMcp {
         server_id: server_id.to_string(),
     }
+}
+
+fn handle_mcp_toggle(app: &mut App, server_id: &str, new_state: bool) -> CommandResult {
+    let Some(server) = app.mcp.server(server_id) else {
+        app.conversation()
+            .set_status(format!("Unknown MCP server: {}", server_id));
+        return CommandResult::Continue;
+    };
+    let server_label = server.config.id.clone();
+
+    if let Some(server) = app.mcp.server_mut(server_id) {
+        server.config.enabled = Some(new_state);
+    }
+    if let Some(server) = app
+        .config
+        .mcp_servers
+        .iter_mut()
+        .find(|server| server.id.eq_ignore_ascii_case(server_id))
+    {
+        server.enabled = Some(new_state);
+    }
+
+    let saved = match crate::core::config::data::Config::load() {
+        Ok(mut cfg) => {
+            if let Some(server) = cfg
+                .mcp_servers
+                .iter_mut()
+                .find(|server| server.id.eq_ignore_ascii_case(server_id))
+            {
+                server.enabled = Some(new_state);
+                cfg.save().is_ok()
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    };
+
+    let state_word = if new_state { "enabled" } else { "disabled" };
+    let persist_note = if saved {
+        "saved to config.toml"
+    } else {
+        "config.toml not saved"
+    };
+    app.conversation().set_status(format!(
+        "MCP {} for {} ({})",
+        state_word, server_label, persist_note
+    ));
+    CommandResult::Continue
 }
 
 pub(crate) fn build_mcp_server_output(
@@ -1834,6 +1924,56 @@ mod tests {
     }
 
     #[test]
+    fn mcp_command_highlights_disabled_servers() {
+        let mut app = create_test_app();
+        app.config.mcp_servers.push(McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(false),
+            yolo: None,
+        });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let res = process_input(&mut app, "/mcp");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("**disabled**"));
+    }
+
+    #[test]
+    fn mcp_command_skips_refresh_for_disabled_server() {
+        let mut app = create_test_app();
+        app.config
+            .mcp_servers
+            .push(crate::core::config::data::McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(false),
+                yolo: None,
+            });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let res = process_input(&mut app, "/mcp alpha");
+        assert!(matches!(res, CommandResult::ContinueWithTranscriptFocus));
+        let last = app.ui.messages.back().expect("app message");
+        assert!(last.content.contains("MCP: **disabled**"));
+    }
+
+    #[test]
     fn mcp_command_includes_allowed_tools() {
         let mut app = create_test_app();
         app.config
@@ -1910,6 +2050,47 @@ mod tests {
                 .and_then(|server| server.get("yolo"))
                 .and_then(|value| value.as_bool());
             assert_eq!(yolo, Some(true));
+        });
+    }
+
+    #[test]
+    fn mcp_command_toggle_enabled_persists() {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
+            let mut config = Config::default();
+            config.mcp_servers.push(McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                yolo: None,
+            });
+            config.save().expect("save config");
+
+            let mut app = create_test_app();
+            app.config = config.clone();
+            app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+            let result = process_input(&mut app, "/mcp alpha off");
+            assert!(matches!(result, CommandResult::Continue));
+            let status = app.ui.status.as_deref().unwrap_or_default();
+            assert!(status.contains("MCP disabled"));
+            assert!(status.contains("saved to config.toml"));
+
+            let config = read_config(&config_path);
+            let enabled = config
+                .get("mcp_servers")
+                .and_then(|servers| servers.as_array())
+                .and_then(|servers| servers.first())
+                .and_then(|server| server.get("enabled"))
+                .and_then(|value| value.as_bool());
+            assert_eq!(enabled, Some(false));
         });
     }
 

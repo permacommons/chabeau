@@ -15,6 +15,7 @@ This repository contains Chabeau, an open source (CC-0) chatbot TUI for remote A
 
 ## Commit summaries
 - When asked to draft a commit message, use a conventional commit format. The first line should be 50 characters wide max; subsequent lines 72 characters wide max. Keep it under 5 bullet points. Only summarize uncommitted (staged or working area) changes, not prior versions of those changes (e.g., if you refactored a function, and then refactored it again, only summarize its final state)
+- When constructing commit messages via CLI flags, prefer a single `-m` body with newline-separated bullets (or a heredoc) rather than multiple `-m` flags, to avoid extra blank lines between bullets.
 - When in interactive mode, present commit summaries to the user in a way that is easy to copy and paste with any formatting (e.g., markdown) intact.
 - Do not mention passing tests.
 

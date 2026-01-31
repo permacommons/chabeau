@@ -253,6 +253,14 @@ const COMMANDS: &[Command] = &[
                 syntax: "/mcp <server-id>",
                 description: "List MCP tools, resources, templates, and prompts.",
             },
+            CommandUsage {
+                syntax: "/mcp <server-id> on",
+                description: "Enable an MCP server and persist to config.toml.",
+            },
+            CommandUsage {
+                syntax: "/mcp <server-id> off",
+                description: "Disable an MCP server and persist to config.toml.",
+            },
         ],
         extra_help: &[],
         handler: super::handle_mcp,

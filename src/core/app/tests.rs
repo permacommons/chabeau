@@ -1,5 +1,6 @@
 use super::*;
-use crate::api::ChatMessage;
+use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
+use crate::core::app::session::{ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus};
 use crate::core::config::data::McpServerConfig;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
@@ -231,6 +232,8 @@ fn build_stream_params_includes_mcp_tools() {
             allowed_tools: Some(vec!["search".to_string()]),
             protocol_version: None,
             enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: None,
         });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -290,12 +293,18 @@ fn build_stream_params_includes_mcp_tools() {
     );
 
     let tools = params.tools.expect("expected MCP tools");
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].function.name, "search");
-    let description = tools[0]
-        .function
-        .description
-        .as_ref()
+    assert_eq!(tools.len(), 3);
+    assert!(tools.iter().any(|tool| tool.function.name == "search"));
+    assert!(tools
+        .iter()
+        .any(|tool| { tool.function.name == crate::mcp::MCP_SESSION_MEMORY_PIN_TOOL }));
+    assert!(tools
+        .iter()
+        .any(|tool| { tool.function.name == crate::mcp::MCP_SESSION_MEMORY_UNPIN_TOOL }));
+    let description = tools
+        .iter()
+        .find(|tool| tool.function.name == "search")
+        .and_then(|tool| tool.function.description.as_ref())
         .expect("missing tool description");
     assert!(description.contains("Alpha MCP"));
 }
@@ -317,6 +326,8 @@ fn build_stream_params_includes_mcp_resources() {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: None,
         });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -385,6 +396,142 @@ fn build_stream_params_includes_mcp_resources() {
         .contains("MCP resources and templates (by server id):"));
     assert!(system_message.content.contains("mcp://alpha/doc"));
     assert!(system_message.content.contains("mcp://alpha/{doc}"));
+}
+
+#[test]
+fn build_stream_params_includes_tool_history_and_payloads() {
+    let mut app = create_test_app();
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "alpha".to_string(),
+        display_name: "Alpha MCP".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
+        yolo: None,
+    });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+    app.session.tool_result_history.push(ToolResultRecord {
+        tool_name: "lookup".to_string(),
+        server_name: Some("Alpha MCP".to_string()),
+        server_id: Some("alpha".to_string()),
+        status: ToolResultStatus::Success,
+        failure_kind: None,
+        content: "{\"ok\":true}".to_string(),
+        summary: "lookup on Alpha MCP (success)".to_string(),
+        tool_call_id: Some("call-1".to_string()),
+        raw_arguments: Some("{\"q\":\"test\"}".to_string()),
+        assistant_message_index: None,
+    });
+    app.session.tool_result_history.push(ToolResultRecord {
+        tool_name: "lookup".to_string(),
+        server_name: Some("Alpha MCP".to_string()),
+        server_id: Some("alpha".to_string()),
+        status: ToolResultStatus::Success,
+        failure_kind: None,
+        content: "{\"ok\":true}".to_string(),
+        summary: "lookup on Alpha MCP (success) args: {\"q\":\"missing\"}".to_string(),
+        tool_call_id: Some("call-2".to_string()),
+        raw_arguments: Some("{\"q\":\"missing\"}".to_string()),
+        assistant_message_index: None,
+    });
+
+    let assistant_message = ChatMessage {
+        role: "assistant".to_string(),
+        content: String::new(),
+        name: None,
+        tool_call_id: None,
+        tool_calls: Some(vec![ChatToolCall {
+            id: "call-1".to_string(),
+            kind: "function".to_string(),
+            function: ChatToolCallFunction {
+                name: "lookup".to_string(),
+                arguments: "{\"q\":\"test\"}".to_string(),
+            },
+        }]),
+    };
+    let tool_message = ChatMessage {
+        role: "tool".to_string(),
+        content: "{\"ok\":true}".to_string(),
+        name: None,
+        tool_call_id: Some("call-1".to_string()),
+        tool_calls: None,
+    };
+    app.session
+        .tool_payload_history
+        .push(ToolPayloadHistoryEntry {
+            server_id: Some("alpha".to_string()),
+            tool_call_id: Some("call-1".to_string()),
+            assistant_message,
+            tool_message,
+            assistant_message_index: None,
+        });
+
+    let params = app.build_stream_params(
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }],
+        CancellationToken::new(),
+        1,
+    );
+
+    let system = params
+        .api_messages
+        .iter()
+        .find(|msg| msg.role == "system")
+        .expect("missing system message");
+    assert!(system.content.contains(
+        "MCP tool payload retention note: Tool call retention policy: window(5) for all MCP servers (last 5 tool payloads per server kept; older outputs summarized)."
+    ));
+    assert!(system
+        .content
+        .contains("SESSION TOOL LEDGER (call_id • tool • args • status):"));
+    assert!(system.content.contains("SESSION MEMORY HINT:"));
+    assert!(system.content.contains("call_id=call-1"));
+    assert!(system.content.contains("call_id=call-2"));
+    assert!(!system.content.contains("Tool history (session summaries):"));
+    assert!(!system.content.contains("lookup on Alpha MCP (success)"));
+
+    let last_user_idx = params
+        .api_messages
+        .iter()
+        .rposition(|msg| msg.role == "user")
+        .expect("missing user message");
+    let assistant_idx = params
+        .api_messages
+        .iter()
+        .position(|msg| msg.role == "assistant" && msg.tool_calls.is_some())
+        .expect("missing assistant tool call");
+    let tool_idx = params
+        .api_messages
+        .iter()
+        .position(|msg| msg.role == "tool" && msg.tool_call_id.as_deref() == Some("call-1"))
+        .expect("missing tool message");
+    let summary_idx = params
+        .api_messages
+        .iter()
+        .position(|msg| {
+            msg.role == "assistant"
+                && msg
+                    .content
+                    .starts_with("TOOL SUMMARY (system-added per MCP payload policy):")
+        })
+        .expect("missing summary message");
+    let summary_message = &params.api_messages[summary_idx].content;
+    assert!(summary_message.contains("missing"));
+    assert!(assistant_idx < tool_idx);
+    assert!(tool_idx < summary_idx);
+    assert!(summary_idx < last_user_idx);
 }
 
 #[test]
@@ -1049,6 +1196,8 @@ fn complete_slash_command_completes_mcp_server() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
         yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -1079,6 +1228,8 @@ fn complete_slash_command_completes_yolo_server() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
         yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -1109,6 +1260,8 @@ fn complete_slash_command_lists_mcp_servers() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
         yolo: None,
     });
     app.config.mcp_servers.push(McpServerConfig {
@@ -1122,6 +1275,8 @@ fn complete_slash_command_lists_mcp_servers() {
         allowed_tools: None,
         protocol_version: None,
         enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
         yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);

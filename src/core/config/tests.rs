@@ -1,5 +1,8 @@
 use super::data::suggest_provider_id;
-use super::data::{path_display, Config, CustomProvider, CustomTheme, McpServerConfig, Persona};
+use super::data::{
+    path_display, Config, CustomProvider, CustomTheme, McpServerConfig, McpToolPayloadRetention,
+    Persona,
+};
 use super::orchestrator::ConfigOrchestrator;
 use crate::core::persona::PersonaManager;
 use directories::ProjectDirs;
@@ -664,6 +667,8 @@ fn test_mcp_server_config_persistence() {
             allowed_tools: Some(vec!["alpha.tool".to_string()]),
             protocol_version: Some("2024-11-05".to_string()),
             enabled: Some(false),
+            tool_payloads: Some(McpToolPayloadRetention::Window),
+            tool_payload_window: Some(4),
             yolo: Some(true),
         }],
         ..Default::default()
@@ -687,6 +692,8 @@ fn test_mcp_server_config_persistence() {
     );
     assert_eq!(server.protocol_version.as_deref(), Some("2024-11-05"));
     assert_eq!(server.enabled, Some(false));
+    assert_eq!(server.tool_payloads, Some(McpToolPayloadRetention::Window));
+    assert_eq!(server.tool_payload_window, Some(4));
     assert_eq!(server.yolo, Some(true));
 }
 
@@ -710,6 +717,8 @@ fn test_mcp_server_stdio_config_persistence() {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: None,
         }],
         ..Default::default()

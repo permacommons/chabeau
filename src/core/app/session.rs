@@ -65,6 +65,9 @@ pub struct SessionContext {
     pub tool_call_records: Vec<ChatToolCall>,
     pub tool_results: Vec<ChatMessage>,
     pub tool_result_history: Vec<ToolResultRecord>,
+    pub tool_payload_history: Vec<ToolPayloadHistoryEntry>,
+    pub pinned_tool_payloads: Vec<PinnedToolPayloadEntry>,
+    pub active_assistant_message_index: Option<usize>,
     pub last_stream_api_messages: Option<Vec<ChatMessage>>,
     pub last_stream_api_messages_base: Option<Vec<ChatMessage>>,
     pub mcp_tools_enabled: bool,
@@ -136,8 +139,30 @@ pub struct ToolResultRecord {
     pub status: ToolResultStatus,
     pub failure_kind: Option<ToolFailureKind>,
     pub content: String,
+    pub summary: String,
     pub tool_call_id: Option<String>,
     pub raw_arguments: Option<String>,
+    pub assistant_message_index: Option<usize>,
+}
+
+#[derive(Clone)]
+pub struct ToolPayloadHistoryEntry {
+    pub server_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub assistant_message: ChatMessage,
+    pub tool_message: ChatMessage,
+    pub assistant_message_index: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PinnedToolPayloadEntry {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub server_id: Option<String>,
+    pub server_name: Option<String>,
+    pub content: String,
+    pub note: Option<String>,
+    pub assistant_message_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +243,43 @@ impl SessionContext {
     /// Mark the character greeting as shown
     pub fn mark_greeting_shown(&mut self) {
         self.character_greeting_shown = true;
+    }
+
+    pub fn prune_tool_records_for_assistant_index(&mut self, index: usize) {
+        self.prune_tool_records(|candidate| candidate == index);
+    }
+
+    pub fn prune_tool_records_from_index(&mut self, start_index: usize) {
+        self.prune_tool_records(|candidate| candidate >= start_index);
+    }
+
+    fn prune_tool_records<F>(&mut self, predicate: F)
+    where
+        F: Fn(usize) -> bool,
+    {
+        self.tool_result_history.retain(|record| {
+            record
+                .assistant_message_index
+                .map(|idx| !predicate(idx))
+                .unwrap_or(true)
+        });
+        self.tool_payload_history.retain(|entry| {
+            entry
+                .assistant_message_index
+                .map(|idx| !predicate(idx))
+                .unwrap_or(true)
+        });
+        self.pinned_tool_payloads.retain(|entry| {
+            entry
+                .assistant_message_index
+                .map(|idx| !predicate(idx))
+                .unwrap_or(true)
+        });
+        if let Some(active) = self.active_assistant_message_index {
+            if predicate(active) {
+                self.active_assistant_message_index = None;
+            }
+        }
     }
 }
 
@@ -425,6 +487,9 @@ pub(crate) async fn prepare_with_auth(
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
+        tool_payload_history: Vec::new(),
+        pinned_tool_payloads: Vec::new(),
+        active_assistant_message_index: None,
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
@@ -481,6 +546,9 @@ pub(crate) async fn prepare_uninitialized(
         tool_call_records: Vec::new(),
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
+        tool_payload_history: Vec::new(),
+        pinned_tool_payloads: Vec::new(),
+        active_assistant_message_index: None,
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
@@ -657,6 +725,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -744,6 +815,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -810,6 +884,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -879,6 +956,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1102,6 +1182,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1149,6 +1232,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1234,6 +1320,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
@@ -1311,6 +1400,9 @@ mod tests {
             tool_call_records: Vec::new(),
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
+            tool_payload_history: Vec::new(),
+            pinned_tool_payloads: Vec::new(),
+            active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
             mcp_tools_enabled: false,

@@ -5,15 +5,19 @@ use super::{App, AppAction, AppActionContext, AppCommand};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::session::{
     McpPromptRequest, McpSamplingRequest, PendingToolCall, ToolCallRequest, ToolFailureKind,
-    ToolResultRecord, ToolResultStatus,
+    ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus,
 };
 use crate::core::app::ui_state::ToolPromptRequest;
 use crate::core::chat_stream::StreamParams;
+use crate::core::config::data::McpToolPayloadRetention;
 use crate::core::mcp_sampling::{
     build_sampling_messages, serialize_sampling_params, summarize_sampling_request,
 };
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::mcp::permissions::ToolPermissionDecision;
+use crate::mcp::{
+    MCP_SESSION_MEMORY_PIN_TOOL, MCP_SESSION_MEMORY_SERVER_ID, MCP_SESSION_MEMORY_UNPIN_TOOL,
+};
 use rust_mcp_schema::schema_utils::ServerJsonrpcRequest;
 use rust_mcp_schema::{
     ClientCapabilities, ClientSampling, ContentBlock, PromptMessage, Role, RpcError,
@@ -452,6 +456,9 @@ fn handle_tool_permission_decision(
 
         app.session.active_tool_request = Some(request.clone());
         set_status_for_tool_run(app, &request, ctx);
+        if is_session_memory_tool(&request.tool_name) {
+            return handle_session_memory_tool_request(app, request, ctx);
+        }
         return Some(AppCommand::RunMcpTool(request));
     }
 
@@ -841,6 +848,29 @@ fn prepare_tool_flow(
                     continue;
                 }
             }
+        } else if is_session_memory_tool(&tool_name) {
+            match parse_session_memory_arguments(&raw_arguments) {
+                Ok(arguments) => {
+                    pending_queue.push_back(ToolCallRequest {
+                        server_id: MCP_SESSION_MEMORY_SERVER_ID.to_string(),
+                        tool_name: tool_name.clone(),
+                        arguments: Some(arguments),
+                        raw_arguments,
+                        tool_call_id: Some(tool_call_id),
+                    });
+                    continue;
+                }
+                Err(err) => {
+                    pending_errors.push(PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: Some(MCP_SESSION_MEMORY_SERVER_ID.to_string()),
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: err,
+                    });
+                    continue;
+                }
+            }
         } else {
             let server_id = match resolve_tool_server(app, &tool_name) {
                 Ok((server_id, _)) => server_id,
@@ -919,9 +949,20 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         return spawn_stream_after_tools(app, ctx);
     };
 
+    if is_session_memory_tool(&request.tool_name)
+        && is_session_memory_yolo_enabled(app, &request.server_id)
+    {
+        app.session.active_tool_request = Some(request.clone());
+        set_status_for_tool_run(app, &request, ctx);
+        return handle_session_memory_tool_request(app, request, ctx);
+    }
+
     if is_mcp_yolo_enabled(app, &request.server_id) {
         app.session.active_tool_request = Some(request.clone());
         set_status_for_tool_run(app, &request, ctx);
+        if is_session_memory_tool(&request.tool_name) {
+            return handle_session_memory_tool_request(app, request, ctx);
+        }
         return Some(AppCommand::RunMcpTool(request));
     }
 
@@ -953,17 +994,7 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         return Some(AppCommand::RunMcpTool(request));
     }
 
-    let server_name = app
-        .mcp
-        .server(&request.server_id)
-        .map(|server| {
-            if server.config.display_name.trim().is_empty() {
-                server.config.id.clone()
-            } else {
-                server.config.display_name.clone()
-            }
-        })
-        .unwrap_or_else(|| request.server_id.clone());
+    let server_name = resolve_server_label(app, &request.server_id);
 
     let args_summary = summarize_tool_arguments(&request.raw_arguments);
     let server_id = request.server_id.clone();
@@ -979,8 +1010,12 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
                 .position(|record| record.id.as_str() == id.as_str())
         })
         .unwrap_or(0);
+    let display_name = if is_session_memory_tool(&tool_name) {
+        build_session_memory_prompt_display_name(app, &request)
+    } else {
+        format!("Allow {} to run {}?", server_name, tool_name)
+    };
     app.session.active_tool_request = Some(request);
-    let display_name = format!("Allow {} to run {}?", server_name, tool_name);
     app.ui.start_tool_prompt(ToolPromptRequest {
         server_id,
         server_name,
@@ -1197,6 +1232,80 @@ fn parse_resource_read_arguments(
     Ok((server_id, uri, arguments))
 }
 
+fn parse_session_memory_arguments(raw: &str) -> Result<Map<String, Value>, String> {
+    let arguments = parse_tool_arguments(raw)?
+        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
+    let tool_call_id = arguments
+        .get("tool_call_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?;
+    if tool_call_id.trim().is_empty() {
+        return Err("Session memory tool requires tool_call_id.".to_string());
+    }
+    Ok(arguments)
+}
+
+fn is_session_memory_tool(tool_name: &str) -> bool {
+    tool_name.eq_ignore_ascii_case(MCP_SESSION_MEMORY_PIN_TOOL)
+        || tool_name.eq_ignore_ascii_case(MCP_SESSION_MEMORY_UNPIN_TOOL)
+}
+
+fn is_session_memory_yolo_enabled(app: &App, server_id: &str) -> bool {
+    if !server_id.eq_ignore_ascii_case(MCP_SESSION_MEMORY_SERVER_ID) {
+        return false;
+    }
+
+    app.mcp
+        .servers()
+        .any(|server| server.config.is_enabled() && server.config.is_yolo())
+}
+
+fn format_char_count(count: usize) -> String {
+    if count < 1_000 {
+        return format!("{count} chars");
+    }
+    if count < 1_000_000 {
+        return format!("{:.1}k chars", (count as f32) / 1_000.0);
+    }
+    format!("{:.1}m chars", (count as f32) / 1_000_000.0)
+}
+
+fn build_session_memory_prompt_display_name(app: &App, request: &ToolCallRequest) -> String {
+    if request
+        .tool_name
+        .eq_ignore_ascii_case(MCP_SESSION_MEMORY_UNPIN_TOOL)
+    {
+        return "Allow session memory to unpin tool output?".to_string();
+    }
+
+    let system_chars = app
+        .session
+        .last_stream_api_messages
+        .as_ref()
+        .and_then(|messages| messages.iter().find(|msg| msg.role == "system"))
+        .map(|message| message.content.len())
+        .unwrap_or(0);
+    let pinned_chars = request
+        .arguments
+        .as_ref()
+        .and_then(|args| args.get("tool_call_id").and_then(Value::as_str))
+        .and_then(|tool_call_id| {
+            app.session
+                .tool_result_history
+                .iter()
+                .find(|record| record.tool_call_id.as_deref() == Some(tool_call_id))
+        })
+        .map(|record| record.content.len())
+        .unwrap_or(0);
+
+    format!(
+        "Allow session memory to pin tool output? (system prompt {}, pin {})",
+        format_char_count(system_chars),
+        format_char_count(pinned_chars)
+    )
+}
+
 fn summarize_tool_arguments(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1223,6 +1332,133 @@ fn summarize_tool_arguments(raw: &str) -> String {
     summary
 }
 
+fn handle_session_memory_tool_request(
+    app: &mut App,
+    request: ToolCallRequest,
+    ctx: AppActionContext,
+) -> Option<AppCommand> {
+    let tool_call_id = request.tool_call_id.clone();
+    let raw_arguments = request.raw_arguments.clone();
+    let server_label = resolve_server_label(app, &request.server_id);
+    let meta = ToolResultMeta::new(
+        Some(server_label),
+        Some(request.server_id.clone()),
+        tool_call_id.clone(),
+        Some(raw_arguments),
+    );
+
+    let result = if request
+        .tool_name
+        .eq_ignore_ascii_case(MCP_SESSION_MEMORY_PIN_TOOL)
+    {
+        pin_tool_result(app, &request)
+    } else {
+        unpin_tool_result(app, &request)
+    };
+
+    let (payload, status, failure_kind) = match result {
+        Ok(message) => (message, ToolResultStatus::Success, None),
+        Err(error) => (
+            error,
+            ToolResultStatus::Error,
+            Some(ToolFailureKind::ToolError),
+        ),
+    };
+
+    let mut meta = meta;
+    meta.failure_kind = failure_kind;
+    record_tool_result(app, &request.tool_name, meta, payload, status, ctx);
+    app.session.active_tool_request = None;
+    advance_tool_queue(app, ctx)
+}
+
+fn pin_tool_result(app: &mut App, request: &ToolCallRequest) -> Result<String, String> {
+    let arguments = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
+    let tool_call_id = arguments
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?
+        .trim()
+        .to_string();
+    if tool_call_id.is_empty() {
+        return Err("Session memory tool requires tool_call_id.".to_string());
+    }
+    let note = arguments
+        .get("note")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+
+    let record = app
+        .session
+        .tool_result_history
+        .iter()
+        .find(|entry| entry.tool_call_id.as_deref() == Some(tool_call_id.as_str()))
+        .cloned()
+        .ok_or_else(|| format!("No tool result found for tool_call_id={tool_call_id}."))?;
+
+    if let Some(existing) = app
+        .session
+        .pinned_tool_payloads
+        .iter_mut()
+        .find(|entry| entry.tool_call_id == tool_call_id)
+    {
+        existing.content = record.content;
+        if note.is_some() {
+            existing.note = note;
+        }
+        return Ok(format!(
+            "Tool result {tool_call_id} is already pinned; session memory updated."
+        ));
+    }
+
+    app.session
+        .pinned_tool_payloads
+        .push(crate::core::app::session::PinnedToolPayloadEntry {
+            tool_call_id: tool_call_id.clone(),
+            tool_name: record.tool_name,
+            server_id: record.server_id,
+            server_name: record.server_name,
+            content: record.content,
+            note,
+            assistant_message_index: record.assistant_message_index,
+        });
+
+    Ok(format!(
+        "Pinned tool result {tool_call_id} into session memory."
+    ))
+}
+
+fn unpin_tool_result(app: &mut App, request: &ToolCallRequest) -> Result<String, String> {
+    let arguments = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
+    let tool_call_id = arguments
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?
+        .trim()
+        .to_string();
+    if tool_call_id.is_empty() {
+        return Err("Session memory tool requires tool_call_id.".to_string());
+    }
+
+    let index = app
+        .session
+        .pinned_tool_payloads
+        .iter()
+        .position(|entry| entry.tool_call_id == tool_call_id)
+        .ok_or_else(|| format!("No pinned entry found for tool_call_id={tool_call_id}."))?;
+    app.session.pinned_tool_payloads.remove(index);
+
+    Ok(format!(
+        "Removed tool result {tool_call_id} from session memory."
+    ))
+}
+
 fn record_tool_result(
     app: &mut App,
     tool_name: &str,
@@ -1231,8 +1467,17 @@ fn record_tool_result(
     status: ToolResultStatus,
     ctx: AppActionContext,
 ) {
+    let tool_call_id = meta.tool_call_id.clone();
+    let raw_arguments = meta.raw_arguments.clone();
+    let assistant_message_index = app.session.active_assistant_message_index;
+    let server_id = meta.server_id.clone();
+    let server_label = meta.server_label.clone();
+    let failure_kind = meta.failure_kind;
+    let summary = build_tool_result_summary(tool_name, &meta, status);
+    let (payload_policy, payload_window) =
+        resolve_tool_payload_policy(app, meta.server_id.as_deref());
     let mut transcript_payload = tool_name.to_string();
-    if let Some(server) = meta.server_label.as_ref() {
+    if let Some(server) = server_label.as_ref() {
         if !server.trim().is_empty() {
             transcript_payload.push_str(" on ");
             transcript_payload.push_str(server);
@@ -1240,9 +1485,7 @@ fn record_tool_result(
     }
     transcript_payload.push_str(" (");
     let status_label = match status {
-        ToolResultStatus::Error => meta
-            .failure_kind
-            .map_or(status.label(), ToolFailureKind::label),
+        ToolResultStatus::Error => failure_kind.map_or(status.label(), ToolFailureKind::label),
         _ => status.label(),
     };
     transcript_payload.push_str(status_label);
@@ -1257,24 +1500,157 @@ fn record_tool_result(
         conversation.update_scroll_position(available_height, ctx.term_width);
     }
 
+    let context_payload = match payload_policy {
+        McpToolPayloadRetention::Turn
+        | McpToolPayloadRetention::Window
+        | McpToolPayloadRetention::All => payload.clone(),
+    };
+
     app.session.tool_results.push(ChatMessage {
         role: "tool".to_string(),
-        content: payload.clone(),
+        content: context_payload.clone(),
         name: None,
-        tool_call_id: meta.tool_call_id.clone(),
+        tool_call_id: tool_call_id.clone(),
         tool_calls: None,
     });
 
     app.session.tool_result_history.push(ToolResultRecord {
         tool_name: tool_name.to_string(),
-        server_name: meta.server_label,
-        server_id: meta.server_id,
+        server_name: server_label,
+        server_id: server_id.clone(),
         status,
-        failure_kind: meta.failure_kind,
-        content: payload,
-        tool_call_id: meta.tool_call_id,
-        raw_arguments: meta.raw_arguments,
+        failure_kind,
+        content: payload.clone(),
+        summary,
+        tool_call_id: tool_call_id.clone(),
+        raw_arguments: raw_arguments.clone(),
+        assistant_message_index,
     });
+
+    if matches!(
+        payload_policy,
+        McpToolPayloadRetention::Window | McpToolPayloadRetention::All
+    ) {
+        if let Some(tool_call_id) = tool_call_id.clone() {
+            let assistant_message = ChatMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: tool_call_id.clone(),
+                    kind: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: tool_name.to_string(),
+                        arguments: raw_arguments.clone().unwrap_or_default(),
+                    },
+                }]),
+            };
+            let tool_message = ChatMessage {
+                role: "tool".to_string(),
+                content: payload.clone(),
+                name: None,
+                tool_call_id: Some(tool_call_id.clone()),
+                tool_calls: None,
+            };
+            app.session
+                .tool_payload_history
+                .push(ToolPayloadHistoryEntry {
+                    server_id: server_id.clone(),
+                    tool_call_id: Some(tool_call_id),
+                    assistant_message,
+                    tool_message,
+                    assistant_message_index,
+                });
+            if payload_policy == McpToolPayloadRetention::Window && payload_window > 0 {
+                trim_tool_payload_history(app, server_id.as_deref(), payload_window);
+            }
+        }
+    }
+}
+
+fn resolve_tool_payload_policy(
+    app: &App,
+    server_id: Option<&str>,
+) -> (McpToolPayloadRetention, usize) {
+    let Some(server_id) = server_id else {
+        return (McpToolPayloadRetention::Turn, 0);
+    };
+    let Some(server) = app.mcp.server(server_id) else {
+        return (McpToolPayloadRetention::Turn, 0);
+    };
+    (
+        server.config.tool_payloads(),
+        server.config.tool_payload_window(),
+    )
+}
+
+fn trim_tool_payload_history(app: &mut App, server_id: Option<&str>, window: usize) {
+    let Some(server_id) = server_id else {
+        return;
+    };
+    let count = app
+        .session
+        .tool_payload_history
+        .iter()
+        .filter(|entry| {
+            entry
+                .server_id
+                .as_deref()
+                .is_some_and(|id| id.eq_ignore_ascii_case(server_id))
+        })
+        .count();
+    if count <= window {
+        return;
+    }
+
+    let mut keep = Vec::with_capacity(app.session.tool_payload_history.len());
+    let mut drop = count - window;
+    for entry in app.session.tool_payload_history.iter() {
+        let matches = entry
+            .server_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(server_id));
+        if matches && drop > 0 {
+            drop -= 1;
+            continue;
+        }
+        keep.push(entry.clone());
+    }
+    app.session.tool_payload_history = keep;
+}
+
+fn build_tool_result_summary(
+    tool_name: &str,
+    meta: &ToolResultMeta,
+    status: ToolResultStatus,
+) -> String {
+    let mut summary = tool_name.to_string();
+    if let Some(server) = meta.server_label.as_ref() {
+        if !server.trim().is_empty() {
+            summary.push_str(" on ");
+            summary.push_str(server);
+        }
+    }
+    summary.push_str(" (");
+    let status_label = match status {
+        ToolResultStatus::Error => meta
+            .failure_kind
+            .map_or(status.label(), ToolFailureKind::label),
+        _ => status.label(),
+    };
+    summary.push_str(status_label);
+    summary.push(')');
+
+    if let Some(raw_arguments) = meta.raw_arguments.as_ref() {
+        let arg_summary = summarize_tool_arguments(raw_arguments);
+        if !arg_summary.is_empty() {
+            summary.push_str(" args: ");
+            summary.push_str(&arg_summary);
+        }
+    }
+
+    summary
 }
 
 fn set_status_for_tool_run(app: &mut App, request: &ToolCallRequest, ctx: AppActionContext) {
@@ -1311,6 +1687,9 @@ fn is_mcp_yolo_enabled(app: &App, server_id: &str) -> bool {
 }
 
 fn resolve_server_label(app: &App, server_id: &str) -> String {
+    if server_id.eq_ignore_ascii_case(MCP_SESSION_MEMORY_SERVER_ID) {
+        return "Session memory".to_string();
+    }
     app.mcp
         .server(server_id)
         .map(|server| {

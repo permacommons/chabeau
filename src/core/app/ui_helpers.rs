@@ -130,12 +130,16 @@ impl App {
             return;
         }
 
-        let role = self.ui.messages[actual_index].role.as_str();
+        let role = self.ui.messages[actual_index].role.clone();
         if role != ROLE_USER && role != ROLE_ASSISTANT {
             return;
         }
 
         self.ui.messages[actual_index].content = new_text;
+        if role == ROLE_ASSISTANT {
+            self.session
+                .prune_tool_records_for_assistant_index(actual_index);
+        }
         self.invalidate_prewrap_cache();
         let user_display_name = self.persona_manager.get_display_name();
         let _ = self

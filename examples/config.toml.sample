@@ -67,6 +67,8 @@ enabled = true
 allowed_tools = ["weather.lookup", "time.now"]
 # yolo = true  # Skip permission prompts for this server (use with care).
 # protocol_version = "2024-11-05"
+# tool_payloads = "window" # Raw tool payloads: turn | window | all
+# tool_payload_window = 5
 
 # Configure MCP servers that launch over stdio.
 [[mcp_servers]]

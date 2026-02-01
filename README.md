@@ -176,6 +176,9 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
 - If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
 - Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
+- Tool results are summarized into session context; raw tool payload retention is configurable per server (`tool_payloads` = `turn|window|all` + `tool_payload_window`, defaults to `tool_payloads = "window"` and `tool_payload_window = 5`).
+- When payload retention is `turn` or `window`, session memory tools (`chabeau_pin_to_session_memory`, `chabeau_unpin_from_session_memory`) let the agent pin tool outputs into the system prompt.
+- In `turn`/`window` modes, Chabeau adds a session tool ledger (with call IDs) plus a session memory hint to the system prompt to support pinning after results leave the transcript.
 - Not supported yet: context inclusion, tasks, roots, or elicitation.
 - Need a clean run? `--disable-mcp` turns MCP off for a session. For verbose logs, use `--debug-mcp` (writes `mcp.log`).
 - Want fewer prompts? `/yolo <server-id> on|off` toggles per‑server YOLO.

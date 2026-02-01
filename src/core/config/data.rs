@@ -13,6 +13,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpToolPayloadRetention {
+    Turn,
+    Window,
+    All,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomProvider {
     pub id: String,
@@ -80,6 +88,8 @@ pub struct McpServerConfig {
     pub allowed_tools: Option<Vec<String>>,
     pub protocol_version: Option<String>,
     pub enabled: Option<bool>,
+    pub tool_payloads: Option<McpToolPayloadRetention>,
+    pub tool_payload_window: Option<usize>,
     #[serde(default)]
     pub yolo: Option<bool>,
 }
@@ -149,6 +159,7 @@ so it MUST be a seamless replacement _without_ any new preamble or postamble.
 "#;
 
 pub const DEFAULT_REFINE_PREFIX: &str = "REFINE:";
+pub const DEFAULT_MCP_TOOL_PAYLOAD_WINDOW: usize = 5;
 
 /// Get a user-friendly display string for a path
 /// Converts absolute paths to use ~ notation on Unix-like systems when possible
@@ -235,6 +246,16 @@ impl McpServerConfig {
 
     pub fn is_yolo(&self) -> bool {
         self.yolo.unwrap_or(false)
+    }
+
+    pub fn tool_payloads(&self) -> McpToolPayloadRetention {
+        self.tool_payloads
+            .unwrap_or(McpToolPayloadRetention::Window)
+    }
+
+    pub fn tool_payload_window(&self) -> usize {
+        self.tool_payload_window
+            .unwrap_or(DEFAULT_MCP_TOOL_PAYLOAD_WINDOW)
     }
 }
 

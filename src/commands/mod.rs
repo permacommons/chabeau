@@ -1913,6 +1913,8 @@ mod tests {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: Some(true),
         });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -1937,6 +1939,8 @@ mod tests {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(false),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: None,
         });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -1963,6 +1967,8 @@ mod tests {
                 allowed_tools: None,
                 protocol_version: None,
                 enabled: Some(false),
+                tool_payloads: None,
+                tool_payload_window: None,
                 yolo: None,
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -1989,6 +1995,8 @@ mod tests {
                 allowed_tools: Some(vec!["weather.lookup".to_string(), "time.now".to_string()]),
                 protocol_version: Some("2024-11-05".to_string()),
                 enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
                 yolo: None,
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -2023,6 +2031,8 @@ mod tests {
                 allowed_tools: None,
                 protocol_version: None,
                 enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
                 yolo: None,
             });
             config.save().expect("save config");
@@ -2069,6 +2079,8 @@ mod tests {
                 allowed_tools: None,
                 protocol_version: None,
                 enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
                 yolo: None,
             });
             config.save().expect("save config");

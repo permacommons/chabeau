@@ -582,6 +582,9 @@ fn build_tool_pending_content(request: &ToolCallRequest, app: &App, decoded: boo
 }
 
 fn resolve_server_label(app: &App, server_id: &str) -> String {
+    if server_id.eq_ignore_ascii_case(crate::mcp::MCP_SESSION_MEMORY_SERVER_ID) {
+        return "Session memory".to_string();
+    }
     app.mcp
         .server(server_id)
         .map(|server| {
@@ -889,6 +892,8 @@ mod tests {
                 enabled: Some(true),
                 allowed_tools: None,
                 protocol_version: None,
+                tool_payloads: None,
+                tool_payload_window: None,
                 yolo: None,
             });
         app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
@@ -914,8 +919,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{\"ok\":true}".to_string(),
+            summary: "mcp_read_resource on Example Server (success)".to_string(),
             tool_call_id: Some("tool-call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://example/resource\"}".to_string()),
+            assistant_message_index: None,
         };
 
         let content = build_tool_request_content(&record, false);
@@ -932,8 +939,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{}".to_string(),
+            summary: "no_args (success)".to_string(),
             tool_call_id: None,
             raw_arguments: None,
+            assistant_message_index: None,
         };
 
         let content = build_tool_request_content(&record, false);
@@ -951,8 +960,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{}".to_string(),
+            summary: "completed_tool on Alpha MCP (success)".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"ok\":true}".to_string()),
+            assistant_message_index: None,
         });
         app.session.pending_tool_queue.push_back(ToolCallRequest {
             server_id: "alpha".to_string(),
@@ -997,8 +1008,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{}".to_string(),
+            summary: "completed_tool on Alpha MCP (success)".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"ok\":true}".to_string()),
+            assistant_message_index: None,
         });
 
         let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
@@ -1025,8 +1038,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{\"ok\":true}".to_string(),
+            summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
+            assistant_message_index: None,
         });
         app.open_tool_call_inspect(
             "Inspect".to_string(),
@@ -1052,8 +1067,10 @@ mod tests {
             status: ToolResultStatus::Success,
             failure_kind: None,
             content: "{\"ok\":true}".to_string(),
+            summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
+            assistant_message_index: None,
         });
         app.open_tool_call_inspect(
             "Inspect".to_string(),
@@ -1080,8 +1097,10 @@ mod tests {
             failure_kind: None,
             content: "{\"content\":[{\"text\":\"{\\\"ok\\\":true}\",\"type\":\"text\"}]}"
                 .to_string(),
+            summary: "mcp_list_documents on Alpha MCP (success)".to_string(),
             tool_call_id: Some("call-1".to_string()),
             raw_arguments: Some("{\"q\":\"nested\"}".to_string()),
+            assistant_message_index: None,
         });
         app.open_tool_call_inspect(
             "Inspect".to_string(),

@@ -171,6 +171,7 @@ pub async fn handle_edit_select_mode_event(
                                 let mut conversation = app.conversation();
                                 conversation.cancel_current_stream();
                             }
+                            app.session.prune_tool_records_from_index(idx);
                             app.ui.messages.truncate(idx);
                             app.invalidate_prewrap_cache();
                             let user_display_name = app.persona_manager.get_display_name();
@@ -245,6 +246,7 @@ pub async fn handle_edit_select_mode_event(
                                 let mut conversation = app.conversation();
                                 conversation.cancel_current_stream();
                             }
+                            app.session.prune_tool_records_from_index(idx);
                             app.ui.messages.truncate(idx);
                             app.invalidate_prewrap_cache();
                             let user_display_name = app.persona_manager.get_display_name();

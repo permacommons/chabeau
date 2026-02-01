@@ -222,6 +222,8 @@ impl<'a> ConversationController<'a> {
         };
         self.ui.messages.push_back(assistant_message);
         self.ui.current_response.clear();
+        self.session.active_assistant_message_index =
+            Some(self.ui.messages.len().saturating_sub(1));
 
         self.session.retrying_message_index = None;
         self.session.original_refining_content = None;
@@ -237,6 +239,8 @@ impl<'a> ConversationController<'a> {
         };
         self.ui.messages.push_back(assistant_message);
         self.ui.current_response.clear();
+        self.session.active_assistant_message_index =
+            Some(self.ui.messages.len().saturating_sub(1));
 
         self.session.retrying_message_index = None;
         self.session.original_refining_content = None;
@@ -468,6 +472,9 @@ impl<'a> ConversationController<'a> {
 
         if let Some(retry_index) = self.session.retrying_message_index {
             if retry_index < self.ui.messages.len() {
+                self.session.active_assistant_message_index = Some(retry_index);
+                self.session
+                    .prune_tool_records_for_assistant_index(retry_index);
                 if !self.session.has_received_assistant_message {
                     if let Some(greeting) = self.character_greeting_text() {
                         if let Some(msg) = self.ui.messages.get_mut(retry_index) {
@@ -513,6 +520,8 @@ impl<'a> ConversationController<'a> {
                 }
 
                 self.session.retrying_message_index = Some(index);
+                self.session.active_assistant_message_index = Some(index);
+                self.session.prune_tool_records_for_assistant_index(index);
 
                 if let Some(msg) = self.ui.messages.get_mut(index) {
                     msg.content.clear();

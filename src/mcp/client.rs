@@ -1964,6 +1964,8 @@ mod tests {
             allowed_tools: None,
             protocol_version: None,
             enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
             yolo: None,
         }
     }

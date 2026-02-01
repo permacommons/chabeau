@@ -1307,29 +1307,12 @@ fn build_session_memory_prompt_display_name(app: &App, request: &ToolCallRequest
 }
 
 fn summarize_tool_arguments(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
+    let summary = crate::core::app::streaming::abbreviate_args(raw);
+    if summary == "(none)" {
+        String::new()
+    } else {
+        summary
     }
-
-    let mut summary = String::new();
-    let mut count = 0;
-    for ch in trimmed.chars() {
-        if ch.is_whitespace() {
-            if summary.ends_with(' ') {
-                continue;
-            }
-            summary.push(' ');
-        } else {
-            summary.push(ch);
-        }
-        count += 1;
-        if count >= 60 {
-            summary.push('…');
-            break;
-        }
-    }
-    summary
 }
 
 fn handle_session_memory_tool_request(

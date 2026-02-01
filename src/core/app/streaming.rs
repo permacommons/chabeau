@@ -644,7 +644,7 @@ fn inject_mcp_session_memory(api_messages: &mut Vec<ChatMessage>, memory_text: &
     inject_or_replace_system_block(api_messages, MCP_SESSION_MEMORY_MARKER, memory_text);
 }
 
-fn abbreviate_args(raw: &str) -> String {
+pub(crate) fn abbreviate_args(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return "(none)".to_string();

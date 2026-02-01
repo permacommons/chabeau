@@ -201,7 +201,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             }
             _ => {
                 Cow::Borrowed(
-                    "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)",
+                    "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • c=Copy • Esc=Cancel)",
                 )
             }
         }

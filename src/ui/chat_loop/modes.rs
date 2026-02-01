@@ -267,6 +267,21 @@ pub async fn handle_edit_select_mode_event(
                 }
                 true
             }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if matches!(target, EditSelectTarget::User) {
+                    if let Some(idx) = app.ui.selected_user_message_index() {
+                        if let Some(message) = app.ui.messages.get(idx) {
+                            if message.role == ROLE_USER {
+                                match crate::utils::clipboard::copy_to_clipboard(&message.content) {
+                                    Ok(()) => app.conversation().set_status("Copied message"),
+                                    Err(_e) => app.conversation().set_status("Clipboard error"),
+                                }
+                            }
+                        }
+                    }
+                }
+                true
+            }
 
             _ => false,
         }

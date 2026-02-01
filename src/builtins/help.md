@@ -13,7 +13,7 @@ Find a bug? Let us know: https://github.com/permacommons/chabeau/issues
 - Ctrl+N: Re-run the most recent `/refine` prompt
 - Ctrl+D: Exit when input is empty (prints transcript); otherwise [Del]
 - Ctrl+C: Exit immediately (no transcript)
-- Ctrl+P: Edit previous messages (select mode)
+- Ctrl+P: Edit previous messages (select mode; C=copy)
 - Ctrl+X: Edit assistant messages (select mode)
 - Ctrl+B: Select code blocks (copy `c`, save `s`)
 - Ctrl+L: Clear status message

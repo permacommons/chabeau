@@ -402,7 +402,7 @@ Once set, press Ctrl+T in the TUI to launch the external editor.
 
 ## Architecture Overview
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a high-level walkthrough aligned with commit 5d81609a33ce1abeef3ccb976b5387c474221511.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a high-level walkthrough aligned with the current repository state.
 
 Chabeau uses a modular design with focused components:
 
@@ -461,8 +461,15 @@ Chabeau uses a modular design with focused components:
     - `printing.rs` – CLI-facing config print helpers
     - `tests.rs` – Configuration module tests
   - `keyring.rs` – Secure storage for API keys
-  - `message.rs` – Message data structures
-  - `persona.rs` – Persona management and variable substitution
+- `message.rs` – Message data structures
+- `mcp/` – Model Context Protocol client integration
+  - `client.rs` – MCP transport and connection handling for HTTP and stdio
+  - `events.rs` – MCP server request envelopes
+  - `mod.rs` – MCP module exports and tool name constants
+  - `permissions.rs` – Per-tool permission decision store
+  - `registry.rs` – Enabled MCP server registry
+- `mcp_auth.rs` – Keyring-backed MCP token storage
+- `persona.rs` – Persona management and variable substitution
   - `preset.rs` – System instruction preset management
   - `text_wrapping.rs` – Text wrapping utilities
 - `ui/` – Terminal interface rendering

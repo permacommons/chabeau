@@ -94,20 +94,12 @@ impl App {
         let mut tools = Vec::new();
         let mut has_resources = false;
         let mut any_enabled = false;
-        let mut allow_session_memory = false;
 
         for server in self.mcp.servers() {
             if !server.config.is_enabled() {
                 continue;
             }
             any_enabled = true;
-            if matches!(
-                server.config.tool_payloads(),
-                crate::core::config::data::McpToolPayloadRetention::Turn
-                    | crate::core::config::data::McpToolPayloadRetention::Window
-            ) {
-                allow_session_memory = true;
-            }
             if let Some(resources) = &server.cached_resources {
                 if !resources.resources.is_empty() {
                     has_resources = true;
@@ -189,7 +181,7 @@ impl App {
             });
         }
 
-        if any_enabled && allow_session_memory {
+        if any_enabled && self.is_session_memory_enabled() {
             tools.push(ChatToolDefinition {
                 kind: "function".to_string(),
                 function: ChatToolFunction {
@@ -344,21 +336,7 @@ impl App {
             return None;
         }
 
-        let mut needs_ledger = false;
-        for server in self.mcp.servers() {
-            if !server.config.is_enabled() {
-                continue;
-            }
-            if matches!(
-                server.config.tool_payloads(),
-                crate::core::config::data::McpToolPayloadRetention::Turn
-                    | crate::core::config::data::McpToolPayloadRetention::Window
-            ) {
-                needs_ledger = true;
-                break;
-            }
-        }
-        if !needs_ledger {
+        if !self.is_session_memory_enabled() {
             return None;
         }
 
@@ -416,21 +394,7 @@ impl App {
             return None;
         }
 
-        let mut pinning_enabled = false;
-        for server in self.mcp.servers() {
-            if !server.config.is_enabled() {
-                continue;
-            }
-            if matches!(
-                server.config.tool_payloads(),
-                crate::core::config::data::McpToolPayloadRetention::Turn
-                    | crate::core::config::data::McpToolPayloadRetention::Window
-            ) {
-                pinning_enabled = true;
-                break;
-            }
-        }
-        if !pinning_enabled {
+        if !self.is_session_memory_enabled() {
             return None;
         }
 
@@ -468,6 +432,17 @@ impl App {
         }
 
         Some(lines.join("\n"))
+    }
+
+    fn is_session_memory_enabled(&self) -> bool {
+        self.mcp.servers().any(|server| {
+            server.config.is_enabled()
+                && matches!(
+                    server.config.tool_payloads(),
+                    crate::core::config::data::McpToolPayloadRetention::Turn
+                        | crate::core::config::data::McpToolPayloadRetention::Window
+                )
+        })
     }
 
     fn inject_tool_payload_history(&self, api_messages: &mut Vec<ChatMessage>) {
@@ -614,18 +589,19 @@ fn inject_mcp_preamble(api_messages: &mut Vec<ChatMessage>) {
             }
             message.content.push_str(preamble);
         }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: preamble.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
+        return;
     }
+
+    api_messages.insert(
+        0,
+        ChatMessage {
+            role: "system".to_string(),
+            content: preamble.to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    );
 }
 
 fn inject_mcp_resources(api_messages: &mut Vec<ChatMessage>, resources_text: &str) {
@@ -633,25 +609,7 @@ fn inject_mcp_resources(api_messages: &mut Vec<ChatMessage>, resources_text: &st
         return;
     }
 
-    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
-        if !message.content.contains(MCP_RESOURCES_MARKER) {
-            if !message.content.trim().is_empty() {
-                message.content.push_str("\n\n");
-            }
-            message.content.push_str(resources_text);
-        }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: resources_text.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
-    }
+    inject_or_replace_system_block(api_messages, MCP_RESOURCES_MARKER, resources_text);
 }
 
 fn inject_mcp_payload_note(api_messages: &mut Vec<ChatMessage>, note: &str) {
@@ -659,25 +617,7 @@ fn inject_mcp_payload_note(api_messages: &mut Vec<ChatMessage>, note: &str) {
         return;
     }
 
-    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
-        if !message.content.contains(MCP_PAYLOAD_NOTE_MARKER) {
-            if !message.content.trim().is_empty() {
-                message.content.push_str("\n\n");
-            }
-            message.content.push_str(note);
-        }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: note.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
-    }
+    inject_or_replace_system_block(api_messages, MCP_PAYLOAD_NOTE_MARKER, note);
 }
 
 fn inject_mcp_tool_ledger(api_messages: &mut Vec<ChatMessage>, ledger: &str) {
@@ -685,25 +625,7 @@ fn inject_mcp_tool_ledger(api_messages: &mut Vec<ChatMessage>, ledger: &str) {
         return;
     }
 
-    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
-        if !message.content.contains(MCP_TOOL_LEDGER_MARKER) {
-            if !message.content.trim().is_empty() {
-                message.content.push_str("\n\n");
-            }
-            message.content.push_str(ledger);
-        }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: ledger.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
-    }
+    inject_or_replace_system_block(api_messages, MCP_TOOL_LEDGER_MARKER, ledger);
 }
 
 fn inject_mcp_session_memory_hint(api_messages: &mut Vec<ChatMessage>, hint: &str) {
@@ -711,25 +633,7 @@ fn inject_mcp_session_memory_hint(api_messages: &mut Vec<ChatMessage>, hint: &st
         return;
     }
 
-    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
-        if !message.content.contains(MCP_SESSION_MEMORY_HINT_MARKER) {
-            if !message.content.trim().is_empty() {
-                message.content.push_str("\n\n");
-            }
-            message.content.push_str(hint);
-        }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: hint.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
-    }
+    inject_or_replace_system_block(api_messages, MCP_SESSION_MEMORY_HINT_MARKER, hint);
 }
 
 fn inject_mcp_session_memory(api_messages: &mut Vec<ChatMessage>, memory_text: &str) {
@@ -737,25 +641,7 @@ fn inject_mcp_session_memory(api_messages: &mut Vec<ChatMessage>, memory_text: &
         return;
     }
 
-    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
-        if !message.content.contains(MCP_SESSION_MEMORY_MARKER) {
-            if !message.content.trim().is_empty() {
-                message.content.push_str("\n\n");
-            }
-            message.content.push_str(memory_text);
-        }
-    } else {
-        api_messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: memory_text.to_string(),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        );
-    }
+    inject_or_replace_system_block(api_messages, MCP_SESSION_MEMORY_MARKER, memory_text);
 }
 
 fn abbreviate_args(raw: &str) -> String {
@@ -782,4 +668,42 @@ fn abbreviate_args(raw: &str) -> String {
         }
     }
     summary
+}
+
+fn inject_or_replace_system_block(api_messages: &mut Vec<ChatMessage>, marker: &str, block: &str) {
+    if let Some(message) = api_messages.iter_mut().find(|msg| msg.role == "system") {
+        if let Some(start) = message.content.find(marker) {
+            let suffix_start = message.content[start..]
+                .find("\n\n")
+                .map(|offset| start + offset)
+                .unwrap_or_else(|| message.content.len());
+            let mut updated = String::with_capacity(
+                message.content.len().saturating_sub(suffix_start - start) + block.len(),
+            );
+            updated.push_str(&message.content[..start]);
+            updated.push_str(block);
+            if suffix_start < message.content.len() {
+                updated.push_str(&message.content[suffix_start..]);
+            }
+            message.content = updated;
+            return;
+        }
+
+        if !message.content.trim().is_empty() {
+            message.content.push_str("\n\n");
+        }
+        message.content.push_str(block);
+        return;
+    }
+
+    api_messages.insert(
+        0,
+        ChatMessage {
+            role: "system".to_string(),
+            content: block.to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    );
 }

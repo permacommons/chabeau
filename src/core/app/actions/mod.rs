@@ -4,6 +4,8 @@ mod mcp_prompt;
 mod picker;
 mod streaming;
 
+pub(crate) use streaming::{parse_resource_list_kind, ResourceListKind};
+
 use tokio::sync::mpsc;
 
 use super::App;

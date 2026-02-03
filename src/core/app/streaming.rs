@@ -79,6 +79,7 @@ impl App {
     fn collect_mcp_tools(&self) -> Option<Vec<ChatToolDefinition>> {
         let mut tools = Vec::new();
         let mut has_resources = false;
+        let mut can_list_resources = false;
         let mut any_enabled = false;
 
         for server in self.mcp.servers() {
@@ -86,14 +87,30 @@ impl App {
                 continue;
             }
             any_enabled = true;
+            if server
+                .server_details
+                .as_ref()
+                .map(|details| details.capabilities.resources.is_some())
+                .unwrap_or(true)
+            {
+                can_list_resources = true;
+            }
             if let Some(resources) = &server.cached_resources {
                 if !resources.resources.is_empty() {
                     has_resources = true;
+                }
+                if resources.next_cursor.is_some() {
+                    has_resources = true;
+                    can_list_resources = true;
                 }
             }
             if let Some(templates) = &server.cached_resource_templates {
                 if !templates.resource_templates.is_empty() {
                     has_resources = true;
+                }
+                if templates.next_cursor.is_some() {
+                    has_resources = true;
+                    can_list_resources = true;
                 }
             }
             let Some(list) = &server.cached_tools else {
@@ -167,6 +184,37 @@ impl App {
             });
         }
 
+        if can_list_resources {
+            tools.push(ChatToolDefinition {
+                kind: "function".to_string(),
+                function: ChatToolFunction {
+                    name: crate::mcp::MCP_LIST_RESOURCES_TOOL.to_string(),
+                    description: Some(
+                        "List MCP resources or templates for a server. Use the cursor from the MCP resources list to page results. Set kind to \"resources\" (default) or \"templates\"."
+                            .to_string(),
+                    ),
+                    parameters: json!({
+                        "type": "object",
+                        "required": ["server_id"],
+                        "properties": {
+                            "server_id": {
+                                "type": "string",
+                                "description": "MCP server id from the resources list."
+                            },
+                            "cursor": {
+                                "type": "string",
+                                "description": "Opaque pagination cursor from a previous response."
+                            },
+                            "kind": {
+                                "type": "string",
+                                "description": "List type: \"resources\" (default) or \"templates\"."
+                            }
+                        }
+                    }),
+                },
+            });
+        }
+
         if any_enabled {
             tools.push(ChatToolDefinition {
                 kind: "function".to_string(),
@@ -214,6 +262,15 @@ impl App {
                     }
                     lines.push(line);
                 }
+
+                if let Some(cursor) = list.next_cursor.as_deref() {
+                    lines.push(format!(
+                        "- {}: more resources available (cursor: {}). Use {} with kind=\"resources\".",
+                        server.config.id,
+                        cursor,
+                        crate::mcp::MCP_LIST_RESOURCES_TOOL
+                    ));
+                }
             }
 
             if let Some(list) = &server.cached_resource_templates {
@@ -228,6 +285,15 @@ impl App {
                         }
                     }
                     lines.push(line);
+                }
+
+                if let Some(cursor) = list.next_cursor.as_deref() {
+                    lines.push(format!(
+                        "- {}: more templates available (cursor: {}). Use {} with kind=\"templates\".",
+                        server.config.id,
+                        cursor,
+                        crate::mcp::MCP_LIST_RESOURCES_TOOL
+                    ));
                 }
             }
         }

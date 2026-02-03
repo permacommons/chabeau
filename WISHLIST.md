@@ -14,6 +14,8 @@ Items are removed when completed.
 - MCP: handle notifications (listChanged, progress, logging) for streamable HTTP and stdio — [OPEN]
 - MCP: support long-lived SSE response streams within streamable HTTP — [OPEN]
 - MCP: expand capabilities negotiation (advertise client caps + surface server caps) — [OPEN]
+- MCP: make max tool list cap configurable per server — [OPEN]
+- MCP: add tests for mcp_list_resources execution across transports — [OPEN]
 - MCP: add optional features — [OPEN]
   - Client roots capability (`roots/list` + list_changed) — [OPEN]
   - Client elicitation capability (`elicitation/create`) — [OPEN]

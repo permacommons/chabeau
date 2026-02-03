@@ -293,11 +293,14 @@ fn build_stream_params_includes_mcp_tools() {
     );
 
     let tools = params.tools.expect("expected MCP tools");
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 3);
     assert!(tools.iter().any(|tool| tool.function.name == "search"));
     assert!(tools
         .iter()
         .any(|tool| { tool.function.name == crate::mcp::MCP_INSTANT_RECALL_TOOL }));
+    assert!(tools
+        .iter()
+        .any(|tool| { tool.function.name == crate::mcp::MCP_LIST_RESOURCES_TOOL }));
     let description = tools
         .iter()
         .find(|tool| tool.function.name == "search")
@@ -331,7 +334,7 @@ fn build_stream_params_includes_mcp_resources() {
 
     let resources = ListResourcesResult {
         meta: None,
-        next_cursor: None,
+        next_cursor: Some("cursor-res".to_string()),
         resources: vec![Resource {
             annotations: None,
             description: Some("Alpha resource".to_string()),
@@ -346,7 +349,7 @@ fn build_stream_params_includes_mcp_resources() {
     };
     let resource_templates = ListResourceTemplatesResult {
         meta: None,
-        next_cursor: None,
+        next_cursor: Some("cursor-templates".to_string()),
         resource_templates: vec![ResourceTemplate {
             annotations: None,
             description: Some("Alpha template".to_string()),
@@ -382,6 +385,9 @@ fn build_stream_params_includes_mcp_resources() {
     assert!(tools
         .iter()
         .any(|tool| tool.function.name == crate::mcp::MCP_READ_RESOURCE_TOOL));
+    assert!(tools
+        .iter()
+        .any(|tool| tool.function.name == crate::mcp::MCP_LIST_RESOURCES_TOOL));
 
     let system_message = params
         .api_messages
@@ -393,6 +399,49 @@ fn build_stream_params_includes_mcp_resources() {
         .contains("MCP resources and templates (by server id):"));
     assert!(system_message.content.contains("mcp://alpha/doc"));
     assert!(system_message.content.contains("mcp://alpha/{doc}"));
+    assert!(system_message.content.contains("cursor-res"));
+    assert!(system_message.content.contains("cursor-templates"));
+}
+
+#[test]
+fn parse_resource_list_kind_defaults_to_resources_and_passes_cursor() {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "cursor".to_string(),
+        serde_json::Value::String("cursor-1".to_string()),
+    );
+    let (kind, cursor) = crate::core::app::actions::parse_resource_list_kind(&args)
+        .expect("expected kind parsing to succeed");
+
+    assert_eq!(kind, crate::core::app::actions::ResourceListKind::Resources);
+    assert_eq!(cursor.as_deref(), Some("cursor-1"));
+}
+
+#[test]
+fn parse_resource_list_kind_rejects_empty_cursor() {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "cursor".to_string(),
+        serde_json::Value::String("   ".to_string()),
+    );
+    let err = crate::core::app::actions::parse_resource_list_kind(&args)
+        .expect_err("expected empty cursor to error");
+
+    assert!(err.contains("cursor cannot be empty"));
+}
+
+#[test]
+fn parse_resource_list_kind_accepts_templates() {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "kind".to_string(),
+        serde_json::Value::String("templates".to_string()),
+    );
+    let (kind, cursor) = crate::core::app::actions::parse_resource_list_kind(&args)
+        .expect("expected kind parsing to succeed");
+
+    assert_eq!(kind, crate::core::app::actions::ResourceListKind::Templates);
+    assert!(cursor.is_none());
 }
 
 #[test]

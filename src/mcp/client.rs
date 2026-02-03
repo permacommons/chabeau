@@ -11,8 +11,8 @@ use rust_mcp_schema::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientSampling,
     GetPromptRequestParams, GetPromptResult, Implementation, InitializeRequestParams,
     InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, ReadResourceRequestParams, ReadResourceResult, RequestId, RpcError,
-    ServerCapabilities, LATEST_PROTOCOL_VERSION,
+    ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult,
+    RequestId, RpcError, ServerCapabilities, LATEST_PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
 const MCP_METHOD_NOT_FOUND: i64 = -32601;
+const MCP_MAX_TOOL_LIST: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransportKind {
@@ -655,6 +656,55 @@ enum ListFetch<T> {
     Err(String),
 }
 
+macro_rules! paginate_tools_list_with {
+    ($fetch_fn:path, ($($arg:expr),*)) => {{
+        match $fetch_fn($($arg),*, None).await {
+            Ok(Some(mut list)) => {
+                let meta = list.meta.take();
+                let mut tools = std::mem::take(&mut list.tools);
+                let mut next_cursor = list.next_cursor.take();
+                let mut error: Option<String> = None;
+
+                if tools.len() >= MCP_MAX_TOOL_LIST {
+                    tools.truncate(MCP_MAX_TOOL_LIST);
+                } else {
+                    while let Some(cursor) = next_cursor.clone() {
+                        match $fetch_fn($($arg),*, Some(cursor)).await {
+                            Ok(Some(next_list)) => {
+                                tools.extend(next_list.tools);
+                                next_cursor = next_list.next_cursor;
+                                if tools.len() >= MCP_MAX_TOOL_LIST {
+                                    tools.truncate(MCP_MAX_TOOL_LIST);
+                                    break;
+                                }
+                            }
+                            Ok(None) => {
+                                next_cursor = None;
+                                break;
+                            }
+                            Err(message) => {
+                                error = Some(message);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                match error {
+                    Some(message) => Err(message),
+                    None => Ok(Some(ListToolsResult {
+                        meta,
+                        next_cursor,
+                        tools,
+                    })),
+                }
+            }
+            Ok(None) => Ok(None),
+            Err(message) => Err(message),
+        }
+    }};
+}
+
 impl McpClientManager {
     pub fn set_request_sender(&mut self, sender: mpsc::UnboundedSender<McpServerRequest>) {
         self.server_request_tx = Some(sender);
@@ -684,6 +734,22 @@ impl McpClientManager {
             }
             ListFetch::Err(message) => {
                 server.last_error = Some(format!("{label} listing failed: {message}"));
+            }
+        }
+    }
+
+    fn apply_tools_list_result(&mut self, id: &str, result: Result<ListToolsResult, String>) {
+        match result {
+            Ok(list) => {
+                if let Some(server) = self.server_mut(id) {
+                    server.cached_tools = Some(list);
+                    server.last_error = None;
+                }
+            }
+            Err(message) => {
+                if let Some(server) = self.server_mut(id) {
+                    server.last_error = Some(format!("Tools listing failed: {message}"));
+                }
             }
         }
     }
@@ -892,21 +958,11 @@ impl McpClientManager {
             return;
         };
 
-        let response = client
-            .send_request(RequestFromClient::ListToolsRequest(None))
-            .await;
-        let fetch = match response {
-            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
-            Ok(message) => match parse_list_tools(message) {
-                Ok(list) => ListFetch::Ok(list, None),
-                Err(err) => ListFetch::Err(err),
-            },
-            Err(err) => ListFetch::Err(err),
-        };
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(server, fetch, "Tools", empty_list_tools, |server, list| {
-                server.cached_tools = Some(list)
-            });
+        let list = paginate_tools_list_with!(fetch_tools_page_stdio, (&client));
+        match list {
+            Ok(Some(list)) => self.apply_tools_list_result(id, Ok(list)),
+            Ok(None) => self.apply_tools_list_result(id, Ok(empty_list_tools())),
+            Err(message) => self.apply_tools_list_result(id, Err(message)),
         }
     }
 
@@ -1065,15 +1121,11 @@ impl McpClientManager {
             return;
         }
 
-        let response = self
-            .send_streamable_http_request(id, RequestFromClient::ListToolsRequest(None))
-            .await;
-
-        let fetch = streamable_http_list_fetch(response, parse_list_tools);
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(server, fetch, "Tools", empty_list_tools, |server, list| {
-                server.cached_tools = Some(list)
-            });
+        let list = paginate_tools_list_with!(fetch_tools_page_http, (self, id));
+        match list {
+            Ok(Some(list)) => self.apply_tools_list_result(id, Ok(list)),
+            Ok(None) => self.apply_tools_list_result(id, Ok(empty_list_tools())),
+            Err(message) => self.apply_tools_list_result(id, Err(message)),
         }
     }
 
@@ -1668,6 +1720,68 @@ pub async fn execute_resource_read(
     }
 }
 
+pub async fn execute_resource_list(
+    context: &mut McpToolCallContext,
+    cursor: Option<String>,
+) -> Result<ListResourcesResult, String> {
+    let params = cursor.map(|cursor| PaginatedRequestParams {
+        cursor: Some(cursor),
+        meta: None,
+    });
+
+    match context.transport_kind {
+        McpTransportKind::Stdio => {
+            let Some(client) = context.client.clone() else {
+                return Err("MCP client not connected.".to_string());
+            };
+            let response = client
+                .send_request(RequestFromClient::ListResourcesRequest(params))
+                .await?;
+            parse_list_resources(response)
+        }
+        McpTransportKind::StreamableHttp => {
+            ensure_streamable_http_session_context(context).await?;
+            let response = send_streamable_http_request_with_context(
+                context,
+                RequestFromClient::ListResourcesRequest(params),
+            )
+            .await?;
+            parse_list_resources(response)
+        }
+    }
+}
+
+pub async fn execute_resource_template_list(
+    context: &mut McpToolCallContext,
+    cursor: Option<String>,
+) -> Result<ListResourceTemplatesResult, String> {
+    let params = cursor.map(|cursor| PaginatedRequestParams {
+        cursor: Some(cursor),
+        meta: None,
+    });
+
+    match context.transport_kind {
+        McpTransportKind::Stdio => {
+            let Some(client) = context.client.clone() else {
+                return Err("MCP client not connected.".to_string());
+            };
+            let response = client
+                .send_request(RequestFromClient::ListResourceTemplatesRequest(params))
+                .await?;
+            parse_list_resource_templates(response)
+        }
+        McpTransportKind::StreamableHttp => {
+            ensure_streamable_http_session_context(context).await?;
+            let response = send_streamable_http_request_with_context(
+                context,
+                RequestFromClient::ListResourceTemplatesRequest(params),
+            )
+            .await?;
+            parse_list_resource_templates(response)
+        }
+    }
+}
+
 pub async fn execute_prompt(
     context: &mut McpPromptContext,
     request: &crate::core::app::session::McpPromptRequest,
@@ -1951,6 +2065,8 @@ fn parse_initialize_result(message: ServerMessage) -> Result<InitializeResult, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     fn sample_config() -> McpServerConfig {
         McpServerConfig {
@@ -2017,6 +2133,100 @@ mod tests {
         assert!(state.supports_tools());
         assert!(state.supports_resources());
         assert!(state.supports_prompts());
+    }
+
+    fn sample_tool(name: String) -> rust_mcp_schema::Tool {
+        rust_mcp_schema::Tool {
+            annotations: None,
+            description: None,
+            execution: None,
+            icons: Vec::new(),
+            input_schema: rust_mcp_schema::ToolInputSchema::new(Vec::new(), None, None),
+            meta: None,
+            name,
+            output_schema: None,
+            title: None,
+        }
+    }
+
+    struct ToolPageState {
+        calls: Vec<Option<String>>,
+    }
+
+    async fn fetch_tools_page_test(
+        state: &Arc<Mutex<ToolPageState>>,
+        cursor: Option<String>,
+    ) -> Result<Option<ListToolsResult>, String> {
+        let mut state = state.lock().await;
+        state.calls.push(cursor.clone());
+        let result = match cursor.as_deref() {
+            None => ListToolsResult {
+                meta: None,
+                next_cursor: Some("c1".to_string()),
+                tools: (0..60)
+                    .map(|idx| sample_tool(format!("tool-{idx}")))
+                    .collect(),
+            },
+            Some("c1") => ListToolsResult {
+                meta: None,
+                next_cursor: Some("c2".to_string()),
+                tools: (60..120)
+                    .map(|idx| sample_tool(format!("tool-{idx}")))
+                    .collect(),
+            },
+            Some("c2") => ListToolsResult {
+                meta: None,
+                next_cursor: None,
+                tools: vec![sample_tool("tool-120".to_string())],
+            },
+            Some(other) => {
+                return Err(format!("Unexpected cursor: {other}"));
+            }
+        };
+
+        Ok(Some(result))
+    }
+
+    #[tokio::test]
+    async fn paginate_tools_list_caps_and_preserves_cursor() {
+        let state = Arc::new(Mutex::new(ToolPageState { calls: Vec::new() }));
+        let result = paginate_tools_list_with!(fetch_tools_page_test, (&state))
+            .expect("pagination should succeed")
+            .expect("expected list tools result");
+
+        assert_eq!(result.tools.len(), MCP_MAX_TOOL_LIST);
+        assert_eq!(result.next_cursor.as_deref(), Some("c2"));
+        let calls = state.lock().await.calls.clone();
+        assert_eq!(calls, vec![None, Some("c1".to_string())]);
+    }
+
+    async fn fetch_tools_page_first_page_full(
+        state: &Arc<Mutex<ToolPageState>>,
+        cursor: Option<String>,
+    ) -> Result<Option<ListToolsResult>, String> {
+        let mut state = state.lock().await;
+        state.calls.push(cursor.clone());
+        let result = ListToolsResult {
+            meta: None,
+            next_cursor: Some("c1".to_string()),
+            tools: (0..MCP_MAX_TOOL_LIST + 5)
+                .map(|idx| sample_tool(format!("tool-{idx}")))
+                .collect(),
+        };
+        Ok(Some(result))
+    }
+
+    #[tokio::test]
+    async fn paginate_tools_list_stops_when_first_page_is_full() {
+        let state = Arc::new(Mutex::new(ToolPageState { calls: Vec::new() }));
+        let result = paginate_tools_list_with!(fetch_tools_page_first_page_full, (&state))
+            .expect("pagination should succeed")
+            .expect("expected list tools result");
+
+        assert_eq!(result.tools.len(), MCP_MAX_TOOL_LIST);
+        assert_eq!(result.next_cursor.as_deref(), Some("c1"));
+        let calls = state.lock().await.calls.clone();
+        assert_eq!(calls, vec![None]);
     }
 }
 
@@ -2086,6 +2296,47 @@ fn is_method_not_found(message: &ServerMessage) -> bool {
         message,
         ServerMessage::Error(error) if error.error.code == MCP_METHOD_NOT_FOUND
     )
+}
+
+fn paginated_params(cursor: Option<String>) -> Option<PaginatedRequestParams> {
+    cursor.map(|cursor| PaginatedRequestParams {
+        cursor: Some(cursor),
+        meta: None,
+    })
+}
+
+async fn fetch_tools_page_stdio(
+    client: &Arc<StdioClient>,
+    cursor: Option<String>,
+) -> Result<Option<ListToolsResult>, String> {
+    let params = paginated_params(cursor);
+    let response = client
+        .send_request(RequestFromClient::ListToolsRequest(params))
+        .await;
+    match response {
+        Ok(message) if is_method_not_found(&message) => Ok(None),
+        Ok(message) => parse_list_tools(message)
+            .map(Some)
+            .map_err(|err| err.to_string()),
+        Err(err) => Err(err),
+    }
+}
+
+async fn fetch_tools_page_http(
+    manager: &mut McpClientManager,
+    id: &str,
+    cursor: Option<String>,
+) -> Result<Option<ListToolsResult>, String> {
+    let params = paginated_params(cursor);
+    let response = manager
+        .send_streamable_http_request(id, RequestFromClient::ListToolsRequest(params))
+        .await;
+    let fetch = streamable_http_list_fetch(response, parse_list_tools);
+    match fetch {
+        ListFetch::Ok(list, _) => Ok(Some(list)),
+        ListFetch::MethodNotFound(_) => Ok(None),
+        ListFetch::Err(message) => Err(message),
+    }
 }
 
 fn empty_list_tools() -> ListToolsResult {

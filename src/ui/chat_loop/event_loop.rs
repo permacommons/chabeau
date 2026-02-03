@@ -198,6 +198,50 @@ fn spawn_mcp_tool_call(
             crate::mcp::client::execute_resource_read(&mut call_context, &uri)
                 .await
                 .map(|result| serialize_mcp_result(&result))
+        } else if request
+            .tool_name
+            .eq_ignore_ascii_case(crate::mcp::MCP_LIST_RESOURCES_TOOL)
+        {
+            let Some(arguments) = request.arguments.as_ref() else {
+                dispatcher.dispatch_many(
+                    [AppAction::ToolCallCompleted {
+                        tool_name: request.tool_name.clone(),
+                        tool_call_id: request.tool_call_id.clone(),
+                        result: Err("Resource list arguments are required.".to_string()),
+                    }],
+                    ctx,
+                );
+                return;
+            };
+
+            let (kind, cursor) =
+                match crate::core::app::actions::parse_resource_list_kind(arguments) {
+                    Ok(values) => values,
+                    Err(err) => {
+                        dispatcher.dispatch_many(
+                            [AppAction::ToolCallCompleted {
+                                tool_name: request.tool_name.clone(),
+                                tool_call_id: request.tool_call_id.clone(),
+                                result: Err(err),
+                            }],
+                            ctx,
+                        );
+                        return;
+                    }
+                };
+
+            match kind {
+                crate::core::app::actions::ResourceListKind::Resources => {
+                    crate::mcp::client::execute_resource_list(&mut call_context, cursor)
+                        .await
+                        .map(|result| serialize_mcp_result(&result))
+                }
+                crate::core::app::actions::ResourceListKind::Templates => {
+                    crate::mcp::client::execute_resource_template_list(&mut call_context, cursor)
+                        .await
+                        .map(|result| serialize_mcp_result(&result))
+                }
+            }
         } else {
             crate::mcp::client::execute_tool_call(&mut call_context, &request)
                 .await

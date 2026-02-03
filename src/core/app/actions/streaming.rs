@@ -800,7 +800,66 @@ fn prepare_tool_flow(
             continue;
         }
 
-        if tool_name.eq_ignore_ascii_case(crate::mcp::MCP_READ_RESOURCE_TOOL) {
+        if tool_name.eq_ignore_ascii_case(crate::mcp::MCP_LIST_RESOURCES_TOOL) {
+            match parse_resource_list_arguments(&raw_arguments) {
+                Ok((server_id, _kind, _cursor, arguments)) => {
+                    match app.mcp.server(&server_id) {
+                        Some(server) if !server.config.is_enabled() => {
+                            pending_errors.push(PendingToolError {
+                                tool_name: tool_name.clone(),
+                                server_id: Some(server_id.clone()),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                raw_arguments: Some(raw_arguments.clone()),
+                                error: format!("MCP server is disabled: {server_id}."),
+                            });
+                            continue;
+                        }
+                        Some(server) if !server_supports_resources(server) => {
+                            pending_errors.push(PendingToolError {
+                                tool_name: tool_name.clone(),
+                                server_id: Some(server_id.clone()),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                raw_arguments: Some(raw_arguments.clone()),
+                                error: format!(
+                                    "MCP server does not support resources: {server_id}."
+                                ),
+                            });
+                            continue;
+                        }
+                        Some(_) => {}
+                        None => {
+                            pending_errors.push(PendingToolError {
+                                tool_name: tool_name.clone(),
+                                server_id: Some(server_id.clone()),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                raw_arguments: Some(raw_arguments.clone()),
+                                error: format!("Unknown MCP server id: {server_id}."),
+                            });
+                            continue;
+                        }
+                    }
+
+                    pending_queue.push_back(ToolCallRequest {
+                        server_id,
+                        tool_name: tool_name.clone(),
+                        arguments: Some(arguments),
+                        raw_arguments,
+                        tool_call_id: Some(tool_call_id),
+                    });
+                    continue;
+                }
+                Err(err) => {
+                    pending_errors.push(PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: err,
+                    });
+                    continue;
+                }
+            }
+        } else if tool_name.eq_ignore_ascii_case(crate::mcp::MCP_READ_RESOURCE_TOOL) {
             match parse_resource_read_arguments(&raw_arguments) {
                 Ok((server_id, _uri, arguments)) => {
                     match app.mcp.server(&server_id) {
@@ -1218,6 +1277,72 @@ fn parse_resource_read_arguments(
         .map(str::to_string)
         .ok_or_else(|| "Resource read requires uri.".to_string())?;
     Ok((server_id, uri, arguments))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResourceListKind {
+    Resources,
+    Templates,
+}
+
+type ResourceListArgs = (String, ResourceListKind, Option<String>, Map<String, Value>);
+
+fn parse_resource_list_arguments(raw: &str) -> Result<ResourceListArgs, String> {
+    let mut arguments = parse_tool_arguments(raw)?
+        .ok_or_else(|| "Resource list arguments are required.".to_string())?;
+    let server_id = arguments
+        .get("server_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "Resource list requires server_id.".to_string())?;
+    let (kind, cursor) = parse_resource_list_kind(&arguments)?;
+    arguments.insert(
+        "kind".to_string(),
+        Value::String(match kind {
+            ResourceListKind::Resources => "resources".to_string(),
+            ResourceListKind::Templates => "templates".to_string(),
+        }),
+    );
+    Ok((server_id, kind, cursor, arguments))
+}
+
+pub(crate) fn parse_resource_list_kind(
+    arguments: &Map<String, Value>,
+) -> Result<(ResourceListKind, Option<String>), String> {
+    let cursor = arguments
+        .get("cursor")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    if let Some(cursor) = cursor.as_deref() {
+        if cursor.trim().is_empty() {
+            return Err("Resource list cursor cannot be empty.".to_string());
+        }
+    }
+    let kind = match arguments
+        .get("kind")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("resources") | Some("resource") => ResourceListKind::Resources,
+        Some("templates") | Some("template") | Some("resource_templates") => {
+            ResourceListKind::Templates
+        }
+        Some(other) => {
+            return Err(format!(
+                "Resource list kind must be \"resources\" or \"templates\" (got {other})."
+            ))
+        }
+    };
+    Ok((kind, cursor))
+}
+
+fn server_supports_resources(server: &crate::mcp::client::McpServerState) -> bool {
+    server
+        .server_details
+        .as_ref()
+        .map(|details| details.capabilities.resources.is_some())
+        .unwrap_or(true)
 }
 
 fn parse_instant_recall_arguments(raw: &str) -> Result<Map<String, Value>, String> {

@@ -177,6 +177,7 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
 - If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
 - Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
+- Resource lists are injected into the system prompt with pagination cursors when available; the model can page with `mcp_list_resources` (set `kind = "templates"` for templates).
 - Tool results are summarized into session context; raw tool payload retention is configurable per server (`tool_payloads` = `turn|window|all` + `tool_payload_window`, defaults to `tool_payloads = "turn"` and `tool_payload_window = 5`). `turn` keeps only the current turn’s raw outputs, `window` keeps the last N outputs per server, and `all` keeps every raw output; summaries persist either way.
 - When a raw payload is not in context, tool summaries include a `call_id`. The assistant can call `chabeau_instant_recall` with that `call_id` to pull the full payload back into context on demand.
 - Not supported yet: context inclusion, tasks, roots, or elicitation.

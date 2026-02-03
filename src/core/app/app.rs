@@ -86,7 +86,6 @@ impl App {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,

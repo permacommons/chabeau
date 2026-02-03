@@ -1,8 +1,6 @@
 use super::*;
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
-use crate::core::app::session::{
-    PinnedToolPayloadEntry, ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus,
-};
+use crate::core::app::session::{ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus};
 use crate::core::config::data::McpServerConfig;
 use crate::core::message::Message;
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
@@ -295,14 +293,11 @@ fn build_stream_params_includes_mcp_tools() {
     );
 
     let tools = params.tools.expect("expected MCP tools");
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 2);
     assert!(tools.iter().any(|tool| tool.function.name == "search"));
     assert!(tools
         .iter()
-        .any(|tool| { tool.function.name == crate::mcp::MCP_SESSION_MEMORY_PIN_TOOL }));
-    assert!(tools
-        .iter()
-        .any(|tool| { tool.function.name == crate::mcp::MCP_SESSION_MEMORY_UNPIN_TOOL }));
+        .any(|tool| { tool.function.name == crate::mcp::MCP_INSTANT_RECALL_TOOL }));
     let description = tools
         .iter()
         .find(|tool| tool.function.name == "search")
@@ -493,14 +488,18 @@ fn build_stream_params_includes_tool_history_and_payloads() {
         .find(|msg| msg.role == "system")
         .expect("missing system message");
     assert!(system.content.contains(
-        "MCP tool payload retention note: Tool call retention policy: window(5) for all MCP servers (last 5 tool payloads per server kept; older outputs summarized)."
+        "MCP tool payload retention note: Default MCP tool output policy: only the current turn's raw outputs stay in chat context to save tokens; older outputs are summarized. Full payloads remain available via chabeau_instant_recall using call_id, which reinserts earlier outputs from system memory (NO software limit on retention)."
+    ));
+    assert!(system.content.contains(
+        "Configure per server in config.toml with tool_payloads: turn (current turn only), window (last N raw outputs; set tool_payload_window), all (keep all raw outputs in context; token-expensive)."
     ));
     assert!(system
         .content
+        .contains("MCP tool payload policy by server: alpha: default (turn)"));
+    assert!(!system
+        .content
         .contains("SESSION TOOL LEDGER (call_id • tool • args • status):"));
-    assert!(system.content.contains("SESSION MEMORY HINT:"));
-    assert!(system.content.contains("call_id=call-1"));
-    assert!(system.content.contains("call_id=call-2"));
+    assert!(!system.content.contains("SESSION MEMORY HINT:"));
     assert!(!system.content.contains("Tool history (session summaries):"));
     assert!(!system.content.contains("lookup on Alpha MCP (success)"));
 
@@ -531,195 +530,10 @@ fn build_stream_params_includes_tool_history_and_payloads() {
         .expect("missing summary message");
     let summary_message = &params.api_messages[summary_idx].content;
     assert!(summary_message.contains("missing"));
+    assert!(summary_message.contains("call_id=call-2"));
     assert!(assistant_idx < tool_idx);
     assert!(tool_idx < summary_idx);
     assert!(summary_idx < last_user_idx);
-}
-
-#[test]
-fn build_stream_params_refreshes_session_memory_on_followup() {
-    let mut app = create_test_app();
-    app.config.mcp_servers.push(McpServerConfig {
-        id: "alpha".to_string(),
-        display_name: "Alpha MCP".to_string(),
-        base_url: Some("https://mcp.example.com".to_string()),
-        command: None,
-        args: None,
-        env: None,
-        transport: Some("streamable-http".to_string()),
-        allowed_tools: None,
-        protocol_version: None,
-        enabled: Some(true),
-        tool_payloads: None,
-        tool_payload_window: None,
-        yolo: None,
-    });
-    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
-
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success)".to_string(),
-        tool_call_id: Some("call-a".to_string()),
-        raw_arguments: Some("{\"q\":\"alpha\"}".to_string()),
-        assistant_message_index: None,
-    });
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success)".to_string(),
-        tool_call_id: Some("call-b".to_string()),
-        raw_arguments: Some("{\"q\":\"beta\"}".to_string()),
-        assistant_message_index: None,
-    });
-
-    app.session
-        .pinned_tool_payloads
-        .push(PinnedToolPayloadEntry {
-            tool_call_id: "call-a".to_string(),
-            tool_name: "lookup".to_string(),
-            server_id: Some("alpha".to_string()),
-            server_name: Some("Alpha MCP".to_string()),
-            content: "payload-a".to_string(),
-            note: None,
-            assistant_message_index: None,
-        });
-
-    let _ = app.build_stream_params(
-        vec![ChatMessage {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-        }],
-        CancellationToken::new(),
-        1,
-    );
-
-    app.session
-        .pinned_tool_payloads
-        .push(PinnedToolPayloadEntry {
-            tool_call_id: "call-b".to_string(),
-            tool_name: "lookup".to_string(),
-            server_id: Some("alpha".to_string()),
-            server_name: Some("Alpha MCP".to_string()),
-            content: "payload-b".to_string(),
-            note: None,
-            assistant_message_index: None,
-        });
-
-    let base_messages = app
-        .session
-        .last_stream_api_messages
-        .clone()
-        .expect("missing last stream messages");
-    let followup = app.build_stream_params(base_messages, CancellationToken::new(), 2);
-    let system = followup
-        .api_messages
-        .iter()
-        .find(|msg| msg.role == "system")
-        .expect("missing system message");
-    let marker = "SESSION MEMORY (pinned tool outputs; oldest first):";
-    let marker_pos = system
-        .content
-        .find(marker)
-        .expect("missing session memory block");
-    let session_memory_block = &system.content[marker_pos..];
-    assert!(
-        session_memory_block.contains("call_id=call-b"),
-        "expected session memory to include newly pinned call id"
-    );
-    assert!(
-        session_memory_block.contains("payload-b"),
-        "expected session memory to include newly pinned payload"
-    );
-}
-
-#[test]
-fn build_stream_params_refreshes_tool_ledger_on_followup() {
-    let mut app = create_test_app();
-    app.config.mcp_servers.push(McpServerConfig {
-        id: "alpha".to_string(),
-        display_name: "Alpha MCP".to_string(),
-        base_url: Some("https://mcp.example.com".to_string()),
-        command: None,
-        args: None,
-        env: None,
-        transport: Some("streamable-http".to_string()),
-        allowed_tools: None,
-        protocol_version: None,
-        enabled: Some(true),
-        tool_payloads: None,
-        tool_payload_window: None,
-        yolo: None,
-    });
-    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
-
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success)".to_string(),
-        tool_call_id: Some("call-a".to_string()),
-        raw_arguments: Some("{\"q\":\"alpha\"}".to_string()),
-        assistant_message_index: None,
-    });
-
-    let _ = app.build_stream_params(
-        vec![ChatMessage {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-        }],
-        CancellationToken::new(),
-        1,
-    );
-
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success)".to_string(),
-        tool_call_id: Some("call-b".to_string()),
-        raw_arguments: Some("{\"q\":\"beta\"}".to_string()),
-        assistant_message_index: None,
-    });
-
-    let base_messages = app
-        .session
-        .last_stream_api_messages
-        .clone()
-        .expect("missing last stream messages");
-    let followup = app.build_stream_params(base_messages, CancellationToken::new(), 2);
-    let system = followup
-        .api_messages
-        .iter()
-        .find(|msg| msg.role == "system")
-        .expect("missing system message");
-    let marker = "SESSION TOOL LEDGER (call_id • tool • args • status):";
-    let marker_pos = system.content.find(marker).expect("missing tool ledger");
-    let ledger_block = &system.content[marker_pos..];
-    assert!(
-        ledger_block.contains("call_id=call-b"),
-        "expected tool ledger to include newly added call id"
-    );
 }
 
 #[test]

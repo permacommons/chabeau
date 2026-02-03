@@ -279,6 +279,13 @@ impl<'a> ConversationController<'a> {
         let pending: Vec<(u32, PendingToolCall)> = pending_map.into_iter().collect();
 
         for (_, tool_call) in pending.iter() {
+            if tool_call
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(crate::mcp::MCP_INSTANT_RECALL_TOOL))
+            {
+                continue;
+            }
             let arguments = tool_call.arguments.trim();
             let summary = summarize_tool_call_arguments(arguments);
             let content = match (tool_call.name.as_deref(), summary.as_deref()) {

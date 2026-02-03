@@ -47,8 +47,8 @@ tool discovery, and a permission store tracks per-tool approval decisions for th
 ## Tool-calling and MCP execution pipeline
 When building a stream request, Chabeau injects MCP tool schemas, a built-in MCP preamble, and optional
 resource/template listings so that the model can call tools and request MCP resources. It also adds a tool
-payload retention note, a session tool ledger, and session memory blocks when tool payload retention is
-configured to summarize outputs.【F:src/core/app/streaming.rs†L9-L214】 Tool calls are queued, permission
+payload retention note; when payloads are summarized, tool summaries include call IDs that can be used with
+`chabeau_instant_recall` to pull full outputs back into context.【F:src/core/app/streaming.rs†L9-L214】 Tool calls are queued, permission
 prompts are surfaced in the input area, and the execution path supports MCP tools, MCP resource reads,
 and MCP sampling (`sampling/createMessage`) requests with separate permission prompts or YOLO auto-approval.
 Tool results are summarized into the transcript while raw payload retention is governed by per-server policy

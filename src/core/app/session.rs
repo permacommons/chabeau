@@ -66,7 +66,6 @@ pub struct SessionContext {
     pub tool_results: Vec<ChatMessage>,
     pub tool_result_history: Vec<ToolResultRecord>,
     pub tool_payload_history: Vec<ToolPayloadHistoryEntry>,
-    pub pinned_tool_payloads: Vec<PinnedToolPayloadEntry>,
     pub active_assistant_message_index: Option<usize>,
     pub last_stream_api_messages: Option<Vec<ChatMessage>>,
     pub last_stream_api_messages_base: Option<Vec<ChatMessage>>,
@@ -151,17 +150,6 @@ pub struct ToolPayloadHistoryEntry {
     pub tool_call_id: Option<String>,
     pub assistant_message: ChatMessage,
     pub tool_message: ChatMessage,
-    pub assistant_message_index: Option<usize>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PinnedToolPayloadEntry {
-    pub tool_call_id: String,
-    pub tool_name: String,
-    pub server_id: Option<String>,
-    pub server_name: Option<String>,
-    pub content: String,
-    pub note: Option<String>,
     pub assistant_message_index: Option<usize>,
 }
 
@@ -264,12 +252,6 @@ impl SessionContext {
                 .unwrap_or(true)
         });
         self.tool_payload_history.retain(|entry| {
-            entry
-                .assistant_message_index
-                .map(|idx| !predicate(idx))
-                .unwrap_or(true)
-        });
-        self.pinned_tool_payloads.retain(|entry| {
             entry
                 .assistant_message_index
                 .map(|idx| !predicate(idx))
@@ -488,7 +470,6 @@ pub(crate) async fn prepare_with_auth(
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
         tool_payload_history: Vec::new(),
-        pinned_tool_payloads: Vec::new(),
         active_assistant_message_index: None,
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
@@ -547,7 +528,6 @@ pub(crate) async fn prepare_uninitialized(
         tool_results: Vec::new(),
         tool_result_history: Vec::new(),
         tool_payload_history: Vec::new(),
-        pinned_tool_payloads: Vec::new(),
         active_assistant_message_index: None,
         last_stream_api_messages: None,
         last_stream_api_messages_base: None,
@@ -726,7 +706,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -816,7 +795,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -885,7 +863,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -957,7 +934,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -1183,7 +1159,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -1233,7 +1208,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -1321,7 +1295,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,
@@ -1401,7 +1374,6 @@ mod tests {
             tool_results: Vec::new(),
             tool_result_history: Vec::new(),
             tool_payload_history: Vec::new(),
-            pinned_tool_payloads: Vec::new(),
             active_assistant_message_index: None,
             last_stream_api_messages: None,
             last_stream_api_messages_base: None,

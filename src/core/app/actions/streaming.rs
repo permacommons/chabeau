@@ -15,9 +15,7 @@ use crate::core::mcp_sampling::{
 };
 use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
 use crate::mcp::permissions::ToolPermissionDecision;
-use crate::mcp::{
-    MCP_SESSION_MEMORY_PIN_TOOL, MCP_SESSION_MEMORY_SERVER_ID, MCP_SESSION_MEMORY_UNPIN_TOOL,
-};
+use crate::mcp::{MCP_INSTANT_RECALL_TOOL, MCP_SESSION_MEMORY_SERVER_ID};
 use rust_mcp_schema::schema_utils::ServerJsonrpcRequest;
 use rust_mcp_schema::{
     ClientCapabilities, ClientSampling, ContentBlock, PromptMessage, Role, RpcError,
@@ -455,10 +453,10 @@ fn handle_tool_permission_decision(
         }
 
         app.session.active_tool_request = Some(request.clone());
-        set_status_for_tool_run(app, &request, ctx);
-        if is_session_memory_tool(&request.tool_name) {
-            return handle_session_memory_tool_request(app, request, ctx);
+        if is_instant_recall_tool(&request.tool_name) {
+            return handle_instant_recall_tool_request(app, request, ctx);
         }
+        set_status_for_tool_run(app, &request, ctx);
         return Some(AppCommand::RunMcpTool(request));
     }
 
@@ -848,8 +846,8 @@ fn prepare_tool_flow(
                     continue;
                 }
             }
-        } else if is_session_memory_tool(&tool_name) {
-            match parse_session_memory_arguments(&raw_arguments) {
+        } else if is_instant_recall_tool(&tool_name) {
+            match parse_instant_recall_arguments(&raw_arguments) {
                 Ok(arguments) => {
                     pending_queue.push_back(ToolCallRequest {
                         server_id: MCP_SESSION_MEMORY_SERVER_ID.to_string(),
@@ -949,20 +947,14 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         return spawn_stream_after_tools(app, ctx);
     };
 
-    if is_session_memory_tool(&request.tool_name)
-        && is_session_memory_yolo_enabled(app, &request.server_id)
-    {
+    if is_instant_recall_tool(&request.tool_name) {
         app.session.active_tool_request = Some(request.clone());
-        set_status_for_tool_run(app, &request, ctx);
-        return handle_session_memory_tool_request(app, request, ctx);
+        return handle_instant_recall_tool_request(app, request, ctx);
     }
 
     if is_mcp_yolo_enabled(app, &request.server_id) {
         app.session.active_tool_request = Some(request.clone());
         set_status_for_tool_run(app, &request, ctx);
-        if is_session_memory_tool(&request.tool_name) {
-            return handle_session_memory_tool_request(app, request, ctx);
-        }
         return Some(AppCommand::RunMcpTool(request));
     }
 
@@ -1010,11 +1002,7 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
                 .position(|record| record.id.as_str() == id.as_str())
         })
         .unwrap_or(0);
-    let display_name = if is_session_memory_tool(&tool_name) {
-        build_session_memory_prompt_display_name(app, &request)
-    } else {
-        format!("Allow {} to run {}?", server_name, tool_name)
-    };
+    let display_name = format!("Allow {} to run {}?", server_name, tool_name);
     app.session.active_tool_request = Some(request);
     app.ui.start_tool_prompt(ToolPromptRequest {
         server_id,
@@ -1232,78 +1220,22 @@ fn parse_resource_read_arguments(
     Ok((server_id, uri, arguments))
 }
 
-fn parse_session_memory_arguments(raw: &str) -> Result<Map<String, Value>, String> {
+fn parse_instant_recall_arguments(raw: &str) -> Result<Map<String, Value>, String> {
     let arguments = parse_tool_arguments(raw)?
-        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
+        .ok_or_else(|| "Instant recall arguments are required.".to_string())?;
     let tool_call_id = arguments
         .get("tool_call_id")
         .and_then(|value| value.as_str())
         .map(str::to_string)
-        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?;
+        .ok_or_else(|| "Instant recall requires tool_call_id.".to_string())?;
     if tool_call_id.trim().is_empty() {
-        return Err("Session memory tool requires tool_call_id.".to_string());
+        return Err("Instant recall requires tool_call_id.".to_string());
     }
     Ok(arguments)
 }
 
-fn is_session_memory_tool(tool_name: &str) -> bool {
-    tool_name.eq_ignore_ascii_case(MCP_SESSION_MEMORY_PIN_TOOL)
-        || tool_name.eq_ignore_ascii_case(MCP_SESSION_MEMORY_UNPIN_TOOL)
-}
-
-fn is_session_memory_yolo_enabled(app: &App, server_id: &str) -> bool {
-    if !server_id.eq_ignore_ascii_case(MCP_SESSION_MEMORY_SERVER_ID) {
-        return false;
-    }
-
-    app.mcp
-        .servers()
-        .any(|server| server.config.is_enabled() && server.config.is_yolo())
-}
-
-fn format_char_count(count: usize) -> String {
-    if count < 1_000 {
-        return format!("{count} chars");
-    }
-    if count < 1_000_000 {
-        return format!("{:.1}k chars", (count as f32) / 1_000.0);
-    }
-    format!("{:.1}m chars", (count as f32) / 1_000_000.0)
-}
-
-fn build_session_memory_prompt_display_name(app: &App, request: &ToolCallRequest) -> String {
-    if request
-        .tool_name
-        .eq_ignore_ascii_case(MCP_SESSION_MEMORY_UNPIN_TOOL)
-    {
-        return "Allow session memory to unpin tool output?".to_string();
-    }
-
-    let system_chars = app
-        .session
-        .last_stream_api_messages
-        .as_ref()
-        .and_then(|messages| messages.iter().find(|msg| msg.role == "system"))
-        .map(|message| message.content.len())
-        .unwrap_or(0);
-    let pinned_chars = request
-        .arguments
-        .as_ref()
-        .and_then(|args| args.get("tool_call_id").and_then(Value::as_str))
-        .and_then(|tool_call_id| {
-            app.session
-                .tool_result_history
-                .iter()
-                .find(|record| record.tool_call_id.as_deref() == Some(tool_call_id))
-        })
-        .map(|record| record.content.len())
-        .unwrap_or(0);
-
-    format!(
-        "Allow session memory to pin tool output? (system prompt {}, pin {})",
-        format_char_count(system_chars),
-        format_char_count(pinned_chars)
-    )
+fn is_instant_recall_tool(tool_name: &str) -> bool {
+    tool_name.eq_ignore_ascii_case(MCP_INSTANT_RECALL_TOOL)
 }
 
 fn summarize_tool_arguments(raw: &str) -> String {
@@ -1315,131 +1247,73 @@ fn summarize_tool_arguments(raw: &str) -> String {
     }
 }
 
-fn handle_session_memory_tool_request(
+fn handle_instant_recall_tool_request(
     app: &mut App,
     request: ToolCallRequest,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     let tool_call_id = request.tool_call_id.clone();
-    let raw_arguments = request.raw_arguments.clone();
-    let server_label = resolve_server_label(app, &request.server_id);
-    let meta = ToolResultMeta::new(
-        Some(server_label),
-        Some(request.server_id.clone()),
-        tool_call_id.clone(),
-        Some(raw_arguments),
-    );
 
-    let result = if request
-        .tool_name
-        .eq_ignore_ascii_case(MCP_SESSION_MEMORY_PIN_TOOL)
-    {
-        pin_tool_result(app, &request)
-    } else {
-        unpin_tool_result(app, &request)
+    let result = recall_tool_payload(app, &request);
+    let payload = match result {
+        Ok((payload, summary)) => {
+            let summary_label = summary.unwrap_or_else(|| "Unknown tool call".to_string());
+            let recall_label = tool_call_id.as_deref().map_or_else(
+                || format!("Recalling result from previous tool call: {summary_label}"),
+                |id| format!("Recalling result from previous tool call {id}: {summary_label}"),
+            );
+            app.conversation()
+                .add_app_message(AppMessageKind::Info, recall_label);
+            payload
+        }
+        Err(error) => {
+            app.conversation().add_app_message(
+                AppMessageKind::Warning,
+                format!("Instant recall failed: {error}"),
+            );
+            error
+        }
     };
 
-    let (payload, status, failure_kind) = match result {
-        Ok(message) => (message, ToolResultStatus::Success, None),
-        Err(error) => (
-            error,
-            ToolResultStatus::Error,
-            Some(ToolFailureKind::ToolError),
-        ),
+    let tool_message = ChatMessage {
+        role: "tool".to_string(),
+        content: payload,
+        name: None,
+        tool_call_id,
+        tool_calls: None,
     };
+    app.session.tool_results.push(tool_message);
 
-    let mut meta = meta;
-    meta.failure_kind = failure_kind;
-    record_tool_result(app, &request.tool_name, meta, payload, status, ctx);
+    app.clear_status();
     app.session.active_tool_request = None;
     advance_tool_queue(app, ctx)
 }
 
-fn pin_tool_result(app: &mut App, request: &ToolCallRequest) -> Result<String, String> {
+fn recall_tool_payload(
+    app: &App,
+    request: &ToolCallRequest,
+) -> Result<(String, Option<String>), String> {
     let arguments = request
         .arguments
         .as_ref()
-        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
+        .ok_or_else(|| "Instant recall arguments are required.".to_string())?;
     let tool_call_id = arguments
         .get("tool_call_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?
+        .ok_or_else(|| "Instant recall requires tool_call_id.".to_string())?
         .trim()
         .to_string();
     if tool_call_id.is_empty() {
-        return Err("Session memory tool requires tool_call_id.".to_string());
+        return Err("Instant recall requires tool_call_id.".to_string());
     }
-    let note = arguments
-        .get("note")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
-
     let record = app
         .session
         .tool_result_history
         .iter()
         .find(|entry| entry.tool_call_id.as_deref() == Some(tool_call_id.as_str()))
-        .cloned()
         .ok_or_else(|| format!("No tool result found for tool_call_id={tool_call_id}."))?;
 
-    if let Some(existing) = app
-        .session
-        .pinned_tool_payloads
-        .iter_mut()
-        .find(|entry| entry.tool_call_id == tool_call_id)
-    {
-        existing.content = record.content;
-        if note.is_some() {
-            existing.note = note;
-        }
-        return Ok(format!(
-            "Tool result {tool_call_id} is already pinned; session memory updated."
-        ));
-    }
-
-    app.session
-        .pinned_tool_payloads
-        .push(crate::core::app::session::PinnedToolPayloadEntry {
-            tool_call_id: tool_call_id.clone(),
-            tool_name: record.tool_name,
-            server_id: record.server_id,
-            server_name: record.server_name,
-            content: record.content,
-            note,
-            assistant_message_index: record.assistant_message_index,
-        });
-
-    Ok(format!(
-        "Pinned tool result {tool_call_id} into session memory."
-    ))
-}
-
-fn unpin_tool_result(app: &mut App, request: &ToolCallRequest) -> Result<String, String> {
-    let arguments = request
-        .arguments
-        .as_ref()
-        .ok_or_else(|| "Session memory tool arguments are required.".to_string())?;
-    let tool_call_id = arguments
-        .get("tool_call_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Session memory tool requires tool_call_id.".to_string())?
-        .trim()
-        .to_string();
-    if tool_call_id.is_empty() {
-        return Err("Session memory tool requires tool_call_id.".to_string());
-    }
-
-    let index = app
-        .session
-        .pinned_tool_payloads
-        .iter()
-        .position(|entry| entry.tool_call_id == tool_call_id)
-        .ok_or_else(|| format!("No pinned entry found for tool_call_id={tool_call_id}."))?;
-    app.session.pinned_tool_payloads.remove(index);
-
-    Ok(format!(
-        "Removed tool result {tool_call_id} from session memory."
-    ))
+    Ok((record.content.clone(), Some(record.summary.clone())))
 }
 
 fn record_tool_result(
@@ -1671,7 +1545,7 @@ fn is_mcp_yolo_enabled(app: &App, server_id: &str) -> bool {
 
 fn resolve_server_label(app: &App, server_id: &str) -> String {
     if server_id.eq_ignore_ascii_case(MCP_SESSION_MEMORY_SERVER_ID) {
-        return "Session memory".to_string();
+        return "Instant recall".to_string();
     }
     app.mcp
         .server(server_id)

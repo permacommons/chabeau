@@ -249,8 +249,7 @@ impl McpServerConfig {
     }
 
     pub fn tool_payloads(&self) -> McpToolPayloadRetention {
-        self.tool_payloads
-            .unwrap_or(McpToolPayloadRetention::Window)
+        self.tool_payloads.unwrap_or(McpToolPayloadRetention::Turn)
     }
 
     pub fn tool_payload_window(&self) -> usize {

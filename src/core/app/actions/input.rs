@@ -583,7 +583,7 @@ fn build_tool_pending_content(request: &ToolCallRequest, app: &App, decoded: boo
 
 fn resolve_server_label(app: &App, server_id: &str) -> String {
     if server_id.eq_ignore_ascii_case(crate::mcp::MCP_SESSION_MEMORY_SERVER_ID) {
-        return "Session memory".to_string();
+        return "Instant recall".to_string();
     }
     app.mcp
         .server(server_id)

@@ -642,6 +642,21 @@ impl McpServerState {
             .map(|caps| caps.prompts.is_some())
             .unwrap_or(true)
     }
+
+    pub fn clear_runtime_state(&mut self) {
+        self.connected = false;
+        self.last_error = None;
+        self.cached_tools = None;
+        self.cached_resources = None;
+        self.cached_resource_templates = None;
+        self.cached_prompts = None;
+        self.session_id = None;
+        self.auth_header = None;
+        self.server_details = None;
+        self.streamable_http_request_id = 0;
+        self.event_listener_started = false;
+        self.client = None;
+    }
 }
 
 #[derive(Default, Clone)]

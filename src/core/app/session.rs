@@ -263,6 +263,23 @@ impl SessionContext {
             }
         }
     }
+
+    pub fn clear_mcp_tool_records(&mut self, server_id: &str) {
+        self.tool_result_history.retain(|record| {
+            record
+                .server_id
+                .as_deref()
+                .map(|id| !id.eq_ignore_ascii_case(server_id))
+                .unwrap_or(true)
+        });
+        self.tool_payload_history.retain(|entry| {
+            entry
+                .server_id
+                .as_deref()
+                .map(|id| !id.eq_ignore_ascii_case(server_id))
+                .unwrap_or(true)
+        });
+    }
 }
 
 /// Result of attempting to load a character during session initialization.

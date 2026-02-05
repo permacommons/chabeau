@@ -173,7 +173,7 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
 - HTTP servers use `base_url` and need a token: `chabeau mcp token <server-id>`.
 - Stdio servers run a local command with optional `args`/`env`.
-- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` (saved to `config.toml`).
+- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` (saved to `config.toml`). Turning a server on refreshes MCP data immediately; turning it off clears cached MCP metadata and removes it from API payloads. Use `/mcp <server-id> forget` to disable the server and clear cached MCP metadata, permissions, and tool history.
 - Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
 - If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
 - Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).

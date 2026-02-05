@@ -416,20 +416,20 @@ pub(super) fn handle_mcp(app: &mut App, invocation: CommandInvocation<'_>) -> Co
         1 => handle_mcp_server(app, server_id.unwrap()),
         2 => {
             let arg = invocation.arg(1).unwrap_or_default();
-            let new_state = match arg.to_ascii_lowercase().as_str() {
-                "on" => true,
-                "off" => false,
+            match arg.to_ascii_lowercase().as_str() {
+                "on" => handle_mcp_toggle(app, server_id.unwrap(), true),
+                "off" => handle_mcp_toggle(app, server_id.unwrap(), false),
+                "forget" => handle_mcp_forget(app, server_id.unwrap()),
                 _ => {
                     app.conversation()
-                        .set_status("Usage: /mcp <server-id> [on|off]".to_string());
-                    return CommandResult::Continue;
+                        .set_status("Usage: /mcp <server-id> [on|off|forget]".to_string());
+                    CommandResult::Continue
                 }
-            };
-            handle_mcp_toggle(app, server_id.unwrap(), new_state)
+            }
         }
         _ => {
             app.conversation()
-                .set_status("Usage: /mcp <server-id> [on|off]".to_string());
+                .set_status("Usage: /mcp <server-id> [on|off|forget]".to_string());
             CommandResult::Continue
         }
     }
@@ -689,10 +689,14 @@ fn handle_mcp_toggle(app: &mut App, server_id: &str, new_state: bool) -> Command
             .set_status(format!("Unknown MCP server: {}", server_id));
         return CommandResult::Continue;
     };
+    let was_enabled = server.config.is_enabled();
     let server_label = server.config.id.clone();
 
     if let Some(server) = app.mcp.server_mut(server_id) {
         server.config.enabled = Some(new_state);
+        if !new_state {
+            clear_mcp_runtime_state(server);
+        }
     }
     if let Some(server) = app
         .config
@@ -725,11 +729,79 @@ fn handle_mcp_toggle(app: &mut App, server_id: &str, new_state: bool) -> Command
     } else {
         "config.toml not saved"
     };
+    if new_state && !was_enabled && !app.session.mcp_disabled {
+        app.conversation().set_status(format!(
+            "Refreshing MCP data for {} ({})",
+            server_label, persist_note
+        ));
+        app.ui
+            .begin_activity(crate::core::app::ActivityKind::McpRefresh);
+        return CommandResult::RefreshMcp {
+            server_id: server_id.to_string(),
+        };
+    }
+
     app.conversation().set_status(format!(
         "MCP {} for {} ({})",
         state_word, server_label, persist_note
     ));
     CommandResult::Continue
+}
+
+fn handle_mcp_forget(app: &mut App, server_id: &str) -> CommandResult {
+    let Some(server) = app.mcp.server(server_id) else {
+        app.conversation()
+            .set_status(format!("Unknown MCP server: {}", server_id));
+        return CommandResult::Continue;
+    };
+    let server_label = server.config.id.clone();
+
+    if let Some(server) = app.mcp.server_mut(server_id) {
+        server.config.enabled = Some(false);
+        clear_mcp_runtime_state(server);
+    }
+    if let Some(server) = app
+        .config
+        .mcp_servers
+        .iter_mut()
+        .find(|server| server.id.eq_ignore_ascii_case(server_id))
+    {
+        server.enabled = Some(false);
+    }
+
+    let saved = match crate::core::config::data::Config::load() {
+        Ok(mut cfg) => {
+            if let Some(server) = cfg
+                .mcp_servers
+                .iter_mut()
+                .find(|server| server.id.eq_ignore_ascii_case(server_id))
+            {
+                server.enabled = Some(false);
+                cfg.save().is_ok()
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    };
+
+    app.mcp_permissions.clear_server(server_id);
+    app.session.clear_mcp_tool_records(server_id);
+
+    let persist_note = if saved {
+        "saved to config.toml"
+    } else {
+        "config.toml not saved"
+    };
+    app.conversation().set_status(format!(
+        "Forgot MCP data for {} ({})",
+        server_label, persist_note
+    ));
+    CommandResult::Continue
+}
+
+fn clear_mcp_runtime_state(server: &mut crate::mcp::client::McpServerState) {
+    server.clear_runtime_state();
 }
 
 pub(crate) fn build_mcp_server_output(
@@ -1290,6 +1362,10 @@ mod tests {
     use crate::core::message::ROLE_ASSISTANT;
     use crate::core::persona::PersonaManager;
     use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
+    use rust_mcp_schema::{
+        Implementation, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
+        ListResourcesResult, ListToolsResult, ServerCapabilities,
+    };
     use std::fs;
     use std::io::Read;
     use std::path::Path;
@@ -2103,6 +2179,304 @@ mod tests {
                 .and_then(|server| server.get("enabled"))
                 .and_then(|value| value.as_bool());
             assert_eq!(enabled, Some(false));
+        });
+    }
+
+    #[test]
+    fn mcp_command_toggle_on_triggers_refresh() {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
+            let mut config = Config::default();
+            config.mcp_servers.push(McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(false),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            });
+            config.save().expect("save config");
+
+            let mut app = create_test_app();
+            app.config = config.clone();
+            app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+            let result = process_input(&mut app, "/mcp alpha on");
+            assert!(matches!(
+                result,
+                CommandResult::RefreshMcp {
+                    server_id: ref id
+                } if id == "alpha"
+            ));
+            assert!(app
+                .ui
+                .status
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Refreshing MCP data for alpha"));
+            assert_eq!(
+                app.ui.activity_indicator,
+                Some(crate::core::app::ActivityKind::McpRefresh)
+            );
+
+            let config = read_config(&config_path);
+            let enabled = config
+                .get("mcp_servers")
+                .and_then(|servers| servers.as_array())
+                .and_then(|servers| servers.first())
+                .and_then(|server| server.get("enabled"))
+                .and_then(|value| value.as_bool());
+            assert_eq!(enabled, Some(true));
+        });
+    }
+
+    #[test]
+    fn mcp_command_toggle_off_clears_runtime_state() {
+        let mut app = create_test_app();
+        app.config.mcp_servers.push(McpServerConfig {
+            id: "alpha".to_string(),
+            display_name: "Alpha".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
+            yolo: None,
+        });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        if let Some(server) = app.mcp.server_mut("alpha") {
+            server.connected = true;
+            server.last_error = Some("boom".to_string());
+            server.cached_tools = Some(ListToolsResult {
+                meta: None,
+                next_cursor: None,
+                tools: Vec::new(),
+            });
+            server.cached_resources = Some(ListResourcesResult {
+                meta: None,
+                next_cursor: None,
+                resources: Vec::new(),
+            });
+            server.cached_resource_templates = Some(ListResourceTemplatesResult {
+                meta: None,
+                next_cursor: None,
+                resource_templates: Vec::new(),
+            });
+            server.cached_prompts = Some(ListPromptsResult {
+                meta: None,
+                next_cursor: None,
+                prompts: Vec::new(),
+            });
+            server.session_id = Some("session".to_string());
+            server.auth_header = Some("Bearer token".to_string());
+            server.server_details = Some(InitializeResult {
+                capabilities: ServerCapabilities::default(),
+                instructions: None,
+                meta: None,
+                protocol_version: "2025-11-25".to_string(),
+                server_info: Implementation {
+                    name: "server".to_string(),
+                    version: "0.1.0".to_string(),
+                    title: None,
+                    description: None,
+                    icons: Vec::new(),
+                    website_url: None,
+                },
+            });
+            server.streamable_http_request_id = 5;
+            server.event_listener_started = true;
+        } else {
+            panic!("missing MCP server state");
+        }
+
+        let result = process_input(&mut app, "/mcp alpha off");
+        assert!(matches!(result, CommandResult::Continue));
+
+        let server = app.mcp.server("alpha").expect("missing MCP server");
+        assert!(!server.connected);
+        assert!(server.last_error.is_none());
+        assert!(server.cached_tools.is_none());
+        assert!(server.cached_resources.is_none());
+        assert!(server.cached_resource_templates.is_none());
+        assert!(server.cached_prompts.is_none());
+        assert!(server.session_id.is_none());
+        assert!(server.auth_header.is_none());
+        assert!(server.server_details.is_none());
+        assert_eq!(server.streamable_http_request_id, 0);
+        assert!(!server.event_listener_started);
+    }
+
+    #[test]
+    fn mcp_command_forget_clears_permissions_and_history() {
+        with_test_config_env(|config_root| {
+            let config_path = config_root.join("chabeau").join("config.toml");
+            let mut config = Config::default();
+            config.mcp_servers.push(McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            });
+            config.mcp_servers.push(McpServerConfig {
+                id: "beta".to_string(),
+                display_name: "Beta".to_string(),
+                base_url: Some("https://mcp.example.com".to_string()),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            });
+            config.save().expect("save config");
+
+            let mut app = create_test_app();
+            app.config = config.clone();
+            app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+            app.mcp_permissions.record(
+                "alpha",
+                "tool-a",
+                crate::mcp::permissions::ToolPermissionDecision::Block,
+            );
+            app.mcp_permissions.record(
+                "beta",
+                "tool-b",
+                crate::mcp::permissions::ToolPermissionDecision::Block,
+            );
+
+            app.session
+                .tool_result_history
+                .push(crate::core::app::session::ToolResultRecord {
+                    tool_name: "tool-a".to_string(),
+                    server_name: Some("Alpha".to_string()),
+                    server_id: Some("alpha".to_string()),
+                    status: crate::core::app::session::ToolResultStatus::Success,
+                    failure_kind: None,
+                    content: "ok".to_string(),
+                    summary: "ok".to_string(),
+                    tool_call_id: None,
+                    raw_arguments: None,
+                    assistant_message_index: None,
+                });
+            app.session
+                .tool_result_history
+                .push(crate::core::app::session::ToolResultRecord {
+                    tool_name: "tool-b".to_string(),
+                    server_name: Some("Beta".to_string()),
+                    server_id: Some("beta".to_string()),
+                    status: crate::core::app::session::ToolResultStatus::Success,
+                    failure_kind: None,
+                    content: "ok".to_string(),
+                    summary: "ok".to_string(),
+                    tool_call_id: None,
+                    raw_arguments: None,
+                    assistant_message_index: None,
+                });
+            app.session.tool_payload_history.push(
+                crate::core::app::session::ToolPayloadHistoryEntry {
+                    server_id: Some("alpha".to_string()),
+                    tool_call_id: Some("1".to_string()),
+                    assistant_message: crate::api::ChatMessage {
+                        role: "assistant".to_string(),
+                        content: "call".to_string(),
+                        name: None,
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                    tool_message: crate::api::ChatMessage {
+                        role: "tool".to_string(),
+                        content: "result".to_string(),
+                        name: None,
+                        tool_call_id: Some("1".to_string()),
+                        tool_calls: None,
+                    },
+                    assistant_message_index: None,
+                },
+            );
+            app.session.tool_payload_history.push(
+                crate::core::app::session::ToolPayloadHistoryEntry {
+                    server_id: Some("beta".to_string()),
+                    tool_call_id: Some("2".to_string()),
+                    assistant_message: crate::api::ChatMessage {
+                        role: "assistant".to_string(),
+                        content: "call".to_string(),
+                        name: None,
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                    tool_message: crate::api::ChatMessage {
+                        role: "tool".to_string(),
+                        content: "result".to_string(),
+                        name: None,
+                        tool_call_id: Some("2".to_string()),
+                        tool_calls: None,
+                    },
+                    assistant_message_index: None,
+                },
+            );
+
+            let result = process_input(&mut app, "/mcp alpha forget");
+            assert!(matches!(result, CommandResult::Continue));
+            assert_eq!(
+                app.mcp_permissions
+                    .decision_for("alpha", "tool-a")
+                    .is_some(),
+                false
+            );
+            assert_eq!(
+                app.mcp_permissions.decision_for("beta", "tool-b").is_some(),
+                true
+            );
+            assert_eq!(app.session.tool_result_history.len(), 1);
+            assert_eq!(app.session.tool_payload_history.len(), 1);
+            assert_eq!(
+                app.session.tool_result_history[0].server_id.as_deref(),
+                Some("beta")
+            );
+            assert_eq!(
+                app.session.tool_payload_history[0].server_id.as_deref(),
+                Some("beta")
+            );
+
+            let config = read_config(&config_path);
+            let alpha_enabled = config
+                .get("mcp_servers")
+                .and_then(|servers| servers.as_array())
+                .and_then(|servers| {
+                    servers
+                        .iter()
+                        .find(|server| server.get("id").and_then(|id| id.as_str()) == Some("alpha"))
+                })
+                .and_then(|server| server.get("enabled"))
+                .and_then(|value| value.as_bool());
+            assert_eq!(alpha_enabled, Some(false));
         });
     }
 

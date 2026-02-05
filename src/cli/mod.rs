@@ -6,6 +6,7 @@ pub mod character_list;
 pub mod model_list;
 pub mod provider_list;
 pub mod say;
+pub mod settings;
 pub mod theme_list;
 
 use std::error::Error;
@@ -22,14 +23,18 @@ use crate::character::CharacterService;
 use crate::cli::character_list::list_characters;
 use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
+use crate::cli::settings::{SetContext, SettingRegistry};
 use crate::cli::theme_list::list_themes;
-use crate::core::builtin_providers::find_builtin_provider;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
 use crate::core::persona::PersonaManager;
-use crate::ui::builtin_themes::find_builtin_theme;
 use crate::ui::chat_loop::run_chat;
 use tracing_subscriber::EnvFilter;
+
+#[cfg(test)]
+use crate::core::builtin_providers::find_builtin_provider;
+#[cfg(test)]
+use crate::ui::builtin_themes::find_builtin_theme;
 
 fn print_version_info() {
     println!("chabeau {}", env!("CARGO_PKG_VERSION"));
@@ -262,6 +267,7 @@ fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Err
 
 /// Resolve a provider identifier against built-in and custom providers.
 /// Returns the canonical provider ID if found.
+#[cfg(test)]
 fn resolve_provider_id(config: &Config, input: &str) -> Option<String> {
     if let Some(provider) = find_builtin_provider(input) {
         return Some(provider.id);
@@ -274,6 +280,7 @@ fn resolve_provider_id(config: &Config, input: &str) -> Option<String> {
 
 /// Resolve a theme identifier against built-in and custom themes.
 /// Returns the canonical theme ID if found.
+#[cfg(test)]
 fn resolve_theme_id(config: &Config, input: &str) -> Option<String> {
     if let Some(theme) = find_builtin_theme(input) {
         return Some(theme.id);
@@ -309,6 +316,16 @@ fn validate_preset(preset_id: &str, config: &Config) -> Result<(), Box<dyn Error
     }
 
     Ok(())
+}
+
+/// Print all settings using the registry's format methods.
+fn print_all_settings(config: &Config, registry: &SettingRegistry) {
+    println!("Current configuration:");
+    for key in registry.keys_display_order() {
+        if let Some(handler) = registry.get(key) {
+            println!("{}", handler.format(config));
+        }
+    }
 }
 
 async fn async_main() -> Result<(), Box<dyn Error>> {
@@ -400,210 +417,60 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some(Commands::Set { key, value }) => {
+            let registry = SettingRegistry::new();
+            let config = Config::load()?;
+
             if let Some(key) = key {
-                match key.as_str() {
-                    "default-provider" => {
-                        if !value.is_empty() {
-                            let provider_input = value.join(" ");
-                            let config_snapshot = Config::load()?;
+                let mut ctx = SetContext {
+                    config: &config,
+                    character_service: &mut character_service,
+                };
 
-                            match resolve_provider_id(&config_snapshot, &provider_input) {
-                                Some(resolved_provider) => {
-                                    let provider_msg = resolved_provider.clone();
-                                    Config::mutate(move |config| {
-                                        config.default_provider = Some(resolved_provider);
-                                        Ok(())
-                                    })?;
-                                    println!("✅ Set default-provider to: {provider_msg}");
-                                }
-                                None => {
-                                    eprintln!(
-                                        "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
-                                    );
-                                    std::process::exit(1);
+                match registry.get(&key) {
+                    Some(handler) => {
+                        if value.is_empty() {
+                            // No value provided, show current config
+                            print_all_settings(&config, &registry);
+                        } else {
+                            match handler.set(&value, &mut ctx) {
+                                Ok(msg) => println!("{msg}"),
+                                Err(e) => {
+                                    e.print();
+                                    std::process::exit(e.exit_code());
                                 }
                             }
-                        } else {
-                            Config::load()?.print_all();
                         }
                     }
-                    "theme" => {
-                        if !value.is_empty() {
-                            let theme_input = value.join(" ");
-                            let config_snapshot = Config::load()?;
-
-                            match resolve_theme_id(&config_snapshot, &theme_input) {
-                                Some(resolved_theme) => {
-                                    let theme_msg = resolved_theme.clone();
-                                    Config::mutate(move |config| {
-                                        config.theme = Some(resolved_theme);
-                                        Ok(())
-                                    })?;
-                                    println!("✅ Set theme to: {theme_msg}");
-                                }
-                                None => {
-                                    eprintln!(
-                                        "❌ Unknown theme: {theme_input}. Run 'chabeau themes' to list available themes."
-                                    );
-                                    std::process::exit(1);
-                                }
-                            }
-                        } else {
-                            Config::load()?.print_all();
-                        }
-                    }
-                    "default-model" => {
-                        if !value.is_empty() {
-                            let val_str = value.join(" ");
-                            let parts: Vec<&str> = val_str.splitn(2, ' ').collect();
-                            if parts.len() == 2 {
-                                let provider_input = parts[0].to_string();
-                                let model = parts[1].to_string();
-                                let config_snapshot = Config::load()?;
-
-                                let Some(resolved_provider) =
-                                    resolve_provider_id(&config_snapshot, &provider_input)
-                                else {
-                                    eprintln!(
-                                        "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
-                                    );
-                                    std::process::exit(1);
-                                };
-
-                                let provider_msg = resolved_provider.clone();
-                                let model_msg = model.clone();
-                                Config::mutate(move |config| {
-                                    config.set_default_model(resolved_provider, model);
-                                    Ok(())
-                                })?;
-                                println!(
-                                    "✅ Set default-model for provider '{}' to: {}",
-                                    provider_msg, model_msg
-                                );
-                            } else {
-                                eprintln!(
-                                    "⚠️  To set a default model, specify the provider and model:"
-                                );
-                                eprintln!("Example: chabeau set default-model openai gpt-4o");
-                            }
-                        } else {
-                            Config::load()?.print_all();
-                        }
-                    }
-                    "default-character" => {
-                        if value.len() >= 3 {
-                            let provider_input = value[0].to_string();
-                            let model = value[1].to_string();
-                            let character = value[2..].join(" ");
-
-                            let config_snapshot = Config::load()?;
-                            let Some(resolved_provider) =
-                                resolve_provider_id(&config_snapshot, &provider_input)
-                            else {
-                                eprintln!(
-                                    "❌ Unknown provider: {provider_input}. Run 'chabeau providers' to list available providers."
-                                );
-                                std::process::exit(1);
-                            };
-
-                            match character_service.resolve_by_name(&character) {
-                                Ok(_) => {
-                                    let provider_msg = resolved_provider.clone();
-                                    let model_msg = model.clone();
-                                    let character_msg = character.clone();
-                                    Config::mutate(move |config| {
-                                        config.set_default_character(
-                                            resolved_provider,
-                                            model,
-                                            character,
-                                        );
-                                        Ok(())
-                                    })?;
-                                    println!(
-                                        "✅ Set default character for '{}:{}' to: {}",
-                                        provider_msg, model_msg, character_msg
-                                    );
-                                }
-                                Err(err) => {
-                                    eprintln!("❌ {}", err);
-                                    eprintln!(
-                                        "   Run 'chabeau import <file>' to import a character card first"
-                                    );
-                                    std::process::exit(1);
-                                }
-                            }
-                        } else {
-                            eprintln!(
-                                "⚠️  To set a default character, specify provider, model, and character:"
-                            );
-                            eprintln!("Example: chabeau set default-character openai gpt-4 alice");
-                        }
-                    }
-                    _ => {
+                    None => {
                         eprintln!("❌ Unknown config key: {key}");
+                        eprintln!("   Available keys: {}", registry.keys_sorted().join(", "));
                         std::process::exit(1);
                     }
                 }
             } else {
-                Config::load()?.print_all();
+                print_all_settings(&config, &registry);
             }
             Ok(())
         }
         Some(Commands::Unset { key, value }) => {
-            match key.as_str() {
-                "default-provider" => {
-                    Config::mutate(|config| {
-                        config.default_provider = None;
-                        Ok(())
-                    })?;
-                    println!("✅ Unset default-provider");
-                }
-                "theme" => {
-                    Config::mutate(|config| {
-                        config.theme = None;
-                        Ok(())
-                    })?;
-                    println!("✅ Unset theme");
-                }
-                "default-model" => {
-                    if let Some(provider) = value {
-                        let provider_msg = provider.clone();
-                        Config::mutate(|config| {
-                            config.unset_default_model(&provider);
-                            Ok(())
-                        })?;
-                        println!("✅ Unset default-model for provider: {provider_msg}");
-                    } else {
-                        eprintln!("⚠️  To unset a default model, specify the provider:");
-                        eprintln!("Example: chabeau unset default-model openai");
+            let registry = SettingRegistry::new();
+            let config = Config::load()?;
+            let mut ctx = SetContext {
+                config: &config,
+                character_service: &mut character_service,
+            };
+
+            match registry.get(&key) {
+                Some(handler) => match handler.unset(value.as_deref(), &mut ctx) {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => {
+                        e.print();
+                        std::process::exit(e.exit_code());
                     }
-                }
-                "default-character" => {
-                    if let Some(val) = value {
-                        let parts: Vec<&str> = val.splitn(2, ' ').collect();
-                        if parts.len() == 2 {
-                            let provider = parts[0];
-                            let model = parts[1];
-                            let provider_owned = provider.to_string();
-                            let model_owned = model.to_string();
-                            Config::mutate(move |config| {
-                                config.unset_default_character(&provider_owned, &model_owned);
-                                Ok(())
-                            })?;
-                            println!("✅ Unset default character for '{}:{}'", provider, model);
-                        } else {
-                            eprintln!(
-                                "⚠️  To unset a default character, specify provider and model:"
-                            );
-                            eprintln!("Example: chabeau unset default-character openai gpt-4");
-                        }
-                    } else {
-                        eprintln!("⚠️  To unset a default character, specify provider and model:");
-                        eprintln!("Example: chabeau unset default-character openai gpt-4");
-                    }
-                }
-                _ => {
+                },
+                None => {
                     eprintln!("❌ Unknown config key: {key}");
+                    eprintln!("   Available keys: {}", registry.keys_sorted().join(", "));
                     std::process::exit(1);
                 }
             }

@@ -108,7 +108,4 @@ impl Config {
         }
     }
 
-    pub fn print_default_characters(&self) {
-        println!("{}", self.format_default_characters());
-    }
 }

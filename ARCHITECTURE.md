@@ -103,3 +103,19 @@ consistent across keyboard shortcuts and slash commands.【F:src/commands/mod.rs
 Outgoing requests are encapsulated in `StreamParams` and executed by `ChatStreamService`. Each stream runs in
 a Tokio task that posts SSE frames into an unbounded channel, normalizes malformed input, reports API errors
 with helpful Markdown summaries, and honors cancellation tokens so that user interrupts stop work promptly.【F:src/core/chat_stream.rs†L9-L349】
+
+## Configuration orchestrator and test isolation
+All configuration reads and writes go through `ConfigOrchestrator`, which caches the on-disk state and
+serializes mutations so that concurrent access is safe.【F:src/core/config/orchestrator.rs†L13-L80】 The
+static `CONFIG_ORCHESTRATOR` points at the real config path; in `#[cfg(test)]` builds a second static,
+`TEST_ORCHESTRATOR`, can be swapped in to redirect all `Config::load()`, `Config::mutate()`, and
+`Config::save()` calls to an isolated temporary directory.【F:src/core/config/orchestrator.rs†L82-L146】
+
+When `TEST_ORCHESTRATOR` is `None` (the default for most unit tests), the test-mode `Config::mutate()`
+applies the mutator to a throwaway `Config::default()` and discards the result without writing to disk.
+`Config::load()` does fall through to the real config in this case, but only for reads.
+
+Tests that need round-trip persistence (save then re-load) use `with_test_config_env()`, which creates a
+`TempDir`, sets `XDG_CONFIG_HOME` to it, calls `Config::set_test_config_path()` to activate the test
+orchestrator, and restores everything on drop.【F:src/utils/test_utils.rs†L28-L106】 This guarantees that
+`cargo test` never writes to the user's real `config.toml`.

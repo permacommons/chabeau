@@ -143,28 +143,51 @@ Chabeau stores its configuration in `config.toml`.
 
 Generally, you can rely on the UI: when you use interactive commands like `/model`, `/provider`, `/theme`, or `/character`, press Alt+Enter (or Ctrl+J) to persist the selection.
 
-Command-line helpers mirror those flows:
+### `chabeau set` / `chabeau unset`
+
+`chabeau set` handles **scalar values and selection defaults** — anything that's a single value or a provider/model mapping. Run `chabeau set` with no arguments to print the current configuration and see which values are explicitly set versus inherited defaults.
 
 ```bash
-# Set default provider
-chabeau set default-provider openai
-
-# Set default model for a provider
-chabeau set default-model openai gpt-4o
-
-# Persist a theme
-chabeau set theme dark
-
-# Set default character (per provider and model)
-chabeau set default-character openai gpt-4 hypatia
-
-# Print the current configuration
-chabeau set
+chabeau set                                              # Show all settings
+chabeau set default-provider openai                      # Provider selection
+chabeau set theme dracula                                # Theme selection
+chabeau set default-model openai gpt-4o                  # Default model per provider
+chabeau set default-character openai gpt-4 hypatia       # Default character per provider/model
+chabeau set default-persona anthropic claude-3 developer  # Default persona per provider/model
+chabeau set default-preset openai gpt-4o short           # Default preset per provider/model
+chabeau set markdown off                                 # Toggle markdown rendering
+chabeau set syntax off                                   # Toggle syntax highlighting
+chabeau set builtin-presets off                          # Toggle built-in presets
+chabeau set refine-prefix "REVISE:"                      # Custom refine trigger
+chabeau set refine-instructions "Custom instructions"    # Custom refine system prompt
+chabeau set mcp agpedia off                              # Enable/disable an MCP server
+chabeau set mcp agpedia yolo on                          # Toggle auto-approve for a server
 ```
 
-Both the CLI and TUI run these mutations through the same configuration orchestrator. Chabeau caches the parsed file based on its last-modified timestamp, skipping redundant reloads when nothing has changed, and persists updates atomically so a failed write never clobbers your existing `config.toml`.
+Every `set` key has a matching `unset` to clear the value:
 
-Prefer editing by hand? Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory and adjust it to suit your setup. The sample covers provider defaults, markdown/syntax toggles, custom providers, custom themes, and character assignments.
+```bash
+chabeau unset default-provider
+chabeau unset default-model openai                       # Provider-keyed: pass the provider
+chabeau unset default-character "openai gpt-4"           # Provider/model-keyed: quote both
+chabeau unset markdown                                   # Reverts to default (on)
+chabeau unset mcp agpedia                                # Reverts to default (on)
+chabeau unset mcp "agpedia yolo"                         # Reverts to default (off)
+```
+
+### Editing `config.toml` by hand
+
+**Structured definitions** that have multiple fields need to be edited in `config.toml` directly:
+
+- **Custom providers** — configured via `chabeau auth`, which also handles credentials
+- **Custom themes** — multi-field color/style definitions under `[[custom_themes]]`
+- **Personas** — id, display name, and bio under `[[personas]]`
+- **Presets** — id, pre, and post instructions under `[[presets]]`
+- **MCP servers** — connection config (url, command, args, env, transport) under `[[mcp_servers]]`
+
+Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory for a starting point.
+
+Both the CLI and TUI run mutations through the same configuration orchestrator. Chabeau caches the parsed file based on its last-modified timestamp, skipping redundant reloads when nothing has changed, and persists updates atomically so a failed write never clobbers your existing `config.toml`.
 
 ## MCP Servers
 
@@ -173,7 +196,7 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
 - HTTP servers use `base_url` and need a token: `chabeau mcp token <server-id>`.
 - Stdio servers run a local command with optional `args`/`env`.
-- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` (saved to `config.toml`). Turning a server on refreshes MCP data immediately; turning it off clears cached MCP metadata and removes it from API payloads. Use `/mcp <server-id> forget` to disable the server and clear cached MCP metadata, permissions, and tool history.
+- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` or `chabeau set mcp <server-id> on|off` (both saved to `config.toml`). Turning a server on refreshes MCP data immediately; turning it off clears cached MCP metadata and removes it from API payloads. Use `/mcp <server-id> forget` to disable the server and clear cached MCP metadata, permissions, and tool history.
 - Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
 - If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
 - Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
@@ -182,7 +205,7 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - When a raw payload is not in context, tool summaries include a `call_id`. The assistant can call `chabeau_instant_recall` with that `call_id` to pull the full payload back into context on demand.
 - Not supported yet: context inclusion, tasks, roots, or elicitation.
 - Need a clean run? `--disable-mcp` turns MCP off for a session. For verbose logs, use `--debug-mcp` (writes `mcp.log`).
-- Want fewer prompts? `/yolo <server-id> on|off` toggles per‑server YOLO.
+- Want fewer prompts? `/yolo <server-id> on|off` or `chabeau set mcp <server-id> yolo on|off` toggles per‑server YOLO.
 
 ## Character Cards
 
@@ -254,13 +277,24 @@ name = "Jordan"
 # bio is optional - persona will just change the display name
 ```
 
+Assign defaults per provider/model from the CLI or in `config.toml`:
+
+```bash
+chabeau set default-persona openai gpt-4o developer
+```
+
+```toml
+[default-personas.openai]
+"gpt-4o" = "developer"
+```
+
 ### Use Personas in Chat
 
 ```bash
 chabeau --persona developer                 # Start with a specific persona
 ```
 
-In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Ctrl+O to read the persona text, Enter to select). You can also run `/persona <id>` for quick switches, or select "[Turn off persona]" to return to anonymous mode.
+In the TUI, `/persona` opens the persona picker (↑↓ to navigate, Ctrl+O to read the persona text, Enter to select, Alt+Enter to set as default). You can also run `/persona <id>` for quick switches, or select "[Turn off persona]" to return to anonymous mode.
 
 When a persona is active:
 - Your messages are labeled with the persona's name instead of "You"
@@ -315,7 +349,11 @@ pre = """
 - `post` text is wrapped in blank lines and appended to the final system message. If no system message exists at either position, Chabeau creates one automatically.
 - Presets support the same `{{user}}` and `{{char}}` substitutions as personas and character cards.
 
-Assign defaults per provider/model with `default-presets`:
+Assign defaults per provider/model from the CLI or in `config.toml`:
+
+```bash
+chabeau set default-preset openai gpt-4o focus
+```
 
 ```toml
 [default-presets.openai]
@@ -432,6 +470,7 @@ Chabeau uses a modular design with focused components:
   - `mod.rs` – CLI argument parsing and command dispatching
   - `model_list.rs` – Model listing functionality
   - `provider_list.rs` – Provider listing functionality
+  - `settings/` – Trait-based `set`/`unset` handler registry
   - `theme_list.rs` – Theme listing functionality
 - `commands/` – Chat command processing and registry-driven dispatch
   - `mod.rs` – Command handlers and dispatcher
@@ -458,8 +497,7 @@ Chabeau uses a modular design with focused components:
     - `defaults.rs` – Default selection helpers and `Config` implementations
     - `io.rs` – Config path resolution and persistence routines
     - `mod.rs` – Public exports for configuration helpers
-    - `orchestrator.rs` – Cached config loader and mutation orchestrator
-    - `printing.rs` – CLI-facing config print helpers
+    - `orchestrator.rs` – Cached config loader, mutation orchestrator, and test isolation
     - `tests.rs` – Configuration module tests
   - `keyring.rs` – Secure storage for API keys
 - `message.rs` – Message data structures

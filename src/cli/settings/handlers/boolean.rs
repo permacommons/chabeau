@@ -42,7 +42,11 @@ impl SettingHandler for BooleanHandler {
         Ok(format!("✅ Set {key} to: {display}"))
     }
 
-    fn unset(&self, _args: Option<&str>, _ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
+    fn unset(
+        &self,
+        _args: Option<&str>,
+        _ctx: &mut SetContext<'_>,
+    ) -> Result<String, SettingError> {
         let set_field = self.set_field;
 
         mutate_config(move |config| {

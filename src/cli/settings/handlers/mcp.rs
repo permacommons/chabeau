@@ -58,8 +58,7 @@ impl SettingHandler for McpHandler {
         // Check if this is a yolo setting: `mcp <server> yolo on/off`
         if args.len() >= 3 && args[1].eq_ignore_ascii_case("yolo") {
             let value_input = args[2..].join(" ");
-            let yolo =
-                parse_bool(&value_input).ok_or(SettingError::InvalidBoolean(value_input))?;
+            let yolo = parse_bool(&value_input).ok_or(SettingError::InvalidBoolean(value_input))?;
             let display = format_bool(yolo);
             let server_id_owned = server_id.clone();
 
@@ -82,8 +81,7 @@ impl SettingHandler for McpHandler {
 
         // Otherwise it's an enabled setting: `mcp <server> on/off`
         let value_input = args[1..].join(" ");
-        let enabled =
-            parse_bool(&value_input).ok_or(SettingError::InvalidBoolean(value_input))?;
+        let enabled = parse_bool(&value_input).ok_or(SettingError::InvalidBoolean(value_input))?;
         let display = format_bool(enabled);
         let server_id_owned = server_id.clone();
 

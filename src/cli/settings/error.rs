@@ -36,7 +36,9 @@ impl SettingError {
                 eprintln!("❌ Unknown config key: {key}");
             }
             SettingError::UnknownProvider { input } => {
-                eprintln!("❌ Unknown provider: {input}. Run 'chabeau -p' to list available providers.");
+                eprintln!(
+                    "❌ Unknown provider: {input}. Run 'chabeau -p' to list available providers."
+                );
             }
             SettingError::UnknownTheme { input } => {
                 eprintln!(

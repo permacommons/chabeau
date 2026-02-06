@@ -183,7 +183,8 @@ pub fn render_message_with_config(
     config: MessageRenderConfig,
 ) -> RenderedMessageDetails {
     let role = RoleKind::from_message(msg);
-    let (mut lines, mut metadata) = if config.markdown {
+    let use_markdown = config.markdown && !matches!(role, RoleKind::ToolCall);
+    let (mut lines, mut metadata) = if use_markdown {
         let renderer_config = MarkdownRendererConfig {
             collect_span_metadata: config.collect_span_metadata,
             syntax_highlighting: config.syntax_highlighting,
@@ -203,7 +204,7 @@ pub fn render_message_with_config(
             config.user_display_name.as_deref(),
         )
     };
-    if !config.markdown {
+    if !use_markdown {
         if let Some(width) = config.terminal_width {
             let width = width.min(u16::MAX as usize) as u16;
             let (wrapped_lines, wrapped_metadata) =
@@ -1182,6 +1183,22 @@ mod tests {
         for (line, kinds) in details_with_width.lines.iter().zip(metadata_wrapped.iter()) {
             assert_eq!(line.spans.len(), kinds.len());
         }
+    }
+
+    #[test]
+    fn tool_call_arguments_do_not_render_markdown() {
+        let theme = crate::ui::theme::Theme::dark_default();
+        let message = Message::tool_call("lookup | Arguments: q=\"**bold**\"".to_string());
+
+        let rendered = render_markdown_for_test(&message, &theme, true, None);
+        let rendered_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(rendered_text.contains("**bold**"));
     }
 
     #[test]

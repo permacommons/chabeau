@@ -735,12 +735,16 @@ fn summarize_tool_call_arguments(raw: &str) -> Option<String> {
             }
             parts.join(", ")
         }
-        Ok(Value::Array(items)) => serde_json::to_string(&items).unwrap_or_else(|_| "[]".into()),
-        Ok(Value::String(value)) => serde_json::to_string(&value).unwrap_or(value),
+        Ok(Value::Array(items)) => abbreviate_tool_call_value(
+            &serde_json::to_string(&items).unwrap_or_else(|_| "[]".into()),
+        ),
+        Ok(Value::String(value)) => {
+            abbreviate_tool_call_value(&serde_json::to_string(&value).unwrap_or(value))
+        }
         Ok(Value::Number(value)) => value.to_string(),
         Ok(Value::Bool(value)) => value.to_string(),
         Ok(Value::Null) => "null".to_string(),
-        Err(_) => collapse_whitespace(raw),
+        Err(_) => abbreviate_tool_call_value(&collapse_whitespace(raw)),
     };
 
     let summary = collapse_whitespace(&summary);
@@ -752,14 +756,32 @@ fn summarize_tool_call_arguments(raw: &str) -> Option<String> {
 }
 
 fn summarize_tool_call_value(value: &Value) -> String {
-    match value {
+    let summary = match value {
         Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| value.clone()),
         Value::Number(value) => value.to_string(),
         Value::Bool(value) => value.to_string(),
         Value::Null => "null".to_string(),
         Value::Array(items) => serde_json::to_string(items).unwrap_or_else(|_| "[]".into()),
         Value::Object(map) => serde_json::to_string(map).unwrap_or_else(|_| "{}".into()),
+    };
+    abbreviate_tool_call_value(&summary)
+}
+
+fn abbreviate_tool_call_value(value: &str) -> String {
+    const TOOL_CALL_VALUE_LIMIT: usize = 100;
+    if value.chars().count() <= TOOL_CALL_VALUE_LIMIT {
+        return value.to_string();
     }
+
+    let mut shortened = String::with_capacity(TOOL_CALL_VALUE_LIMIT + 1);
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= TOOL_CALL_VALUE_LIMIT {
+            break;
+        }
+        shortened.push(ch);
+    }
+    shortened.push('…');
+    shortened
 }
 
 fn collapse_whitespace(input: &str) -> String {
@@ -847,6 +869,19 @@ mod tests {
         for msg in &api_messages {
             assert!(!message::is_app_message_role(&msg.role));
         }
+    }
+
+    #[test]
+    fn test_tool_call_argument_values_truncate_long_strings() {
+        let long_value = "a".repeat(120);
+        let raw = format!(r#"{{"q":"{long_value}","n":1}}"#);
+
+        let summary = summarize_tool_call_arguments(&raw).expect("summary");
+        let expected_q =
+            abbreviate_tool_call_value(&serde_json::to_string(&long_value).expect("json"));
+
+        assert!(summary.contains(&format!("q={expected_q}")));
+        assert!(summary.contains("n=1"));
     }
 
     #[test]

@@ -43,6 +43,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 
 - Full-screen terminal UI with real-time streaming responses
 - Markdown rendering in the chat area (headings, lists, quotes, tables, callouts, horizontal rules, superscript/subscript, inline/fenced code) with clickable OSC 8 hyperlinks
+- Modal pickers and inspectors temporarily suspend hyperlink rendering to keep the screen clean
 - Built-in support for many common providers (OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras)
 - Support for quick custom configuration of new OpenAI-compatible providers
 - Interactive dialogs for selecting models and providers

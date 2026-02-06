@@ -142,10 +142,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let title_text = build_main_title(app, chunks[0].width);
     let block = Block::default().title(Span::styled(title_text, app.ui.theme.title_style));
     let inner_area = block.inner(chunks[0]);
-    let picker_active = app.picker_state().is_some();
+    let suppress_links = suppress_link_rendering(app);
 
     let mut messages_lines = lines.clone();
-    if picker_active {
+    if suppress_links {
         for (line, kinds) in messages_lines.iter_mut().zip(span_metadata.iter()) {
             for (span, kind) in line.spans.iter_mut().zip(kinds.iter()) {
                 if matches!(kind, SpanKind::Link(_)) {
@@ -164,7 +164,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     f.render_widget(messages_paragraph, chunks[0]);
 
-    if picker_active {
+    if suppress_links {
         set_render_state(OscRenderState::default());
     } else {
         let state = compute_render_state(
@@ -642,6 +642,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let help = Paragraph::new(help_text.as_str()).style(app.ui.theme.system_text_style);
         f.render_widget(help, help_area);
     }
+}
+
+fn suppress_link_rendering(app: &App) -> bool {
+    app.picker_state().is_some() || app.inspect_state().is_some()
 }
 
 fn tool_prompt_insert_index(

@@ -33,7 +33,11 @@ impl SettingHandler for DefaultProviderHandler {
         Ok(format!("✅ Set default-provider to: {msg}"))
     }
 
-    fn unset(&self, _args: Option<&str>, _ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
+    fn unset(
+        &self,
+        _args: Option<&str>,
+        _ctx: &mut SetContext<'_>,
+    ) -> Result<String, SettingError> {
         mutate_config(|config| {
             config.default_provider = None;
             Ok(())
@@ -78,7 +82,11 @@ impl SettingHandler for ThemeHandler {
         Ok(format!("✅ Set theme to: {msg}"))
     }
 
-    fn unset(&self, _args: Option<&str>, _ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
+    fn unset(
+        &self,
+        _args: Option<&str>,
+        _ctx: &mut SetContext<'_>,
+    ) -> Result<String, SettingError> {
         mutate_config(|config| {
             config.theme = None;
             Ok(())

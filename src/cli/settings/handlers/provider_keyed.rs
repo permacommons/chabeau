@@ -54,7 +54,9 @@ impl SettingHandler for DefaultModelHandler {
             Ok(())
         })?;
 
-        Ok(format!("✅ Unset default-model for provider: {provider_msg}"))
+        Ok(format!(
+            "✅ Unset default-model for provider: {provider_msg}"
+        ))
     }
 
     fn format(&self, config: &Config) -> String {

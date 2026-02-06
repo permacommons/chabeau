@@ -32,7 +32,11 @@ impl SettingHandler for RefineInstructionsHandler {
         Ok(format!("✅ Set refine-instructions to: {display}"))
     }
 
-    fn unset(&self, _args: Option<&str>, _ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
+    fn unset(
+        &self,
+        _args: Option<&str>,
+        _ctx: &mut SetContext<'_>,
+    ) -> Result<String, SettingError> {
         mutate_config(|config| {
             config.refine_instructions = None;
             Ok(())
@@ -97,7 +101,11 @@ impl SettingHandler for RefinePrefixHandler {
         Ok(format!("✅ Set refine-prefix to: {msg}"))
     }
 
-    fn unset(&self, _args: Option<&str>, _ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
+    fn unset(
+        &self,
+        _args: Option<&str>,
+        _ctx: &mut SetContext<'_>,
+    ) -> Result<String, SettingError> {
         mutate_config(|config| {
             config.refine_prefix = None;
             Ok(())

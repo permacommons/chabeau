@@ -195,19 +195,14 @@ Both the CLI and TUI run mutations through the same configuration orchestrator. 
 Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resources from the TUI.
 
 - Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
-- HTTP servers use `base_url` and need a token: `chabeau mcp token <server-id>`.
-- Stdio servers run a local command with optional `args`/`env`.
-- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` or `chabeau set mcp <server-id> on|off` (both saved to `config.toml`). Turning a server on refreshes MCP data immediately; turning it off clears cached MCP metadata and removes it from API payloads. Use `/mcp <server-id> forget` to disable the server and clear cached MCP metadata, permissions, and tool history.
-- Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
-- If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
-- Tool call summaries in the transcript abbreviate long argument values; use Ctrl+O to inspect the full payload.
-- Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
-- Resource lists are injected into the system prompt with pagination cursors when available; the model can page with `mcp_list_resources` (set `kind = "templates"` for templates).
-- Tool results are summarized into session context; raw tool payload retention is configurable per server (`tool_payloads` = `turn|window|all` + `tool_payload_window`, defaults to `tool_payloads = "turn"` and `tool_payload_window = 5`). `turn` keeps only the current turn’s raw outputs, `window` keeps the last N outputs per server, and `all` keeps every raw output; summaries persist either way.
-- When a raw payload is not in context, tool summaries include a `call_id`. The assistant can call `chabeau_instant_recall` with that `call_id` to pull the full payload back into context on demand.
-- Not supported yet: context inclusion, tasks, roots, or elicitation.
-- Need a clean run? `--disable-mcp` turns MCP off for a session. For verbose logs, use `--debug-mcp` (writes `mcp.log`).
-- Want fewer prompts? `/yolo <server-id> on|off` or `chabeau set mcp <server-id> yolo on|off` toggles per‑server YOLO.
+- Manage servers from the CLI: `chabeau mcp list`, `chabeau mcp add`, `chabeau mcp add -a`, `chabeau mcp edit <server-id>`, and `chabeau mcp remove <server-id>`.
+- `chabeau mcp add` runs in basic mode and prompts only for required settings; use `-a`/`--advanced` to configure optional fields during add.
+- HTTP servers can use bearer tokens with `chabeau mcp token list [server-id]`, `chabeau mcp token add <server-id>`, and `chabeau mcp token remove <server-id>`.
+- `chabeau mcp add` probes OAuth discovery for HTTP/HTTPS servers and starts browser auth when available. You can also run `chabeau mcp oauth list [server-id]`, `chabeau mcp oauth add <server-id>`, and `chabeau mcp oauth remove <server-id>` directly. Use `chabeau mcp oauth add <server-id> -a` to provide an OAuth client id manually.
+- Stdio servers run a local command with optional `args` and `env`.
+- In the TUI, `/mcp` lists servers and `/mcp <server-id>` shows server info. Toggle with `/mcp <server-id> on|off` (or `chabeau set mcp <server-id> on|off`) and clear runtime MCP state with `/mcp <server-id> forget`.
+- If a tool requires approval, Chabeau prompts you; use `/yolo <server-id> on|off` (or `chabeau set mcp <server-id> yolo on|off`) for per-server auto-approve.
+- `--disable-mcp` turns MCP off for a session. `--debug-mcp` writes verbose MCP logs to `mcp.log`.
 
 ## Character Cards
 

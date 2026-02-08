@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{TITLE}}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg-light: #f5f7fb;
+        --fg-light: #0f172a;
+        --card-light: #ffffff;
+        --muted-light: #475569;
+        --success-light: #157347;
+        --error-light: #b42318;
+        --bg-dark: #0b1220;
+        --fg-dark: #e2e8f0;
+        --card-dark: #111827;
+        --muted-dark: #94a3b8;
+        --success-dark: #34d399;
+        --error-dark: #f87171;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: var(--bg-light);
+        color: var(--fg-light);
+        font-family:
+          "Iosevka Aile",
+          "SF Pro Text",
+          "Segoe UI",
+          "Noto Sans",
+          system-ui,
+          sans-serif;
+      }
+
+      .card {
+        width: min(560px, 100%);
+        background: var(--card-light);
+        border-radius: 16px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        box-shadow:
+          0 10px 25px rgba(15, 23, 42, 0.08),
+          0 2px 8px rgba(15, 23, 42, 0.06);
+        overflow: hidden;
+      }
+
+      .accent {
+        height: 7px;
+        background: {{ACCENT_COLOR_LIGHT}};
+      }
+
+      .content {
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        line-height: 1.2;
+        font-size: 1.4rem;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted-light);
+        line-height: 1.55;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: var(--bg-dark);
+          color: var(--fg-dark);
+        }
+
+        .card {
+          background: var(--card-dark);
+          border-color: rgba(148, 163, 184, 0.25);
+          box-shadow:
+            0 10px 25px rgba(2, 6, 23, 0.45),
+            0 2px 8px rgba(2, 6, 23, 0.3);
+        }
+
+        .accent {
+          background: {{ACCENT_COLOR_DARK}};
+        }
+
+        p {
+          color: var(--muted-dark);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" role="main">
+      <div class="accent"></div>
+      <section class="content">
+        <h1>{{HEADING}}</h1>
+        <p>{{DETAIL}}</p>
+      </section>
+    </main>
+  </body>
+</html>

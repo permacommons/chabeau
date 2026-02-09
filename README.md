@@ -189,13 +189,15 @@ chabeau unset mcp "agpedia yolo"                         # Reverts to default (o
 
 ### Editing `config.toml` by hand
 
-**Structured definitions** that have multiple fields need to be edited in `config.toml` directly:
-
-- **Custom providers** — configured via `chabeau provider add`
+The following structured definitions need to be edited in `config.toml`
+directly:
 - **Custom themes** — multi-field color/style definitions under `[[custom_themes]]`
 - **Personas** — id, display name, and bio under `[[personas]]`
 - **Presets** — id, pre, and post instructions under `[[presets]]`
-- **MCP servers** — connection config (url, command, args, env, transport) under `[[mcp_servers]]`
+
+You can also edit the following in `config.toml`, but you don't strictly need to:
+- **Custom providers** — can be configured via `chabeau provider` subcommands
+- **MCP servers** — can be configured via `chabeau mcp` subcommands
 
 Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory for a starting point.
 
@@ -205,13 +207,12 @@ Both the CLI and TUI run mutations through the same configuration orchestrator. 
 
 Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resources from the TUI.
 
-- Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
 - Manage servers from the CLI: `chabeau mcp list`, `chabeau mcp add`, `chabeau mcp add -a`, `chabeau mcp edit <server-id>`, and `chabeau mcp remove <server-id>`.
 - `chabeau mcp add` runs in basic mode and prompts only for required settings; use `-a`/`--advanced` to configure optional fields during add.
 - HTTP servers can use bearer tokens with `chabeau mcp token list [server-id]`, `chabeau mcp token add <server-id>`, and `chabeau mcp token remove <server-id>`.
 - `chabeau mcp add` probes OAuth discovery for HTTP/HTTPS servers and starts browser auth when available. You can also run `chabeau mcp oauth list [server-id]`, `chabeau mcp oauth add <server-id>`, and `chabeau mcp oauth remove <server-id>` directly. Use `chabeau mcp oauth add <server-id> -a` to provide an OAuth client id manually.
 - Stdio servers run a local command with optional `args` and `env`.
-- In the TUI, `/mcp` lists servers and `/mcp <server-id>` shows server info. Toggle with `/mcp <server-id> on|off` (or `chabeau set mcp <server-id> on|off`) and clear runtime MCP state with `/mcp <server-id> forget`.
+- In the TUI, `/mcp` lists servers and `/mcp <server-id>` shows server info. Toggle with `/mcp <server-id> on|off` (or `chabeau set mcp <server-id> on|off`). To also clear session runtime MCP state, use `/mcp <server-id> forget` instead.
 - If a tool requires approval, Chabeau prompts you; use `/yolo <server-id> on|off` (or `chabeau set mcp <server-id> yolo on|off`) for per-server auto-approve.
 - `--disable-mcp` turns MCP off for a session. `--debug-mcp` writes verbose MCP logs to `mcp.log`.
 

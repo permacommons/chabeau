@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+- MCP (Model Context Protocol) client with streamable HTTP and stdio transport, tool discovery, resource browsing, prompt invocation, sampling, cursor paging, inspector dialog for requests and results, payload retention settings and instant recall of payloads from memory, auth workflows, server capabilities display, tab completion, and a YOLO mode that suppresses permission prompts.
+- Expanded `chabeau set` support for scalar configuration values.
+- Piping support: `chabeau say` accepts stdin and produces plain-text output when not connected to a TTY.
+- Cursor color theming, and a new input cursor style that works more reliably across terminals.
+- Ctrl+P copy-to-clipboard feature for user messages.
+- Clickable image links, markdown horizontal rules, and hanging indent support for lists.
+- Log-related events are now included in logs.
+
+### Changed
+- [BREAKING] New provider management workflows in the CLI (`chabeau provider`), replacing `chabeau auth` and `chabeau deauth`
+- Leveraged `LazyLock` and relaxed dependency version pins.
+
+### Fixed
+- Markdown rendering: fix adjacent punctuation handling, double blank lines after blockquotes, blank lines in nested lists, and nested bullet indentation.
+- Code block highlight extends to full line width with correct selection styling.
+- Transcript receives focus after `/help` for immediate scrolling.
+- Logging: atomic file rewrites to prevent corruption; fix `/refine` rewrite deduplication; log errors surfaced to users instead of stderr.
+- Resolved `vergen` version incompatibility.
+
 ## 0.6.0
 
 ### Added

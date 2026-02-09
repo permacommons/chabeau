@@ -110,7 +110,7 @@ chabeau provider add                 # Built-in token or custom provider
 chabeau provider add poe             # Shortcut for built-in provider token
 chabeau provider add my-provider     # Shortcut for custom provider id
 chabeau provider edit <provider-id>
-chabeau provider remove <provider-id>
+chabeau provider remove <provider-id>  # Remove custom provider, or built-in token
 ```
 
 Most users only need `provider add`; it can either attach a token to a

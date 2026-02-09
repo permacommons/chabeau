@@ -241,7 +241,7 @@ pub enum ProviderCommands {
         /// Provider id from config.toml
         provider: String,
     },
-    /// Remove a custom provider configuration
+    /// Remove a custom provider, or remove token for a built-in provider
     Remove {
         /// Provider id from config.toml
         provider: String,
@@ -825,6 +825,16 @@ fn prompt_and_store_provider_token(
     Ok(())
 }
 
+fn remove_provider_token_with_message(
+    auth_manager: &AuthManager,
+    provider_id: &str,
+    display_name: &str,
+) -> Result<(), Box<dyn Error>> {
+    auth_manager.remove_token(provider_id)?;
+    println!("✅ Removed provider token for {display_name}");
+    Ok(())
+}
+
 fn confirm_provider_token_replacement(
     rows: &[ProviderStatusRow],
     provider_id: &str,
@@ -1008,10 +1018,28 @@ fn handle_provider_edit(provider_input: &str) -> Result<(), Box<dyn Error>> {
 
 fn handle_provider_remove(provider_input: &str) -> Result<(), Box<dyn Error>> {
     let mut config = Config::load()?;
+    let auth_manager = AuthManager::new()?;
+    if let Some(builtin) = find_builtin_provider(provider_input) {
+        let confirmed = prompt_bool_with_default(
+            &format!(
+                "Remove token for built-in provider {} ({})? The provider itself will remain available",
+                builtin.display_name, builtin.id
+            ),
+            false,
+        )?;
+        if !confirmed {
+            println!("Cancelled.");
+            return Ok(());
+        }
+        remove_provider_token_with_message(&auth_manager, &builtin.id, &builtin.display_name)?;
+        println!(
+            "ℹ️ Built-in provider {} ({}) remains available.",
+            builtin.display_name, builtin.id
+        );
+        return Ok(());
+    }
     let provider = if let Some(provider) = resolve_custom_provider(&config, provider_input) {
         provider.clone()
-    } else if find_builtin_provider(provider_input).is_some() {
-        return Err("Built-in providers cannot be removed.".into());
     } else {
         return Err(format!("Provider '{provider_input}' not found").into());
     };
@@ -1030,7 +1058,7 @@ fn handle_provider_remove(provider_input: &str) -> Result<(), Box<dyn Error>> {
 
     config.remove_custom_provider(&provider.id);
     config.save()?;
-    let _ = AuthManager::new()?.remove_token(&provider.id);
+    let _ = remove_provider_token_with_message(&auth_manager, &provider.id, &provider.display_name);
     println!(
         "✅ Removed provider {} ({})",
         provider.display_name, provider.id
@@ -1108,8 +1136,7 @@ fn handle_provider_token(command: ProviderTokenCommands) -> Result<(), Box<dyn E
                 .iter()
                 .find(|candidate| candidate.id.eq_ignore_ascii_case(&provider_id))
                 .ok_or_else(|| format!("Provider '{provider_id}' not found"))?;
-            auth_manager.remove_token(&provider_id)?;
-            println!("✅ Removed provider token for {}", row.display_name);
+            remove_provider_token_with_message(&auth_manager, &provider_id, &row.display_name)?;
         }
     }
 

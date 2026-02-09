@@ -11,10 +11,15 @@ pub mod theme_list;
 
 use std::error::Error;
 use std::fs::OpenOptions;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 // Import specific items we need
 use crate::auth::prompt_provider_token;
@@ -25,14 +30,15 @@ use crate::cli::model_list::list_models;
 use crate::cli::provider_list::list_providers;
 use crate::cli::settings::{SetContext, SettingRegistry};
 use crate::cli::theme_list::list_themes;
-use crate::core::config::data::{Config, McpServerConfig};
-use crate::core::mcp_auth::McpTokenStore;
+use crate::core::builtin_oauth::{render_oauth_callback_page, OAuthCallbackVariant};
+use crate::core::builtin_providers::{find_builtin_provider, load_builtin_providers};
+use crate::core::config::data::{Config, CustomProvider, McpServerConfig};
+use crate::core::mcp_auth::{McpOAuthGrant, McpTokenStore};
 use crate::core::persona::PersonaManager;
 use crate::ui::chat_loop::run_chat;
+use crate::utils::url::normalize_base_url;
 use tracing_subscriber::EnvFilter;
 
-#[cfg(test)]
-use crate::core::builtin_providers::find_builtin_provider;
 #[cfg(test)]
 use crate::ui::builtin_themes::find_builtin_theme;
 
@@ -100,7 +106,7 @@ static HELP_ABOUT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "Chabeau is a full-screen terminal chat interface for OpenAI‑compatible APIs.\n\n\
 Authentication:\n\
-  Use 'chabeau auth' to set up credentials (OpenAI, OpenRouter, Poe, Anthropic, custom).\n\n\
+  Use 'chabeau provider add' and 'chabeau provider token add <id>' to set up credentials.\n\n\
 For one-off use, you can set environment variables (used only if no providers are configured, or with --env):\n\
   OPENAI_API_KEY    API key\n\
   OPENAI_BASE_URL   Base URL (default: https://api.openai.com/v1)\n\n\
@@ -126,42 +132,38 @@ Character cards:\n\
 #[derive(Parser)]
 #[command(name = "chabeau")]
 #[command(about = HELP_ABOUT.as_str())]
-#[command(disable_version_flag = true, disable_help_flag = true)]
+#[command(disable_version_flag = true)]
 #[command(long_about = HELP_ABOUT.as_str())]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    /// Print this help
-    #[arg(short = 'h', long = "help", action = clap::ArgAction::Help, help = "Print this help")]
-    pub help: Option<bool>,
-
     /// Model to use for chat, or list available models if no model specified
-    #[arg(short = 'm', long, global = true, value_name = "MODEL", num_args = 0..=1, default_missing_value = "")]
+    #[arg(short = 'm', long, value_name = "MODEL", num_args = 0..=1, default_missing_value = "")]
     pub model: Option<String>,
 
     /// Enable logging to specified file
-    #[arg(short = 'l', long, global = true)]
+    #[arg(short = 'l', long)]
     pub log: Option<String>,
 
     /// Provider to use, or list available providers if no provider specified
-    #[arg(short = 'p', long, global = true, value_name = "PROVIDER", num_args = 0..=1, default_missing_value = "")]
+    #[arg(short = 'p', long, value_name = "PROVIDER", num_args = 0..=1, default_missing_value = "")]
     pub provider: Option<String>,
 
     /// Use environment variables for auth (ignore keyring/config)
-    #[arg(long = "env", global = true, action = clap::ArgAction::SetTrue)]
+    #[arg(long = "env", action = clap::ArgAction::SetTrue)]
     pub env_only: bool,
 
     /// Character card to use (name from cards dir, or file path), or list available characters if no character specified
-    #[arg(short = 'c', long, global = true, value_name = "CHARACTER", num_args = 0..=1, default_missing_value = "")]
+    #[arg(short = 'c', long, value_name = "CHARACTER", num_args = 0..=1, default_missing_value = "")]
     pub character: Option<String>,
 
     /// Persona to use for this session
-    #[arg(long, global = true, value_name = "PERSONA")]
+    #[arg(long, value_name = "PERSONA")]
     pub persona: Option<String>,
 
     /// Preset to use for this session
-    #[arg(long, global = true, value_name = "PRESET")]
+    #[arg(long, value_name = "PRESET")]
     pub preset: Option<String>,
 
     /// Print version information
@@ -169,20 +171,21 @@ pub struct Args {
     pub version: bool,
 
     /// Enable verbose MCP debug logging
-    #[arg(long = "debug-mcp", global = true, action = clap::ArgAction::SetTrue)]
+    #[arg(long = "debug-mcp", action = clap::ArgAction::SetTrue)]
     pub debug_mcp: bool,
 
     /// Disable MCP even if configured
-    #[arg(short = 'd', long = "disable-mcp", global = true, action = clap::ArgAction::SetTrue)]
+    #[arg(short = 'd', long = "disable-mcp", action = clap::ArgAction::SetTrue)]
     pub disable_mcp: bool,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Set up authentication for API providers
-    Auth,
-    /// Remove authentication for API providers
-    Deauth,
+    /// Manage API providers and credentials
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommands,
+    },
     /// Set configuration values, or show current configuration if no arguments are provided.
     Set {
         /// Configuration key to set. If no key is provided, the current configuration is shown.
@@ -209,12 +212,12 @@ pub enum Commands {
         #[arg(short = 'f', long)]
         force: bool,
     },
-    /// Send a single-turn message to a model without launching the TUI
+    /// Send a single-turn message to a model without launching the TUI (MCP is disabled in this mode)
     Say {
         /// The prompt to send to the model
         prompt: Vec<String>,
     },
-    /// Manage MCP server authentication
+    /// Manage MCP servers and authentication
     Mcp {
         #[command(subcommand)]
         command: McpCommands,
@@ -222,9 +225,121 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-pub enum McpCommands {
-    /// Store or update the bearer token for an MCP server
+pub enum ProviderCommands {
+    /// List configured providers and token status
+    List,
+    /// Add provider credentials or a custom provider interactively
+    Add {
+        /// Built-in provider id/name shortcut, or custom provider id seed
+        provider: Option<String>,
+        /// Show optional provider settings, including authentication mode
+        #[arg(short = 'a', long = "advanced", action = clap::ArgAction::SetTrue)]
+        advanced: bool,
+    },
+    /// Edit a custom provider configuration interactively
+    Edit {
+        /// Provider id from config.toml
+        provider: String,
+    },
+    /// Remove a custom provider, or remove token for a built-in provider
+    Remove {
+        /// Provider id from config.toml
+        provider: String,
+    },
+    /// Manage provider bearer tokens
     Token {
+        #[command(subcommand)]
+        command: ProviderTokenCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProviderTokenCommands {
+    /// Show token status for one or all providers
+    List {
+        /// Provider id
+        provider: Option<String>,
+    },
+    /// Store or update the bearer token for a provider
+    Add {
+        /// Provider id
+        provider: String,
+    },
+    /// Remove the bearer token for a provider
+    Remove {
+        /// Provider id
+        provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum McpCommands {
+    /// List configured MCP servers and token status
+    List,
+    /// Add a new MCP server configuration interactively
+    Add {
+        /// Show optional MCP settings in the add flow
+        #[arg(short = 'a', long = "advanced", action = clap::ArgAction::SetTrue)]
+        advanced: bool,
+    },
+    /// Edit an existing MCP server configuration interactively
+    Edit {
+        /// MCP server id from config.toml
+        server: String,
+    },
+    /// Remove an MCP server configuration
+    Remove {
+        /// MCP server id from config.toml
+        server: String,
+    },
+    /// Manage bearer tokens for MCP servers
+    Token {
+        #[command(subcommand)]
+        command: McpTokenCommands,
+    },
+    /// Manage OAuth grants for MCP servers
+    Oauth {
+        #[command(subcommand)]
+        command: McpOauthCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum McpTokenCommands {
+    /// Show token status for one or all MCP servers
+    List {
+        /// MCP server id from config.toml
+        server: Option<String>,
+    },
+    /// Store or update the bearer token for an MCP server
+    Add {
+        /// MCP server id from config.toml
+        server: String,
+    },
+    /// Remove the bearer token for an MCP server
+    Remove {
+        /// MCP server id from config.toml
+        server: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum McpOauthCommands {
+    /// Show OAuth grant status for one or all MCP servers
+    List {
+        /// MCP server id from config.toml
+        server: Option<String>,
+    },
+    /// Add an OAuth grant for an MCP server
+    Add {
+        /// MCP server id from config.toml
+        server: String,
+        /// Show optional OAuth prompts
+        #[arg(short = 'a', long = "advanced", action = clap::ArgAction::SetTrue)]
+        advanced: bool,
+    },
+    /// Remove (revoke + delete) OAuth grant for an MCP server
+    Remove {
         /// MCP server id from config.toml
         server: String,
     },
@@ -267,7 +382,6 @@ fn validate_persona(persona_id: &str, config: &Config) -> Result<(), Box<dyn Err
 
 /// Resolve a provider identifier against built-in and custom providers.
 /// Returns the canonical provider ID if found.
-#[cfg(test)]
 fn resolve_provider_id(config: &Config, input: &str) -> Option<String> {
     if let Some(provider) = find_builtin_provider(input) {
         return Some(provider.id);
@@ -388,34 +502,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
     let mut character_service = CharacterService::new();
 
     match args.command {
-        Some(Commands::Auth) => {
-            let mut auth_manager = match AuthManager::new() {
-                Ok(manager) => manager,
-                Err(err) => {
-                    eprintln!("❌ Failed to load configuration: {err}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = auth_manager.interactive_auth() {
-                eprintln!("❌ Authentication failed: {e}");
-                std::process::exit(1);
-            }
-            Ok(())
-        }
-        Some(Commands::Deauth) => {
-            let mut auth_manager = match AuthManager::new() {
-                Ok(manager) => manager,
-                Err(err) => {
-                    eprintln!("❌ Failed to load configuration: {err}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = auth_manager.interactive_deauth(args.provider) {
-                eprintln!("❌ Deauthentication failed: {e}");
-                std::process::exit(1);
-            }
-            Ok(())
-        }
+        Some(Commands::Provider { command }) => handle_provider_command(command).await,
         Some(Commands::Set { key, value }) => {
             let registry = SettingRegistry::new();
             let config = Config::load()?;
@@ -586,33 +673,1669 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                 args.character,
                 args.persona,
                 args.preset,
-                args.disable_mcp,
             )
             .await
         }
-        Some(Commands::Mcp { command }) => handle_mcp_command(command, args.env_only),
+        Some(Commands::Mcp { command }) => handle_mcp_command(command, args.env_only).await,
     }
 }
 
-fn handle_mcp_command(command: McpCommands, env_only: bool) -> Result<(), Box<dyn Error>> {
-    if env_only {
-        eprintln!("❌ MCP tokens require keyring access; remove --env.");
-        std::process::exit(1);
+#[derive(Clone)]
+struct ProviderStatusRow {
+    id: String,
+    display_name: String,
+    has_token: bool,
+    kind: &'static str,
+}
+
+fn collect_provider_status_rows(
+    auth_manager: &AuthManager,
+    config: &Config,
+) -> (Vec<ProviderStatusRow>, Option<String>) {
+    let (providers, default_provider) = auth_manager.get_all_providers_with_auth_status();
+    let rows = providers
+        .into_iter()
+        .map(|provider| {
+            let kind = if find_builtin_provider(&provider.id).is_some()
+                && config.get_custom_provider(&provider.id).is_none()
+            {
+                "builtin"
+            } else {
+                "custom"
+            };
+            ProviderStatusRow {
+                id: provider.id,
+                display_name: provider.display_name,
+                has_token: provider.has_token,
+                kind,
+            }
+        })
+        .collect();
+    (rows, default_provider)
+}
+
+fn resolve_custom_provider<'a>(config: &'a Config, input: &str) -> Option<&'a CustomProvider> {
+    config.get_custom_provider(input)
+}
+
+fn resolve_provider_mode(input: &str) -> Result<Option<String>, Box<dyn Error>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "openai" {
+        return Ok(None);
+    }
+    if normalized == "anthropic" {
+        return Ok(Some(normalized));
+    }
+    Err("Authentication mode must be 'openai' or 'anthropic'.".into())
+}
+
+fn prompt_provider_authentication_mode(
+    default_mode: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let mode_input = prompt_optional(&format!(
+        "Authentication mode [openai|anthropic] [{default_mode}]: "
+    ))?;
+    if mode_input.is_empty() {
+        if default_mode.eq_ignore_ascii_case("anthropic") {
+            Ok(Some("anthropic".to_string()))
+        } else {
+            Ok(None)
+        }
+    } else {
+        resolve_provider_mode(&mode_input)
+    }
+}
+
+fn validate_provider_id(input: &str) -> Result<String, Box<dyn Error>> {
+    if !input
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err("Provider id must contain only letters, numbers, '-' or '_'.".into());
+    }
+    Ok(input.to_ascii_lowercase())
+}
+
+enum ProviderAddMode {
+    BuiltinToken,
+    CustomProvider,
+}
+
+fn print_available_builtin_providers() {
+    println!("Available built-in providers:");
+    for provider in load_builtin_providers() {
+        println!("  - {} ({})", provider.display_name, provider.id);
+    }
+    println!();
+}
+
+fn prompt_provider_add_mode() -> Result<ProviderAddMode, Box<dyn Error>> {
+    println!("Select provider setup type:");
+    println!("  1) Add token for a built-in provider");
+    println!("  2) Add a custom provider");
+    loop {
+        let input = prompt_optional("Choice [1/2] [1]: ")?;
+        match input.trim().to_ascii_lowercase().as_str() {
+            "" | "1" | "builtin" | "built-in" => return Ok(ProviderAddMode::BuiltinToken),
+            "2" | "custom" => return Ok(ProviderAddMode::CustomProvider),
+            _ => println!("Enter 1 for built-in or 2 for custom."),
+        }
+    }
+}
+
+fn prompt_builtin_provider_choice() -> Result<(String, String), Box<dyn Error>> {
+    let builtins = load_builtin_providers();
+    println!("Built-in providers:");
+    for (index, provider) in builtins.iter().enumerate() {
+        println!(
+            "  {}) {} ({})",
+            index + 1,
+            provider.display_name,
+            provider.id
+        );
     }
 
-    let config = Config::load()?;
+    loop {
+        let input = prompt_optional("Select provider by number or id: ")?;
+        if let Ok(index) = input.parse::<usize>() {
+            if index > 0 && index <= builtins.len() {
+                let provider = &builtins[index - 1];
+                return Ok((provider.id.clone(), provider.display_name.clone()));
+            }
+        }
+
+        if let Some(provider) = builtins.iter().find(|candidate| {
+            candidate.id.eq_ignore_ascii_case(&input)
+                || candidate.display_name.eq_ignore_ascii_case(&input)
+        }) {
+            return Ok((provider.id.clone(), provider.display_name.clone()));
+        }
+        println!("Unknown provider. Enter a listed number or provider id.");
+    }
+}
+
+fn prompt_and_store_provider_token(
+    auth_manager: &AuthManager,
+    provider_id: &str,
+    display_name: &str,
+) -> Result<(), Box<dyn Error>> {
+    let token = prompt_provider_token(display_name).map_err(|err| err.to_string())?;
+    auth_manager.store_token(provider_id, &token)?;
+    println!("✅ Stored provider token for {display_name}");
+    Ok(())
+}
+
+fn remove_provider_token_with_message(
+    auth_manager: &AuthManager,
+    provider_id: &str,
+    display_name: &str,
+) -> Result<(), Box<dyn Error>> {
+    auth_manager.remove_token(provider_id)?;
+    println!("✅ Removed provider token for {display_name}");
+    Ok(())
+}
+
+fn confirm_provider_token_replacement(
+    rows: &[ProviderStatusRow],
+    provider_id: &str,
+    display_name: &str,
+) -> Result<bool, Box<dyn Error>> {
+    let has_token = rows
+        .iter()
+        .find(|candidate| candidate.id.eq_ignore_ascii_case(provider_id))
+        .is_some_and(|row| row.has_token);
+    if has_token {
+        prompt_bool_with_default(
+            &format!(
+                "A token is already configured for {}. Replace it",
+                display_name
+            ),
+            false,
+        )
+    } else {
+        Ok(true)
+    }
+}
+
+async fn handle_provider_command(command: ProviderCommands) -> Result<(), Box<dyn Error>> {
     match command {
-        McpCommands::Token { server } => {
-            let server_config = resolve_mcp_server(&config, &server)?;
-            let token = prompt_provider_token(&server_config.display_name)
-                .map_err(|err| err.to_string())?;
-            let store = McpTokenStore::new();
-            store.set_token(&server_config.id, &token)?;
-            println!("✅ Stored MCP token for {}", server_config.display_name);
+        ProviderCommands::List => list_providers().await,
+        ProviderCommands::Add { provider, advanced } => handle_provider_add(provider, advanced),
+        ProviderCommands::Edit { provider } => handle_provider_edit(&provider),
+        ProviderCommands::Remove { provider } => handle_provider_remove(&provider),
+        ProviderCommands::Token { command } => handle_provider_token(command),
+    }
+}
+
+fn resolve_builtin_provider_choice(input: &str) -> Option<(String, String)> {
+    load_builtin_providers()
+        .into_iter()
+        .find(|provider| {
+            provider.id.eq_ignore_ascii_case(input)
+                || provider.display_name.eq_ignore_ascii_case(input)
+        })
+        .map(|provider| (provider.id, provider.display_name))
+}
+
+fn add_builtin_provider_token(provider_id: &str, display_name: &str) -> Result<(), Box<dyn Error>> {
+    let auth_manager = AuthManager::new()?;
+    let config = Config::load()?;
+    let (rows, _) = collect_provider_status_rows(&auth_manager, &config);
+    if !confirm_provider_token_replacement(&rows, provider_id, display_name)? {
+        println!("Cancelled.");
+        return Ok(());
+    }
+    prompt_and_store_provider_token(&auth_manager, provider_id, display_name)
+}
+
+fn add_custom_provider_interactive(
+    advanced: bool,
+    seeded_provider_id: Option<String>,
+) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    if !advanced {
+        println!(
+            "Basic mode: advanced options are hidden (including authentication mode). Re-run with `chabeau provider add -a` for advanced settings."
+        );
+    }
+
+    let display_name = if let Some(provider_id) = seeded_provider_id.as_deref() {
+        let input = prompt_optional(&format!("Display name [{provider_id}]: "))?;
+        if input.is_empty() {
+            provider_id.to_string()
+        } else {
+            input
+        }
+    } else {
+        prompt_required("Display name: ")?
+    };
+    let provider_id = if let Some(provider_id) = seeded_provider_id {
+        provider_id
+    } else {
+        let suggested_id = crate::core::config::data::suggest_provider_id(&display_name);
+        let id_input = prompt_optional(&format!("Provider id [{suggested_id}]: "))?;
+        if id_input.is_empty() {
+            suggested_id
+        } else {
+            validate_provider_id(&id_input)?
+        }
+    };
+
+    if find_builtin_provider(&provider_id).is_some()
+        || config.get_custom_provider(&provider_id).is_some()
+    {
+        return Err(format!("Provider '{provider_id}' already exists").into());
+    }
+
+    let base_url_input = prompt_required("Base URL: ")?;
+    let base_url = normalize_base_url(&base_url_input);
+    let mode = if advanced {
+        prompt_provider_authentication_mode("openai")?
+    } else {
+        None
+    };
+
+    config.add_custom_provider(CustomProvider::new(
+        provider_id.clone(),
+        display_name.clone(),
+        base_url,
+        mode,
+    ));
+    config.save()?;
+    println!("✅ Added provider {display_name} ({provider_id})");
+
+    if prompt_bool_with_default("Add bearer token now", true)? {
+        let auth_manager = AuthManager::new()?;
+        prompt_and_store_provider_token(&auth_manager, &provider_id, &display_name)?;
+    }
+
+    Ok(())
+}
+
+fn handle_provider_add(provider: Option<String>, advanced: bool) -> Result<(), Box<dyn Error>> {
+    if let Some(input) = provider {
+        if let Some((provider_id, display_name)) = resolve_builtin_provider_choice(&input) {
+            println!("Recognized built-in provider: {display_name} ({provider_id}).");
+            return add_builtin_provider_token(&provider_id, &display_name);
+        }
+        let provider_id = validate_provider_id(&input)?;
+        println!(
+            "'{input}' is not a built-in provider. Treating it as a new custom provider id: {provider_id}"
+        );
+        return add_custom_provider_interactive(advanced, Some(provider_id));
+    }
+
+    print_available_builtin_providers();
+    match prompt_provider_add_mode()? {
+        ProviderAddMode::BuiltinToken => {
+            let (provider_id, display_name) = prompt_builtin_provider_choice()?;
+            return add_builtin_provider_token(&provider_id, &display_name);
+        }
+        ProviderAddMode::CustomProvider => {}
+    }
+
+    add_custom_provider_interactive(advanced, None)
+}
+
+fn handle_provider_edit(provider_input: &str) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    let existing = resolve_custom_provider(&config, provider_input).cloned();
+    let Some(mut provider) = existing else {
+        if find_builtin_provider(provider_input).is_some() {
+            return Err(
+                "Built-in providers cannot be edited. Add a custom provider for overrides.".into(),
+            );
+        }
+        return Err(format!("Provider '{provider_input}' not found").into());
+    };
+
+    let display_input = prompt_optional(&format!("Display name [{}]: ", provider.display_name))?;
+    if !display_input.is_empty() {
+        provider.display_name = display_input;
+    }
+
+    let base_input = prompt_optional(&format!("Base URL [{}]: ", provider.base_url))?;
+    if !base_input.is_empty() {
+        provider.base_url = normalize_base_url(&base_input);
+    }
+
+    let mode_default = provider.mode.as_deref().unwrap_or("openai");
+    provider.mode = prompt_provider_authentication_mode(mode_default)?;
+
+    for entry in &mut config.custom_providers {
+        if entry.id.eq_ignore_ascii_case(&provider.id) {
+            *entry = provider.clone();
+            break;
+        }
+    }
+    config.save()?;
+    println!(
+        "✅ Updated provider {} ({})",
+        provider.display_name, provider.id
+    );
+    Ok(())
+}
+
+fn handle_provider_remove(provider_input: &str) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    let auth_manager = AuthManager::new()?;
+    if let Some(builtin) = find_builtin_provider(provider_input) {
+        let confirmed = prompt_bool_with_default(
+            &format!(
+                "Remove token for built-in provider {} ({})? The provider itself will remain available",
+                builtin.display_name, builtin.id
+            ),
+            false,
+        )?;
+        if !confirmed {
+            println!("Cancelled.");
+            return Ok(());
+        }
+        remove_provider_token_with_message(&auth_manager, &builtin.id, &builtin.display_name)?;
+        println!(
+            "ℹ️ Built-in provider {} ({}) remains available.",
+            builtin.display_name, builtin.id
+        );
+        return Ok(());
+    }
+    let provider = if let Some(provider) = resolve_custom_provider(&config, provider_input) {
+        provider.clone()
+    } else {
+        return Err(format!("Provider '{provider_input}' not found").into());
+    };
+
+    let confirmed = prompt_bool_with_default(
+        &format!(
+            "Remove provider {} ({}) from config",
+            provider.display_name, provider.id
+        ),
+        false,
+    )?;
+    if !confirmed {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    config.remove_custom_provider(&provider.id);
+    config.save()?;
+    let _ = remove_provider_token_with_message(&auth_manager, &provider.id, &provider.display_name);
+    println!(
+        "✅ Removed provider {} ({})",
+        provider.display_name, provider.id
+    );
+    Ok(())
+}
+
+fn handle_provider_token(command: ProviderTokenCommands) -> Result<(), Box<dyn Error>> {
+    let config = Config::load()?;
+    let auth_manager = AuthManager::new()?;
+    let (rows, default_provider) = collect_provider_status_rows(&auth_manager, &config);
+
+    match command {
+        ProviderTokenCommands::List { provider } => {
+            if let Some(input) = provider {
+                let provider_id = resolve_provider_id(&config, &input)
+                    .ok_or_else(|| format!("Provider '{input}' not found"))?;
+                let row = rows
+                    .iter()
+                    .find(|candidate| candidate.id.eq_ignore_ascii_case(&provider_id))
+                    .ok_or_else(|| format!("Provider '{provider_id}' not found"))?;
+                let status = if row.has_token {
+                    "configured"
+                } else {
+                    "missing"
+                };
+                println!(
+                    "Provider token for {} ({}, {}): {}",
+                    row.display_name, row.id, row.kind, status
+                );
+            } else {
+                if rows.is_empty() {
+                    println!("No providers configured.");
+                    return Ok(());
+                }
+                println!("Provider token status:");
+                for row in rows {
+                    let default_mark = if default_provider
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(&row.id))
+                    {
+                        "*"
+                    } else {
+                        ""
+                    };
+                    let status = if row.has_token {
+                        "configured"
+                    } else {
+                        "missing"
+                    };
+                    println!(
+                        "  - {}{} ({}, {}): {}",
+                        row.display_name, default_mark, row.id, row.kind, status
+                    );
+                }
+            }
+        }
+        ProviderTokenCommands::Add { provider } => {
+            let provider_id = resolve_provider_id(&config, &provider)
+                .ok_or_else(|| format!("Provider '{provider}' not found"))?;
+            let row = rows
+                .iter()
+                .find(|candidate| candidate.id.eq_ignore_ascii_case(&provider_id))
+                .ok_or_else(|| format!("Provider '{provider_id}' not found"))?;
+            if !confirm_provider_token_replacement(&rows, &provider_id, &row.display_name)? {
+                println!("Cancelled.");
+                return Ok(());
+            }
+            prompt_and_store_provider_token(&auth_manager, &provider_id, &row.display_name)?;
+        }
+        ProviderTokenCommands::Remove { provider } => {
+            let provider_id = resolve_provider_id(&config, &provider)
+                .ok_or_else(|| format!("Provider '{provider}' not found"))?;
+            let row = rows
+                .iter()
+                .find(|candidate| candidate.id.eq_ignore_ascii_case(&provider_id))
+                .ok_or_else(|| format!("Provider '{provider_id}' not found"))?;
+            remove_provider_token_with_message(&auth_manager, &provider_id, &row.display_name)?;
         }
     }
 
     Ok(())
+}
+
+async fn handle_mcp_command(command: McpCommands, _env_only: bool) -> Result<(), Box<dyn Error>> {
+    match command {
+        McpCommands::List => handle_mcp_list(),
+        McpCommands::Add { advanced } => handle_mcp_add(advanced).await,
+        McpCommands::Edit { server } => handle_mcp_edit(&server),
+        McpCommands::Remove { server } => handle_mcp_remove(&server),
+        McpCommands::Token { command } => handle_mcp_token(command),
+        McpCommands::Oauth { command } => handle_mcp_oauth(command).await,
+    }
+}
+
+fn handle_mcp_list() -> Result<(), Box<dyn Error>> {
+    let config = Config::load()?;
+    let servers = config.list_mcp_servers();
+    if servers.is_empty() {
+        println!(
+            "No MCP servers configured. Add `[[mcp_servers]]` to config.toml or run `chabeau mcp add`."
+        );
+        return Ok(());
+    }
+
+    let store = McpTokenStore::new();
+    println!("Configured MCP servers:");
+    for server in servers {
+        let token_status = match store.get_token(&server.id) {
+            Ok(Some(_)) => "token configured",
+            Ok(None) => "no token",
+            Err(_) => "token status unavailable",
+        };
+        let transport = server.transport.as_deref().unwrap_or("streamable-http");
+        let enabled = if server.is_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        println!(
+            "  - {} ({}) [{}; {}; {}]",
+            server.display_name, server.id, transport, enabled, token_status
+        );
+    }
+
+    Ok(())
+}
+
+async fn handle_mcp_add(advanced: bool) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    if !advanced {
+        println!(
+            "Basic mode: advanced options are hidden. Re-run with `chabeau mcp add -a` for advanced settings."
+        );
+    }
+    let display_name = prompt_required("Display name: ")?;
+    let suggested_id = crate::core::config::data::suggest_provider_id(&display_name);
+    let id_input = prompt_optional(&format!("Server id [{suggested_id}]: "))?;
+    let server_id = if id_input.is_empty() {
+        suggested_id
+    } else {
+        validate_mcp_server_id(&id_input)?
+    };
+
+    if config.get_mcp_server(&server_id).is_some() {
+        return Err(format!("MCP server '{server_id}' already exists").into());
+    }
+
+    let mut server = McpServerConfig {
+        id: server_id,
+        display_name,
+        base_url: None,
+        command: None,
+        args: None,
+        env: None,
+        transport: Some(prompt_transport(None)?.to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
+        yolo: Some(false),
+    };
+    configure_mcp_transport_fields(&mut server, false, advanced)?;
+    if advanced {
+        server.enabled = Some(prompt_bool_with_default("Enabled", server.is_enabled())?);
+        server.yolo = Some(prompt_bool_with_default(
+            "YOLO auto-approve",
+            server.is_yolo(),
+        )?);
+    }
+
+    config.mcp_servers.push(server.clone());
+    config.save()?;
+    println!(
+        "✅ Added MCP server {} ({})",
+        server.display_name, server.id
+    );
+
+    let is_http_transport = !matches!(server.transport.as_deref(), Some("stdio"));
+    if is_http_transport
+        && server
+            .base_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("http://") || url.starts_with("https://"))
+    {
+        if let Some(metadata) = probe_oauth_support(&server).await? {
+            println!("Detected OAuth metadata for {}.", server.display_name);
+            if let Err(err) =
+                add_oauth_grant_for_server(&server, Some(metadata), false, advanced).await
+            {
+                eprintln!("⚠️ OAuth setup skipped: {err}");
+            }
+        } else if prompt_bool_with_default(
+            "No OAuth metadata detected. Add bearer token now",
+            false,
+        )? {
+            let token =
+                prompt_provider_token(&server.display_name).map_err(|err| err.to_string())?;
+            McpTokenStore::new().set_token(&server.id, &token)?;
+            println!("✅ Stored MCP token for {}", server.display_name);
+        }
+    }
+    Ok(())
+}
+
+fn handle_mcp_edit(server_input: &str) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    let current = resolve_mcp_server(&config, server_input)?.clone();
+    let mut server = current.clone();
+
+    let display_name = prompt_optional(&format!("Display name [{}]: ", current.display_name))?;
+    if !display_name.is_empty() {
+        server.display_name = display_name;
+    }
+
+    let current_transport = current
+        .transport
+        .as_deref()
+        .unwrap_or("streamable-http")
+        .to_string();
+    let transport = prompt_transport(Some(&current_transport))?;
+    server.transport = Some(transport.to_string());
+    configure_mcp_transport_fields(&mut server, true, true)?;
+
+    server.enabled = Some(prompt_bool_with_default("Enabled", current.is_enabled())?);
+    server.yolo = Some(prompt_bool_with_default(
+        "YOLO auto-approve",
+        current.is_yolo(),
+    )?);
+
+    if let Some(existing) = config
+        .mcp_servers
+        .iter_mut()
+        .find(|candidate| candidate.id.eq_ignore_ascii_case(&server.id))
+    {
+        *existing = server.clone();
+    }
+    config.save()?;
+    println!(
+        "✅ Updated MCP server {} ({})",
+        server.display_name, server.id
+    );
+    Ok(())
+}
+
+fn handle_mcp_remove(server_input: &str) -> Result<(), Box<dyn Error>> {
+    let mut config = Config::load()?;
+    let server = resolve_mcp_server(&config, server_input)?.clone();
+    let confirmed = prompt_bool_with_default(
+        &format!(
+            "Remove MCP server {} ({}) from config",
+            server.display_name, server.id
+        ),
+        false,
+    )?;
+    if !confirmed {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    config
+        .mcp_servers
+        .retain(|candidate| !candidate.id.eq_ignore_ascii_case(&server.id));
+    config.save()?;
+    println!(
+        "✅ Removed MCP server {} ({})",
+        server.display_name, server.id
+    );
+    Ok(())
+}
+
+fn handle_mcp_token(command: McpTokenCommands) -> Result<(), Box<dyn Error>> {
+    let config = Config::load()?;
+    let store = McpTokenStore::new();
+    match command {
+        McpTokenCommands::Add { server } => {
+            let server_config = resolve_mcp_server(&config, &server)?;
+            let token = prompt_provider_token(&server_config.display_name)
+                .map_err(|err| err.to_string())?;
+            store.set_token(&server_config.id, &token)?;
+            println!("✅ Stored MCP token for {}", server_config.display_name);
+        }
+        McpTokenCommands::Remove { server } => {
+            let server_config = resolve_mcp_server(&config, &server)?;
+            let removed = store.remove_token(&server_config.id)?;
+            if removed {
+                println!("✅ Removed MCP token for {}", server_config.display_name);
+            } else {
+                println!("No MCP token was stored for {}", server_config.display_name);
+            }
+        }
+        McpTokenCommands::List { server } => {
+            if let Some(server) = server {
+                let server_config = resolve_mcp_server(&config, &server)?;
+                let status = if store.get_token(&server_config.id)?.is_some() {
+                    "configured"
+                } else {
+                    "missing"
+                };
+                println!(
+                    "MCP token for {} ({}): {}",
+                    server_config.display_name, server_config.id, status
+                );
+            } else {
+                let servers = config.list_mcp_servers();
+                if servers.is_empty() {
+                    println!("No MCP servers configured.");
+                    return Ok(());
+                }
+                println!("MCP token status:");
+                for server in servers {
+                    let status = if store.get_token(&server.id)?.is_some() {
+                        "configured"
+                    } else {
+                        "missing"
+                    };
+                    println!("  - {} ({}): {}", server.display_name, server.id, status);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_mcp_oauth(command: McpOauthCommands) -> Result<(), Box<dyn Error>> {
+    let config = Config::load()?;
+    let store = McpTokenStore::new();
+    match command {
+        McpOauthCommands::List { server } => {
+            if let Some(server) = server {
+                let server_config = resolve_mcp_server(&config, &server)?;
+                if let Some(grant) = store.get_oauth_grant(&server_config.id)? {
+                    println!(
+                        "MCP OAuth for {} ({}): configured",
+                        server_config.display_name, server_config.id
+                    );
+                    let scope = grant.scope.as_deref().unwrap_or("n/a");
+                    println!("  scope: {scope}");
+                    let expires = grant
+                        .expires_at_epoch_s
+                        .map(|epoch| epoch.to_string())
+                        .unwrap_or_else(|| "n/a".to_string());
+                    println!("  expires_at_epoch_s: {expires}");
+                } else {
+                    println!(
+                        "MCP OAuth for {} ({}): missing",
+                        server_config.display_name, server_config.id
+                    );
+                }
+            } else {
+                let servers = config.list_mcp_servers();
+                if servers.is_empty() {
+                    println!("No MCP servers configured.");
+                    return Ok(());
+                }
+                println!("MCP OAuth grant status:");
+                for server in servers {
+                    let status = if store.get_oauth_grant(&server.id)?.is_some() {
+                        "configured"
+                    } else {
+                        "missing"
+                    };
+                    println!("  - {} ({}): {}", server.display_name, server.id, status);
+                }
+            }
+        }
+        McpOauthCommands::Add { server, advanced } => {
+            let server_config = resolve_mcp_server(&config, &server)?;
+            add_oauth_grant_for_server(server_config, None, true, advanced).await?;
+        }
+        McpOauthCommands::Remove { server } => {
+            let server_config = resolve_mcp_server(&config, &server)?;
+            remove_oauth_grant_for_server(server_config).await?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct OAuthMetadata {
+    authorization_endpoint: Option<String>,
+    token_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
+    issuer: Option<String>,
+    #[serde(default)]
+    registration_endpoint: Option<String>,
+    #[serde(default)]
+    scopes_supported: Option<Vec<String>>,
+    #[serde(default)]
+    authorization_servers: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OAuthTokenResponse {
+    access_token: String,
+    #[serde(default)]
+    token_type: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OAuthClientRegistrationResponse {
+    client_id: String,
+}
+
+struct AuthorizationUrlParams<'a> {
+    authorization_endpoint: &'a str,
+    client_id: Option<&'a str>,
+    redirect_uri: &'a str,
+    state: &'a str,
+    code_challenge: &'a str,
+    code_challenge_method: &'a str,
+    issuer: Option<&'a str>,
+    scope: Option<&'a str>,
+}
+
+async fn add_oauth_grant_for_server(
+    server: &McpServerConfig,
+    metadata: Option<OAuthMetadata>,
+    check_existing: bool,
+    advanced: bool,
+) -> Result<(), Box<dyn Error>> {
+    let store = McpTokenStore::new();
+
+    if check_existing && store.get_oauth_grant(&server.id)?.is_some() {
+        println!(
+            "OAuth grant already exists for {} ({}).",
+            server.display_name, server.id
+        );
+        if prompt_bool_with_default("Remove existing grant now", false)? {
+            remove_oauth_grant_for_server(server).await?;
+        } else {
+            println!("Cancelled.");
+        }
+        return Ok(());
+    }
+
+    let metadata = if let Some(metadata) = metadata {
+        metadata
+    } else {
+        match probe_oauth_support(server).await? {
+            Some(metadata) => metadata,
+            None => {
+                return Err(format!(
+                    "No OAuth metadata discovered for {} ({})",
+                    server.display_name, server.id
+                )
+                .into());
+            }
+        }
+    };
+
+    if let Some(authorization_endpoint) = metadata.authorization_endpoint.as_deref() {
+        let token_endpoint = metadata
+            .token_endpoint
+            .as_deref()
+            .ok_or("OAuth metadata is missing token_endpoint.")?;
+        let mut client_id = if advanced {
+            let client_id_input = prompt_optional("OAuth client id (optional): ")?;
+            if client_id_input.is_empty() {
+                None
+            } else {
+                Some(client_id_input)
+            }
+        } else {
+            println!(
+                "Basic mode: trying automatic OAuth client registration. Re-run with `-a` to provide a client id manually."
+            );
+            None
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
+
+        if client_id.is_none() {
+            if let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() {
+                match register_oauth_client(registration_endpoint, &redirect_uri).await {
+                    Ok(registered_id) => {
+                        println!("Registered OAuth client automatically.");
+                        client_id = Some(registered_id);
+                    }
+                    Err(err) => {
+                        eprintln!("⚠️ OAuth client registration failed: {err}");
+                    }
+                }
+            } else if !advanced {
+                println!(
+                    "OAuth metadata does not advertise dynamic registration. Re-run with `-a` to provide a client id if authorization fails."
+                );
+            }
+        }
+
+        let scope = metadata.scopes_supported.as_ref().and_then(|scopes| {
+            let joined = scopes
+                .iter()
+                .map(|scope| scope.trim())
+                .filter(|scope| !scope.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        });
+
+        let state = random_urlsafe(24);
+        let code_verifier = random_urlsafe(64);
+        let code_challenge = pkce_s256_challenge(&code_verifier);
+        let authorization_url = build_authorization_url(AuthorizationUrlParams {
+            authorization_endpoint,
+            client_id: client_id.as_deref(),
+            redirect_uri: &redirect_uri,
+            state: &state,
+            code_challenge: &code_challenge,
+            code_challenge_method: "S256",
+            issuer: metadata.issuer.as_deref(),
+            scope: scope.as_deref(),
+        })?;
+
+        if open_in_browser(authorization_url.as_str()).is_ok() {
+            println!("Opened OAuth authorization URL in your browser.");
+        } else {
+            eprintln!(
+                "⚠️ Could not launch browser automatically. Open this URL manually:\n{}",
+                authorization_url
+            );
+        }
+
+        println!("Waiting for OAuth redirect on {redirect_uri} ...");
+        let auth_code = wait_for_oauth_callback(listener, &state).await?;
+        let token = exchange_oauth_code(
+            token_endpoint,
+            client_id.as_deref(),
+            &redirect_uri,
+            &auth_code,
+            &code_verifier,
+        )
+        .await?;
+
+        let expires_at_epoch_s = token.expires_in.and_then(|seconds| {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
+            now.checked_add(seconds)
+        });
+
+        let grant = McpOAuthGrant {
+            access_token: token.access_token.clone(),
+            refresh_token: token.refresh_token.clone(),
+            token_type: token.token_type.clone(),
+            scope: token.scope.clone(),
+            expires_at_epoch_s,
+            client_id,
+            redirect_uri: Some(redirect_uri),
+            authorization_endpoint: metadata.authorization_endpoint.clone(),
+            token_endpoint: metadata.token_endpoint.clone(),
+            revocation_endpoint: metadata.revocation_endpoint.clone(),
+            issuer: metadata.issuer.clone(),
+        };
+        store.set_oauth_grant(&server.id, &grant)?;
+        store.set_token(&server.id, &token.access_token)?;
+        println!("✅ Stored OAuth grant for {}", server.display_name);
+        Ok(())
+    } else {
+        Err("OAuth metadata is missing authorization_endpoint.".into())
+    }
+}
+
+async fn remove_oauth_grant_for_server(server: &McpServerConfig) -> Result<(), Box<dyn Error>> {
+    let store = McpTokenStore::new();
+    let grant = match store.get_oauth_grant(&server.id)? {
+        Some(grant) => grant,
+        None => {
+            println!("No OAuth grant stored for {}.", server.display_name);
+            return Ok(());
+        }
+    };
+
+    if let Some(revocation_endpoint) = grant.revocation_endpoint.as_deref() {
+        let client = reqwest::Client::new();
+        match client
+            .post(revocation_endpoint)
+            .form(&[("token", grant.access_token.as_str())])
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                println!("OAuth token revoked at server endpoint.");
+            }
+            Ok(response) => {
+                eprintln!(
+                    "⚠️ OAuth revocation returned HTTP {}. Removing local grant anyway.",
+                    response.status()
+                );
+            }
+            Err(err) => {
+                eprintln!("⚠️ OAuth revocation failed ({err}). Removing local grant anyway.");
+            }
+        }
+    } else {
+        eprintln!("⚠️ No revocation endpoint in OAuth metadata. Removing local grant only.");
+    }
+
+    store.remove_oauth_grant(&server.id)?;
+    let _ = store.remove_token(&server.id)?;
+    println!("✅ Removed OAuth grant for {}", server.display_name);
+    Ok(())
+}
+
+async fn probe_oauth_support(
+    server: &McpServerConfig,
+) -> Result<Option<OAuthMetadata>, Box<dyn Error>> {
+    let Some(base_url) = server.base_url.as_deref() else {
+        return Ok(None);
+    };
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Ok(None);
+    }
+
+    let url = reqwest::Url::parse(base_url)?;
+    let scheme = url.scheme();
+    let Some(host) = url.host_str() else {
+        return Ok(None);
+    };
+    let authority = if let Some(port) = url.port() {
+        format!("{host}:{port}")
+    } else {
+        host.to_string()
+    };
+    let origin = format!("{scheme}://{authority}");
+    let candidates = [
+        format!("{origin}/.well-known/oauth-authorization-server"),
+        format!("{origin}/.well-known/openid-configuration"),
+        format!("{origin}/.well-known/oauth-protected-resource"),
+    ];
+
+    let client = reqwest::Client::new();
+    for candidate in candidates {
+        let Some(metadata) = fetch_oauth_metadata(&client, &candidate).await else {
+            continue;
+        };
+        if metadata.authorization_endpoint.is_some()
+            || metadata.token_endpoint.is_some()
+            || metadata.revocation_endpoint.is_some()
+        {
+            return Ok(Some(metadata));
+        }
+        if let Some(servers) = metadata.authorization_servers.as_ref() {
+            for issuer in servers {
+                let issuer = issuer.trim_end_matches('/');
+                let auth_server_well_known =
+                    format!("{issuer}/.well-known/oauth-authorization-server");
+                if let Some(mut delegated) =
+                    fetch_oauth_metadata(&client, &auth_server_well_known).await
+                {
+                    if delegated.issuer.is_none() {
+                        delegated.issuer = Some(issuer.to_string());
+                    }
+                    if delegated.authorization_endpoint.is_some()
+                        || delegated.token_endpoint.is_some()
+                        || delegated.revocation_endpoint.is_some()
+                    {
+                        return Ok(Some(delegated));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+async fn fetch_oauth_metadata(client: &reqwest::Client, url: &str) -> Option<OAuthMetadata> {
+    let response = client.get(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<OAuthMetadata>().await.ok()
+}
+
+fn open_in_browser(url: &str) -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open").arg(url).status()?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err("failed to launch browser with open".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err("failed to launch browser with start".into());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let status = std::process::Command::new("xdg-open").arg(url).status()?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err("failed to launch browser with xdg-open".into());
+    }
+
+    #[allow(unreachable_code)]
+    Err(format!("no browser launcher configured for URL: {url}").into())
+}
+
+fn random_urlsafe(bytes_len: usize) -> String {
+    let bytes = best_effort_random_bytes(bytes_len);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn pkce_s256_challenge(verifier: &str) -> String {
+    let digest = sha256_digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn best_effort_random_bytes(len: usize) -> Vec<u8> {
+    let mut out = vec![0_u8; len];
+
+    #[cfg(unix)]
+    {
+        if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+            if file.read_exact(&mut out).is_ok() {
+                return out;
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if windows_fill_random(&mut out) {
+            return out;
+        }
+    }
+
+    // Fallback: non-cryptographic entropy source when OS RNG is unavailable.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut x = nanos ^ ((std::process::id() as u64) << 32) ^ (len as u64);
+    for byte in &mut out {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *byte = (x & 0xFF) as u8;
+    }
+    out
+}
+
+#[cfg(target_os = "windows")]
+fn windows_fill_random(buffer: &mut [u8]) -> bool {
+    #[link(name = "bcrypt")]
+    unsafe extern "system" {
+        fn BCryptGenRandom(
+            h_algorithm: usize,
+            pb_buffer: *mut u8,
+            cb_buffer: u32,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
+    // SAFETY: `buffer` is a valid mutable byte slice and the function only writes cb_buffer bytes.
+    let status = unsafe {
+        BCryptGenRandom(
+            0,
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    status == 0
+}
+
+fn sha256_digest(input: &[u8]) -> [u8; 32] {
+    const H0: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut message = input.to_vec();
+    let bit_len = (message.len() as u64) * 8;
+    message.push(0x80);
+    while (message.len() % 64) != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut h = H0;
+    for chunk in message.chunks_exact(64) {
+        let mut w = [0_u32; 64];
+        for (i, word) in w.iter_mut().take(16).enumerate() {
+            let base = i * 4;
+            *word = u32::from_be_bytes([
+                chunk[base],
+                chunk[base + 1],
+                chunk[base + 2],
+                chunk[base + 3],
+            ]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+
+    let mut out = [0_u8; 32];
+    for (index, word) in h.iter().enumerate() {
+        out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+fn build_authorization_url(
+    params: AuthorizationUrlParams<'_>,
+) -> Result<reqwest::Url, Box<dyn Error>> {
+    let mut url = reqwest::Url::parse(params.authorization_endpoint)?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("response_type", "code");
+        if let Some(client_id) = params.client_id.filter(|value| !value.trim().is_empty()) {
+            query.append_pair("client_id", client_id);
+        }
+        query.append_pair("redirect_uri", params.redirect_uri);
+        query.append_pair("state", params.state);
+        query.append_pair("code_challenge", params.code_challenge);
+        query.append_pair("code_challenge_method", params.code_challenge_method);
+        if let Some(scope) = params.scope.filter(|value| !value.trim().is_empty()) {
+            query.append_pair("scope", scope);
+        }
+        if let Some(issuer) = params.issuer {
+            query.append_pair("resource", issuer);
+        }
+    }
+    Ok(url)
+}
+
+async fn wait_for_oauth_callback(
+    listener: TcpListener,
+    expected_state: &str,
+) -> Result<String, Box<dyn Error>> {
+    let (mut stream, _) =
+        tokio::time::timeout(Duration::from_secs(300), listener.accept()).await??;
+    let mut buffer = vec![0_u8; 16 * 1024];
+    let bytes_read = stream.read(&mut buffer).await?;
+    if bytes_read == 0 {
+        return Err("OAuth callback received no data".into());
+    }
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let first_line = request
+        .lines()
+        .next()
+        .ok_or("OAuth callback request line missing")?;
+    let mut parts = first_line.split_whitespace();
+    let _method = parts.next().ok_or("OAuth callback method missing")?;
+    let target = parts.next().ok_or("OAuth callback target missing")?;
+    let callback_url = reqwest::Url::parse(&format!("http://localhost{target}"))?;
+
+    let mut state = None::<String>;
+    let mut code = None::<String>;
+    let mut error = None::<String>;
+    let mut error_description = None::<String>;
+    for (key, value) in callback_url.query_pairs() {
+        match key.as_ref() {
+            "state" => state = Some(value.to_string()),
+            "code" => code = Some(value.to_string()),
+            "error" => error = Some(value.to_string()),
+            "error_description" => error_description = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    if let Some(error) = error {
+        write_oauth_callback_response(
+            &mut stream,
+            "400 Bad Request",
+            "OAuth authorization failed",
+            "The identity provider rejected the authorization request. Close this tab and retry in Chabeau.",
+            OAuthCallbackVariant::Error,
+        )
+        .await?;
+        let detail = error_description.unwrap_or_default();
+        return Err(format!("OAuth callback error: {error} {detail}").into());
+    }
+
+    if state.as_deref() != Some(expected_state) {
+        write_oauth_callback_response(
+            &mut stream,
+            "400 Bad Request",
+            "OAuth state validation failed",
+            "The callback state token did not match this session. Close this tab and retry in Chabeau.",
+            OAuthCallbackVariant::Error,
+        )
+        .await?;
+        return Err("OAuth callback state mismatch".into());
+    }
+
+    let Some(code) = code else {
+        write_oauth_callback_response(
+            &mut stream,
+            "400 Bad Request",
+            "OAuth callback missing code",
+            "The callback response did not include an authorization code. Close this tab and retry in Chabeau.",
+            OAuthCallbackVariant::Error,
+        )
+        .await?;
+        return Err("OAuth callback missing code".into());
+    };
+
+    write_oauth_callback_response(
+        &mut stream,
+        "200 OK",
+        "You're signed in to Chabeau",
+        "OAuth authorization completed successfully. Close this tab and return to Chabeau.",
+        OAuthCallbackVariant::Success,
+    )
+    .await?;
+    Ok(code)
+}
+
+async fn write_oauth_callback_response(
+    stream: &mut tokio::net::TcpStream,
+    status: &str,
+    heading: &str,
+    detail: &str,
+    variant: OAuthCallbackVariant,
+) -> Result<(), Box<dyn Error>> {
+    let body = render_oauth_callback_page("Chabeau OAuth", heading, detail, variant);
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+async fn exchange_oauth_code(
+    token_endpoint: &str,
+    client_id: Option<&str>,
+    redirect_uri: &str,
+    code: &str,
+    code_verifier: &str,
+) -> Result<OAuthTokenResponse, Box<dyn Error>> {
+    let mut form_fields = vec![
+        ("grant_type", "authorization_code"),
+        ("redirect_uri", redirect_uri),
+        ("code", code),
+        ("code_verifier", code_verifier),
+    ];
+    if let Some(client_id) = client_id.filter(|value| !value.trim().is_empty()) {
+        form_fields.push(("client_id", client_id));
+    }
+    let response = reqwest::Client::new()
+        .post(token_endpoint)
+        .form(&form_fields)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("OAuth token exchange failed ({status}): {text}").into());
+    }
+    let token = response.json::<OAuthTokenResponse>().await?;
+    Ok(token)
+}
+
+async fn register_oauth_client(
+    registration_endpoint: &str,
+    redirect_uri: &str,
+) -> Result<String, Box<dyn Error>> {
+    let payload = serde_json::json!({
+        "client_name": "chabeau",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none"
+    });
+    let response = reqwest::Client::new()
+        .post(registration_endpoint)
+        .json(&payload)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("registration failed ({status}): {body}").into());
+    }
+    let data = response.json::<OAuthClientRegistrationResponse>().await?;
+    Ok(data.client_id)
+}
+
+fn validate_mcp_server_id(input: &str) -> Result<String, Box<dyn Error>> {
+    if !input
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err("Server id must contain only letters, numbers, '-' or '_'.".into());
+    }
+    Ok(input.to_ascii_lowercase())
+}
+
+fn prompt_required(prompt: &str) -> Result<String, Box<dyn Error>> {
+    loop {
+        let value = prompt_optional(prompt)?;
+        if value.is_empty() {
+            println!("Value cannot be empty.");
+            continue;
+        }
+        return Ok(value);
+    }
+}
+
+fn prompt_optional(prompt: &str) -> Result<String, Box<dyn Error>> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_string())
+}
+
+fn prompt_bool_with_default(label: &str, default: bool) -> Result<bool, Box<dyn Error>> {
+    let default_hint = if default { "Y/n" } else { "y/N" };
+    loop {
+        let input = prompt_optional(&format!("{label} [{default_hint}]: "))?;
+        if input.is_empty() {
+            return Ok(default);
+        }
+        match input.to_ascii_lowercase().as_str() {
+            "y" | "yes" | "on" | "true" => return Ok(true),
+            "n" | "no" | "off" | "false" => return Ok(false),
+            _ => println!("Please enter yes or no."),
+        }
+    }
+}
+
+fn prompt_transport(current: Option<&str>) -> Result<&'static str, Box<dyn Error>> {
+    let default = current.unwrap_or("streamable-http");
+    loop {
+        let input = prompt_optional(&format!("Transport [streamable-http|stdio] [{default}]: "))?;
+        let normalized = if input.is_empty() {
+            default.to_ascii_lowercase()
+        } else {
+            input.to_ascii_lowercase()
+        };
+        match normalized.as_str() {
+            "streamable-http" | "streamable_http" | "http" => return Ok("streamable-http"),
+            "stdio" => return Ok("stdio"),
+            _ => println!("Unsupported transport. Enter streamable-http or stdio."),
+        }
+    }
+}
+
+fn configure_mcp_transport_fields(
+    server: &mut McpServerConfig,
+    is_edit: bool,
+    advanced: bool,
+) -> Result<(), Box<dyn Error>> {
+    match server.transport.as_deref().unwrap_or("streamable-http") {
+        "stdio" => {
+            server.base_url = None;
+            let command_prompt = if is_edit {
+                format!(
+                    "Command [{}]: ",
+                    server.command.as_deref().unwrap_or_default()
+                )
+            } else {
+                "Command: ".to_string()
+            };
+            let command_input = prompt_optional(&command_prompt)?;
+            if is_edit {
+                if !command_input.is_empty() {
+                    server.command = Some(command_input);
+                }
+            } else if command_input.is_empty() {
+                return Err("Command cannot be empty for stdio transport.".into());
+            } else {
+                server.command = Some(command_input);
+            }
+
+            let args_default = server
+                .args
+                .as_ref()
+                .map(|args| args.join(" "))
+                .unwrap_or_default();
+            let args_input =
+                prompt_optional(&format!("Args (space-separated) [{}]: ", args_default))?;
+            if !args_input.is_empty() {
+                server.args = Some(
+                    args_input
+                        .split_whitespace()
+                        .map(ToString::to_string)
+                        .collect(),
+                );
+            } else if !is_edit {
+                server.args = None;
+            }
+
+            if is_edit || advanced {
+                let env_default = server
+                    .env
+                    .as_ref()
+                    .map(|env| {
+                        let mut pairs: Vec<String> = env
+                            .iter()
+                            .map(|(key, value)| format!("{key}={value}"))
+                            .collect();
+                        pairs.sort();
+                        pairs.join(",")
+                    })
+                    .unwrap_or_default();
+                let env_input = prompt_optional(&format!(
+                    "Env (KEY=VALUE, comma-separated) [{}]: ",
+                    env_default
+                ))?;
+                if !env_input.is_empty() {
+                    server.env = Some(parse_env_pairs(&env_input)?);
+                } else if !is_edit {
+                    server.env = None;
+                }
+            }
+        }
+        _ => {
+            server.command = None;
+            server.args = None;
+            server.env = None;
+            let base_prompt = if is_edit {
+                format!(
+                    "Base URL [{}]: ",
+                    server.base_url.as_deref().unwrap_or_default()
+                )
+            } else {
+                "Base URL: ".to_string()
+            };
+            let base_input = prompt_optional(&base_prompt)?;
+            if is_edit {
+                if !base_input.is_empty() {
+                    server.base_url = Some(base_input);
+                }
+                if server.base_url.as_deref().unwrap_or_default().is_empty() {
+                    return Err("Base URL cannot be empty for HTTP transport.".into());
+                }
+            } else if base_input.is_empty() {
+                return Err("Base URL cannot be empty for HTTP transport.".into());
+            } else {
+                server.base_url = Some(base_input);
+            }
+        }
+    }
+
+    if is_edit || advanced {
+        let protocol_default = server.protocol_version.as_deref().unwrap_or_default();
+        let protocol_input = prompt_optional(&format!(
+            "Protocol version (optional) [{}]: ",
+            protocol_default
+        ))?;
+        if !protocol_input.is_empty() {
+            server.protocol_version = Some(protocol_input);
+        } else if !is_edit {
+            server.protocol_version = None;
+        }
+
+        let tools_default = server
+            .allowed_tools
+            .as_ref()
+            .map(|tools| tools.join(","))
+            .unwrap_or_default();
+        let tools_input = prompt_optional(&format!(
+            "Allowed tools (comma-separated, optional) [{}]: ",
+            tools_default
+        ))?;
+        if !tools_input.is_empty() {
+            let tools: Vec<String> = tools_input
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect();
+            server.allowed_tools = if tools.is_empty() { None } else { Some(tools) };
+        } else if !is_edit {
+            server.allowed_tools = None;
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_env_pairs(
+    input: &str,
+) -> Result<std::collections::HashMap<String, String>, Box<dyn Error>> {
+    let mut env = std::collections::HashMap::new();
+    for pair in input
+        .split(',')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+    {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(format!("Invalid env entry '{pair}'. Expected KEY=VALUE.").into());
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("Environment variable name cannot be empty.".into());
+        }
+        env.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(env)
 }
 
 fn resolve_mcp_server<'a>(
@@ -729,16 +2452,266 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_token_command_parsing() {
-        let args = Args::try_parse_from(["chabeau", "mcp", "token", "agpedia"]).unwrap();
+    fn test_provider_add_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "provider", "add"]).unwrap();
+        match args.command {
+            Some(Commands::Provider {
+                command: ProviderCommands::Add { provider, advanced },
+            }) => {
+                assert!(provider.is_none());
+                assert!(!advanced);
+            }
+            _ => panic!("Expected provider add subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_provider_add_advanced_flag_parsing() {
+        let args = Args::try_parse_from(["chabeau", "provider", "add", "-a"]).unwrap();
+        match args.command {
+            Some(Commands::Provider {
+                command: ProviderCommands::Add { provider, advanced },
+            }) => {
+                assert!(provider.is_none());
+                assert!(advanced);
+            }
+            _ => panic!("Expected provider add -a subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_provider_add_with_provider_shortcut_parsing() {
+        let args = Args::try_parse_from(["chabeau", "provider", "add", "poe"]).unwrap();
+        match args.command {
+            Some(Commands::Provider {
+                command: ProviderCommands::Add { provider, advanced },
+            }) => {
+                assert_eq!(provider.as_deref(), Some("poe"));
+                assert!(!advanced);
+            }
+            _ => panic!("Expected provider add -a subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_provider_token_add_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "provider", "token", "add", "openai"]).unwrap();
+        match args.command {
+            Some(Commands::Provider {
+                command:
+                    ProviderCommands::Token {
+                        command: ProviderTokenCommands::Add { provider },
+                    },
+            }) => assert_eq!(provider, "openai"),
+            _ => panic!("Expected provider token add subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_provider_token_list_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "provider", "token", "list"]).unwrap();
+        match args.command {
+            Some(Commands::Provider {
+                command:
+                    ProviderCommands::Token {
+                        command: ProviderTokenCommands::List { provider },
+                    },
+            }) => assert!(provider.is_none()),
+            _ => panic!("Expected provider token list subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_token_add_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "token", "add", "agpedia"]).unwrap();
         match args.command {
             Some(Commands::Mcp {
-                command: McpCommands::Token { server },
+                command:
+                    McpCommands::Token {
+                        command: McpTokenCommands::Add { server },
+                    },
             }) => {
                 assert_eq!(server, "agpedia");
             }
-            _ => panic!("Expected mcp token subcommand"),
+            _ => panic!("Expected mcp token add subcommand"),
         }
+    }
+
+    #[test]
+    fn test_mcp_token_list_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "token", "list"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command:
+                    McpCommands::Token {
+                        command: McpTokenCommands::List { server },
+                    },
+            }) => {
+                assert!(server.is_none());
+            }
+            _ => panic!("Expected mcp token list subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_edit_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "edit", "agpedia"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command: McpCommands::Edit { server },
+            }) => {
+                assert_eq!(server, "agpedia");
+            }
+            _ => panic!("Expected mcp edit subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_add_advanced_flag_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "add", "--advanced"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command: McpCommands::Add { advanced },
+            }) => {
+                assert!(advanced);
+            }
+            _ => panic!("Expected mcp add --advanced"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_oauth_add_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "oauth", "add", "agpedia"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command:
+                    McpCommands::Oauth {
+                        command: McpOauthCommands::Add { server, advanced },
+                    },
+            }) => {
+                assert_eq!(server, "agpedia");
+                assert!(!advanced);
+            }
+            _ => panic!("Expected mcp oauth add subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_oauth_list_command_parsing() {
+        let args = Args::try_parse_from(["chabeau", "mcp", "oauth", "list"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command:
+                    McpCommands::Oauth {
+                        command: McpOauthCommands::List { server },
+                    },
+            }) => {
+                assert!(server.is_none());
+            }
+            _ => panic!("Expected mcp oauth list subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_oauth_add_advanced_flag_parsing() {
+        let args =
+            Args::try_parse_from(["chabeau", "mcp", "oauth", "add", "agpedia", "-a"]).unwrap();
+        match args.command {
+            Some(Commands::Mcp {
+                command:
+                    McpCommands::Oauth {
+                        command: McpOauthCommands::Add { server, advanced },
+                    },
+            }) => {
+                assert_eq!(server, "agpedia");
+                assert!(advanced);
+            }
+            _ => panic!("Expected mcp oauth add subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_random_urlsafe_is_urlsafe() {
+        let token = random_urlsafe(32);
+        assert!(token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+        assert!(!token.contains('='));
+    }
+
+    #[test]
+    fn test_pkce_s256_matches_rfc_example() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = pkce_s256_challenge(verifier);
+        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn test_build_authorization_url_includes_required_params() {
+        let url = build_authorization_url(AuthorizationUrlParams {
+            authorization_endpoint: "https://auth.example.com/authorize",
+            client_id: Some("chabeau"),
+            redirect_uri: "http://127.0.0.1:7777/oauth/callback",
+            state: "state123",
+            code_challenge: "challenge123",
+            code_challenge_method: "S256",
+            issuer: None,
+            scope: None,
+        })
+        .expect("authorization URL should build");
+        let params: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(params.get("response_type"), Some(&"code".to_string()));
+        assert_eq!(params.get("client_id"), Some(&"chabeau".to_string()));
+        assert_eq!(
+            params.get("redirect_uri"),
+            Some(&"http://127.0.0.1:7777/oauth/callback".to_string())
+        );
+        assert_eq!(params.get("state"), Some(&"state123".to_string()));
+        assert_eq!(
+            params.get("code_challenge"),
+            Some(&"challenge123".to_string())
+        );
+        assert_eq!(
+            params.get("code_challenge_method"),
+            Some(&"S256".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_authorization_url_omits_empty_client_id() {
+        let url = build_authorization_url(AuthorizationUrlParams {
+            authorization_endpoint: "https://auth.example.com/authorize",
+            client_id: None,
+            redirect_uri: "http://127.0.0.1:7777/oauth/callback",
+            state: "state123",
+            code_challenge: "challenge123",
+            code_challenge_method: "S256",
+            issuer: None,
+            scope: None,
+        })
+        .expect("authorization URL should build");
+        let params: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert!(!params.contains_key("client_id"));
+    }
+
+    #[test]
+    fn test_build_authorization_url_includes_scope() {
+        let url = build_authorization_url(AuthorizationUrlParams {
+            authorization_endpoint: "https://auth.example.com/authorize",
+            client_id: Some("chabeau"),
+            redirect_uri: "http://127.0.0.1:7777/oauth/callback",
+            state: "state123",
+            code_challenge: "challenge123",
+            code_challenge_method: "S256",
+            issuer: None,
+            scope: Some("mcp.read mcp.write"),
+        })
+        .expect("authorization URL should build");
+        let params: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(params.get("scope"), Some(&"mcp.read mcp.write".to_string()));
     }
 
     #[test]

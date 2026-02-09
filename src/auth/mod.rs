@@ -260,6 +260,11 @@ impl AuthManager {
         Ok(())
     }
 
+    /// Removes a stored API token for a provider from the system keyring.
+    pub fn remove_token(&self, provider_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.remove_provider_auth(provider_name)
+    }
+
     /// Retrieves an API token for a provider from the system keyring.
     ///
     /// Results are cached to avoid repeated keyring access. Returns `None`

@@ -1,7 +1,30 @@
 use crate::core::keyring::KeyringAccessError;
 use keyring::Entry;
+use serde::{Deserialize, Serialize};
 
 const KEYRING_SERVICE: &str = "chabeau-mcp";
+const OAUTH_KEYRING_SERVICE: &str = "chabeau-mcp-oauth";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpOAuthGrant {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub token_type: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub expires_at_epoch_s: Option<i64>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+    pub authorization_endpoint: Option<String>,
+    pub token_endpoint: Option<String>,
+    pub revocation_endpoint: Option<String>,
+    pub issuer: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct McpTokenStore {
@@ -57,6 +80,54 @@ impl McpTokenStore {
         }
 
         let entry = Entry::new(KEYRING_SERVICE, server_id)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(err) => Err(Box::new(KeyringAccessError::from(err))),
+        }
+    }
+
+    pub fn get_oauth_grant(
+        &self,
+        server_id: &str,
+    ) -> Result<Option<McpOAuthGrant>, Box<dyn std::error::Error>> {
+        if !self.use_keyring {
+            return Ok(None);
+        }
+
+        let entry = Entry::new(OAUTH_KEYRING_SERVICE, server_id)?;
+        match entry.get_password() {
+            Ok(raw) => {
+                let grant: McpOAuthGrant = serde_json::from_str(&raw)?;
+                Ok(Some(grant))
+            }
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => Err(Box::new(KeyringAccessError::from(err))),
+        }
+    }
+
+    pub fn set_oauth_grant(
+        &self,
+        server_id: &str,
+        grant: &McpOAuthGrant,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.use_keyring {
+            return Ok(());
+        }
+
+        let entry = Entry::new(OAUTH_KEYRING_SERVICE, server_id)?;
+        let payload = serde_json::to_string(grant)?;
+        entry
+            .set_password(&payload)
+            .map_err(|err| Box::new(KeyringAccessError::from(err)) as Box<dyn std::error::Error>)
+    }
+
+    pub fn remove_oauth_grant(&self, server_id: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        if !self.use_keyring {
+            return Ok(false);
+        }
+
+        let entry = Entry::new(OAUTH_KEYRING_SERVICE, server_id)?;
         match entry.delete_credential() {
             Ok(()) => Ok(true),
             Err(keyring::Error::NoEntry) => Ok(false),

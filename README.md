@@ -72,9 +72,10 @@ For features under consideration, see [WISHLIST.md](WISHLIST.md).
 cargo install chabeau
 ```
 
-### Authenticate
+### Configure Providers
 ```bash
-chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, or custom providers
+chabeau provider list
+chabeau provider add
 ```
 
 ### Launch
@@ -101,13 +102,21 @@ chabeau -m                           # List available models
 chabeau -p openrouter -m             # List models for specific provider
 ```
 
-Manage authentication from the CLI:
+Manage providers from the CLI:
 
 ```bash
-chabeau auth                         # Set up authentication
-chabeau deauth                       # Remove authentication (interactive)
-chabeau deauth --provider openai     # Remove specific provider
+chabeau provider list
+chabeau provider add                 # Built-in token or custom provider
+chabeau provider add poe             # Shortcut for built-in provider token
+chabeau provider add my-provider     # Shortcut for custom provider id
+chabeau provider edit <provider-id>
+chabeau provider remove <provider-id>  # Remove custom provider, or built-in token
 ```
+
+Most users only need `provider add`; it can either attach a token to a
+built-in provider or create a custom provider and prompt for a token.
+Use `chabeau provider token ...` commands later when rotating or removing
+credentials.
 
 Environment variables are used only if no providers are configured, or when you pass `--env`.
 
@@ -126,6 +135,8 @@ chabeau say "What is the capital of France?"
 ```
 
 This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings, emits OSC8 hyperlinks when your terminal supports them, and uses a monochrome theme for clean, readable output.
+
+MCP is disabled in `chabeau say` mode.
 
 When you omit the prompt argument, `chabeau say` will read from piped or redirected stdin (trimming trailing whitespace) before showing the usage message, so `cat prompt.txt | chabeau say` works as expected.
 
@@ -178,13 +189,15 @@ chabeau unset mcp "agpedia yolo"                         # Reverts to default (o
 
 ### Editing `config.toml` by hand
 
-**Structured definitions** that have multiple fields need to be edited in `config.toml` directly:
-
-- **Custom providers** — configured via `chabeau auth`, which also handles credentials
+The following structured definitions need to be edited in `config.toml`
+directly:
 - **Custom themes** — multi-field color/style definitions under `[[custom_themes]]`
 - **Personas** — id, display name, and bio under `[[personas]]`
 - **Presets** — id, pre, and post instructions under `[[presets]]`
-- **MCP servers** — connection config (url, command, args, env, transport) under `[[mcp_servers]]`
+
+You can also edit the following in `config.toml`, but you don't strictly need to:
+- **Custom providers** — can be configured via `chabeau provider` subcommands
+- **MCP servers** — can be configured via `chabeau mcp` subcommands
 
 Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory for a starting point.
 
@@ -194,20 +207,14 @@ Both the CLI and TUI run mutations through the same configuration orchestrator. 
 
 Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resources from the TUI.
 
-- Configure servers in `config.toml` using `[[mcp_servers]]` (see `examples/config.toml.sample`).
-- HTTP servers use `base_url` and need a token: `chabeau mcp token <server-id>`.
-- Stdio servers run a local command with optional `args`/`env`.
-- Use `/mcp` to list servers and `/mcp <server-id>` to view tools/resources/prompts. Toggle with `/mcp <server-id> on|off` or `chabeau set mcp <server-id> on|off` (both saved to `config.toml`). Turning a server on refreshes MCP data immediately; turning it off clears cached MCP metadata and removes it from API payloads. Use `/mcp <server-id> forget` to disable the server and clear cached MCP metadata, permissions, and tool history.
-- Disabled servers are not initialized by `/mcp <server-id>` until they are enabled.
-- If a tool needs approval, Chabeau will prompt you. Use Ctrl+O to inspect tool calls, D to decode nested JSON, and C to copy the current request/response payload.
-- Tool call summaries in the transcript abbreviate long argument values; use Ctrl+O to inspect the full payload.
-- Supports MCP tools, resources/templates (via `mcp_read_resource`), prompts, and sampling (`sampling/createMessage`).
-- Resource lists are injected into the system prompt with pagination cursors when available; the model can page with `mcp_list_resources` (set `kind = "templates"` for templates).
-- Tool results are summarized into session context; raw tool payload retention is configurable per server (`tool_payloads` = `turn|window|all` + `tool_payload_window`, defaults to `tool_payloads = "turn"` and `tool_payload_window = 5`). `turn` keeps only the current turn’s raw outputs, `window` keeps the last N outputs per server, and `all` keeps every raw output; summaries persist either way.
-- When a raw payload is not in context, tool summaries include a `call_id`. The assistant can call `chabeau_instant_recall` with that `call_id` to pull the full payload back into context on demand.
-- Not supported yet: context inclusion, tasks, roots, or elicitation.
-- Need a clean run? `--disable-mcp` turns MCP off for a session. For verbose logs, use `--debug-mcp` (writes `mcp.log`).
-- Want fewer prompts? `/yolo <server-id> on|off` or `chabeau set mcp <server-id> yolo on|off` toggles per‑server YOLO.
+- Manage servers from the CLI: `chabeau mcp list`, `chabeau mcp add`, `chabeau mcp add -a`, `chabeau mcp edit <server-id>`, and `chabeau mcp remove <server-id>`.
+- `chabeau mcp add` runs in basic mode and prompts only for required settings; use `-a`/`--advanced` to configure optional fields during add.
+- HTTP servers can use bearer tokens with `chabeau mcp token list [server-id]`, `chabeau mcp token add <server-id>`, and `chabeau mcp token remove <server-id>`.
+- `chabeau mcp add` probes OAuth discovery for HTTP/HTTPS servers and starts browser auth when available. You can also run `chabeau mcp oauth list [server-id]`, `chabeau mcp oauth add <server-id>`, and `chabeau mcp oauth remove <server-id>` directly. Use `chabeau mcp oauth add <server-id> -a` to provide an OAuth client id manually.
+- Stdio servers run a local command with optional `args` and `env`.
+- In the TUI, `/mcp` lists servers and `/mcp <server-id>` shows server info. Toggle with `/mcp <server-id> on|off` (or `chabeau set mcp <server-id> on|off`). To also clear session runtime MCP state, use `/mcp <server-id> forget` instead.
+- If a tool requires approval, Chabeau prompts you; use `/yolo <server-id> on|off` (or `chabeau set mcp <server-id> yolo on|off`) for per-server auto-approve.
+- `--disable-mcp` turns MCP off for a session. `--debug-mcp` writes verbose MCP logs to `mcp.log`.
 
 ## Character Cards
 

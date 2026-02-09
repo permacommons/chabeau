@@ -56,8 +56,16 @@ base_url = "https://api.example.com/v1"
 
 # Configure MCP servers for MCP-over-HTTP access.
 #
-# Tokens are stored in the system keyring under each server id. Set them with:
-#   chabeau mcp token <server-id>
+# Tokens are stored in the system keyring under each server id.
+# The preferred way to configure MCP servres is via OAuth,
+# which is done automatically if you add an MCP server via
+#
+# 	chabeau mcp add
+#
+# For servers that require a bearer token, you can set it with:
+#
+#	chabeau mcp token <server-id>
+#
 [[mcp_servers]]
 id = "local-mcp"
 display_name = "Local MCP"
@@ -66,9 +74,9 @@ transport = "streamable-http"
 enabled = true
 allowed_tools = ["weather.lookup", "time.now"]
 # yolo = true  # Skip permission prompts for this server (use with care).
-# protocol_version = "2024-11-05"
-# tool_payloads = "turn" # Raw tool payloads: turn | window | all
-# tool_payload_window = 5
+# protocol_version = "2024-11-05" # If you need to specify an earlier version
+# tool_payloads = "turn" # Retention of raw tool payloads: turn | window | all
+# tool_payload_window = 5 # When set to "window", retain payloads for n turns
 
 # Configure MCP servers that launch over stdio.
 [[mcp_servers]]
@@ -109,7 +117,7 @@ app_error_text = "#f44747"
 [[personas]]
 id = "developer"
 display_name = "Alex"
-bio = "You are talking to Alex, a senior software developer with expertise in Rust and distributed systems."
+bio = "Alex is a senior software developer with expertise in Rust and distributed systems."
 
 [[personas]]
 id = "student"

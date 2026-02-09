@@ -2210,25 +2210,25 @@ fn configure_mcp_transport_fields(
                 server.command = Some(command_input);
             }
 
-            if is_edit || advanced {
-                let args_default = server
-                    .args
-                    .as_ref()
-                    .map(|args| args.join(" "))
-                    .unwrap_or_default();
-                let args_input =
-                    prompt_optional(&format!("Args (space-separated) [{}]: ", args_default))?;
-                if !args_input.is_empty() {
-                    server.args = Some(
-                        args_input
-                            .split_whitespace()
-                            .map(ToString::to_string)
-                            .collect(),
-                    );
-                } else if !is_edit {
-                    server.args = None;
-                }
+            let args_default = server
+                .args
+                .as_ref()
+                .map(|args| args.join(" "))
+                .unwrap_or_default();
+            let args_input =
+                prompt_optional(&format!("Args (space-separated) [{}]: ", args_default))?;
+            if !args_input.is_empty() {
+                server.args = Some(
+                    args_input
+                        .split_whitespace()
+                        .map(ToString::to_string)
+                        .collect(),
+                );
+            } else if !is_edit {
+                server.args = None;
+            }
 
+            if is_edit || advanced {
                 let env_default = server
                     .env
                     .as_ref()

@@ -212,7 +212,7 @@ pub enum Commands {
         #[arg(short = 'f', long)]
         force: bool,
     },
-    /// Send a single-turn message to a model without launching the TUI
+    /// Send a single-turn message to a model without launching the TUI (MCP is disabled in this mode)
     Say {
         /// The prompt to send to the model
         prompt: Vec<String>,
@@ -673,7 +673,6 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                 args.character,
                 args.persona,
                 args.preset,
-                args.disable_mcp,
             )
             .await
         }

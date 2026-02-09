@@ -136,6 +136,8 @@ chabeau say "What is the capital of France?"
 
 This command sends a single-turn message to the configured model, streams the response directly to your terminal, and exits. It respects your markdown settings, emits OSC8 hyperlinks when your terminal supports them, and uses a monochrome theme for clean, readable output.
 
+MCP is disabled in `chabeau say` mode.
+
 When you omit the prompt argument, `chabeau say` will read from piped or redirected stdin (trimming trailing whitespace) before showing the usage message, so `cat prompt.txt | chabeau say` works as expected.
 
 When stdout is redirected to a file or piped into another program, Chabeau automatically falls back to a plain-text streaming mode. This mode skips OSC8 hyperlinks and cursor control so captured output stays free of escape codes.

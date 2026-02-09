@@ -15,7 +15,8 @@ use std::fmt;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const QUICK_FIXES: &[&str] = &[
-    "chabeau auth                    # Interactive setup",
+    "chabeau provider add            # Add a custom provider",
+    "chabeau provider token add ID   # Store provider token",
     "chabeau -p                      # Check provider status",
     "export OPENAI_API_KEY=sk-...    # Use environment variable (defaults to OpenAI API)",
 ];
@@ -56,7 +57,7 @@ pub struct ProviderResolutionError {
 impl ProviderResolutionError {
     pub fn missing_authentication() -> Self {
         Self::new(
-            "❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau auth' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional",
+            "❌ No authentication configured and OPENAI_API_KEY environment variable not set\n\nPlease either:\n1. Run 'chabeau provider token add <provider-id>' to set up authentication, or\n2. Set environment variables:\n   export OPENAI_API_KEY=\"your-api-key-here\"\n   export OPENAI_BASE_URL=\"https://api.openai.com/v1\"  # Optional",
             QUICK_FIXES,
             2,
         )
@@ -65,7 +66,7 @@ impl ProviderResolutionError {
     pub fn provider_not_configured(provider: &str) -> Self {
         Self::new(
             format!(
-                "No authentication found for provider '{provider}'. Run 'chabeau auth' to set up authentication."
+                "No authentication found for provider '{provider}'. Run 'chabeau provider token add {provider}' to set up authentication."
             ),
             QUICK_FIXES,
             2,
@@ -75,7 +76,7 @@ impl ProviderResolutionError {
     pub fn default_provider_missing(provider: &str) -> Self {
         Self::new(
             format!(
-                "No authentication found for default provider '{provider}'. Run 'chabeau auth' to set up authentication."
+                "No authentication found for default provider '{provider}'. Run 'chabeau provider token add {provider}' to set up authentication."
             ),
             QUICK_FIXES,
             2,

@@ -72,9 +72,10 @@ For features under consideration, see [WISHLIST.md](WISHLIST.md).
 cargo install chabeau
 ```
 
-### Authenticate
+### Configure Providers
 ```bash
-chabeau auth    # Interactive setup for OpenAI, OpenRouter, Poe, Anthropic, Venice AI, Groq, Mistral, Cerebras, or custom providers
+chabeau provider list
+chabeau provider add
 ```
 
 ### Launch
@@ -101,13 +102,21 @@ chabeau -m                           # List available models
 chabeau -p openrouter -m             # List models for specific provider
 ```
 
-Manage authentication from the CLI:
+Manage providers from the CLI:
 
 ```bash
-chabeau auth                         # Set up authentication
-chabeau deauth                       # Remove authentication (interactive)
-chabeau deauth --provider openai     # Remove specific provider
+chabeau provider list
+chabeau provider add                 # Built-in token or custom provider
+chabeau provider add poe             # Shortcut for built-in provider token
+chabeau provider add my-provider     # Shortcut for custom provider id
+chabeau provider edit <provider-id>
+chabeau provider remove <provider-id>
 ```
+
+Most users only need `provider add`; it can either attach a token to a
+built-in provider or create a custom provider and prompt for a token.
+Use `chabeau provider token ...` commands later when rotating or removing
+credentials.
 
 Environment variables are used only if no providers are configured, or when you pass `--env`.
 
@@ -180,7 +189,7 @@ chabeau unset mcp "agpedia yolo"                         # Reverts to default (o
 
 **Structured definitions** that have multiple fields need to be edited in `config.toml` directly:
 
-- **Custom providers** — configured via `chabeau auth`, which also handles credentials
+- **Custom providers** — configured via `chabeau provider add`
 - **Custom themes** — multi-field color/style definitions under `[[custom_themes]]`
 - **Personas** — id, display name, and bio under `[[personas]]`
 - **Presets** — id, pre, and post instructions under `[[presets]]`

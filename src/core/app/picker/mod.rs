@@ -840,7 +840,7 @@ impl PickerController {
 
         if items.is_empty() {
             return Err(
-                "No configured providers found. Run 'chabeau auth' to set up authentication."
+                "No configured providers found. Run 'chabeau provider add' and 'chabeau provider token add <provider-id>' to set up authentication."
                     .to_string(),
             );
         }

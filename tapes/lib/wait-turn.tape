@@ -1,3 +1,3 @@
 Enter
-Wait+Screen /Ctrl\+C\=quit/
+Wait+Screen@30s /Ctrl\+C\=quit/
 Sleep 1

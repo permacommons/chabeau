@@ -28,16 +28,20 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 
 ### See it in action
 
-- [Message retry](https://permacommons.org/videos/chabeau-0.6.0/retry.mp4)
-- [Presets](https://permacommons.org/videos/chabeau-0.6.0/preset-short.mp4)
-- [Themes](https://permacommons.org/videos/chabeau-0.6.0/themes.mp4)
-- [User message editing](https://permacommons.org/videos/chabeau-0.6.0/user-edit.mp4)
-- [Assistant response editing](https://permacommons.org/videos/chabeau-0.6.0/assistant-edit.mp4)
-- [Character cards](https://permacommons.org/videos/chabeau-0.6.0/character.mp4)
-- [In-place refinement](https://permacommons.org/videos/chabeau-0.6.0/refine.mp4)
-- [Syntax highlighting](https://permacommons.org/videos/chabeau-0.6.0/syntax.mp4)
-- [Code block selection](https://permacommons.org/videos/chabeau-0.6.0/codeblock.mp4)
-- [Complex tables](https://permacommons.org/videos/chabeau-0.6.0/table.mp4)
+- [Message retry](https://permacommons.org/videos/chabeau-0.7.0/retry.mp4)
+- [Presets](https://permacommons.org/videos/chabeau-0.7.0/preset-short.mp4)
+- [Themes](https://permacommons.org/videos/chabeau-0.7.0/themes.mp4)
+- [User message editing](https://permacommons.org/videos/chabeau-0.7.0/user-edit.mp4)
+- [Assistant response editing](https://permacommons.org/videos/chabeau-0.7.0/assistant-edit.mp4)
+- [Character cards](https://permacommons.org/videos/chabeau-0.7.0/character.mp4)
+- [In-place refinement](https://permacommons.org/videos/chabeau-0.7.0/refine.mp4)
+- [Syntax highlighting](https://permacommons.org/videos/chabeau-0.7.0/syntax.mp4)
+- [Code block selection](https://permacommons.org/videos/chabeau-0.7.0/codeblock.mp4)
+- [Complex tables](https://permacommons.org/videos/chabeau-0.7.0/table.mp4)
+- [MCP tool calls](https://permacommons.org/videos/chabeau-0.7.0/mcp.mp4)
+- [Inspecting MCP requests](https://permacommons.org/videos/chabeau-0.7.0/mcp-inspector.mp4)
+
+The MCP server shown in the videos above is "[MCP Research Friend](https://github.com/permacommons/mcp-research-friend)", a Permacommons project.
 
 ### Full feature list
 

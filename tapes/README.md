@@ -9,5 +9,12 @@ UI.
 
 The lib/ directory contains reusable scirpt blocks, nothing fancy.
 
-To avoid bloating this GitHub repository, actual recordings are uploaded to 
+For MCP-focused recordings, run `./mcp.sh mcp.tape` (or another tape path)
+from this directory. Use `./mcp.sh --no-prompt mcp.tape` to skip the final
+interactive cleanup pause. The wrapper temporarily configures the
+[research-friend MCP server](https://github.com/permacommons/mcp-research-friend) for testing,
+preloads configured PDFs into `~/.research-friend/inbox`, and restores your
+original MCP settings afterward.
+
+To avoid bloating this GitHub repository, actual recordings are uploaded to
 https://permacommons.org/

@@ -1,5 +1,5 @@
 Output recordings/themes.mp4
-Source preamble.tape
+Source lib/preamble.tape
 
 Type "Poem about wine, rich markdown, including Wikipedia links"
 Enter

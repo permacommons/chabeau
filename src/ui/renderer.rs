@@ -191,6 +191,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     } else {
         ""
     };
+    let indicator_label = activity_indicator_label(app);
 
     let base_title: Cow<'_, str> = if app.ui.in_edit_select_mode() {
         match app.ui.edit_select_target() {
@@ -278,7 +279,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
     } else if app.ui.compose_mode {
         Cow::Borrowed("Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)")
-    } else if app.ui.is_streaming {
+    } else if app.has_interruptible_activity() {
         Cow::Borrowed("Type a new message (Esc=interrupt • Ctrl+R=retry)")
     } else {
         Cow::Borrowed("Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)")
@@ -295,6 +296,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             Span::raw(" "), // 1 space before indicator
             Span::styled(
                 indicator.to_string(),
+                app.ui.theme.streaming_indicator_style,
+            ),
+            Span::styled(
+                indicator_label.to_string(),
                 app.ui.theme.streaming_indicator_style,
             ),
             Span::raw("  "), // 2 spaces after indicator for a bit more padding
@@ -646,6 +651,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 fn suppress_link_rendering(app: &App) -> bool {
     app.picker_state().is_some() || app.inspect_state().is_some()
+}
+
+fn activity_indicator_label(app: &App) -> &'static str {
+    if matches!(
+        app.ui.activity_kind(),
+        Some(crate::core::app::ActivityKind::McpOperation)
+    ) {
+        " [MCP]"
+    } else {
+        ""
+    }
 }
 
 fn tool_prompt_insert_index(
@@ -1092,6 +1108,15 @@ mod tests {
         assert!(title.contains("foo-model"));
         assert!(!title.contains("(no model selected)"));
         assert!(!title.contains("Preset:"));
+    }
+
+    #[test]
+    fn activity_indicator_label_marks_mcp_operations() {
+        let mut app = create_test_app();
+        assert_eq!(activity_indicator_label(&app), "");
+
+        app.begin_mcp_operation();
+        assert_eq!(activity_indicator_label(&app), " [MCP]");
     }
 
     #[test]

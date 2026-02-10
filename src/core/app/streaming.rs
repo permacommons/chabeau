@@ -23,6 +23,30 @@ impl App {
         self.conversation().cancel_current_stream();
     }
 
+    pub fn begin_mcp_operation(&mut self) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.session.stream_cancel_token = Some(token.clone());
+        self.ui.stream_interrupted = false;
+        self.ui
+            .begin_activity(crate::core::app::ui_state::ActivityKind::McpOperation);
+        token
+    }
+
+    pub fn end_mcp_operation_if_active(&mut self) {
+        if matches!(
+            self.ui.activity_kind(),
+            Some(crate::core::app::ui_state::ActivityKind::McpOperation)
+        ) {
+            self.ui
+                .end_activity(crate::core::app::ui_state::ActivityKind::McpOperation);
+        }
+        self.session.stream_cancel_token = None;
+    }
+
+    pub fn has_interruptible_activity(&self) -> bool {
+        self.ui.is_streaming || self.session.stream_cancel_token.is_some()
+    }
+
     pub fn enable_auto_scroll(&mut self) {
         self.ui.auto_scroll = true;
     }

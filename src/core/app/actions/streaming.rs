@@ -190,8 +190,8 @@ fn append_stream_app_message(
 fn handle_mcp_init_completed(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     app.session.mcp_init_complete = true;
     app.session.mcp_init_in_progress = false;
+    app.end_mcp_operation_if_active();
     if let Some(message) = app.session.pending_mcp_message.take() {
-        app.clear_status();
         spawn_stream_for_message(app, message, ctx)
     } else {
         None
@@ -200,7 +200,7 @@ fn handle_mcp_init_completed(app: &mut App, ctx: AppActionContext) -> Option<App
 
 fn handle_mcp_send_without_tools(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     if let Some(message) = app.session.pending_mcp_message.take() {
-        app.clear_status();
+        app.end_mcp_operation_if_active();
         Some(AppCommand::SpawnStream(prepare_stream_params_for_message(
             app, message, ctx,
         )))
@@ -222,17 +222,8 @@ fn should_defer_for_mcp(app: &App) -> bool {
 
 fn set_status_for_mcp_wait(app: &mut App, ctx: AppActionContext) {
     let input_area_height = app.input_area_height(ctx.term_width);
-    let mcp_name = app
-        .mcp
-        .servers()
-        .find(|server| server.config.is_enabled())
-        .map(|server| server.config.display_name.clone())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "MCP".to_string());
+    app.begin_mcp_operation();
     let mut conversation = app.conversation();
-    conversation.set_status(format!(
-        "Waiting for MCP tools ({mcp_name})... Press Enter to send without tools."
-    ));
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
@@ -607,7 +598,7 @@ fn handle_mcp_sampling_finished(app: &mut App, ctx: AppActionContext) -> Option<
     if let Some(request) = app.session.active_tool_request.clone() {
         set_status_for_tool_run(app, &request, ctx);
     } else {
-        app.clear_status();
+        app.end_mcp_operation_if_active();
     }
     advance_sampling_queue(app, ctx)
 }
@@ -623,7 +614,7 @@ fn handle_tool_call_completed(
     let server_label = request
         .as_ref()
         .map(|req| resolve_server_label(app, &req.server_id));
-    app.clear_status();
+    app.end_mcp_operation_if_active();
 
     match result {
         Ok(payload) => {
@@ -1635,27 +1626,23 @@ fn build_tool_result_summary(
     summary
 }
 
-fn set_status_for_tool_run(app: &mut App, request: &ToolCallRequest, ctx: AppActionContext) {
+fn set_status_for_tool_run(app: &mut App, _request: &ToolCallRequest, ctx: AppActionContext) {
     let input_area_height = app.input_area_height(ctx.term_width);
-    let server_name = resolve_server_label(app, &request.server_id);
+    let _token = app.begin_mcp_operation();
     let mut conversation = app.conversation();
-    conversation.set_status(format!(
-        "Running MCP tool {} on {}...",
-        request.tool_name, server_name
-    ));
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
 }
 
-fn set_status_for_sampling_run(app: &mut App, request: &McpSamplingRequest, ctx: AppActionContext) {
+fn set_status_for_sampling_run(
+    app: &mut App,
+    _request: &McpSamplingRequest,
+    ctx: AppActionContext,
+) {
     let input_area_height = app.input_area_height(ctx.term_width);
-    let server_name = resolve_server_label(app, &request.server_id);
+    let _token = app.begin_mcp_operation();
     let mut conversation = app.conversation();
-    conversation.set_status(format!(
-        "Generating text for MCP tool response on {}...",
-        server_name
-    ));
     let available_height =
         conversation.calculate_available_height(ctx.term_height, input_area_height);
     conversation.update_scroll_position(available_height, ctx.term_width);
@@ -2030,6 +2017,36 @@ mod tests {
             .expect("missing tool result record");
         assert_eq!(record.status, ToolResultStatus::Error);
         assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolCallFailure));
+    }
+
+    #[test]
+    fn tool_run_uses_activity_indicator_and_clears_on_completion() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        let request = ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "lookup".to_string(),
+            arguments: None,
+            raw_arguments: "{}".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+        };
+
+        set_status_for_tool_run(&mut app, &request, ctx);
+        assert!(app.has_interruptible_activity());
+        assert_eq!(app.ui.status, None);
+
+        app.session.active_tool_request = Some(request.clone());
+        let _ = handle_streaming_action(
+            &mut app,
+            AppAction::ToolCallCompleted {
+                tool_name: request.tool_name,
+                tool_call_id: request.tool_call_id,
+                result: Ok("{}".to_string()),
+            },
+            ctx,
+        );
+
+        assert!(!app.has_interruptible_activity());
     }
 
     #[test]

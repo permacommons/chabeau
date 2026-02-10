@@ -212,7 +212,7 @@ impl KeyHandler for EscapeHandler {
                     actions.push(AppAction::CancelMcpPromptInput);
                 } else if app.ui.in_place_edit_index().is_some() {
                     actions.push(AppAction::CancelInPlaceEdit);
-                } else if app.ui.is_streaming {
+                } else if app.has_interruptible_activity() {
                     actions.push(AppAction::CancelStreaming);
                 }
                 actions
@@ -1570,6 +1570,50 @@ mod tests {
                 .await;
             assert!(commands.is_empty());
             assert!(!is_streaming);
+            assert!(cancel_cleared);
+            assert!(interrupted);
+        });
+    }
+
+    #[test]
+    fn escape_handler_cancels_interruptible_mcp_activity() {
+        let handler = EscapeHandler;
+        let mut app = create_test_app();
+        {
+            app.begin_mcp_operation();
+        }
+        let app = AppHandle::new(Arc::new(Mutex::new(app)));
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let (dispatcher, mut action_rx) = test_dispatcher();
+            let result = handler
+                .handle(&app, &dispatcher, &key_event, 80, 24, None)
+                .await;
+            assert_eq!(result, KeyResult::Handled);
+
+            let mut envelopes = Vec::new();
+            while let Ok(envelope) = action_rx.try_recv() {
+                envelopes.push(envelope);
+            }
+            assert!(envelopes
+                .iter()
+                .any(|env| matches!(env.action, AppAction::CancelStreaming)));
+
+            let (commands, has_activity, cancel_cleared, interrupted) = app
+                .update(move |app| {
+                    let commands = apply_actions(app, envelopes);
+                    (
+                        commands,
+                        app.has_interruptible_activity(),
+                        app.session.stream_cancel_token.is_none(),
+                        app.ui.stream_interrupted,
+                    )
+                })
+                .await;
+            assert!(commands.is_empty());
+            assert!(!has_activity);
             assert!(cancel_cleared);
             assert!(interrupted);
         });

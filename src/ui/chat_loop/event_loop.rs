@@ -33,6 +33,7 @@ use ratatui::prelude::Size;
 use serde::Serialize;
 use serde_json;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::api::models::fetch_models;
@@ -147,6 +148,9 @@ fn spawn_mcp_tool_call(
     request: crate::core::app::session::ToolCallRequest,
 ) {
     tokio::spawn(async move {
+        let cancel_token = app
+            .read(|app| app.session.stream_cancel_token.clone())
+            .await;
         let term_size = app.read(|app| app.ui.last_term_size).await;
         let ctx = AppActionContext {
             term_width: term_size.width,
@@ -195,9 +199,12 @@ fn spawn_mcp_tool_call(
                 }
             };
 
-            crate::mcp::client::execute_resource_read(&mut call_context, &uri)
-                .await
-                .map(|result| serialize_mcp_result(&result))
+            run_cancellable(
+                cancel_token.as_ref(),
+                crate::mcp::client::execute_resource_read(&mut call_context, &uri),
+            )
+            .await
+            .map(|result| serialize_mcp_result(&result))
         } else if request
             .tool_name
             .eq_ignore_ascii_case(crate::mcp::MCP_LIST_RESOURCES_TOOL)
@@ -231,21 +238,26 @@ fn spawn_mcp_tool_call(
                 };
 
             match kind {
-                crate::core::app::actions::ResourceListKind::Resources => {
-                    crate::mcp::client::execute_resource_list(&mut call_context, cursor)
-                        .await
-                        .map(|result| serialize_mcp_result(&result))
-                }
-                crate::core::app::actions::ResourceListKind::Templates => {
-                    crate::mcp::client::execute_resource_template_list(&mut call_context, cursor)
-                        .await
-                        .map(|result| serialize_mcp_result(&result))
-                }
+                crate::core::app::actions::ResourceListKind::Resources => run_cancellable(
+                    cancel_token.as_ref(),
+                    crate::mcp::client::execute_resource_list(&mut call_context, cursor),
+                )
+                .await
+                .map(|result| serialize_mcp_result(&result)),
+                crate::core::app::actions::ResourceListKind::Templates => run_cancellable(
+                    cancel_token.as_ref(),
+                    crate::mcp::client::execute_resource_template_list(&mut call_context, cursor),
+                )
+                .await
+                .map(|result| serialize_mcp_result(&result)),
             }
         } else {
-            crate::mcp::client::execute_tool_call(&mut call_context, &request)
-                .await
-                .map(|result| serialize_mcp_result(&result))
+            run_cancellable(
+                cancel_token.as_ref(),
+                crate::mcp::client::execute_tool_call(&mut call_context, &request),
+            )
+            .await
+            .map(|result| serialize_mcp_result(&result))
         };
 
         let session_id = call_context.session_id.clone();
@@ -270,6 +282,23 @@ fn spawn_mcp_tool_call(
 fn serialize_mcp_result<T: Serialize>(result: &T) -> String {
     serde_json::to_string_pretty(result)
         .unwrap_or_else(|_| "Unable to serialize MCP result.".to_string())
+}
+
+async fn run_cancellable<F, T>(
+    cancel_token: Option<&CancellationToken>,
+    operation: F,
+) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    if let Some(token) = cancel_token {
+        tokio::select! {
+            _ = token.cancelled() => Err("MCP operation interrupted by user.".to_string()),
+            result = operation => result,
+        }
+    } else {
+        operation.await
+    }
 }
 
 fn spawn_mcp_prompt_call(
@@ -322,6 +351,9 @@ fn spawn_mcp_sampling_call(
 ) {
     tokio::spawn(async move {
         let start = std::time::Instant::now();
+        let cancel_token = app
+            .read(|app| app.session.stream_cancel_token.clone())
+            .await;
         let term_size = app.read(|app| app.ui.last_term_size).await;
         let ctx = AppActionContext {
             term_width: term_size.width,
@@ -436,6 +468,23 @@ fn spawn_mcp_sampling_call(
             }
         };
 
+        if cancel_token
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            let session_id = context.session_id.clone();
+            app.update(|app| {
+                app.mcp.update_server_request_session(
+                    &context.server_id,
+                    session_id,
+                    Some("MCP operation interrupted by user.".to_string()),
+                );
+            })
+            .await;
+            dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+            return;
+        }
+
         debug!(
             server_id = %request.server_id,
             request_id = ?request.request.id,
@@ -443,7 +492,7 @@ fn spawn_mcp_sampling_call(
             "Sending MCP sampling response"
         );
         let send_timeout = MCP_SAMPLING_SEND_TIMEOUT;
-        let send_result = match tokio::time::timeout(send_timeout, async {
+        let send_operation = tokio::time::timeout(send_timeout, async {
             match completion {
                 Ok(result) => {
                     let preview: String = result.content.chars().take(300).collect();
@@ -488,11 +537,22 @@ fn spawn_mcp_sampling_call(
                     .await
                 }
             }
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err("Timed out sending MCP sampling response.".to_string()),
+        });
+        let send_result = if let Some(token) = cancel_token.as_ref() {
+            tokio::select! {
+                _ = token.cancelled() => Err("MCP operation interrupted by user.".to_string()),
+                timed = send_operation => {
+                    match timed {
+                        Ok(result) => result,
+                        Err(_) => Err("Timed out sending MCP sampling response.".to_string()),
+                    }
+                }
+            }
+        } else {
+            match send_operation.await {
+                Ok(result) => result,
+                Err(_) => Err("Timed out sending MCP sampling response.".to_string()),
+            }
         };
         if let Err(error) = &send_result {
             debug!(

@@ -21,6 +21,9 @@ pub enum ActivityKind {
 
     /// Refreshing MCP tools/resources/prompts.
     McpRefresh,
+
+    /// Executing MCP operations such as tool calls and sampling.
+    McpOperation,
 }
 
 /// Type of file operation prompt being displayed.
@@ -466,6 +469,10 @@ impl UiState {
 
     pub fn is_activity_indicator_visible(&self) -> bool {
         self.activity_indicator.is_some()
+    }
+
+    pub fn activity_kind(&self) -> Option<ActivityKind> {
+        self.activity_indicator
     }
 
     pub fn begin_streaming(&mut self) {

@@ -1,7 +1,7 @@
 Output recordings/retry.mp4
 Source lib/preamble.tape
 
-Type "Name 3 major cities, with food emoji; table format."
+Type "Name 3 major cities, with witty short descriptions and food emoji; table format."
 Source lib/wait-turn.tape
 
 Type "We can retry a response with Ctrl+R."

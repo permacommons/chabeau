@@ -28,6 +28,7 @@ const MCP_METHOD_NOT_FOUND: i64 = -32601;
 const MCP_MAX_TOOL_LIST: usize = 100;
 const MCP_JSON_CONTENT_TYPE: &str = "application/json";
 const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
+const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransportKind {
@@ -78,6 +79,18 @@ fn apply_streamable_http_client_post_headers(
     request
         .header("Content-Type", MCP_JSON_CONTENT_TYPE)
         .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
+}
+
+fn apply_streamable_http_protocol_version_header(
+    request: reqwest::RequestBuilder,
+    protocol_version: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match protocol_version {
+        Some(protocol_version) if !protocol_version.trim().is_empty() => {
+            request.header(MCP_PROTOCOL_VERSION_HEADER, protocol_version)
+        }
+        _ => request,
+    }
 }
 
 const STDIO_REQUEST_TIMEOUT_SECONDS: u64 = 60;
@@ -922,6 +935,13 @@ impl McpClientManager {
                                         server.auth_header.clone(),
                                         server.session_id.clone(),
                                         tx,
+                                        Some(effective_protocol_version(
+                                            &server.config,
+                                            server
+                                                .server_details
+                                                .as_ref()
+                                                .map(|details| details.protocol_version.as_str()),
+                                        )),
                                     );
                                 }
                             }
@@ -1316,7 +1336,7 @@ impl McpClientManager {
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
         let client = reqwest::Client::new();
 
-        let (base_url, auth_header, session_id) = {
+        let (base_url, auth_header, session_id, protocol_version) = {
             let Some(server) = self.server(id) else {
                 return Err("Unknown MCP server".to_string());
             };
@@ -1324,11 +1344,21 @@ impl McpClientManager {
                 require_http_base_url(&server.config)?,
                 server.auth_header.clone(),
                 server.session_id.clone(),
+                effective_protocol_version(
+                    &server.config,
+                    server
+                        .server_details
+                        .as_ref()
+                        .map(|details| details.protocol_version.as_str()),
+                ),
             )
         };
 
-        let mut request =
-            apply_streamable_http_client_post_headers(client.post(base_url)).body(payload);
+        let mut request = apply_streamable_http_protocol_version_header(
+            apply_streamable_http_client_post_headers(client.post(base_url)),
+            Some(protocol_version.as_str()),
+        )
+        .body(payload);
 
         if let Some(auth) = auth_header {
             request = request.header("Authorization", auth);
@@ -1361,7 +1391,7 @@ impl McpClientManager {
         id: &str,
         request: RequestFromClient,
     ) -> Result<ServerMessage, String> {
-        let (base_url, auth_header, session_id, request_id) = {
+        let (base_url, auth_header, session_id, request_id, protocol_version) = {
             let Some(server) = self.server_mut(id) else {
                 return Err("Unknown MCP server".to_string());
             };
@@ -1376,6 +1406,13 @@ impl McpClientManager {
                 server.auth_header.clone(),
                 server.session_id.clone(),
                 request_id,
+                effective_protocol_version(
+                    &server.config,
+                    server
+                        .server_details
+                        .as_ref()
+                        .map(|details| details.protocol_version.as_str()),
+                ),
             )
         };
 
@@ -1394,11 +1431,11 @@ impl McpClientManager {
             url = %base_url,
             "Sending MCP HTTP request"
         );
-        let mut request = client
-            .post(base_url)
-            .header("Content-Type", MCP_JSON_CONTENT_TYPE)
-            .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
-            .body(payload);
+        let mut request = apply_streamable_http_protocol_version_header(
+            apply_streamable_http_client_post_headers(client.post(base_url)),
+            Some(protocol_version.as_str()),
+        )
+        .body(payload);
 
         if let Some(auth) = auth_header {
             request = request.header("Authorization", auth);
@@ -1527,6 +1564,7 @@ fn spawn_streamable_http_listener(
     auth_header: Option<String>,
     session_id: Option<String>,
     request_tx: mpsc::UnboundedSender<McpServerRequest>,
+    protocol_version: Option<String>,
 ) {
     let Some(base_url) = base_url else {
         return;
@@ -1534,7 +1572,10 @@ fn spawn_streamable_http_listener(
 
     tokio::spawn(async move {
         let client = reqwest::Client::new();
-        let mut request = client.get(&base_url).header("Accept", "text/event-stream");
+        let mut request = apply_streamable_http_protocol_version_header(
+            client.get(&base_url).header("Accept", "text/event-stream"),
+            protocol_version.as_deref(),
+        );
 
         if let Some(auth) = auth_header {
             request = request.header("Authorization", auth);
@@ -1615,6 +1656,7 @@ pub struct McpToolCallContext {
     pub(crate) session_id: Option<String>,
     client: Option<Arc<StdioClient>>,
     streamable_http_request_id: u64,
+    negotiated_protocol_version: Option<String>,
 }
 
 pub struct McpPromptContext {
@@ -1625,6 +1667,7 @@ pub struct McpPromptContext {
     pub(crate) session_id: Option<String>,
     client: Option<Arc<StdioClient>>,
     streamable_http_request_id: u64,
+    negotiated_protocol_version: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1635,6 +1678,7 @@ pub struct McpServerRequestContext {
     auth_header: Option<String>,
     pub(crate) session_id: Option<String>,
     client: Option<Arc<StdioClient>>,
+    negotiated_protocol_version: Option<String>,
 }
 
 trait StreamableHttpContext {
@@ -1643,6 +1687,12 @@ trait StreamableHttpContext {
     fn session_id(&self) -> Option<&String>;
     fn set_session_id(&mut self, session_id: Option<String>);
     fn next_request_id(&mut self) -> i64;
+    fn negotiated_protocol_version(&self) -> Option<&str>;
+    fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>);
+
+    fn effective_protocol_version(&self) -> String {
+        effective_protocol_version(self.config(), self.negotiated_protocol_version())
+    }
 }
 
 impl StreamableHttpContext for McpToolCallContext {
@@ -1666,6 +1716,14 @@ impl StreamableHttpContext for McpToolCallContext {
         let request_id = self.streamable_http_request_id as i64;
         self.streamable_http_request_id = self.streamable_http_request_id.saturating_add(1);
         request_id
+    }
+
+    fn negotiated_protocol_version(&self) -> Option<&str> {
+        self.negotiated_protocol_version.as_deref()
+    }
+
+    fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>) {
+        self.negotiated_protocol_version = protocol_version;
     }
 }
 
@@ -1691,6 +1749,14 @@ impl StreamableHttpContext for McpPromptContext {
         self.streamable_http_request_id = self.streamable_http_request_id.saturating_add(1);
         request_id
     }
+
+    fn negotiated_protocol_version(&self) -> Option<&str> {
+        self.negotiated_protocol_version.as_deref()
+    }
+
+    fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>) {
+        self.negotiated_protocol_version = protocol_version;
+    }
 }
 
 impl StreamableHttpContext for McpServerRequestContext {
@@ -1713,6 +1779,14 @@ impl StreamableHttpContext for McpServerRequestContext {
     fn next_request_id(&mut self) -> i64 {
         0
     }
+
+    fn negotiated_protocol_version(&self) -> Option<&str> {
+        self.negotiated_protocol_version.as_deref()
+    }
+
+    fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>) {
+        self.negotiated_protocol_version = protocol_version;
+    }
 }
 
 impl McpClientManager {
@@ -1730,6 +1804,10 @@ impl McpClientManager {
             session_id: server.session_id.clone(),
             client: server.client.clone(),
             streamable_http_request_id: 0,
+            negotiated_protocol_version: server
+                .server_details
+                .as_ref()
+                .map(|details| details.protocol_version.clone()),
         })
     }
 
@@ -1747,6 +1825,10 @@ impl McpClientManager {
             session_id: server.session_id.clone(),
             client: server.client.clone(),
             streamable_http_request_id: 0,
+            negotiated_protocol_version: server
+                .server_details
+                .as_ref()
+                .map(|details| details.protocol_version.clone()),
         })
     }
 
@@ -1763,6 +1845,10 @@ impl McpClientManager {
             auth_header: server.auth_header.clone(),
             session_id: server.session_id.clone(),
             client: server.client.clone(),
+            negotiated_protocol_version: server
+                .server_details
+                .as_ref()
+                .map(|details| details.protocol_version.clone()),
         })
     }
 
@@ -2068,7 +2154,8 @@ async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
         RequestFromClient::InitializeRequest(client_details),
     )
     .await?;
-    parse_initialize_result(response)?;
+    let initialize = parse_initialize_result(response)?;
+    context.set_negotiated_protocol_version(Some(initialize.protocol_version));
 
     if context.session_id().is_none() {
         return Err("Missing session id on initialize response.".to_string());
@@ -2103,8 +2190,12 @@ async fn send_streamable_http_client_message_with_context_inner<C: StreamableHtt
     let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
     let client = reqwest::Client::new();
     let base_url = require_http_base_url(context.config())?;
-    let mut request =
-        apply_streamable_http_client_post_headers(client.post(base_url)).body(payload);
+    let protocol_version = context.effective_protocol_version();
+    let mut request = apply_streamable_http_protocol_version_header(
+        apply_streamable_http_client_post_headers(client.post(base_url)),
+        Some(protocol_version.as_str()),
+    )
+    .body(payload);
 
     if let Some(auth) = context.auth_header() {
         request = request.header("Authorization", auth);
@@ -2152,11 +2243,12 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
         url = %base_url,
         "Sending MCP HTTP request"
     );
-    let mut request = client
-        .post(base_url)
-        .header("Content-Type", MCP_JSON_CONTENT_TYPE)
-        .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
-        .body(payload);
+    let protocol_version = context.effective_protocol_version();
+    let mut request = apply_streamable_http_protocol_version_header(
+        apply_streamable_http_client_post_headers(client.post(base_url)),
+        Some(protocol_version.as_str()),
+    )
+    .body(payload);
 
     if let Some(auth) = context.auth_header() {
         request = request.header("Authorization", auth);
@@ -2203,10 +2295,7 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
 }
 
 fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
-    let protocol_version = config
-        .protocol_version
-        .clone()
-        .unwrap_or_else(|| LATEST_PROTOCOL_VERSION.to_string());
+    let protocol_version = requested_protocol_version(config);
     let capabilities = ClientCapabilities {
         sampling: Some(ClientSampling::default()),
         ..ClientCapabilities::default()
@@ -2223,6 +2312,23 @@ fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
         },
         meta: None,
         protocol_version,
+    }
+}
+
+fn requested_protocol_version(config: &McpServerConfig) -> String {
+    config
+        .protocol_version
+        .clone()
+        .unwrap_or_else(|| LATEST_PROTOCOL_VERSION.to_string())
+}
+
+fn effective_protocol_version(
+    config: &McpServerConfig,
+    negotiated_version: Option<&str>,
+) -> String {
+    match negotiated_version {
+        Some(version) if !version.trim().is_empty() => version.to_string(),
+        _ => requested_protocol_version(config),
     }
 }
 
@@ -2332,6 +2438,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn streamable_http_protocol_version_header_is_applied_when_present() {
+        let client = reqwest::Client::new();
+        let request = apply_streamable_http_protocol_version_header(
+            client.post("https://example.com"),
+            Some("2025-11-25"),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(MCP_PROTOCOL_VERSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("2025-11-25")
+        );
+    }
+
+    #[test]
+    fn effective_protocol_version_prefers_negotiated_value() {
+        let mut config = sample_config();
+        config.protocol_version = Some("2025-01-01".to_string());
+
+        assert_eq!(
+            effective_protocol_version(&config, Some("2025-11-25")),
+            "2025-11-25"
+        );
+        assert_eq!(effective_protocol_version(&config, None), "2025-01-01");
+    }
+
     fn sample_tool(name: String) -> rust_mcp_schema::Tool {
         rust_mcp_schema::Tool {
             annotations: None,
@@ -2350,7 +2487,7 @@ mod tests {
         calls: Vec<Option<String>>,
     }
 
-    type CapturedHttpRequests = Arc<Mutex<Vec<(String, String, String, String)>>>;
+    type CapturedHttpRequests = Arc<Mutex<Vec<(String, String, String, String, String)>>>;
 
     async fn fetch_tools_page_test(
         state: &Arc<Mutex<ToolPageState>>,
@@ -2528,6 +2665,11 @@ mod tests {
                     .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
                     .map(|(_, value)| value.clone())
                     .unwrap_or_default();
+                let protocol_version = headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(MCP_PROTOCOL_VERSION_HEADER))
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default();
 
                 let body_json: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|err| err.to_string())?;
@@ -2542,6 +2684,7 @@ mod tests {
                     method.clone(),
                     accept,
                     content_type,
+                    protocol_version,
                 ));
 
                 let response = if method == "initialize" {
@@ -2549,7 +2692,7 @@ mod tests {
                         "jsonrpc": "2.0",
                         "id": 0,
                         "result": {
-                            "protocolVersion": "2025-11-25",
+                            "protocolVersion": "2025-12-31",
                             "capabilities": {},
                             "serverInfo": {
                                 "name": "mock",
@@ -2642,6 +2785,9 @@ mod tests {
         assert_eq!(captured[0].3, MCP_JSON_CONTENT_TYPE);
         assert_eq!(captured[1].3, MCP_JSON_CONTENT_TYPE);
         assert_eq!(captured[2].3, MCP_JSON_CONTENT_TYPE);
+        assert_eq!(captured[0].4, LATEST_PROTOCOL_VERSION);
+        assert_eq!(captured[1].4, "2025-12-31");
+        assert_eq!(captured[2].4, "2025-12-31");
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::cli::refresh_oauth_grant_if_needed;
 use crate::core::app::session::ToolCallRequest;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
@@ -807,6 +808,28 @@ impl McpClientManager {
     }
 
     pub async fn connect_server(&mut self, id: &str, token_store: &McpTokenStore) {
+        let oauth_refresh_warning = {
+            let Some(server) = self.server(id) else {
+                return;
+            };
+            if !server.config.is_enabled() {
+                None
+            } else if matches!(
+                McpTransportKind::from_config(&server.config),
+                Ok(McpTransportKind::StreamableHttp)
+            ) {
+                match refresh_oauth_grant_if_needed(&server.config.id, token_store).await {
+                    Ok(_) => None,
+                    Err(err) => Some(format!(
+                        "OAuth refresh failed for {}: {}. Re-authenticate with `chabeau mcp oauth add {}`.",
+                        server.config.display_name, err, server.config.id
+                    )),
+                }
+            } else {
+                None
+            }
+        };
+
         let (config, transport_kind, auth_header) = {
             let Some(server) = self.server_mut(id) else {
                 return;
@@ -876,7 +899,7 @@ impl McpClientManager {
                     Ok(()) => {
                         if let Some(server) = self.server_mut(id) {
                             server.connected = true;
-                            server.last_error = None;
+                            server.last_error = oauth_refresh_warning.clone();
                             server.auth_header = auth_header;
                         }
                         if let Some(tx) = request_tx.clone() {
@@ -897,7 +920,12 @@ impl McpClientManager {
                     Err(err) => {
                         if let Some(server) = self.server_mut(id) {
                             server.connected = false;
-                            server.last_error = Some(err);
+                            server.last_error = Some(match oauth_refresh_warning.clone() {
+                                Some(refresh_warning) => {
+                                    format!("{refresh_warning} Connection failed: {err}")
+                                }
+                                None => err,
+                            });
                             server.auth_header = auth_header;
                         }
                     }

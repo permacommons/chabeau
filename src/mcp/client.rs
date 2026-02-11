@@ -1275,6 +1275,77 @@ impl McpClientManager {
             return Err("Missing session id on initialize response.".to_string());
         }
 
+        self.send_streamable_http_notification(
+            id,
+            NotificationFromClient::InitializedNotification(None),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn send_streamable_http_notification(
+        &mut self,
+        id: &str,
+        notification: NotificationFromClient,
+    ) -> Result<(), String> {
+        let message = ClientMessage::from_message(
+            MessageFromClient::NotificationFromClient(notification),
+            None,
+        )
+        .map_err(|err| err.to_string())?;
+
+        self.send_streamable_http_client_message(id, message).await
+    }
+
+    async fn send_streamable_http_client_message(
+        &mut self,
+        id: &str,
+        message: ClientMessage,
+    ) -> Result<(), String> {
+        let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
+        let client = reqwest::Client::new();
+
+        let (base_url, auth_header, session_id) = {
+            let Some(server) = self.server(id) else {
+                return Err("Unknown MCP server".to_string());
+            };
+            (
+                require_http_base_url(&server.config)?,
+                server.auth_header.clone(),
+                server.session_id.clone(),
+            )
+        };
+
+        let mut request = client
+            .post(base_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .body(payload);
+
+        if let Some(auth) = auth_header {
+            request = request.header("Authorization", auth);
+        }
+        if let Some(session_id) = session_id {
+            request = request.header("mcp-session-id", session_id);
+        }
+
+        let response = request.send().await.map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        if let Some(session_id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string())
+        {
+            if let Some(server) = self.server_mut(id) {
+                server.session_id = Some(session_id);
+            }
+        }
+
         Ok(())
     }
 
@@ -1604,6 +1675,28 @@ impl StreamableHttpContext for McpPromptContext {
         let request_id = self.streamable_http_request_id as i64;
         self.streamable_http_request_id = self.streamable_http_request_id.saturating_add(1);
         request_id
+    }
+}
+
+impl StreamableHttpContext for McpServerRequestContext {
+    fn config(&self) -> &McpServerConfig {
+        &self.config
+    }
+
+    fn auth_header(&self) -> Option<&String> {
+        self.auth_header.as_ref()
+    }
+
+    fn session_id(&self) -> Option<&String> {
+        self.session_id.as_ref()
+    }
+
+    fn set_session_id(&mut self, session_id: Option<String>) {
+        self.session_id = session_id;
+    }
+
+    fn next_request_id(&mut self) -> i64 {
+        0
     }
 }
 
@@ -1944,37 +2037,7 @@ async fn send_streamable_http_client_message(
     context: &mut McpServerRequestContext,
     message: ClientMessage,
 ) -> Result<(), String> {
-    let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-    let client = reqwest::Client::new();
-    let base_url = require_http_base_url(&context.config)?;
-    let mut request = client
-        .post(base_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(payload);
-
-    if let Some(auth) = context.auth_header.as_ref() {
-        request = request.header("Authorization", auth);
-    }
-    if let Some(session_id) = context.session_id.as_ref() {
-        request = request.header("mcp-session-id", session_id);
-    }
-
-    let response = request.send().await.map_err(|err| err.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    if let Some(session_id) = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string())
-    {
-        context.session_id = Some(session_id);
-    }
-
-    Ok(())
+    send_streamable_http_client_message_with_context_inner(context, message).await
 }
 
 async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
@@ -1994,6 +2057,62 @@ async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
 
     if context.session_id().is_none() {
         return Err("Missing session id on initialize response.".to_string());
+    }
+
+    send_streamable_http_notification_with_context_inner(
+        context,
+        NotificationFromClient::InitializedNotification(None),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn send_streamable_http_notification_with_context_inner<C: StreamableHttpContext>(
+    context: &mut C,
+    notification: NotificationFromClient,
+) -> Result<(), String> {
+    let message = ClientMessage::from_message(
+        MessageFromClient::NotificationFromClient(notification),
+        None,
+    )
+    .map_err(|err| err.to_string())?;
+
+    send_streamable_http_client_message_with_context_inner(context, message).await
+}
+
+async fn send_streamable_http_client_message_with_context_inner<C: StreamableHttpContext>(
+    context: &mut C,
+    message: ClientMessage,
+) -> Result<(), String> {
+    let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
+    let client = reqwest::Client::new();
+    let base_url = require_http_base_url(context.config())?;
+    let mut request = client
+        .post(base_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(payload);
+
+    if let Some(auth) = context.auth_header() {
+        request = request.header("Authorization", auth);
+    }
+    if let Some(session_id) = context.session_id() {
+        request = request.header("mcp-session-id", session_id);
+    }
+
+    let response = request.send().await.map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    if let Some(session_id) = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+    {
+        context.set_session_id(Some(session_id));
     }
 
     Ok(())

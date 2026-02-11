@@ -26,6 +26,8 @@ use tracing::debug;
 
 const MCP_METHOD_NOT_FOUND: i64 = -32601;
 const MCP_MAX_TOOL_LIST: usize = 100;
+const MCP_JSON_CONTENT_TYPE: &str = "application/json";
+const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransportKind {
@@ -68,6 +70,14 @@ fn stdio_args(config: &McpServerConfig) -> Vec<String> {
 
 fn stdio_env(config: &McpServerConfig) -> Option<HashMap<String, String>> {
     config.env.clone()
+}
+
+fn apply_streamable_http_client_post_headers(
+    request: reqwest::RequestBuilder,
+) -> reqwest::RequestBuilder {
+    request
+        .header("Content-Type", MCP_JSON_CONTENT_TYPE)
+        .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
 }
 
 const STDIO_REQUEST_TIMEOUT_SECONDS: u64 = 60;
@@ -1317,11 +1327,8 @@ impl McpClientManager {
             )
         };
 
-        let mut request = client
-            .post(base_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(payload);
+        let mut request =
+            apply_streamable_http_client_post_headers(client.post(base_url)).body(payload);
 
         if let Some(auth) = auth_header {
             request = request.header("Authorization", auth);
@@ -1389,8 +1396,8 @@ impl McpClientManager {
         );
         let mut request = client
             .post(base_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", MCP_JSON_CONTENT_TYPE)
+            .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
             .body(payload);
 
         if let Some(auth) = auth_header {
@@ -1424,7 +1431,7 @@ impl McpClientManager {
             .to_string();
 
         let request_tx = self.server_request_tx.clone();
-        let server_message = if content_type.starts_with("text/event-stream") {
+        let server_message = if is_event_stream_content_type(&content_type) {
             read_sse_response_messages(response, id, request_tx).await?
         } else {
             let body = response.bytes().await.map_err(|err| err.to_string())?;
@@ -1443,6 +1450,14 @@ impl McpClientManager {
 
 fn sse_data_payload(line: &str) -> Option<&str> {
     line.strip_prefix("data:").map(str::trim)
+}
+
+fn is_event_stream_content_type(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("text/event-stream"))
 }
 
 async fn read_sse_response_messages(
@@ -1542,7 +1557,7 @@ fn spawn_streamable_http_listener(
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        if !content_type.starts_with("text/event-stream") {
+        if !is_event_stream_content_type(content_type) {
             return;
         }
 
@@ -2088,11 +2103,8 @@ async fn send_streamable_http_client_message_with_context_inner<C: StreamableHtt
     let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
     let client = reqwest::Client::new();
     let base_url = require_http_base_url(context.config())?;
-    let mut request = client
-        .post(base_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(payload);
+    let mut request =
+        apply_streamable_http_client_post_headers(client.post(base_url)).body(payload);
 
     if let Some(auth) = context.auth_header() {
         request = request.header("Authorization", auth);
@@ -2142,8 +2154,8 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
     );
     let mut request = client
         .post(base_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", MCP_JSON_CONTENT_TYPE)
+        .header("Accept", MCP_JSON_AND_SSE_ACCEPT)
         .body(payload);
 
     if let Some(auth) = context.auth_header() {
@@ -2176,7 +2188,7 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
         .unwrap_or("")
         .to_string();
 
-    let server_message = if content_type.starts_with("text/event-stream") {
+    let server_message = if is_event_stream_content_type(&content_type) {
         read_sse_response_messages(response, &context.config().id, None).await?
     } else {
         let body = response.bytes().await.map_err(|err| err.to_string())?;
@@ -2297,6 +2309,29 @@ mod tests {
         assert!(state.supports_prompts());
     }
 
+    #[test]
+    fn streamable_http_client_post_headers_include_json_and_sse_accept() {
+        let client = reqwest::Client::new();
+        let request = apply_streamable_http_client_post_headers(client.post("https://example.com"))
+            .build()
+            .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("Content-Type")
+                .and_then(|v| v.to_str().ok()),
+            Some(MCP_JSON_CONTENT_TYPE)
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("Accept")
+                .and_then(|v| v.to_str().ok()),
+            Some(MCP_JSON_AND_SSE_ACCEPT)
+        );
+    }
+
     fn sample_tool(name: String) -> rust_mcp_schema::Tool {
         rust_mcp_schema::Tool {
             annotations: None,
@@ -2314,6 +2349,8 @@ mod tests {
     struct ToolPageState {
         calls: Vec<Option<String>>,
     }
+
+    type CapturedHttpRequests = Arc<Mutex<Vec<(String, String, String, String)>>>;
 
     async fn fetch_tools_page_test(
         state: &Arc<Mutex<ToolPageState>>,
@@ -2389,6 +2426,222 @@ mod tests {
         assert_eq!(result.next_cursor.as_deref(), Some("c1"));
         let calls = state.lock().await.calls.clone();
         assert_eq!(calls, vec![None]);
+    }
+    #[test]
+    fn event_stream_content_type_parser_handles_parameters_and_case() {
+        assert!(is_event_stream_content_type("text/event-stream"));
+        assert!(is_event_stream_content_type(
+            "Text/Event-Stream; charset=UTF-8"
+        ));
+        assert!(is_event_stream_content_type(
+            "text/event-stream ; version=1"
+        ));
+        assert!(!is_event_stream_content_type("application/json"));
+    }
+
+    async fn read_http_request(
+        stream: &mut tokio::net::TcpStream,
+    ) -> Result<(String, Vec<(String, String)>, Vec<u8>), String> {
+        use tokio::io::AsyncReadExt;
+
+        let mut buffer = Vec::new();
+        let mut header_end = None;
+        while header_end.is_none() {
+            let mut chunk = [0_u8; 1024];
+            let read = stream
+                .read(&mut chunk)
+                .await
+                .map_err(|err| err.to_string())?;
+            if read == 0 {
+                return Err("Unexpected EOF while reading HTTP headers".to_string());
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            header_end = buffer
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|index| index + 4);
+        }
+
+        let header_end = header_end.expect("header end should exist");
+        let header_bytes = &buffer[..header_end];
+        let header_text = std::str::from_utf8(header_bytes).map_err(|err| err.to_string())?;
+        let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
+        let request_line = lines
+            .next()
+            .ok_or_else(|| "Missing HTTP request line".to_string())?
+            .to_string();
+
+        let mut headers = Vec::new();
+        let mut content_length = 0_usize;
+        for line in lines {
+            let mut parts = line.splitn(2, ':');
+            let Some(name) = parts.next() else {
+                continue;
+            };
+            let value = parts.next().unwrap_or_default().trim().to_string();
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse::<usize>().map_err(|err| err.to_string())?;
+            }
+            headers.push((name.to_string(), value));
+        }
+
+        let mut body = buffer[header_end..].to_vec();
+        while body.len() < content_length {
+            let mut chunk = vec![0_u8; content_length.saturating_sub(body.len())];
+            let read = stream
+                .read(&mut chunk)
+                .await
+                .map_err(|err| err.to_string())?;
+            if read == 0 {
+                return Err("Unexpected EOF while reading HTTP body".to_string());
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body.truncate(content_length);
+
+        Ok((request_line, headers, body))
+    }
+
+    #[tokio::test]
+    async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("local addr should resolve");
+        let captured_requests: CapturedHttpRequests = Arc::new(Mutex::new(Vec::new()));
+        let captured_for_server = Arc::clone(&captured_requests);
+
+        let server_task = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.map_err(|err| err.to_string())?;
+                let (request_line, headers, body) = read_http_request(&mut stream).await?;
+                let accept = headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default();
+                let content_type = headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default();
+
+                let body_json: serde_json::Value =
+                    serde_json::from_slice(&body).map_err(|err| err.to_string())?;
+                let method = body_json
+                    .get("method")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                captured_for_server.lock().await.push((
+                    request_line,
+                    method.clone(),
+                    accept,
+                    content_type,
+                ));
+
+                let response = if method == "initialize" {
+                    let body = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "result": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {},
+                            "serverInfo": {
+                                "name": "mock",
+                                "version": "0.1.0",
+                                "icons": []
+                            }
+                        }
+                    })
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: test-session\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(), body
+                    )
+                } else if method == "notifications/initialized" {
+                    let body = "{}";
+                    format!(
+                        "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(), body
+                    )
+                } else {
+                    let event = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: Text/Event-Stream; Charset=UTF-8\r\ncontent-length: {}\r\n\r\n{}",
+                        event.len(), event
+                    )
+                };
+
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .map_err(|err| err.to_string())?;
+            }
+            Ok::<(), String>(())
+        });
+
+        std::env::remove_var("HTTP_PROXY");
+        std::env::remove_var("http_proxy");
+        std::env::remove_var("HTTPS_PROXY");
+        std::env::remove_var("https_proxy");
+        std::env::remove_var("ALL_PROXY");
+        std::env::remove_var("all_proxy");
+        std::env::set_var("NO_PROXY", "*");
+        std::env::set_var("no_proxy", "*");
+
+        let config = Config {
+            mcp_servers: vec![McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: Some(format!("http://{}", addr)),
+                command: None,
+                args: None,
+                env: None,
+                transport: Some("streamable-http".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            }],
+            ..Config::default()
+        };
+
+        let mut manager = McpClientManager::from_config(&config);
+        manager
+            .ensure_streamable_http_session("alpha")
+            .await
+            .expect("initialize should succeed");
+
+        let message = manager
+            .send_streamable_http_request("alpha", RequestFromClient::ListResourcesRequest(None))
+            .await
+            .expect("SSE request should succeed");
+        let value = parse_response_value(message).expect("response value should parse");
+        assert_eq!(value.get("ok").and_then(|item| item.as_bool()), Some(true));
+
+        server_task
+            .await
+            .expect("mock server task should join")
+            .expect("mock server should succeed");
+
+        let captured = captured_requests.lock().await.clone();
+        assert_eq!(captured.len(), 3);
+        assert_eq!(captured[0].1, "initialize");
+        assert_eq!(captured[1].1, "notifications/initialized");
+        assert_eq!(captured[2].1, "resources/list");
+        assert_eq!(captured[0].2, MCP_JSON_AND_SSE_ACCEPT);
+        assert_eq!(captured[1].2, MCP_JSON_AND_SSE_ACCEPT);
+        assert_eq!(captured[2].2, MCP_JSON_AND_SSE_ACCEPT);
+        assert_eq!(captured[0].3, MCP_JSON_CONTENT_TYPE);
+        assert_eq!(captured[1].3, MCP_JSON_CONTENT_TYPE);
+        assert_eq!(captured[2].3, MCP_JSON_CONTENT_TYPE);
     }
 }
 

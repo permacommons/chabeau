@@ -1471,6 +1471,8 @@ struct OAuthClientRegistrationResponse {
     client_id: String,
 }
 
+const OAUTH_REFRESH_SAFETY_WINDOW_S: i64 = 60;
+
 struct AuthorizationUrlParams<'a> {
     authorization_endpoint: &'a str,
     client_id: Option<&'a str>,
@@ -1480,6 +1482,118 @@ struct AuthorizationUrlParams<'a> {
     code_challenge_method: &'a str,
     issuer: Option<&'a str>,
     scope: Option<&'a str>,
+}
+
+fn current_unix_epoch_s() -> Option<i64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs() as i64)
+}
+
+fn oauth_grant_needs_refresh(
+    expires_at_epoch_s: Option<i64>,
+    now_epoch_s: i64,
+    safety_window_s: i64,
+) -> bool {
+    match expires_at_epoch_s {
+        Some(expires_at) => expires_at <= now_epoch_s.saturating_add(safety_window_s),
+        None => false,
+    }
+}
+
+fn apply_oauth_token_response(
+    existing_grant: &McpOAuthGrant,
+    token: OAuthTokenResponse,
+    now_epoch_s: i64,
+) -> McpOAuthGrant {
+    let expires_at_epoch_s = token
+        .expires_in
+        .and_then(|seconds| now_epoch_s.checked_add(seconds));
+
+    McpOAuthGrant {
+        access_token: token.access_token,
+        refresh_token: token
+            .refresh_token
+            .or_else(|| existing_grant.refresh_token.clone()),
+        token_type: token
+            .token_type
+            .or_else(|| existing_grant.token_type.clone()),
+        scope: token.scope.or_else(|| existing_grant.scope.clone()),
+        expires_at_epoch_s,
+        client_id: existing_grant.client_id.clone(),
+        redirect_uri: existing_grant.redirect_uri.clone(),
+        authorization_endpoint: existing_grant.authorization_endpoint.clone(),
+        token_endpoint: existing_grant.token_endpoint.clone(),
+        revocation_endpoint: existing_grant.revocation_endpoint.clone(),
+        issuer: existing_grant.issuer.clone(),
+    }
+}
+
+async fn refresh_oauth_access_token(
+    token_endpoint: &str,
+    refresh_token: &str,
+    client_id: Option<&str>,
+) -> Result<OAuthTokenResponse, Box<dyn Error>> {
+    let mut form_fields = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ];
+    if let Some(client_id) = client_id.filter(|value| !value.trim().is_empty()) {
+        form_fields.push(("client_id", client_id));
+    }
+
+    let response = reqwest::Client::new()
+        .post(token_endpoint)
+        .form(&form_fields)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("OAuth refresh failed ({status}): {text}").into());
+    }
+
+    Ok(response.json::<OAuthTokenResponse>().await?)
+}
+
+pub(crate) async fn refresh_oauth_grant_if_needed(
+    server_id: &str,
+    token_store: &McpTokenStore,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(grant) = token_store.get_oauth_grant(server_id)? else {
+        return Ok(None);
+    };
+
+    let Some(now_epoch_s) = current_unix_epoch_s() else {
+        return Ok(Some(grant.access_token));
+    };
+
+    if !oauth_grant_needs_refresh(
+        grant.expires_at_epoch_s,
+        now_epoch_s,
+        OAUTH_REFRESH_SAFETY_WINDOW_S,
+    ) {
+        return Ok(Some(grant.access_token));
+    }
+
+    let Some(refresh_token) = grant.refresh_token.clone() else {
+        return Ok(Some(grant.access_token));
+    };
+
+    let token_endpoint = grant
+        .token_endpoint
+        .as_deref()
+        .ok_or("OAuth grant is missing token endpoint; re-auth required.")?;
+
+    let token =
+        refresh_oauth_access_token(token_endpoint, &refresh_token, grant.client_id.as_deref())
+            .await?;
+    let updated_grant = apply_oauth_token_response(&grant, token, now_epoch_s);
+    token_store.set_oauth_grant(server_id, &updated_grant)?;
+    token_store.set_token(server_id, &updated_grant.access_token)?;
+    Ok(Some(updated_grant.access_token))
 }
 
 async fn add_oauth_grant_for_server(
@@ -1607,17 +1721,13 @@ async fn add_oauth_grant_for_server(
         )
         .await?;
 
-        let expires_at_epoch_s = token.expires_in.and_then(|seconds| {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
-            now.checked_add(seconds)
-        });
-
-        let grant = McpOAuthGrant {
-            access_token: token.access_token.clone(),
-            refresh_token: token.refresh_token.clone(),
-            token_type: token.token_type.clone(),
-            scope: token.scope.clone(),
-            expires_at_epoch_s,
+        let now_epoch_s = current_unix_epoch_s().unwrap_or_default();
+        let grant_seed = McpOAuthGrant {
+            access_token: String::new(),
+            refresh_token: None,
+            token_type: None,
+            scope: None,
+            expires_at_epoch_s: None,
             client_id,
             redirect_uri: Some(redirect_uri),
             authorization_endpoint: metadata.authorization_endpoint.clone(),
@@ -1625,8 +1735,9 @@ async fn add_oauth_grant_for_server(
             revocation_endpoint: metadata.revocation_endpoint.clone(),
             issuer: metadata.issuer.clone(),
         };
+        let grant = apply_oauth_token_response(&grant_seed, token, now_epoch_s);
         store.set_oauth_grant(&server.id, &grant)?;
-        store.set_token(&server.id, &token.access_token)?;
+        store.set_token(&server.id, &grant.access_token)?;
         println!("✅ Stored OAuth grant for {}", server.display_name);
         Ok(())
     } else {
@@ -2712,6 +2823,56 @@ mod tests {
         let params: std::collections::HashMap<String, String> =
             url.query_pairs().into_owned().collect();
         assert_eq!(params.get("scope"), Some(&"mcp.read mcp.write".to_string()));
+    }
+
+    #[test]
+    fn test_oauth_grant_needs_refresh_with_safety_window() {
+        assert!(oauth_grant_needs_refresh(Some(160), 100, 60));
+        assert!(oauth_grant_needs_refresh(Some(100), 100, 60));
+        assert!(!oauth_grant_needs_refresh(Some(161), 100, 60));
+        assert!(!oauth_grant_needs_refresh(None, 100, 60));
+    }
+
+    #[test]
+    fn test_apply_oauth_token_response_preserves_existing_refresh_token() {
+        let grant = McpOAuthGrant {
+            access_token: "old-access".to_string(),
+            refresh_token: Some("existing-refresh".to_string()),
+            token_type: Some("Bearer".to_string()),
+            scope: Some("mcp.read".to_string()),
+            expires_at_epoch_s: Some(10),
+            client_id: Some("client-id".to_string()),
+            redirect_uri: Some("http://127.0.0.1/callback".to_string()),
+            authorization_endpoint: Some("https://auth.example.com/authorize".to_string()),
+            token_endpoint: Some("https://auth.example.com/token".to_string()),
+            revocation_endpoint: Some("https://auth.example.com/revoke".to_string()),
+            issuer: Some("https://auth.example.com".to_string()),
+        };
+        let token = OAuthTokenResponse {
+            access_token: "new-access".to_string(),
+            token_type: None,
+            expires_in: Some(120),
+            refresh_token: None,
+            scope: None,
+        };
+
+        let updated = apply_oauth_token_response(&grant, token, 1_000);
+        assert_eq!(updated.access_token, "new-access");
+        assert_eq!(updated.refresh_token.as_deref(), Some("existing-refresh"));
+        assert_eq!(updated.expires_at_epoch_s, Some(1_120));
+        assert_eq!(updated.client_id.as_deref(), Some("client-id"));
+    }
+
+    #[test]
+    fn test_refresh_token_response_deserializes_expected_fields() {
+        let token: OAuthTokenResponse = serde_json::from_str(
+            r#"{"access_token":"new-token","refresh_token":"new-refresh","expires_in":120}"#,
+        )
+        .expect("token response should deserialize");
+
+        assert_eq!(token.access_token, "new-token");
+        assert_eq!(token.refresh_token.as_deref(), Some("new-refresh"));
+        assert_eq!(token.expires_in, Some(120));
     }
 
     #[test]

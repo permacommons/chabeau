@@ -9,6 +9,7 @@ pub mod keyring;
 pub mod mcp_auth;
 pub mod mcp_sampling;
 pub mod message;
+pub mod oauth;
 pub mod persona;
 #[cfg(test)]
 pub mod persona_integration_tests;

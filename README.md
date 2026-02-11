@@ -514,6 +514,7 @@ Chabeau uses a modular design with focused components:
     - `orchestrator.rs` – Cached config loader, mutation orchestrator, and test isolation
     - `tests.rs` – Configuration module tests
   - `keyring.rs` – Secure storage for API keys
+  - `oauth.rs` – Shared MCP OAuth discovery, browser flow, callback handling, and token refresh helpers
 - `message.rs` – Message data structures
 - `mcp/` – Model Context Protocol client integration
   - `client.rs` – MCP transport and connection handling for HTTP and stdio

@@ -1,7 +1,7 @@
-use crate::cli::refresh_oauth_grant_if_needed;
 use crate::core::app::session::ToolCallRequest;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
+use crate::core::oauth::refresh_oauth_grant_if_needed;
 use crate::mcp::events::McpServerRequest;
 use futures_util::StreamExt;
 use rust_mcp_schema::schema_utils::{

@@ -2,6 +2,7 @@ pub mod client;
 pub mod events;
 pub mod permissions;
 pub mod registry;
+pub mod transport;
 
 pub const MCP_READ_RESOURCE_TOOL: &str = "mcp_read_resource";
 pub const MCP_LIST_RESOURCES_TOOL: &str = "mcp_list_resources";

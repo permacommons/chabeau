@@ -517,8 +517,12 @@ Chabeau uses a modular design with focused components:
   - `oauth.rs` – Shared MCP OAuth discovery, browser flow, callback handling, and token refresh helpers
 - `message.rs` – Message data structures
 - `mcp/` – Model Context Protocol client integration
-  - `client.rs` – MCP transport and connection handling for HTTP and stdio
+  - `client.rs` – MCP client orchestration, cache updates, and server state
   - `events.rs` – MCP server request envelopes
+  - `transport/` – MCP transport implementations and shared interfaces
+    - `mod.rs` – Shared transport traits, enums, and list-fetch helpers
+    - `stdio.rs` – Stdio transport request/list adapters
+    - `streamable_http.rs` – Streamable HTTP transport list adapters
   - `mod.rs` – MCP module exports and tool name constants
   - `permissions.rs` – Per-tool permission decision store
   - `registry.rs` – Enabled MCP server registry

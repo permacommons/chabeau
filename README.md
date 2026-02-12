@@ -506,6 +506,7 @@ Chabeau uses a modular design with focused components:
     - `builtin_presets.rs` – Built-in preset loader
   - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
   - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
+  - `mcp_runtime.rs` – MCP orchestration service for sampling, permissions, and command dispatch
   - `config/` – Configuration data, defaults, caching, and persistence
     - `data.rs` – Configuration data types and pure helpers
     - `defaults.rs` – Default selection helpers and `Config` implementations
@@ -517,7 +518,10 @@ Chabeau uses a modular design with focused components:
   - `oauth.rs` – Shared MCP OAuth discovery, browser flow, callback handling, and token refresh helpers
 - `message.rs` – Message data structures
 - `mcp/` – Model Context Protocol client integration
-  - `client.rs` – MCP transport and connection handling for HTTP and stdio
+  - `client.rs` – Compatibility exports for MCP manager APIs
+  - `manager.rs` – MCP client manager state/cache and high-level APIs
+  - `transport/http.rs` – Streamable HTTP MCP wire helpers
+  - `transport/stdio.rs` – stdio/SSE protocol helpers
   - `events.rs` – MCP server request envelopes
   - `mod.rs` – MCP module exports and tool name constants
   - `permissions.rs` – Per-tool permission decision store

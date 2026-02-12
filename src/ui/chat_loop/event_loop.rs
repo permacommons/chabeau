@@ -30,10 +30,7 @@ const INPUT_BURST_WINDOW_MS: u64 = 200;
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
 use ratatui::prelude::Size;
-use serde::Serialize;
-use serde_json;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::api::models::fetch_models;
@@ -45,6 +42,7 @@ use crate::core::app::{
 };
 use crate::core::chat_stream::{request_chat_completion, ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
+use crate::core::mcp_runtime::{run_cancellable, serialize_result};
 use crate::core::mcp_sampling::map_finish_reason;
 use crate::core::message::AppMessageKind;
 use crate::ui::renderer::ui;
@@ -204,7 +202,7 @@ fn spawn_mcp_tool_call(
                 crate::mcp::client::execute_resource_read(&mut call_context, &uri),
             )
             .await
-            .map(|result| serialize_mcp_result(&result))
+            .map(|result| serialize_result(&result))
         } else if request
             .tool_name
             .eq_ignore_ascii_case(crate::mcp::MCP_LIST_RESOURCES_TOOL)
@@ -243,13 +241,13 @@ fn spawn_mcp_tool_call(
                     crate::mcp::client::execute_resource_list(&mut call_context, cursor),
                 )
                 .await
-                .map(|result| serialize_mcp_result(&result)),
+                .map(|result| serialize_result(&result)),
                 crate::core::app::actions::ResourceListKind::Templates => run_cancellable(
                     cancel_token.as_ref(),
                     crate::mcp::client::execute_resource_template_list(&mut call_context, cursor),
                 )
                 .await
-                .map(|result| serialize_mcp_result(&result)),
+                .map(|result| serialize_result(&result)),
             }
         } else {
             run_cancellable(
@@ -257,7 +255,7 @@ fn spawn_mcp_tool_call(
                 crate::mcp::client::execute_tool_call(&mut call_context, &request),
             )
             .await
-            .map(|result| serialize_mcp_result(&result))
+            .map(|result| serialize_result(&result))
         };
 
         let session_id = call_context.session_id.clone();
@@ -277,28 +275,6 @@ fn spawn_mcp_tool_call(
             ctx,
         );
     });
-}
-
-fn serialize_mcp_result<T: Serialize>(result: &T) -> String {
-    serde_json::to_string_pretty(result)
-        .unwrap_or_else(|_| "Unable to serialize MCP result.".to_string())
-}
-
-async fn run_cancellable<F, T>(
-    cancel_token: Option<&CancellationToken>,
-    operation: F,
-) -> Result<T, String>
-where
-    F: std::future::Future<Output = Result<T, String>>,
-{
-    if let Some(token) = cancel_token {
-        tokio::select! {
-            _ = token.cancelled() => Err("MCP operation interrupted by user.".to_string()),
-            result = operation => result,
-        }
-    } else {
-        operation.await
-    }
 }
 
 fn spawn_mcp_prompt_call(

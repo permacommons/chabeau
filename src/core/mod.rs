@@ -7,6 +7,7 @@ pub mod chat_stream;
 pub mod config;
 pub mod keyring;
 pub mod mcp_auth;
+pub mod mcp_runtime;
 pub mod mcp_sampling;
 pub mod message;
 pub mod oauth;

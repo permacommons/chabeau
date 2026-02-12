@@ -1,4 +1,4 @@
-# Chabeau Architecture (72dfb98beacfaf6511fe2f5ccdc4ec1f51c2be3a)
+# Chabeau Architecture (8b47a71)
 
 ## System overview
 Chabeau is a terminal-first chat client that wraps OpenAI-compatible APIs behind a rich TUI. The
@@ -43,6 +43,8 @@ and the active transport implementation.【F:src/mcp/client.rs†L1-L168】 Stre
 are supported; stdio launches child processes and streams JSON-RPC frames over stdin/stdout, while HTTP uses
 SSE/streamable responses.【F:src/mcp/client.rs†L18-L209】 A lightweight registry filters enabled servers for
 tool discovery, and a permission store tracks per-tool approval decisions for the current session.【F:src/mcp/registry.rs†L1-L31】【F:src/mcp/permissions.rs†L1-L74】
+The large `mcp::client` test suite is split into `src/mcp/client/tests.rs` to keep runtime code and tests
+separate while still testing private module behavior through `use super::*`.
 
 ## Tool-calling and MCP execution pipeline
 When building a stream request, Chabeau injects MCP tool schemas, a built-in MCP preamble, and optional
@@ -66,13 +68,16 @@ The Ratatui event loop wraps the shared `App` inside an `AppHandle` so tasks can
 mutex. Terminal setup, input polling, and resize handling feed `UiEvent`s into the dispatcher, which resolves
 mode-aware keymaps and emits high-level `AppAction`s. Actions are grouped by concern—streaming, input
 manipulation, picker interaction, and file prompts—and reducers can return `AppCommand`s that request new
-background work such as spawning a stream or running an MCP tool call.【F:src/ui/chat_loop/mod.rs†L1-L42】【F:src/ui/chat_loop/event_loop.rs†L1-L344】【F:src/core/app/actions/mod.rs†L1-L194】
+background work such as spawning a stream or running an MCP tool call.【F:src/ui/chat_loop/mod.rs†L1-L42】【F:src/ui/chat_loop/event_loop.rs†L1-L344】【F:src/core/app/actions/mod.rs†L1-L250】
+`AppActionDispatcher` includes typed batch helpers (`dispatch_input_many`, `dispatch_streaming_many`,
+`dispatch_picker_many`) so same-domain dispatch paths avoid unnecessary wrapping, while `dispatch_many`
+remains the generic entrypoint for intentionally mixed-domain batches.
 
 ## Tool inspection and decode workflow
 Tool calls and results can be inspected via a full-screen overlay managed by `InspectController`, which
 tracks the current tool index, view (request vs result), and a decoded flag for nested JSON display.
 Input actions allow users to toggle decoded views and navigate between tool records, while the renderer
-adds dedicated inspect chrome and keyboard hints for the overlay.【F:src/core/app/inspect.rs†L1-L155】【F:src/core/app/actions/input.rs†L206-L333】【F:src/ui/renderer.rs†L477-L560】
+adds dedicated inspect chrome and keyboard hints for the overlay.【F:src/core/app/inspect.rs†L1-L155】【F:src/core/app/actions/input/mod.rs†L1-L95】【F:src/core/app/actions/input/inspect.rs†L1-L285】【F:src/ui/renderer.rs†L477-L560】
 
 ## Tool result summaries and error labeling
 Tool call outcomes are summarized into readable transcript entries that include per-server labels and

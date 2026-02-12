@@ -570,6 +570,7 @@ cargo test --release          # Faster execution
 ```bash
 cargo check
 cargo fmt
+cargo test
 cargo clippy --all-targets --all-features
 ```
 

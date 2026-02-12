@@ -2444,16 +2444,11 @@ mod tests {
 
             let result = process_input(&mut app, "/mcp alpha forget");
             assert!(matches!(result, CommandResult::Continue));
-            assert_eq!(
-                app.mcp_permissions
-                    .decision_for("alpha", "tool-a")
-                    .is_some(),
-                false
-            );
-            assert_eq!(
-                app.mcp_permissions.decision_for("beta", "tool-b").is_some(),
-                true
-            );
+            assert!(app
+                .mcp_permissions
+                .decision_for("alpha", "tool-a")
+                .is_none());
+            assert!(app.mcp_permissions.decision_for("beta", "tool-b").is_some());
             assert_eq!(app.session.tool_result_history.len(), 1);
             assert_eq!(app.session.tool_payload_history.len(), 1);
             assert_eq!(

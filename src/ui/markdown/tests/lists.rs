@@ -653,8 +653,8 @@ More paragraph text.
     // Actually, let me verify by checking there's only one blank line before second item
     // (from TagEnd::Paragraph), not two (from both TagEnd::Paragraph and our preprocessing)
     let mut blank_count = 0;
-    for i in (first_idx + 1)..second_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(second_idx).skip(first_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }
@@ -1077,8 +1077,8 @@ fn nested_lists_with_single_blank_line_dont_double_space() {
 
     // Count blank lines between parent and child
     let mut blank_count = 0;
-    for i in (parent_idx + 1)..child_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(child_idx).skip(parent_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }
@@ -1114,8 +1114,8 @@ fn blockquote_followed_by_list_has_single_blank_line() {
 
     // Count blank lines between blockquote and list
     let mut blank_count = 0;
-    for i in (quote_idx + 1)..list_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(list_idx).skip(quote_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }
@@ -1156,8 +1156,8 @@ This is a paragraph after the quote."#
 
     // Count blank lines between blockquote and paragraph
     let mut blank_count = 0;
-    for i in (quote_idx + 1)..para_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(para_idx).skip(quote_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }
@@ -1197,8 +1197,8 @@ fn blockquote_followed_by_heading_has_single_blank_line() {
 
     // Count blank lines between blockquote and heading
     let mut blank_count = 0;
-    for i in (quote_idx + 1)..heading_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(heading_idx).skip(quote_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }
@@ -1238,8 +1238,8 @@ Next paragraph"#
 
     // Count blank lines between code block and paragraph
     let mut blank_count = 0;
-    for i in (code_idx + 1)..para_idx {
-        if lines[i].trim().is_empty() {
+    for line in lines.iter().take(para_idx).skip(code_idx + 1) {
+        if line.trim().is_empty() {
             blank_count += 1;
         }
     }

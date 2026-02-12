@@ -33,6 +33,7 @@ mod ui_helpers;
 
 pub use actions::{
     apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
+    FilePromptAction, InputAction, McpPromptAction, PickerAction, PromptAction, StreamingAction,
 };
 #[allow(unused_imports)]
 pub use conversation::ConversationController;

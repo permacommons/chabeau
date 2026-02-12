@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use super::{App, AppAction, AppActionContext, AppCommand};
+use super::{App, AppActionContext, AppCommand, StreamingAction};
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::session::{
     McpPromptRequest, McpSamplingRequest, PendingToolCall, ToolCallRequest, ToolFailureKind,
@@ -60,20 +60,20 @@ struct PendingToolError {
 
 pub(super) fn handle_streaming_action(
     app: &mut App,
-    action: AppAction,
+    action: StreamingAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        AppAction::McpInitCompleted => handle_mcp_init_completed(app, ctx),
-        AppAction::McpSendPendingWithoutTools => handle_mcp_send_without_tools(app, ctx),
-        AppAction::AppendResponseChunk { content, stream_id } => {
+        StreamingAction::McpInitCompleted => handle_mcp_init_completed(app, ctx),
+        StreamingAction::McpSendPendingWithoutTools => handle_mcp_send_without_tools(app, ctx),
+        StreamingAction::AppendResponseChunk { content, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
             append_response_chunk(app, &content, ctx);
             None
         }
-        AppAction::StreamAppMessage {
+        StreamingAction::StreamAppMessage {
             kind,
             message,
             stream_id,
@@ -84,48 +84,47 @@ pub(super) fn handle_streaming_action(
             append_stream_app_message(app, kind, message, ctx);
             None
         }
-        AppAction::StreamToolCallDelta { delta, stream_id } => {
+        StreamingAction::StreamToolCallDelta { delta, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
             append_tool_call_delta(app, delta);
             None
         }
-        AppAction::ToolPermissionDecision { decision } => {
+        StreamingAction::ToolPermissionDecision { decision } => {
             handle_tool_permission_decision(app, decision, ctx)
         }
-        AppAction::ToolCallCompleted {
+        StreamingAction::ToolCallCompleted {
             tool_name,
             tool_call_id,
             result,
         } => handle_tool_call_completed(app, tool_name, tool_call_id, result, ctx),
-        AppAction::McpPromptCompleted { request, result } => {
+        StreamingAction::McpPromptCompleted { request, result } => {
             handle_mcp_prompt_completed(app, request, result, ctx)
         }
-        AppAction::McpServerRequestReceived { request } => {
+        StreamingAction::McpServerRequestReceived { request } => {
             handle_mcp_server_request(app, *request, ctx)
         }
-        AppAction::McpSamplingFinished => handle_mcp_sampling_finished(app, ctx),
-        AppAction::StreamErrored { message, stream_id } => {
+        StreamingAction::McpSamplingFinished => handle_mcp_sampling_finished(app, ctx),
+        StreamingAction::StreamErrored { message, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
             handle_stream_error(app, message, ctx)
         }
-        AppAction::StreamCompleted { stream_id } => {
+        StreamingAction::StreamCompleted { stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
             finalize_stream(app, ctx)
         }
-        AppAction::CancelStreaming => {
+        StreamingAction::CancelStreaming => {
             app.cancel_current_stream();
             None
         }
-        AppAction::SubmitMessage { message } => spawn_stream_for_message(app, message, ctx),
-        AppAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
-        AppAction::RetryLastMessage => retry_last_message(app, ctx),
-        _ => unreachable!("non-streaming action routed to streaming handler"),
+        StreamingAction::SubmitMessage { message } => spawn_stream_for_message(app, message, ctx),
+        StreamingAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
+        StreamingAction::RetryLastMessage => retry_last_message(app, ctx),
     }
 }
 
@@ -1788,7 +1787,7 @@ mod tests {
 
         let command = handle_streaming_action(
             &mut app,
-            AppAction::SubmitMessage {
+            StreamingAction::SubmitMessage {
                 message: "Hello there".into(),
             },
             ctx,
@@ -1804,7 +1803,7 @@ mod tests {
 
         let result = handle_streaming_action(
             &mut app,
-            AppAction::StreamAppMessage {
+            StreamingAction::StreamAppMessage {
                 kind: AppMessageKind::Warning,
                 message: "  invalid utf8  ".into(),
                 stream_id,
@@ -1831,7 +1830,7 @@ mod tests {
 
         let command = handle_streaming_action(
             &mut app,
-            AppAction::SubmitMessage {
+            StreamingAction::SubmitMessage {
                 message: "Hello there".into(),
             },
             ctx,
@@ -1851,7 +1850,7 @@ mod tests {
 
         let result = handle_streaming_action(
             &mut app,
-            AppAction::StreamErrored {
+            StreamingAction::StreamErrored {
                 message: " network failure ".into(),
                 stream_id,
             },
@@ -1886,7 +1885,7 @@ mod tests {
 
         let command = handle_streaming_action(
             &mut app,
-            AppAction::SubmitMessage {
+            StreamingAction::SubmitMessage {
                 message: "Run a tool".into(),
             },
             ctx,
@@ -1900,7 +1899,7 @@ mod tests {
 
         handle_streaming_action(
             &mut app,
-            AppAction::StreamToolCallDelta {
+            StreamingAction::StreamToolCallDelta {
                 stream_id,
                 delta: crate::core::chat_stream::ToolCallDelta {
                     index: 0,
@@ -1914,7 +1913,7 @@ mod tests {
 
         handle_streaming_action(
             &mut app,
-            AppAction::StreamToolCallDelta {
+            StreamingAction::StreamToolCallDelta {
                 stream_id,
                 delta: crate::core::chat_stream::ToolCallDelta {
                     index: 0,
@@ -1926,8 +1925,11 @@ mod tests {
             ctx,
         );
 
-        let command =
-            handle_streaming_action(&mut app, AppAction::StreamCompleted { stream_id }, ctx);
+        let command = handle_streaming_action(
+            &mut app,
+            StreamingAction::StreamCompleted { stream_id },
+            ctx,
+        );
 
         assert!(app.session.pending_tool_calls.is_empty());
         assert!(matches!(command, Some(AppCommand::SpawnStream(_))));
@@ -1969,7 +1971,7 @@ mod tests {
 
         let result = handle_streaming_action(
             &mut app,
-            AppAction::ToolCallCompleted {
+            StreamingAction::ToolCallCompleted {
                 tool_name: "lookup".to_string(),
                 tool_call_id: Some("call-1".to_string()),
                 result: Ok(payload),
@@ -2001,7 +2003,7 @@ mod tests {
 
         let result = handle_streaming_action(
             &mut app,
-            AppAction::ToolCallCompleted {
+            StreamingAction::ToolCallCompleted {
                 tool_name: "lookup".to_string(),
                 tool_call_id: Some("call-1".to_string()),
                 result: Err("timeout".to_string()),
@@ -2038,7 +2040,7 @@ mod tests {
         app.session.active_tool_request = Some(request.clone());
         let _ = handle_streaming_action(
             &mut app,
-            AppAction::ToolCallCompleted {
+            StreamingAction::ToolCallCompleted {
                 tool_name: request.tool_name,
                 tool_call_id: request.tool_call_id,
                 result: Ok("{}".to_string()),

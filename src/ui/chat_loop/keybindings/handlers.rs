@@ -9,7 +9,10 @@
 //! - Mode-specific handlers (picker, edit select, block select)
 
 use crate::core::app::ui_state::{EditSelectTarget, VerticalCursorDirection};
-use crate::core::app::{App, AppAction, AppActionContext, AppActionDispatcher, InspectMode};
+use crate::core::app::{
+    App, AppAction, AppActionContext, AppActionDispatcher, InputAction, InspectMode, PickerAction,
+    StreamingAction,
+};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
 use crate::mcp::permissions::ToolPermissionDecision;
@@ -133,7 +136,7 @@ impl KeyHandler for CtrlLHandler {
                 term_width,
                 term_height,
             };
-            dispatcher.dispatch_many([AppAction::ClearStatus], ctx);
+            dispatcher.dispatch_many([InputAction::ClearStatus], ctx);
         }
         KeyResult::Handled
     }
@@ -154,7 +157,7 @@ impl KeyHandler for CtrlOHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         dispatcher.dispatch_many(
-            [AppAction::InspectToolResults],
+            [InputAction::InspectToolResults],
             AppActionContext {
                 term_width,
                 term_height,
@@ -182,7 +185,7 @@ impl KeyHandler for F4Handler {
             term_width,
             term_height,
         };
-        dispatcher.dispatch_many([AppAction::ToggleComposeMode], ctx);
+        dispatcher.dispatch_many([InputAction::ToggleComposeMode], ctx);
         KeyResult::Handled
     }
 }
@@ -203,17 +206,17 @@ impl KeyHandler for EscapeHandler {
     ) -> KeyResult {
         let actions = app
             .read(|app| {
-                let mut actions = Vec::new();
+                let mut actions: Vec<AppAction> = Vec::new();
                 if app.inspect_state().is_some() {
-                    actions.push(AppAction::PickerEscape);
+                    actions.push(PickerAction::PickerEscape.into());
                 } else if app.ui.file_prompt().is_some() {
-                    actions.push(AppAction::CancelFilePrompt);
+                    actions.push(InputAction::CancelFilePrompt.into());
                 } else if app.ui.mcp_prompt_input().is_some() {
-                    actions.push(AppAction::CancelMcpPromptInput);
+                    actions.push(InputAction::CancelMcpPromptInput.into());
                 } else if app.ui.in_place_edit_index().is_some() {
-                    actions.push(AppAction::CancelInPlaceEdit);
+                    actions.push(InputAction::CancelInPlaceEdit.into());
                 } else if app.has_interruptible_activity() {
-                    actions.push(AppAction::CancelStreaming);
+                    actions.push(StreamingAction::CancelStreaming.into());
                 }
                 actions
             })
@@ -294,10 +297,10 @@ impl KeyHandler for NavigationHandler {
         if inspect_active {
             let page_lines = term_height.saturating_sub(8).max(1) as i32;
             let action = match key.code {
-                KeyCode::PageUp => AppAction::PickerInspectScroll { lines: -page_lines },
-                KeyCode::PageDown => AppAction::PickerInspectScroll { lines: page_lines },
-                KeyCode::Home => AppAction::PickerInspectScrollToStart,
-                KeyCode::End => AppAction::PickerInspectScrollToEnd,
+                KeyCode::PageUp => PickerAction::PickerInspectScroll { lines: -page_lines },
+                KeyCode::PageDown => PickerAction::PickerInspectScroll { lines: page_lines },
+                KeyCode::Home => PickerAction::PickerInspectScrollToStart,
+                KeyCode::End => PickerAction::PickerInspectScrollToEnd,
                 _ => return KeyResult::NotHandled,
             };
             dispatcher.dispatch_many(
@@ -401,18 +404,18 @@ impl KeyHandler for ArrowKeyHandler {
             .read(|app| app.inspect_state().map(|state| state.mode))
             .await;
         if let Some(mode) = inspect_mode {
-            let action = match key.code {
-                KeyCode::Up => Some(AppAction::PickerInspectScroll { lines: -1 }),
-                KeyCode::Down => Some(AppAction::PickerInspectScroll { lines: 1 }),
+            let action: Option<AppAction> = match key.code {
+                KeyCode::Up => Some(PickerAction::PickerInspectScroll { lines: -1 }.into()),
+                KeyCode::Down => Some(PickerAction::PickerInspectScroll { lines: 1 }.into()),
                 KeyCode::Left => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(AppAction::InspectToolResultsStep { delta: -1 })
+                        Some(InputAction::InspectToolResultsStep { delta: -1 }.into())
                     }
                     InspectMode::Static => None,
                 },
                 KeyCode::Right => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(AppAction::InspectToolResultsStep { delta: 1 })
+                        Some(InputAction::InspectToolResultsStep { delta: 1 }.into())
                     }
                     InspectMode::Static => None,
                 },
@@ -862,7 +865,7 @@ impl KeyHandler for CtrlRHandler {
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         dispatcher.dispatch_many(
-            [AppAction::RetryLastMessage],
+            [StreamingAction::RetryLastMessage],
             AppActionContext {
                 term_width,
                 term_height,
@@ -905,12 +908,12 @@ impl KeyHandler for CtrlNHandler {
 
         match last_prompt {
             Some(prompt) if can_retry => {
-                dispatcher.dispatch_many([AppAction::RefineLastMessage { prompt }], ctx);
+                dispatcher.dispatch_many([StreamingAction::RefineLastMessage { prompt }], ctx);
                 KeyResult::Continue
             }
             Some(_) => {
                 dispatcher.dispatch_many(
-                    [AppAction::SetStatus {
+                    [InputAction::SetStatus {
                         message: "No previous message to refine.".to_string(),
                     }],
                     ctx,
@@ -919,7 +922,7 @@ impl KeyHandler for CtrlNHandler {
             }
             None => {
                 dispatcher.dispatch_many(
-                    [AppAction::SetStatus {
+                    [InputAction::SetStatus {
                         message: "No refine prompt yet (/refine <prompt>).".to_string(),
                     }],
                     ctx,
@@ -1063,13 +1066,13 @@ impl KeyHandler for ToolPromptDecisionHandler {
         if inspect_active {
             let page_lines = term_height.saturating_sub(8).max(1) as i32;
             let action = match key.code {
-                KeyCode::Esc => AppAction::PickerEscape,
-                KeyCode::Up => AppAction::PickerInspectScroll { lines: -1 },
-                KeyCode::Down => AppAction::PickerInspectScroll { lines: 1 },
-                KeyCode::PageUp => AppAction::PickerInspectScroll { lines: -page_lines },
-                KeyCode::PageDown => AppAction::PickerInspectScroll { lines: page_lines },
-                KeyCode::Home => AppAction::PickerInspectScrollToStart,
-                KeyCode::End => AppAction::PickerInspectScrollToEnd,
+                KeyCode::Esc => PickerAction::PickerEscape,
+                KeyCode::Up => PickerAction::PickerInspectScroll { lines: -1 },
+                KeyCode::Down => PickerAction::PickerInspectScroll { lines: 1 },
+                KeyCode::PageUp => PickerAction::PickerInspectScroll { lines: -page_lines },
+                KeyCode::PageDown => PickerAction::PickerInspectScroll { lines: page_lines },
+                KeyCode::Home => PickerAction::PickerInspectScrollToStart,
+                KeyCode::End => PickerAction::PickerInspectScrollToEnd,
                 _ => return KeyResult::NotHandled,
             };
             dispatcher.dispatch_many(
@@ -1090,7 +1093,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
             KeyCode::Enter => {
                 debug!("Tool prompt decision: allow once (enter)");
                 dispatcher.dispatch_many(
-                    [AppAction::ToolPermissionDecision {
+                    [StreamingAction::ToolPermissionDecision {
                         decision: ToolPermissionDecision::AllowOnce,
                     }],
                     AppActionContext {
@@ -1103,7 +1106,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
             KeyCode::Esc => {
                 debug!("Tool prompt decision: deny once (esc)");
                 dispatcher.dispatch_many(
-                    [AppAction::ToolPermissionDecision {
+                    [StreamingAction::ToolPermissionDecision {
                         decision: ToolPermissionDecision::DenyOnce,
                     }],
                     AppActionContext {
@@ -1117,7 +1120,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                 'a' => {
                     debug!("Tool prompt decision: allow once (a)");
                     dispatcher.dispatch_many(
-                        [AppAction::ToolPermissionDecision {
+                        [StreamingAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::AllowOnce,
                         }],
                         AppActionContext {
@@ -1130,7 +1133,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                 's' => {
                     debug!("Tool prompt decision: allow session (s)");
                     dispatcher.dispatch_many(
-                        [AppAction::ToolPermissionDecision {
+                        [StreamingAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::AllowSession,
                         }],
                         AppActionContext {
@@ -1143,7 +1146,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                 'd' => {
                     debug!("Tool prompt decision: deny once (d)");
                     dispatcher.dispatch_many(
-                        [AppAction::ToolPermissionDecision {
+                        [StreamingAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::DenyOnce,
                         }],
                         AppActionContext {
@@ -1156,7 +1159,7 @@ impl KeyHandler for ToolPromptDecisionHandler {
                 'b' => {
                     debug!("Tool prompt decision: block (b)");
                     dispatcher.dispatch_many(
-                        [AppAction::ToolPermissionDecision {
+                        [StreamingAction::ToolPermissionDecision {
                             decision: ToolPermissionDecision::Block,
                         }],
                         AppActionContext {
@@ -1180,7 +1183,8 @@ mod tests {
         EscapeHandler, F4Handler, KeyHandler, KeyResult,
     };
     use crate::core::app::actions::{
-        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope,
+        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, InputAction,
+        StreamingAction,
     };
     use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::chat_loop::AppHandle;
@@ -1226,7 +1230,7 @@ mod tests {
 
             let envelope = action_rx.try_recv().expect("expected refine action");
             match envelope.action {
-                AppAction::RefineLastMessage { prompt } => {
+                AppAction::Streaming(StreamingAction::RefineLastMessage { prompt }) => {
                     assert_eq!(prompt, "Tighten it up");
                 }
                 _ => panic!("unexpected action"),
@@ -1260,7 +1264,7 @@ mod tests {
 
             let envelope = action_rx.try_recv().expect("expected status action");
             match envelope.action {
-                AppAction::SetStatus { message } => {
+                AppAction::Input(InputAction::SetStatus { message }) => {
                     assert_eq!(message, "No refine prompt yet (/refine <prompt>).");
                 }
                 _ => panic!("unexpected action"),
@@ -1292,7 +1296,7 @@ mod tests {
 
             let envelope = action_rx.try_recv().expect("expected status action");
             match envelope.action {
-                AppAction::SetStatus { message } => {
+                AppAction::Input(InputAction::SetStatus { message }) => {
                     assert_eq!(message, "No previous message to refine.");
                 }
                 _ => panic!("unexpected action"),
@@ -1395,7 +1399,7 @@ mod tests {
             }
             assert!(envelopes
                 .iter()
-                .any(|env| matches!(env.action, AppAction::ClearStatus)));
+                .any(|env| matches!(env.action, AppAction::Input(InputAction::ClearStatus))));
 
             let (commands, status_is_none) = app
                 .update(move |app| {
@@ -1428,7 +1432,7 @@ mod tests {
             }
             assert!(envelopes
                 .iter()
-                .any(|env| matches!(env.action, AppAction::ToggleComposeMode)));
+                .any(|env| matches!(env.action, AppAction::Input(InputAction::ToggleComposeMode))));
 
             let compose_before = app.read(|app| app.ui.compose_mode).await;
             assert!(!compose_before);
@@ -1469,7 +1473,7 @@ mod tests {
             }
             assert!(envelopes
                 .iter()
-                .any(|env| matches!(env.action, AppAction::CancelFilePrompt)));
+                .any(|env| matches!(env.action, AppAction::Input(InputAction::CancelFilePrompt))));
 
             let (commands, prompt_cleared, input_empty) = app
                 .update(move |app| {
@@ -1512,7 +1516,7 @@ mod tests {
             }
             assert!(envelopes
                 .iter()
-                .any(|env| matches!(env.action, AppAction::CancelInPlaceEdit)));
+                .any(|env| matches!(env.action, AppAction::Input(InputAction::CancelInPlaceEdit))));
 
             let (commands, in_place_cleared, input_empty) = app
                 .update(move |app| {
@@ -1553,9 +1557,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::CancelStreaming)));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Streaming(StreamingAction::CancelStreaming)
+            )));
 
             let (commands, is_streaming, cancel_cleared, interrupted) = app
                 .update(move |app| {
@@ -1597,9 +1602,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::CancelStreaming)));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Streaming(StreamingAction::CancelStreaming)
+            )));
 
             let (commands, has_activity, cancel_cleared, interrupted) = app
                 .update(move |app| {

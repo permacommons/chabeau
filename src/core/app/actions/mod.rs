@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use super::App;
 use crate::api::ModelsResponse;
-use crate::core::app::session::ToolCallRequest;
+use crate::core::app::session::{McpPromptRequest, ToolCallRequest};
 use crate::core::app::ModelPickerRequest;
 use crate::core::chat_stream::StreamParams;
 use crate::core::chat_stream::ToolCallDelta;
@@ -18,6 +18,13 @@ use crate::core::message::AppMessageKind;
 use crate::mcp::events::McpServerRequest;
 
 pub enum AppAction {
+    Streaming(StreamingAction),
+    Input(InputAction),
+    Picker(PickerAction),
+    Prompt(PromptAction),
+}
+
+pub enum StreamingAction {
     AppendResponseChunk {
         content: String,
         stream_id: u64,
@@ -36,20 +43,13 @@ pub enum AppAction {
     ToolPermissionDecision {
         decision: crate::mcp::permissions::ToolPermissionDecision,
     },
-    InspectToolResults,
-    InspectToolResultsToggleView,
-    InspectToolResultsStep {
-        delta: i32,
-    },
-    InspectToolResultsCopy,
-    InspectToolResultsToggleDecode,
     ToolCallCompleted {
         tool_name: String,
         tool_call_id: Option<String>,
         result: Result<String, String>,
     },
     McpPromptCompleted {
-        request: crate::core::app::session::McpPromptRequest,
+        request: McpPromptRequest,
         result: Result<rust_mcp_schema::GetPromptResult, String>,
     },
     McpServerRequestReceived {
@@ -63,19 +63,7 @@ pub enum AppAction {
     StreamCompleted {
         stream_id: u64,
     },
-    ClearStatus,
-    ToggleComposeMode,
-    CancelFilePrompt,
-    CancelMcpPromptInput,
-    CancelInPlaceEdit,
     CancelStreaming,
-    SetStatus {
-        message: String,
-    },
-    ClearInput,
-    InsertIntoInput {
-        text: String,
-    },
     SubmitMessage {
         message: String,
     },
@@ -83,9 +71,28 @@ pub enum AppAction {
         prompt: String,
     },
     RetryLastMessage,
-    ProcessCommand {
-        input: String,
-    },
+}
+
+pub enum InputAction {
+    InspectToolResults,
+    InspectToolResultsToggleView,
+    InspectToolResultsStep { delta: i32 },
+    InspectToolResultsCopy,
+    InspectToolResultsToggleDecode,
+    ClearStatus,
+    ToggleComposeMode,
+    CancelFilePrompt,
+    CancelMcpPromptInput,
+    CancelInPlaceEdit,
+    SetStatus { message: String },
+    ClearInput,
+    InsertIntoInput { text: String },
+    ProcessCommand { input: String },
+    CompleteInPlaceEdit { index: usize, new_text: String },
+    CompleteAssistantEdit { content: String },
+}
+
+pub enum PickerAction {
     PickerEscape,
     PickerMoveUp,
     PickerMoveDown,
@@ -106,25 +113,6 @@ pub enum AppAction {
     },
     PickerInspectScrollToStart,
     PickerInspectScrollToEnd,
-    CompleteFilePromptDump {
-        filename: String,
-        overwrite: bool,
-    },
-    CompleteFilePromptSaveBlock {
-        filename: String,
-        content: String,
-        overwrite: bool,
-    },
-    CompleteMcpPromptArg {
-        value: String,
-    },
-    CompleteInPlaceEdit {
-        index: usize,
-        new_text: String,
-    },
-    CompleteAssistantEdit {
-        content: String,
-    },
     ModelPickerLoaded {
         default_model_for_provider: Option<String>,
         models_response: ModelsResponse,
@@ -132,6 +120,63 @@ pub enum AppAction {
     ModelPickerLoadFailed {
         error: String,
     },
+}
+
+pub enum PromptAction {
+    File(FilePromptAction),
+    Mcp(McpPromptAction),
+}
+
+pub enum FilePromptAction {
+    CompleteDump {
+        filename: String,
+        overwrite: bool,
+    },
+    CompleteSaveBlock {
+        filename: String,
+        content: String,
+        overwrite: bool,
+    },
+}
+
+pub enum McpPromptAction {
+    CompleteArg { value: String },
+}
+
+impl From<StreamingAction> for AppAction {
+    fn from(value: StreamingAction) -> Self {
+        Self::Streaming(value)
+    }
+}
+
+impl From<InputAction> for AppAction {
+    fn from(value: InputAction) -> Self {
+        Self::Input(value)
+    }
+}
+
+impl From<PickerAction> for AppAction {
+    fn from(value: PickerAction) -> Self {
+        Self::Picker(value)
+    }
+}
+
+impl From<PromptAction> for AppAction {
+    fn from(value: PromptAction) -> Self {
+        Self::Prompt(value)
+    }
+}
+
+impl From<FilePromptAction> for AppAction {
+    fn from(value: FilePromptAction) -> Self {
+        Self::Prompt(PromptAction::File(value))
+    }
+}
+
+impl From<McpPromptAction> for AppAction {
+    fn from(value: McpPromptAction) -> Self {
+        Self::Prompt(PromptAction::Mcp(value))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -157,11 +202,12 @@ impl AppActionDispatcher {
 
     pub fn dispatch_many<I>(&self, actions: I, ctx: AppActionContext)
     where
-        I: IntoIterator<Item = AppAction>,
+        I: IntoIterator,
+        I::Item: Into<AppAction>,
     {
         for action in actions.into_iter() {
             let _ = self.tx.send(AppActionEnvelope {
-                action,
+                action: action.into(),
                 context: ctx,
             });
         }
@@ -199,63 +245,13 @@ pub fn apply_actions(
 
 pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> Option<AppCommand> {
     match action {
-        AppAction::AppendResponseChunk { .. }
-        | AppAction::StreamAppMessage { .. }
-        | AppAction::StreamToolCallDelta { .. }
-        | AppAction::McpInitCompleted
-        | AppAction::McpSendPendingWithoutTools
-        | AppAction::ToolPermissionDecision { .. }
-        | AppAction::ToolCallCompleted { .. }
-        | AppAction::McpPromptCompleted { .. }
-        | AppAction::McpServerRequestReceived { .. }
-        | AppAction::McpSamplingFinished
-        | AppAction::StreamErrored { .. }
-        | AppAction::StreamCompleted { .. }
-        | AppAction::CancelStreaming
-        | AppAction::SubmitMessage { .. }
-        | AppAction::RefineLastMessage { .. }
-        | AppAction::RetryLastMessage => streaming::handle_streaming_action(app, action, ctx),
-
-        AppAction::ClearStatus
-        | AppAction::ToggleComposeMode
-        | AppAction::CancelFilePrompt
-        | AppAction::CancelMcpPromptInput
-        | AppAction::CancelInPlaceEdit
-        | AppAction::SetStatus { .. }
-        | AppAction::ClearInput
-        | AppAction::InsertIntoInput { .. }
-        | AppAction::ProcessCommand { .. }
-        | AppAction::CompleteInPlaceEdit { .. }
-        | AppAction::CompleteAssistantEdit { .. }
-        | AppAction::InspectToolResults
-        | AppAction::InspectToolResultsToggleView
-        | AppAction::InspectToolResultsStep { .. }
-        | AppAction::InspectToolResultsCopy
-        | AppAction::InspectToolResultsToggleDecode => input::handle_input_action(app, action, ctx),
-
-        AppAction::PickerEscape
-        | AppAction::PickerMoveUp
-        | AppAction::PickerMoveDown
-        | AppAction::PickerMoveToStart
-        | AppAction::PickerMoveToEnd
-        | AppAction::PickerCycleSortMode
-        | AppAction::PickerApplySelection { .. }
-        | AppAction::PickerUnsetDefault
-        | AppAction::PickerBackspace
-        | AppAction::PickerTypeChar { .. }
-        | AppAction::PickerInspectSelection
-        | AppAction::PickerInspectScroll { .. }
-        | AppAction::PickerInspectScrollToStart
-        | AppAction::PickerInspectScrollToEnd
-        | AppAction::ModelPickerLoaded { .. }
-        | AppAction::ModelPickerLoadFailed { .. } => picker::handle_picker_action(app, action, ctx),
-
-        AppAction::CompleteFilePromptDump { .. }
-        | AppAction::CompleteFilePromptSaveBlock { .. } => {
+        AppAction::Streaming(action) => streaming::handle_streaming_action(app, action, ctx),
+        AppAction::Input(action) => input::handle_input_action(app, action, ctx),
+        AppAction::Picker(action) => picker::handle_picker_action(app, action, ctx),
+        AppAction::Prompt(PromptAction::File(action)) => {
             file_prompt::handle_file_prompt_action(app, action, ctx)
         }
-
-        AppAction::CompleteMcpPromptArg { .. } => {
+        AppAction::Prompt(PromptAction::Mcp(action)) => {
             mcp_prompt::handle_mcp_prompt_action(app, action, ctx)
         }
     }

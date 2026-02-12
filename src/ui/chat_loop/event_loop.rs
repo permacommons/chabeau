@@ -125,10 +125,7 @@ fn spawn_mcp_initializer(
             .collect();
 
         for server_id in server_ids {
-            mcp.refresh_tools(&server_id).await;
-            mcp.refresh_prompts(&server_id).await;
-            mcp.refresh_resources(&server_id).await;
-            mcp.refresh_resource_templates(&server_id).await;
+            mcp.refresh_server_metadata_concurrently(&server_id).await;
         }
 
         app.update(|app| {
@@ -1736,6 +1733,83 @@ mod tests {
             .await;
         assert_eq!(text, "dumpz");
         assert!(focus_is_input);
+    }
+
+    #[tokio::test]
+    async fn mcp_initializer_completes_when_server_connections_fail() {
+        let app = new_app_handle();
+        let failing_servers = vec![
+            crate::core::config::data::McpServerConfig {
+                id: "alpha".to_string(),
+                display_name: "Alpha".to_string(),
+                base_url: None,
+                command: Some("/definitely-missing-command".to_string()),
+                args: None,
+                env: None,
+                transport: Some("stdio".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            },
+            crate::core::config::data::McpServerConfig {
+                id: "beta".to_string(),
+                display_name: "Beta".to_string(),
+                base_url: None,
+                command: Some("/definitely-missing-command-2".to_string()),
+                args: None,
+                env: None,
+                transport: Some("stdio".to_string()),
+                allowed_tools: None,
+                protocol_version: None,
+                enabled: Some(true),
+                tool_payloads: None,
+                tool_payload_window: None,
+                yolo: None,
+            },
+        ];
+
+        app.update(|app| {
+            app.config.mcp_servers = failing_servers.clone();
+            app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+            app.session.mcp_init_in_progress = true;
+            app.session.mcp_init_complete = false;
+        })
+        .await;
+
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+        let dispatcher = AppActionDispatcher::new(action_tx);
+        let (request_tx, _request_rx) = mpsc::unbounded_channel();
+
+        spawn_mcp_initializer(app.clone(), dispatcher, request_tx);
+
+        let action = tokio::time::timeout(Duration::from_secs(5), action_rx.recv())
+            .await
+            .expect("initializer should dispatch completion")
+            .expect("action should be present");
+        assert!(matches!(action.action, AppAction::McpInitCompleted));
+
+        let (init_complete, init_in_progress, alpha_error, beta_error) = app
+            .read(|app| {
+                (
+                    app.session.mcp_init_complete,
+                    app.session.mcp_init_in_progress,
+                    app.mcp
+                        .server("alpha")
+                        .and_then(|server| server.last_error.clone()),
+                    app.mcp
+                        .server("beta")
+                        .and_then(|server| server.last_error.clone()),
+                )
+            })
+            .await;
+
+        assert!(init_complete);
+        assert!(!init_in_progress);
+        assert!(alpha_error.is_some());
+        assert!(beta_error.is_some());
     }
 
     #[test]

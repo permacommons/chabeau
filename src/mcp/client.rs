@@ -5,7 +5,7 @@ use crate::core::oauth::refresh_oauth_grant_if_needed;
 use crate::mcp::events::McpServerRequest;
 pub use crate::mcp::transport::McpTransportKind;
 use crate::mcp::transport::{self, ListFetch};
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt};
 use rust_mcp_schema::schema_utils::{
     ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
     ResultFromClient, ServerMessage,
@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
 const MCP_MAX_TOOL_LIST: usize = 100;
+const MCP_STARTUP_CONCURRENCY_LIMIT: usize = 3;
 const MCP_JSON_CONTENT_TYPE: &str = "application/json";
 const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
@@ -777,14 +778,111 @@ impl McpClientManager {
     }
 
     pub async fn connect_all(&mut self, token_store: &McpTokenStore) {
-        let ids: Vec<String> = self.servers.keys().cloned().collect();
-        for id in ids {
-            if let Some(server) = self.servers.get(&id) {
-                if !server.config.is_enabled() {
-                    continue;
+        let request_tx = self.server_request_tx.clone();
+        let enabled_server_configs: Vec<McpServerConfig> = self
+            .servers
+            .values()
+            .filter(|server| server.config.is_enabled())
+            .map(|server| server.config.clone())
+            .collect();
+
+        let connected_states: Vec<McpServerState> = stream::iter(enabled_server_configs)
+            .map(|server_config| {
+                let request_tx = request_tx.clone();
+                async move {
+                    let server_id = server_config.id.clone();
+                    let mut manager = McpClientManager::from_config(&Config {
+                        mcp_servers: vec![server_config],
+                        ..Config::default()
+                    });
+                    if let Some(tx) = request_tx {
+                        manager.set_request_sender(tx);
+                    }
+                    manager.connect_server(&server_id, token_store).await;
+                    manager.server(&server_id).cloned()
+                }
+            })
+            .buffer_unordered(MCP_STARTUP_CONCURRENCY_LIMIT)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+
+        for server_state in connected_states {
+            self.servers
+                .insert(server_state.config.id.to_ascii_lowercase(), server_state);
+        }
+    }
+
+    pub async fn refresh_server_metadata_concurrently(&mut self, id: &str) {
+        let Some(server) = self.server(id).cloned() else {
+            return;
+        };
+
+        #[derive(Clone, Copy)]
+        enum RefreshOperation {
+            Tools,
+            Prompts,
+            Resources,
+            ResourceTemplates,
+        }
+
+        let server_id = server.config.id.clone();
+        let request_tx = self.server_request_tx.clone();
+
+        let operation_results: Vec<McpServerState> = stream::iter([
+            RefreshOperation::Tools,
+            RefreshOperation::Prompts,
+            RefreshOperation::Resources,
+            RefreshOperation::ResourceTemplates,
+        ])
+        .map(|operation| {
+            let mut manager = Self {
+                servers: HashMap::from([(server_id.to_ascii_lowercase(), server.clone())]),
+                server_request_tx: request_tx.clone(),
+            };
+            let server_id = server_id.clone();
+            async move {
+                match operation {
+                    RefreshOperation::Tools => manager.refresh_tools(&server_id).await,
+                    RefreshOperation::Prompts => manager.refresh_prompts(&server_id).await,
+                    RefreshOperation::Resources => manager.refresh_resources(&server_id).await,
+                    RefreshOperation::ResourceTemplates => {
+                        manager.refresh_resource_templates(&server_id).await
+                    }
+                }
+                manager.server(&server_id).cloned()
+            }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if let Some(target) = self.server_mut(id) {
+            for result in operation_results {
+                if let Some(cached_tools) = result.cached_tools {
+                    target.cached_tools = Some(cached_tools);
+                }
+                if let Some(cached_prompts) = result.cached_prompts {
+                    target.cached_prompts = Some(cached_prompts);
+                }
+                if let Some(cached_resources) = result.cached_resources {
+                    target.cached_resources = Some(cached_resources);
+                }
+                if let Some(cached_resource_templates) = result.cached_resource_templates {
+                    target.cached_resource_templates = Some(cached_resource_templates);
+                }
+                if result.last_error.is_some() {
+                    target.last_error = result.last_error;
+                }
+                if result.session_id.is_some() {
+                    target.session_id = result.session_id;
                 }
             }
-            self.connect_server(&id, token_store).await;
         }
     }
 
@@ -2309,6 +2407,59 @@ mod tests {
         assert!(state.supports_tools());
         assert!(state.supports_resources());
         assert!(state.supports_prompts());
+    }
+
+    #[tokio::test]
+    async fn connect_all_attempts_each_enabled_server_when_one_fails() {
+        let config = Config {
+            mcp_servers: vec![
+                McpServerConfig {
+                    id: "alpha".to_string(),
+                    display_name: "Alpha".to_string(),
+                    base_url: None,
+                    command: Some("/definitely-missing-command".to_string()),
+                    args: None,
+                    env: None,
+                    transport: Some("stdio".to_string()),
+                    allowed_tools: None,
+                    protocol_version: None,
+                    enabled: Some(true),
+                    tool_payloads: None,
+                    tool_payload_window: None,
+                    yolo: None,
+                },
+                McpServerConfig {
+                    id: "beta".to_string(),
+                    display_name: "Beta".to_string(),
+                    base_url: None,
+                    command: Some("/definitely-missing-command-2".to_string()),
+                    args: None,
+                    env: None,
+                    transport: Some("stdio".to_string()),
+                    allowed_tools: None,
+                    protocol_version: None,
+                    enabled: Some(true),
+                    tool_payloads: None,
+                    tool_payload_window: None,
+                    yolo: None,
+                },
+            ],
+            ..Config::default()
+        };
+
+        let mut manager = McpClientManager::from_config(&config);
+        let token_store = McpTokenStore::new_with_keyring(false);
+
+        manager.connect_all(&token_store).await;
+
+        assert!(manager
+            .server("alpha")
+            .and_then(|s| s.last_error.as_ref())
+            .is_some());
+        assert!(manager
+            .server("beta")
+            .and_then(|s| s.last_error.as_ref())
+            .is_some());
     }
 
     #[test]

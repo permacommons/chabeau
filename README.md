@@ -542,6 +542,7 @@ Chabeau uses a modular design with focused components:
   - `appearance.rs` – Theme and style definitions
   - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
     - `event_loop.rs` – Async terminal loop orchestration, event polling, and stream dispatch
+    - `executors/` – Background task executors for model loading and MCP operations
     - `keybindings/` – Mode-aware keybinding registry and handlers
     - `lifecycle.rs` – Terminal setup/teardown helpers and resource guards
     - `modes.rs` – Mode-aware key handlers and text interaction utilities

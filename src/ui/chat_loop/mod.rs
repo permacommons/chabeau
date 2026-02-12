@@ -5,6 +5,7 @@
 //! mode-specific behaviour.
 
 mod event_loop;
+mod executors;
 pub mod keybindings;
 mod lifecycle;
 pub mod modes;

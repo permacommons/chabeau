@@ -535,7 +535,7 @@ Chabeau uses a modular design with focused components:
     - `modes.rs` – Mode-aware key handlers and text interaction utilities
   - `help.rs` – Help text rendering
   - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
-  - `markdown/` – Markdown renderer and wrapping helpers that emit span metadata
+  - `markdown/` – Modular markdown pipeline (`parser.rs`, `render.rs`, `lists.rs`, `code.rs`, `metadata.rs`, `table.rs`) plus wrapping helpers and span-metadata tests
   - `mod.rs` – UI module declarations
   - `osc/` – Crossterm backend wrapper that emits OSC 8 hyperlinks
   - `picker.rs` – Picker controls and rendering

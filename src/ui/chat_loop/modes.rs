@@ -7,8 +7,8 @@ use ratatui::Terminal;
 
 use crate::core::app::ui_state::{EditSelectTarget, FilePromptKind};
 use crate::core::app::{
-    AppAction, AppActionContext, AppActionDispatcher, FilePromptAction, InputAction,
-    McpPromptAction, PickerAction, StreamingAction,
+    AppAction, AppActionContext, AppActionDispatcher, CommandAction, ComposeAction,
+    FilePromptAction, InputAction, McpPromptAction, PickerAction, StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::{ROLE_ASSISTANT, ROLE_USER};
@@ -519,10 +519,10 @@ pub async fn handle_external_editor_shortcut(
 
     let mut actions: Vec<AppAction> = Vec::new();
     if let Some(status) = outcome.status {
-        actions.push(InputAction::SetStatus { message: status }.into());
+        actions.push(InputAction::from(StatusAction::SetStatus { message: status }).into());
     }
     if outcome.clear_input {
-        actions.push(InputAction::ClearInput.into());
+        actions.push(InputAction::from(ComposeAction::ClearInput).into());
     }
     if let Some(message) = outcome.message {
         actions.push(StreamingAction::SubmitMessage { message }.into());
@@ -571,10 +571,10 @@ pub async fn process_input_submission(
     if editing_assistant {
         dispatcher.dispatch_many(
             [
-                InputAction::CompleteAssistantEdit {
+                AppAction::from(InputAction::from(CommandAction::CompleteAssistantEdit {
                     content: input_text,
-                },
-                InputAction::ClearInput,
+                })),
+                AppAction::from(InputAction::from(ComposeAction::ClearInput)),
             ],
             ctx,
         );
@@ -583,8 +583,10 @@ pub async fn process_input_submission(
 
     dispatcher.dispatch_many(
         [
-            InputAction::ClearInput,
-            InputAction::ProcessCommand { input: input_text },
+            AppAction::from(InputAction::from(ComposeAction::ClearInput)),
+            AppAction::from(InputAction::from(CommandAction::ProcessCommand {
+                input: input_text,
+            })),
         ],
         ctx,
     );
@@ -716,11 +718,11 @@ pub async fn handle_enter_key(
     if let Some((idx, new_text)) = in_place_edit {
         dispatcher.dispatch_many(
             [
-                InputAction::CompleteInPlaceEdit {
+                AppAction::from(InputAction::from(CommandAction::CompleteInPlaceEdit {
                     index: idx,
                     new_text,
-                },
-                InputAction::ClearInput,
+                })),
+                AppAction::from(InputAction::from(ComposeAction::ClearInput)),
             ],
             AppActionContext {
                 term_width,
@@ -840,10 +842,10 @@ mod tests {
             assert_eq!(envelopes.len(), 2);
             assert!(matches!(
                 envelopes[0].action,
-                AppAction::Input(InputAction::ClearInput)
+                AppAction::Input(InputAction::Compose(ComposeAction::ClearInput))
             ));
             match &envelopes[1].action {
-                AppAction::Input(InputAction::ProcessCommand { input }) => {
+                AppAction::Input(InputAction::Command(CommandAction::ProcessCommand { input })) => {
                     assert_eq!(input, "hello")
                 }
                 _ => panic!("unexpected action"),
@@ -1029,14 +1031,16 @@ mod tests {
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert_eq!(envelopes.len(), 2);
             match &envelopes[0].action {
-                AppAction::Input(InputAction::CompleteAssistantEdit { content }) => {
+                AppAction::Input(InputAction::Command(CommandAction::CompleteAssistantEdit {
+                    content,
+                })) => {
                     assert_eq!(content, "revised");
                 }
                 _ => panic!("unexpected action"),
             }
             assert!(matches!(
                 envelopes[1].action,
-                AppAction::Input(InputAction::ClearInput)
+                AppAction::Input(InputAction::Compose(ComposeAction::ClearInput))
             ));
 
             let commands = handle.update(|app| apply_actions(app, envelopes)).await;

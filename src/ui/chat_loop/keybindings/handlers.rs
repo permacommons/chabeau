@@ -10,8 +10,8 @@
 
 use crate::core::app::ui_state::{EditSelectTarget, VerticalCursorDirection};
 use crate::core::app::{
-    App, AppAction, AppActionContext, AppActionDispatcher, InputAction, InspectMode, PickerAction,
-    StreamingAction,
+    App, AppAction, AppActionContext, AppActionDispatcher, ComposeAction, InputAction,
+    InspectAction, InspectMode, PickerAction, StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::ROLE_ASSISTANT;
@@ -136,7 +136,7 @@ impl KeyHandler for CtrlLHandler {
                 term_width,
                 term_height,
             };
-            dispatcher.dispatch_many([InputAction::ClearStatus], ctx);
+            dispatcher.dispatch_many([InputAction::from(StatusAction::ClearStatus)], ctx);
         }
         KeyResult::Handled
     }
@@ -157,7 +157,7 @@ impl KeyHandler for CtrlOHandler {
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
         dispatcher.dispatch_many(
-            [InputAction::InspectToolResults],
+            [InputAction::from(InspectAction::Open)],
             AppActionContext {
                 term_width,
                 term_height,
@@ -185,7 +185,7 @@ impl KeyHandler for F4Handler {
             term_width,
             term_height,
         };
-        dispatcher.dispatch_many([InputAction::ToggleComposeMode], ctx);
+        dispatcher.dispatch_many([InputAction::from(ComposeAction::ToggleComposeMode)], ctx);
         KeyResult::Handled
     }
 }
@@ -210,11 +210,11 @@ impl KeyHandler for EscapeHandler {
                 if app.inspect_state().is_some() {
                     actions.push(PickerAction::PickerEscape.into());
                 } else if app.ui.file_prompt().is_some() {
-                    actions.push(InputAction::CancelFilePrompt.into());
+                    actions.push(InputAction::from(ComposeAction::CancelFilePrompt).into());
                 } else if app.ui.mcp_prompt_input().is_some() {
-                    actions.push(InputAction::CancelMcpPromptInput.into());
+                    actions.push(InputAction::from(ComposeAction::CancelMcpPromptInput).into());
                 } else if app.ui.in_place_edit_index().is_some() {
-                    actions.push(InputAction::CancelInPlaceEdit.into());
+                    actions.push(InputAction::from(ComposeAction::CancelInPlaceEdit).into());
                 } else if app.has_interruptible_activity() {
                     actions.push(StreamingAction::CancelStreaming.into());
                 }
@@ -409,13 +409,13 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyCode::Down => Some(PickerAction::PickerInspectScroll { lines: 1 }.into()),
                 KeyCode::Left => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(InputAction::InspectToolResultsStep { delta: -1 }.into())
+                        Some(InputAction::from(InspectAction::Step { delta: -1 }).into())
                     }
                     InspectMode::Static => None,
                 },
                 KeyCode::Right => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(InputAction::InspectToolResultsStep { delta: 1 }.into())
+                        Some(InputAction::from(InspectAction::Step { delta: 1 }).into())
                     }
                     InspectMode::Static => None,
                 },
@@ -913,18 +913,18 @@ impl KeyHandler for CtrlNHandler {
             }
             Some(_) => {
                 dispatcher.dispatch_many(
-                    [InputAction::SetStatus {
+                    [InputAction::from(StatusAction::SetStatus {
                         message: "No previous message to refine.".to_string(),
-                    }],
+                    })],
                     ctx,
                 );
                 KeyResult::Handled
             }
             None => {
                 dispatcher.dispatch_many(
-                    [InputAction::SetStatus {
+                    [InputAction::from(StatusAction::SetStatus {
                         message: "No refine prompt yet (/refine <prompt>).".to_string(),
-                    }],
+                    })],
                     ctx,
                 );
                 KeyResult::Handled
@@ -1183,8 +1183,8 @@ mod tests {
         EscapeHandler, F4Handler, KeyHandler, KeyResult,
     };
     use crate::core::app::actions::{
-        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, InputAction,
-        StreamingAction,
+        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, ComposeAction,
+        InputAction, StatusAction, StreamingAction,
     };
     use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
     use crate::ui::chat_loop::AppHandle;
@@ -1264,7 +1264,7 @@ mod tests {
 
             let envelope = action_rx.try_recv().expect("expected status action");
             match envelope.action {
-                AppAction::Input(InputAction::SetStatus { message }) => {
+                AppAction::Input(InputAction::Status(StatusAction::SetStatus { message })) => {
                     assert_eq!(message, "No refine prompt yet (/refine <prompt>).");
                 }
                 _ => panic!("unexpected action"),
@@ -1296,7 +1296,7 @@ mod tests {
 
             let envelope = action_rx.try_recv().expect("expected status action");
             match envelope.action {
-                AppAction::Input(InputAction::SetStatus { message }) => {
+                AppAction::Input(InputAction::Status(StatusAction::SetStatus { message })) => {
                     assert_eq!(message, "No previous message to refine.");
                 }
                 _ => panic!("unexpected action"),
@@ -1397,9 +1397,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::Input(InputAction::ClearStatus))));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Input(InputAction::Status(StatusAction::ClearStatus))
+            )));
 
             let (commands, status_is_none) = app
                 .update(move |app| {
@@ -1430,9 +1431,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::Input(InputAction::ToggleComposeMode))));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Input(InputAction::Compose(ComposeAction::ToggleComposeMode))
+            )));
 
             let compose_before = app.read(|app| app.ui.compose_mode).await;
             assert!(!compose_before);
@@ -1471,9 +1473,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::Input(InputAction::CancelFilePrompt))));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Input(InputAction::Compose(ComposeAction::CancelFilePrompt))
+            )));
 
             let (commands, prompt_cleared, input_empty) = app
                 .update(move |app| {
@@ -1514,9 +1517,10 @@ mod tests {
             while let Ok(envelope) = action_rx.try_recv() {
                 envelopes.push(envelope);
             }
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::Input(InputAction::CancelInPlaceEdit))));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Input(InputAction::Compose(ComposeAction::CancelInPlaceEdit))
+            )));
 
             let (commands, in_place_cleared, input_empty) = app
                 .update(move |app| {

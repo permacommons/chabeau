@@ -1,175 +1,36 @@
-use super::{streaming, App, AppActionContext, AppCommand, InputAction, StreamingAction};
-use crate::commands::{process_input, CommandResult};
+use super::{App, AppActionContext, AppCommand, InspectAction};
+use crate::core::app::actions::input::status::set_status_message;
 use crate::core::app::picker::build_inspect_text;
 use crate::core::app::session::{ToolCallRequest, ToolResultRecord, ToolResultStatus};
 use crate::core::app::{InspectMode, ToolInspectKind, ToolInspectView};
 
-pub(super) fn handle_input_action(
+pub(super) fn handle_inspect_action(
     app: &mut App,
-    action: InputAction,
+    action: InspectAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        InputAction::ClearStatus => {
-            app.clear_status();
-            None
-        }
-        InputAction::ToggleComposeMode => {
-            app.toggle_compose_mode();
-            None
-        }
-        InputAction::CancelFilePrompt => {
-            app.cancel_file_prompt();
-            None
-        }
-        InputAction::CancelMcpPromptInput => {
-            app.ui.cancel_mcp_prompt_input();
-            None
-        }
-        InputAction::CancelInPlaceEdit => {
-            if app.has_in_place_edit() {
-                app.cancel_in_place_edit();
-                app.clear_input();
-            }
-            None
-        }
-        InputAction::SetStatus { message } => {
-            set_status_message(app, message, ctx);
-            None
-        }
-        InputAction::ClearInput => {
-            app.clear_input();
-            if ctx.term_width > 0 {
-                app.recompute_input_layout_after_edit(ctx.term_width);
-            }
-            None
-        }
-        InputAction::InsertIntoInput { text } => {
-            if !text.is_empty() {
-                app.insert_into_input(&text, ctx.term_width);
-            }
-            None
-        }
-        InputAction::InspectToolResults => {
+        InspectAction::Open => {
             open_latest_tool_call_inspect(app, ctx);
             None
         }
-        InputAction::InspectToolResultsToggleView => {
+        InspectAction::ToggleView => {
             toggle_tool_call_inspect_view(app, ctx);
             None
         }
-        InputAction::InspectToolResultsStep { delta } => {
+        InspectAction::Step { delta } => {
             step_tool_call_inspect(app, delta, ctx);
             None
         }
-        InputAction::InspectToolResultsCopy => {
+        InspectAction::Copy => {
             copy_tool_call_inspect_data(app, ctx);
             None
         }
-        InputAction::InspectToolResultsToggleDecode => {
+        InspectAction::ToggleDecode => {
             toggle_tool_call_inspect_decode(app, ctx);
             None
         }
-        InputAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
-        InputAction::CompleteInPlaceEdit { index, new_text } => {
-            app.complete_in_place_edit(index, new_text);
-            None
-        }
-        InputAction::CompleteAssistantEdit { content } => {
-            app.complete_assistant_edit(content);
-            update_scroll_after_command(app, ctx);
-            None
-        }
     }
-}
-
-fn handle_process_command(
-    app: &mut App,
-    input: String,
-    ctx: AppActionContext,
-) -> Option<AppCommand> {
-    if input.trim().is_empty() {
-        return None;
-    }
-
-    match process_input(app, &input) {
-        CommandResult::Continue => {
-            app.conversation().show_character_greeting_if_needed();
-            update_scroll_after_command(app, ctx);
-            None
-        }
-        CommandResult::ContinueWithTranscriptFocus => {
-            app.conversation().show_character_greeting_if_needed();
-            app.ui.focus_transcript();
-            update_scroll_after_command(app, ctx);
-            None
-        }
-        CommandResult::ProcessAsMessage(message) => {
-            streaming::spawn_stream_for_message(app, message, ctx)
-        }
-        CommandResult::OpenModelPicker => match app.prepare_model_picker_request() {
-            Ok(request) => Some(AppCommand::LoadModelPicker(request)),
-            Err(err) => {
-                set_status_message(app, format!("Model picker error: {}", err), ctx);
-                None
-            }
-        },
-        CommandResult::OpenProviderPicker => {
-            app.open_provider_picker();
-            None
-        }
-        CommandResult::OpenThemePicker => {
-            if let Err(err) = app.open_theme_picker() {
-                set_status_message(app, format!("Theme picker error: {}", err), ctx);
-            }
-            None
-        }
-        CommandResult::OpenCharacterPicker => {
-            app.open_character_picker();
-            None
-        }
-        CommandResult::OpenPersonaPicker => {
-            app.open_persona_picker();
-            None
-        }
-        CommandResult::OpenPresetPicker => {
-            app.open_preset_picker();
-            None
-        }
-        CommandResult::Refine(prompt) => {
-            let action = StreamingAction::RefineLastMessage { prompt };
-            streaming::handle_streaming_action(app, action, ctx)
-        }
-        CommandResult::RunMcpPrompt(request) => Some(AppCommand::RunMcpPrompt(request)),
-        CommandResult::RefreshMcp { server_id } => {
-            app.ui.focus_transcript();
-            update_scroll_after_command(app, ctx);
-            Some(AppCommand::RefreshMcp { server_id })
-        }
-    }
-}
-
-pub(super) fn set_status_message(app: &mut App, message: String, ctx: AppActionContext) {
-    app.conversation().set_status(message);
-    if ctx.term_width > 0 && ctx.term_height > 0 {
-        let input_area_height = app.input_area_height(ctx.term_width);
-        let mut conversation = app.conversation();
-        let available_height =
-            conversation.calculate_available_height(ctx.term_height, input_area_height);
-        conversation.update_scroll_position(available_height, ctx.term_width);
-    }
-}
-
-fn update_scroll_after_command(app: &mut App, ctx: AppActionContext) {
-    if ctx.term_width == 0 || ctx.term_height == 0 {
-        return;
-    }
-
-    let input_area_height = app.input_area_height(ctx.term_width);
-    let mut conversation = app.conversation();
-    let available_height =
-        conversation.calculate_available_height(ctx.term_height, input_area_height);
-    conversation.update_scroll_position(available_height, ctx.term_width);
 }
 
 struct ToolInspectSnapshot {
@@ -825,91 +686,6 @@ mod tests {
     }
 
     #[test]
-    fn process_command_submits_message() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        let cmd = handle_input_action(
-            &mut app,
-            InputAction::ProcessCommand {
-                input: "hello there".into(),
-            },
-            ctx,
-        );
-
-        assert!(matches!(cmd, Some(AppCommand::SpawnStream(_))));
-    }
-
-    #[test]
-    fn process_command_opens_theme_picker() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-
-        let _ = handle_input_action(
-            &mut app,
-            InputAction::ProcessCommand {
-                input: "/theme".into(),
-            },
-            ctx,
-        );
-
-        assert!(app.picker_session().is_some());
-    }
-
-    #[test]
-    fn help_command_focuses_transcript() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        app.ui.focus_input();
-
-        let cmd = handle_input_action(
-            &mut app,
-            InputAction::ProcessCommand {
-                input: "/help".into(),
-            },
-            ctx,
-        );
-
-        assert!(cmd.is_none());
-        assert!(app.ui.is_transcript_focused());
-    }
-
-    #[test]
-    fn mcp_command_focuses_transcript() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        app.ui.focus_input();
-        app.config
-            .mcp_servers
-            .push(crate::core::config::data::McpServerConfig {
-                id: "alpha".to_string(),
-                display_name: "Alpha MCP".to_string(),
-                transport: None,
-                base_url: Some("https://mcp.example.com".to_string()),
-                command: None,
-                args: None,
-                env: None,
-                enabled: Some(true),
-                allowed_tools: None,
-                protocol_version: None,
-                tool_payloads: None,
-                tool_payload_window: None,
-                yolo: None,
-            });
-        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
-
-        let cmd = handle_input_action(
-            &mut app,
-            InputAction::ProcessCommand {
-                input: "/mcp alpha".into(),
-            },
-            ctx,
-        );
-
-        assert!(matches!(cmd, Some(AppCommand::RefreshMcp { .. })));
-        assert!(app.ui.is_transcript_focused());
-    }
-
-    #[test]
     fn tool_request_inspect_formats_arguments() {
         let record = ToolResultRecord {
             tool_name: "mcp_read_resource".to_string(),
@@ -982,7 +758,7 @@ mod tests {
                 batch_index: 0,
             });
 
-        let cmd = handle_input_action(&mut app, InputAction::InspectToolResults, ctx);
+        let cmd = handle_inspect_action(&mut app, InspectAction::Open, ctx);
 
         assert!(cmd.is_none());
         let inspect = app.inspect_state().expect("expected inspect state");
@@ -1013,7 +789,7 @@ mod tests {
             assistant_message_index: None,
         });
 
-        let cmd = handle_input_action(&mut app, InputAction::InspectToolResults, ctx);
+        let cmd = handle_inspect_action(&mut app, InspectAction::Open, ctx);
 
         assert!(cmd.is_none());
         let inspect = app.inspect_state().expect("expected inspect state");

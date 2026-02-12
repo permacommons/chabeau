@@ -41,7 +41,8 @@ use crate::api::ChatRequest;
 use crate::character::CharacterService;
 use crate::core::app::{
     apply_actions, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
-    InputAction, InspectMode, ModelPickerRequest, PickerAction, StreamingAction,
+    ComposeAction, InputAction, InspectAction, InspectMode, ModelPickerRequest, PickerAction,
+    StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::{request_chat_completion, ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
@@ -652,7 +653,10 @@ fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id:
                     .end_activity(crate::core::app::ActivityKind::McpRefresh);
             })
             .await;
-            dispatcher.dispatch_many([InputAction::ClearStatus], AppActionContext::default());
+            dispatcher.dispatch_many(
+                [InputAction::from(StatusAction::ClearStatus)],
+                AppActionContext::default(),
+            );
             return;
         }
 
@@ -696,7 +700,10 @@ fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id:
         })
         .await;
 
-        dispatcher.dispatch_many([InputAction::ClearStatus], AppActionContext::default());
+        dispatcher.dispatch_many(
+            [InputAction::from(StatusAction::ClearStatus)],
+            AppActionContext::default(),
+        );
     });
 }
 
@@ -839,7 +846,7 @@ async fn route_keyboard_event(
             })
         ) {
             dispatcher.dispatch_many(
-                [InputAction::InspectToolResultsToggleView],
+                [InputAction::from(InspectAction::ToggleView)],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -863,7 +870,7 @@ async fn route_keyboard_event(
             .await;
         if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
             dispatcher.dispatch_many(
-                [InputAction::InspectToolResultsCopy],
+                [InputAction::from(InspectAction::Copy)],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -887,7 +894,7 @@ async fn route_keyboard_event(
             .await;
         if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
             dispatcher.dispatch_many(
-                [InputAction::InspectToolResultsToggleDecode],
+                [InputAction::from(InspectAction::ToggleDecode)],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -1020,9 +1027,9 @@ pub(crate) async fn handle_paste_event(
     }
 
     dispatcher.dispatch_many(
-        [InputAction::InsertIntoInput {
+        [InputAction::from(ComposeAction::InsertIntoInput {
             text: sanitized_text,
-        }],
+        })],
         AppActionContext {
             term_width,
             term_height,
@@ -1856,7 +1863,7 @@ mod tests {
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert!(envelopes.iter().any(|env| matches!(
                 env.action,
-                AppAction::Input(InputAction::InsertIntoInput { .. })
+                AppAction::Input(InputAction::Compose(ComposeAction::InsertIntoInput { .. }))
             )));
 
             let mut app = setup_app();

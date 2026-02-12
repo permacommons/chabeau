@@ -21,6 +21,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
@@ -31,6 +32,20 @@ const MCP_STARTUP_CONCURRENCY_LIMIT: usize = 3;
 const MCP_JSON_CONTENT_TYPE: &str = "application/json";
 const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
+const MCP_HTTP_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+const MCP_HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 60;
+const MCP_HTTP_POOL_IDLE_TIMEOUT_SECONDS: u64 = 90;
+const MCP_HTTP_POOL_MAX_IDLE_PER_HOST: usize = 8;
+
+fn build_mcp_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(MCP_HTTP_CONNECT_TIMEOUT_SECONDS))
+        .timeout(Duration::from_secs(MCP_HTTP_REQUEST_TIMEOUT_SECONDS))
+        .pool_idle_timeout(Duration::from_secs(MCP_HTTP_POOL_IDLE_TIMEOUT_SECONDS))
+        .pool_max_idle_per_host(MCP_HTTP_POOL_MAX_IDLE_PER_HOST)
+        .build()
+        .map_err(|err| err.to_string())
+}
 
 fn require_http_base_url(config: &McpServerConfig) -> Result<String, String> {
     config
@@ -598,6 +613,7 @@ pub struct McpServerState {
     pub server_details: Option<InitializeResult>,
     pub streamable_http_request_id: u64,
     pub event_listener_started: bool,
+    http_client: Option<reqwest::Client>,
     client: Option<Arc<StdioClient>>,
 }
 
@@ -616,6 +632,7 @@ impl McpServerState {
             server_details: None,
             streamable_http_request_id: 0,
             event_listener_started: false,
+            http_client: None,
             client: None,
         }
     }
@@ -660,6 +677,7 @@ impl McpServerState {
         self.server_details = None;
         self.streamable_http_request_id = 0;
         self.event_listener_started = false;
+        self.http_client = None;
         self.client = None;
     }
 }
@@ -722,6 +740,21 @@ macro_rules! paginate_tools_list_with {
 impl McpClientManager {
     pub fn set_request_sender(&mut self, sender: mpsc::UnboundedSender<McpServerRequest>) {
         self.server_request_tx = Some(sender);
+    }
+
+    fn ensure_http_client(&mut self, id: &str) -> Result<reqwest::Client, String> {
+        let Some(server) = self.server_mut(id) else {
+            return Err("Unknown MCP server".to_string());
+        };
+
+        if let Some(client) = server.http_client.clone() {
+            return Ok(client);
+        }
+
+        let client =
+            build_mcp_http_client().map_err(|err| format!("Failed to build HTTP client: {err}"))?;
+        server.http_client = Some(client.clone());
+        Ok(client)
     }
 
     fn apply_list_fetch<T>(
@@ -916,11 +949,8 @@ impl McpClientManager {
 
             if !server.config.is_enabled() {
                 server.connected = false;
+                server.http_client = None;
                 server.client = None;
-                return;
-            }
-
-            if server.connected && server.client.is_some() {
                 return;
             }
 
@@ -929,39 +959,68 @@ impl McpClientManager {
                 Err(err) => {
                     server.last_error = Some(err);
                     server.connected = false;
+                    server.http_client = None;
                     server.client = None;
                     return;
                 }
             };
+
+            if server.connected {
+                match transport_kind {
+                    McpTransportKind::Stdio if server.client.is_some() => return,
+                    McpTransportKind::StreamableHttp if server.http_client.is_some() => return,
+                    _ => {}
+                }
+            }
 
             let auth_header = match transport_kind {
                 McpTransportKind::StreamableHttp => {
                     if let Err(err) = require_http_base_url(&server.config) {
                         server.last_error = Some(err);
                         server.connected = false;
+                        server.http_client = None;
                         server.client = None;
                         return;
                     }
+
+                    let http_client = match server.http_client.clone() {
+                        Some(client) => client,
+                        None => match build_mcp_http_client() {
+                            Ok(client) => client,
+                            Err(err) => {
+                                server.last_error =
+                                    Some(format!("Failed to build HTTP client: {err}"));
+                                server.connected = false;
+                                server.http_client = None;
+                                server.client = None;
+                                return;
+                            }
+                        },
+                    };
 
                     let token = match token_store.get_token(&server.config.id) {
                         Ok(token) => token,
                         Err(err) => {
                             server.last_error = Some(format!("Token lookup failed: {}", err));
                             server.connected = false;
+                            server.http_client = None;
                             server.client = None;
                             return;
                         }
                     };
 
+                    server.http_client = Some(http_client);
                     token.map(|token| format!("Bearer {}", token))
                 }
                 McpTransportKind::Stdio => {
                     if let Err(err) = require_stdio_command(&server.config) {
                         server.last_error = Some(err);
                         server.connected = false;
+                        server.http_client = None;
                         server.client = None;
                         return;
                     }
+                    server.http_client = None;
                     None
                 }
             };
@@ -986,6 +1045,10 @@ impl McpClientManager {
                                 if !server.event_listener_started {
                                     server.event_listener_started = true;
                                     spawn_streamable_http_listener(
+                                        server
+                                            .http_client
+                                            .clone()
+                                            .expect("HTTP client should be available"),
                                         server.config.id.clone(),
                                         server.config.base_url.clone(),
                                         server.auth_header.clone(),
@@ -1328,7 +1391,6 @@ impl McpClientManager {
         message: ClientMessage,
     ) -> Result<(), String> {
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-        let client = reqwest::Client::new();
 
         let (base_url, auth_header, session_id, protocol_version) = {
             let Some(server) = self.server(id) else {
@@ -1347,6 +1409,8 @@ impl McpClientManager {
                 ),
             )
         };
+
+        let client = self.ensure_http_client(id)?;
 
         let mut request = apply_streamable_http_protocol_version_header(
             apply_streamable_http_client_post_headers(client.post(base_url)),
@@ -1418,7 +1482,7 @@ impl McpClientManager {
 
         let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
 
-        let client = reqwest::Client::new();
+        let client = self.ensure_http_client(id)?;
         debug!(
             server_id = %id,
             request_id,
@@ -1553,6 +1617,7 @@ async fn read_sse_response_messages(
 }
 
 fn spawn_streamable_http_listener(
+    client: reqwest::Client,
     server_id: String,
     base_url: Option<String>,
     auth_header: Option<String>,
@@ -1565,7 +1630,6 @@ fn spawn_streamable_http_listener(
     };
 
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
         let mut request = apply_streamable_http_protocol_version_header(
             client.get(&base_url).header("Accept", "text/event-stream"),
             protocol_version.as_deref(),
@@ -1648,6 +1712,7 @@ pub struct McpToolCallContext {
     transport_kind: McpTransportKind,
     auth_header: Option<String>,
     pub(crate) session_id: Option<String>,
+    http_client: Option<reqwest::Client>,
     client: Option<Arc<StdioClient>>,
     streamable_http_request_id: u64,
     negotiated_protocol_version: Option<String>,
@@ -1659,6 +1724,7 @@ pub struct McpPromptContext {
     transport_kind: McpTransportKind,
     auth_header: Option<String>,
     pub(crate) session_id: Option<String>,
+    http_client: Option<reqwest::Client>,
     client: Option<Arc<StdioClient>>,
     streamable_http_request_id: u64,
     negotiated_protocol_version: Option<String>,
@@ -1671,6 +1737,7 @@ pub struct McpServerRequestContext {
     transport_kind: McpTransportKind,
     auth_header: Option<String>,
     pub(crate) session_id: Option<String>,
+    http_client: Option<reqwest::Client>,
     client: Option<Arc<StdioClient>>,
     negotiated_protocol_version: Option<String>,
 }
@@ -1679,6 +1746,7 @@ trait StreamableHttpContext {
     fn config(&self) -> &McpServerConfig;
     fn auth_header(&self) -> Option<&String>;
     fn session_id(&self) -> Option<&String>;
+    fn http_client(&self) -> Option<&reqwest::Client>;
     fn set_session_id(&mut self, session_id: Option<String>);
     fn next_request_id(&mut self) -> i64;
     fn negotiated_protocol_version(&self) -> Option<&str>;
@@ -1700,6 +1768,10 @@ impl StreamableHttpContext for McpToolCallContext {
 
     fn session_id(&self) -> Option<&String> {
         self.session_id.as_ref()
+    }
+
+    fn http_client(&self) -> Option<&reqwest::Client> {
+        self.http_client.as_ref()
     }
 
     fn set_session_id(&mut self, session_id: Option<String>) {
@@ -1734,6 +1806,10 @@ impl StreamableHttpContext for McpPromptContext {
         self.session_id.as_ref()
     }
 
+    fn http_client(&self) -> Option<&reqwest::Client> {
+        self.http_client.as_ref()
+    }
+
     fn set_session_id(&mut self, session_id: Option<String>) {
         self.session_id = session_id;
     }
@@ -1766,6 +1842,10 @@ impl StreamableHttpContext for McpServerRequestContext {
         self.session_id.as_ref()
     }
 
+    fn http_client(&self) -> Option<&reqwest::Client> {
+        self.http_client.as_ref()
+    }
+
     fn set_session_id(&mut self, session_id: Option<String>) {
         self.session_id = session_id;
     }
@@ -1796,6 +1876,7 @@ impl McpClientManager {
             transport_kind,
             auth_header: server.auth_header.clone(),
             session_id: server.session_id.clone(),
+            http_client: server.http_client.clone(),
             client: server.client.clone(),
             streamable_http_request_id: 0,
             negotiated_protocol_version: server
@@ -1817,6 +1898,7 @@ impl McpClientManager {
             transport_kind,
             auth_header: server.auth_header.clone(),
             session_id: server.session_id.clone(),
+            http_client: server.http_client.clone(),
             client: server.client.clone(),
             streamable_http_request_id: 0,
             negotiated_protocol_version: server
@@ -1838,6 +1920,7 @@ impl McpClientManager {
             transport_kind,
             auth_header: server.auth_header.clone(),
             session_id: server.session_id.clone(),
+            http_client: server.http_client.clone(),
             client: server.client.clone(),
             negotiated_protocol_version: server
                 .server_details
@@ -2182,7 +2265,9 @@ async fn send_streamable_http_client_message_with_context_inner<C: StreamableHtt
     message: ClientMessage,
 ) -> Result<(), String> {
     let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-    let client = reqwest::Client::new();
+    let client = context
+        .http_client()
+        .ok_or_else(|| "MCP HTTP client not connected.".to_string())?;
     let base_url = require_http_base_url(context.config())?;
     let protocol_version = context.effective_protocol_version();
     let mut request = apply_streamable_http_protocol_version_header(
@@ -2229,7 +2314,9 @@ async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContex
 
     let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
 
-    let client = reqwest::Client::new();
+    let client = context
+        .http_client()
+        .ok_or_else(|| "MCP HTTP client not connected.".to_string())?;
     let base_url = require_http_base_url(context.config())?;
     debug!(
         server_id = %context.config().id,
@@ -2534,7 +2621,8 @@ mod tests {
         calls: Vec<Option<String>>,
     }
 
-    type CapturedHttpRequests = Arc<Mutex<Vec<(String, String, String, String, String)>>>;
+    type CapturedHttpRequests =
+        Arc<Mutex<Vec<(String, String, String, String, String, Option<String>)>>>;
 
     async fn fetch_tools_page_test(
         state: &Arc<Mutex<ToolPageState>>,
@@ -2699,7 +2787,7 @@ mod tests {
         let captured_for_server = Arc::clone(&captured_requests);
 
         let server_task = tokio::spawn(async move {
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let (mut stream, _) = listener.accept().await.map_err(|err| err.to_string())?;
                 let (request_line, headers, body) = read_http_request(&mut stream).await?;
                 let accept = headers
@@ -2717,6 +2805,10 @@ mod tests {
                     .find(|(name, _)| name.eq_ignore_ascii_case(MCP_PROTOCOL_VERSION_HEADER))
                     .map(|(_, value)| value.clone())
                     .unwrap_or_default();
+                let session_id = headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("mcp-session-id"))
+                    .map(|(_, value)| value.clone());
 
                 let body_json: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|err| err.to_string())?;
@@ -2732,6 +2824,7 @@ mod tests {
                     accept,
                     content_type,
                     protocol_version,
+                    session_id,
                 ));
 
                 let response = if method == "initialize" {
@@ -2759,8 +2852,14 @@ mod tests {
                         "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
                         body.len(), body
                     )
-                } else {
+                } else if method == "resources/list" {
                     let event = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: Text/Event-Stream; Charset=UTF-8\r\nmcp-session-id: test-session-2\r\ncontent-length: {}\r\n\r\n{}",
+                        event.len(), event
+                    )
+                } else {
+                    let event = "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}\n\n";
                     format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: Text/Event-Stream; Charset=UTF-8\r\ncontent-length: {}\r\n\r\n{}",
                         event.len(), event
@@ -2816,13 +2915,20 @@ mod tests {
         let value = parse_response_value(message).expect("response value should parse");
         assert_eq!(value.get("ok").and_then(|item| item.as_bool()), Some(true));
 
+        let message = manager
+            .send_streamable_http_request("alpha", RequestFromClient::ListResourcesRequest(None))
+            .await
+            .expect("second SSE request should succeed");
+        let value = parse_response_value(message).expect("response value should parse");
+        assert_eq!(value.get("ok").and_then(|item| item.as_bool()), Some(true));
+
         server_task
             .await
             .expect("mock server task should join")
             .expect("mock server should succeed");
 
         let captured = captured_requests.lock().await.clone();
-        assert_eq!(captured.len(), 3);
+        assert_eq!(captured.len(), 4);
         assert_eq!(captured[0].1, "initialize");
         assert_eq!(captured[1].1, "notifications/initialized");
         assert_eq!(captured[2].1, "resources/list");
@@ -2835,6 +2941,14 @@ mod tests {
         assert_eq!(captured[0].4, LATEST_PROTOCOL_VERSION);
         assert_eq!(captured[1].4, "2025-12-31");
         assert_eq!(captured[2].4, "2025-12-31");
+        assert_eq!(captured[2].5.as_deref(), Some("test-session"));
+        assert_eq!(captured[3].1, "resources/list");
+        assert_eq!(captured[3].5.as_deref(), Some("test-session-2"));
+
+        let stored_session = manager
+            .server("alpha")
+            .and_then(|server| server.session_id.as_deref());
+        assert_eq!(stored_session, Some("test-session-2"));
     }
 }
 

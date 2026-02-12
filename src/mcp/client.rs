@@ -3,6 +3,8 @@ use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
 use crate::core::oauth::refresh_oauth_grant_if_needed;
 use crate::mcp::events::McpServerRequest;
+pub use crate::mcp::transport::McpTransportKind;
+use crate::mcp::transport::{self, ListFetch};
 use futures_util::StreamExt;
 use rust_mcp_schema::schema_utils::{
     ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
@@ -24,32 +26,10 @@ use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
-const MCP_METHOD_NOT_FOUND: i64 = -32601;
 const MCP_MAX_TOOL_LIST: usize = 100;
 const MCP_JSON_CONTENT_TYPE: &str = "application/json";
 const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpTransportKind {
-    StreamableHttp,
-    Stdio,
-}
-
-impl McpTransportKind {
-    pub fn from_config(config: &McpServerConfig) -> Result<Self, String> {
-        let transport = config
-            .transport
-            .as_deref()
-            .unwrap_or("streamable-http")
-            .to_ascii_lowercase();
-        match transport.as_str() {
-            "streamable-http" | "streamable_http" | "http" => Ok(McpTransportKind::StreamableHttp),
-            "stdio" => Ok(McpTransportKind::Stdio),
-            other => Err(format!("Unsupported MCP transport: {}", other)),
-        }
-    }
-}
 
 fn require_http_base_url(config: &McpServerConfig) -> Result<String, String> {
     config
@@ -689,12 +669,6 @@ pub struct McpClientManager {
     server_request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
 }
 
-enum ListFetch<T> {
-    Ok(T, Option<String>),
-    MethodNotFound(Option<String>),
-    Err(String),
-}
-
 macro_rules! paginate_tools_list_with {
     ($fetch_fn:path, ($($arg:expr),*)) => {{
         match $fetch_fn($($arg),*, None).await {
@@ -773,22 +747,6 @@ impl McpClientManager {
             }
             ListFetch::Err(message) => {
                 server.last_error = Some(format!("{label} listing failed: {message}"));
-            }
-        }
-    }
-
-    fn apply_tools_list_result(&mut self, id: &str, result: Result<ListToolsResult, String>) {
-        match result {
-            Ok(list) => {
-                if let Some(server) = self.server_mut(id) {
-                    server.cached_tools = Some(list);
-                    server.last_error = None;
-                }
-            }
-            Err(message) => {
-                if let Some(server) = self.server_mut(id) {
-                    server.last_error = Some(format!("Tools listing failed: {message}"));
-                }
             }
         }
     }
@@ -1008,19 +966,96 @@ impl McpClientManager {
     }
 
     pub async fn refresh_tools(&mut self, id: &str) {
+        let fetch = self.fetch_tools_listing(id).await;
+        self.refresh_listing(
+            id,
+            |server| server.supports_tools(),
+            "Tools",
+            empty_list_tools,
+            |server, list| server.cached_tools = Some(list),
+            fetch,
+        )
+        .await;
+    }
+
+    pub async fn refresh_resources(&mut self, id: &str) {
+        let fetch = self.fetch_resources_listing(id).await;
+        self.refresh_listing(
+            id,
+            |server| server.supports_resources(),
+            "Resources",
+            empty_list_resources,
+            |server, list| server.cached_resources = Some(list),
+            fetch,
+        )
+        .await;
+    }
+
+    pub async fn refresh_resource_templates(&mut self, id: &str) {
+        let fetch = self.fetch_resource_templates_listing(id).await;
+        self.refresh_listing(
+            id,
+            |server| server.supports_resources(),
+            "Resource templates",
+            empty_list_resource_templates,
+            |server, list| server.cached_resource_templates = Some(list),
+            fetch,
+        )
+        .await;
+    }
+
+    pub async fn refresh_prompts(&mut self, id: &str) {
+        let fetch = self.fetch_prompts_listing(id).await;
+        self.refresh_listing(
+            id,
+            |server| server.supports_prompts(),
+            "Prompts",
+            empty_list_prompts,
+            |server, list| server.cached_prompts = Some(list),
+            fetch,
+        )
+        .await;
+    }
+
+    async fn refresh_listing<T, Supports, Empty, Setter>(
+        &mut self,
+        id: &str,
+        supports: Supports,
+        label: &str,
+        empty: Empty,
+        set: Setter,
+        fetch: ListFetch<T>,
+    ) where
+        Supports: Fn(&McpServerState) -> bool,
+        Empty: FnOnce() -> T,
+        Setter: FnOnce(&mut McpServerState, T),
+    {
         if let Some(server) = self.server(id) {
-            if !server.supports_tools() {
+            if !supports(server) {
                 if let Some(server) = self.server_mut(id) {
-                    server.cached_tools = Some(empty_list_tools());
+                    set(server, empty());
                     server.last_error = None;
                 }
                 return;
             }
         }
 
+        if let Some(server) = self.server_mut(id) {
+            Self::apply_list_fetch(server, fetch, label, empty, set);
+        }
+    }
+
+    async fn fetch_tools_listing(&mut self, id: &str) -> ListFetch<ListToolsResult> {
         if self.uses_http(id) {
-            self.refresh_tools_streamable_http(id).await;
-            return;
+            if let Err(err) = self.ensure_streamable_http_session(id).await {
+                return ListFetch::Err(err);
+            }
+            let list = paginate_tools_list_with!(fetch_tools_page_http, (self, id));
+            return match list {
+                Ok(Some(list)) => ListFetch::Ok(list, None),
+                Ok(None) => ListFetch::MethodNotFound(None),
+                Err(message) => ListFetch::Err(message),
+            };
         }
 
         let Some(client) = self
@@ -1028,31 +1063,27 @@ impl McpClientManager {
             .get(&id.to_ascii_lowercase())
             .and_then(|server| server.client.clone())
         else {
-            return;
+            return ListFetch::Err("MCP client not connected.".to_string());
         };
 
         let list = paginate_tools_list_with!(fetch_tools_page_stdio, (&client));
         match list {
-            Ok(Some(list)) => self.apply_tools_list_result(id, Ok(list)),
-            Ok(None) => self.apply_tools_list_result(id, Ok(empty_list_tools())),
-            Err(message) => self.apply_tools_list_result(id, Err(message)),
+            Ok(Some(list)) => ListFetch::Ok(list, None),
+            Ok(None) => ListFetch::MethodNotFound(None),
+            Err(message) => ListFetch::Err(message),
         }
     }
 
-    pub async fn refresh_resources(&mut self, id: &str) {
-        if let Some(server) = self.server(id) {
-            if !server.supports_resources() {
-                if let Some(server) = self.server_mut(id) {
-                    server.cached_resources = Some(empty_list_resources());
-                    server.last_error = None;
-                }
-                return;
-            }
-        }
-
+    async fn fetch_resources_listing(&mut self, id: &str) -> ListFetch<ListResourcesResult> {
         if self.uses_http(id) {
-            self.refresh_resources_streamable_http(id).await;
-            return;
+            if let Err(err) = self.ensure_streamable_http_session(id).await {
+                return ListFetch::Err(err);
+            }
+
+            let response = self
+                .send_streamable_http_request(id, RequestFromClient::ListResourcesRequest(None))
+                .await;
+            return transport::streamable_http::fetch_list(response, parse_list_resources);
         }
 
         let Some(client) = self
@@ -1060,45 +1091,32 @@ impl McpClientManager {
             .get(&id.to_ascii_lowercase())
             .and_then(|server| server.client.clone())
         else {
-            return;
+            return ListFetch::Err("MCP client not connected.".to_string());
         };
 
-        let response = client
-            .send_request(RequestFromClient::ListResourcesRequest(None))
-            .await;
-        let fetch = match response {
-            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
-            Ok(message) => match parse_list_resources(message) {
-                Ok(list) => ListFetch::Ok(list, None),
-                Err(err) => ListFetch::Err(err),
-            },
-            Err(err) => ListFetch::Err(err),
-        };
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Resources",
-                empty_list_resources,
-                |server, list| server.cached_resources = Some(list),
-            );
-        }
+        transport::stdio::fetch_list(
+            client.send_request(RequestFromClient::ListResourcesRequest(None)),
+            parse_list_resources,
+        )
+        .await
     }
 
-    pub async fn refresh_resource_templates(&mut self, id: &str) {
-        if let Some(server) = self.server(id) {
-            if !server.supports_resources() {
-                if let Some(server) = self.server_mut(id) {
-                    server.cached_resource_templates = Some(empty_list_resource_templates());
-                    server.last_error = None;
-                }
-                return;
-            }
-        }
-
+    async fn fetch_resource_templates_listing(
+        &mut self,
+        id: &str,
+    ) -> ListFetch<ListResourceTemplatesResult> {
         if self.uses_http(id) {
-            self.refresh_resource_templates_streamable_http(id).await;
-            return;
+            if let Err(err) = self.ensure_streamable_http_session(id).await {
+                return ListFetch::Err(err);
+            }
+
+            let response = self
+                .send_streamable_http_request(
+                    id,
+                    RequestFromClient::ListResourceTemplatesRequest(None),
+                )
+                .await;
+            return transport::streamable_http::fetch_list(response, parse_list_resource_templates);
         }
 
         let Some(client) = self
@@ -1106,45 +1124,26 @@ impl McpClientManager {
             .get(&id.to_ascii_lowercase())
             .and_then(|server| server.client.clone())
         else {
-            return;
+            return ListFetch::Err("MCP client not connected.".to_string());
         };
 
-        let response = client
-            .send_request(RequestFromClient::ListResourceTemplatesRequest(None))
-            .await;
-        let fetch = match response {
-            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
-            Ok(message) => match parse_list_resource_templates(message) {
-                Ok(list) => ListFetch::Ok(list, None),
-                Err(err) => ListFetch::Err(err),
-            },
-            Err(err) => ListFetch::Err(err),
-        };
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Resource templates",
-                empty_list_resource_templates,
-                |server, list| server.cached_resource_templates = Some(list),
-            );
-        }
+        transport::stdio::fetch_list(
+            client.send_request(RequestFromClient::ListResourceTemplatesRequest(None)),
+            parse_list_resource_templates,
+        )
+        .await
     }
 
-    pub async fn refresh_prompts(&mut self, id: &str) {
-        if let Some(server) = self.server(id) {
-            if !server.supports_prompts() {
-                if let Some(server) = self.server_mut(id) {
-                    server.cached_prompts = Some(empty_list_prompts());
-                    server.last_error = None;
-                }
-                return;
-            }
-        }
-
+    async fn fetch_prompts_listing(&mut self, id: &str) -> ListFetch<ListPromptsResult> {
         if self.uses_http(id) {
-            self.refresh_prompts_streamable_http(id).await;
-            return;
+            if let Err(err) = self.ensure_streamable_http_session(id).await {
+                return ListFetch::Err(err);
+            }
+
+            let response = self
+                .send_streamable_http_request(id, RequestFromClient::ListPromptsRequest(None))
+                .await;
+            return transport::streamable_http::fetch_list(response, parse_list_prompts);
         }
 
         let Some(client) = self
@@ -1152,29 +1151,14 @@ impl McpClientManager {
             .get(&id.to_ascii_lowercase())
             .and_then(|server| server.client.clone())
         else {
-            return;
+            return ListFetch::Err("MCP client not connected.".to_string());
         };
 
-        let response = client
-            .send_request(RequestFromClient::ListPromptsRequest(None))
-            .await;
-        let fetch = match response {
-            Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
-            Ok(message) => match parse_list_prompts(message) {
-                Ok(list) => ListFetch::Ok(list, None),
-                Err(err) => ListFetch::Err(err),
-            },
-            Err(err) => ListFetch::Err(err),
-        };
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Prompts",
-                empty_list_prompts,
-                |server, list| server.cached_prompts = Some(list),
-            );
-        }
+        transport::stdio::fetch_list(
+            client.send_request(RequestFromClient::ListPromptsRequest(None)),
+            parse_list_prompts,
+        )
+        .await
     }
 
     fn uses_http(&self, id: &str) -> bool {
@@ -1184,94 +1168,6 @@ impl McpClientManager {
                 Ok(McpTransportKind::StreamableHttp)
             )
         })
-    }
-
-    async fn refresh_tools_streamable_http(&mut self, id: &str) {
-        if let Err(err) = self.ensure_streamable_http_session(id).await {
-            if let Some(server) = self.server_mut(id) {
-                server.last_error = Some(err);
-            }
-            return;
-        }
-
-        let list = paginate_tools_list_with!(fetch_tools_page_http, (self, id));
-        match list {
-            Ok(Some(list)) => self.apply_tools_list_result(id, Ok(list)),
-            Ok(None) => self.apply_tools_list_result(id, Ok(empty_list_tools())),
-            Err(message) => self.apply_tools_list_result(id, Err(message)),
-        }
-    }
-
-    async fn refresh_resources_streamable_http(&mut self, id: &str) {
-        if let Err(err) = self.ensure_streamable_http_session(id).await {
-            if let Some(server) = self.server_mut(id) {
-                server.last_error = Some(err);
-            }
-            return;
-        }
-
-        let response = self
-            .send_streamable_http_request(id, RequestFromClient::ListResourcesRequest(None))
-            .await;
-
-        let fetch = streamable_http_list_fetch(response, parse_list_resources);
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Resources",
-                empty_list_resources,
-                |server, list| server.cached_resources = Some(list),
-            );
-        }
-    }
-
-    async fn refresh_resource_templates_streamable_http(&mut self, id: &str) {
-        if let Err(err) = self.ensure_streamable_http_session(id).await {
-            if let Some(server) = self.server_mut(id) {
-                server.last_error = Some(err);
-            }
-            return;
-        }
-
-        let response = self
-            .send_streamable_http_request(id, RequestFromClient::ListResourceTemplatesRequest(None))
-            .await;
-
-        let fetch = streamable_http_list_fetch(response, parse_list_resource_templates);
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Resource templates",
-                empty_list_resource_templates,
-                |server, list| server.cached_resource_templates = Some(list),
-            );
-        }
-    }
-
-    async fn refresh_prompts_streamable_http(&mut self, id: &str) {
-        if let Err(err) = self.ensure_streamable_http_session(id).await {
-            if let Some(server) = self.server_mut(id) {
-                server.last_error = Some(err);
-            }
-            return;
-        }
-
-        let response = self
-            .send_streamable_http_request(id, RequestFromClient::ListPromptsRequest(None))
-            .await;
-
-        let fetch = streamable_http_list_fetch(response, parse_list_prompts);
-        if let Some(server) = self.server_mut(id) {
-            Self::apply_list_fetch(
-                server,
-                fetch,
-                "Prompts",
-                empty_list_prompts,
-                |server, list| server.cached_prompts = Some(list),
-            );
-        }
     }
 
     async fn ensure_streamable_http_session(&mut self, id: &str) -> Result<(), String> {
@@ -2838,27 +2734,6 @@ fn parse_response_value(message: ServerMessage) -> Result<Value, String> {
     }
 }
 
-fn streamable_http_list_fetch<T>(
-    response: Result<ServerMessage, String>,
-    parse: impl FnOnce(ServerMessage) -> Result<T, String>,
-) -> ListFetch<T> {
-    match response {
-        Ok(message) if is_method_not_found(&message) => ListFetch::MethodNotFound(None),
-        Ok(message) => match parse(message) {
-            Ok(list) => ListFetch::Ok(list, None),
-            Err(err) => ListFetch::Err(err),
-        },
-        Err(err) => ListFetch::Err(err),
-    }
-}
-
-fn is_method_not_found(message: &ServerMessage) -> bool {
-    matches!(
-        message,
-        ServerMessage::Error(error) if error.error.code == MCP_METHOD_NOT_FOUND
-    )
-}
-
 fn paginated_params(cursor: Option<String>) -> Option<PaginatedRequestParams> {
     cursor.map(|cursor| PaginatedRequestParams {
         cursor: Some(cursor),
@@ -2875,7 +2750,7 @@ async fn fetch_tools_page_stdio(
         .send_request(RequestFromClient::ListToolsRequest(params))
         .await;
     match response {
-        Ok(message) if is_method_not_found(&message) => Ok(None),
+        Ok(message) if transport::is_method_not_found(&message) => Ok(None),
         Ok(message) => parse_list_tools(message)
             .map(Some)
             .map_err(|err| err.to_string()),
@@ -2892,7 +2767,7 @@ async fn fetch_tools_page_http(
     let response = manager
         .send_streamable_http_request(id, RequestFromClient::ListToolsRequest(params))
         .await;
-    let fetch = streamable_http_list_fetch(response, parse_list_tools);
+    let fetch = transport::streamable_http::fetch_list(response, parse_list_tools);
     match fetch {
         ListFetch::Ok(list, _) => Ok(Some(list)),
         ListFetch::MethodNotFound(_) => Ok(None),

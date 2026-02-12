@@ -136,7 +136,7 @@ impl KeyHandler for CtrlLHandler {
                 term_width,
                 term_height,
             };
-            dispatcher.dispatch_many([InputAction::from(StatusAction::ClearStatus)], ctx);
+            dispatcher.dispatch_input_many([StatusAction::ClearStatus], ctx);
         }
         KeyResult::Handled
     }
@@ -156,8 +156,8 @@ impl KeyHandler for CtrlOHandler {
         term_height: u16,
         _last_input_layout_update: Option<std::time::Instant>,
     ) -> KeyResult {
-        dispatcher.dispatch_many(
-            [InputAction::from(InspectAction::Open)],
+        dispatcher.dispatch_input_many(
+            [InspectAction::Open],
             AppActionContext {
                 term_width,
                 term_height,
@@ -185,7 +185,7 @@ impl KeyHandler for F4Handler {
             term_width,
             term_height,
         };
-        dispatcher.dispatch_many([InputAction::from(ComposeAction::ToggleComposeMode)], ctx);
+        dispatcher.dispatch_input_many([ComposeAction::ToggleComposeMode], ctx);
         KeyResult::Handled
     }
 }
@@ -210,11 +210,11 @@ impl KeyHandler for EscapeHandler {
                 if app.inspect_state().is_some() {
                     actions.push(PickerAction::PickerEscape.into());
                 } else if app.ui.file_prompt().is_some() {
-                    actions.push(InputAction::from(ComposeAction::CancelFilePrompt).into());
+                    actions.push(InputAction::Compose(ComposeAction::CancelFilePrompt).into());
                 } else if app.ui.mcp_prompt_input().is_some() {
-                    actions.push(InputAction::from(ComposeAction::CancelMcpPromptInput).into());
+                    actions.push(InputAction::Compose(ComposeAction::CancelMcpPromptInput).into());
                 } else if app.ui.in_place_edit_index().is_some() {
-                    actions.push(InputAction::from(ComposeAction::CancelInPlaceEdit).into());
+                    actions.push(InputAction::Compose(ComposeAction::CancelInPlaceEdit).into());
                 } else if app.has_interruptible_activity() {
                     actions.push(StreamingAction::CancelStreaming.into());
                 }
@@ -409,13 +409,13 @@ impl KeyHandler for ArrowKeyHandler {
                 KeyCode::Down => Some(PickerAction::PickerInspectScroll { lines: 1 }.into()),
                 KeyCode::Left => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(InputAction::from(InspectAction::Step { delta: -1 }).into())
+                        Some(InputAction::Inspect(InspectAction::Step { delta: -1 }).into())
                     }
                     InspectMode::Static => None,
                 },
                 KeyCode::Right => match mode {
                     InspectMode::ToolCalls { .. } => {
-                        Some(InputAction::from(InspectAction::Step { delta: 1 }).into())
+                        Some(InputAction::Inspect(InspectAction::Step { delta: 1 }).into())
                     }
                     InspectMode::Static => None,
                 },
@@ -912,19 +912,19 @@ impl KeyHandler for CtrlNHandler {
                 KeyResult::Continue
             }
             Some(_) => {
-                dispatcher.dispatch_many(
-                    [InputAction::from(StatusAction::SetStatus {
+                dispatcher.dispatch_input_many(
+                    [StatusAction::SetStatus {
                         message: "No previous message to refine.".to_string(),
-                    })],
+                    }],
                     ctx,
                 );
                 KeyResult::Handled
             }
             None => {
-                dispatcher.dispatch_many(
-                    [InputAction::from(StatusAction::SetStatus {
+                dispatcher.dispatch_input_many(
+                    [StatusAction::SetStatus {
                         message: "No refine prompt yet (/refine <prompt>).".to_string(),
-                    })],
+                    }],
                     ctx,
                 );
                 KeyResult::Handled

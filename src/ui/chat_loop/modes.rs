@@ -519,10 +519,10 @@ pub async fn handle_external_editor_shortcut(
 
     let mut actions: Vec<AppAction> = Vec::new();
     if let Some(status) = outcome.status {
-        actions.push(InputAction::from(StatusAction::SetStatus { message: status }).into());
+        actions.push(InputAction::Status(StatusAction::SetStatus { message: status }).into());
     }
     if outcome.clear_input {
-        actions.push(InputAction::from(ComposeAction::ClearInput).into());
+        actions.push(InputAction::Compose(ComposeAction::ClearInput).into());
     }
     if let Some(message) = outcome.message {
         actions.push(StreamingAction::SubmitMessage { message }.into());
@@ -569,22 +569,22 @@ pub async fn process_input_submission(
     };
 
     if editing_assistant {
-        dispatcher.dispatch_many(
+        dispatcher.dispatch_input_many(
             [
-                InputAction::from(CommandAction::CompleteAssistantEdit {
+                InputAction::Command(CommandAction::CompleteAssistantEdit {
                     content: input_text,
                 }),
-                InputAction::from(ComposeAction::ClearInput),
+                InputAction::Compose(ComposeAction::ClearInput),
             ],
             ctx,
         );
         return;
     }
 
-    dispatcher.dispatch_many(
+    dispatcher.dispatch_input_many(
         [
-            InputAction::from(ComposeAction::ClearInput),
-            InputAction::from(CommandAction::ProcessCommand { input: input_text }),
+            InputAction::Compose(ComposeAction::ClearInput),
+            InputAction::Command(CommandAction::ProcessCommand { input: input_text }),
         ],
         ctx,
     );
@@ -714,13 +714,13 @@ pub async fn handle_enter_key(
         .await;
 
     if let Some((idx, new_text)) = in_place_edit {
-        dispatcher.dispatch_many(
+        dispatcher.dispatch_input_many(
             [
-                InputAction::from(CommandAction::CompleteInPlaceEdit {
+                InputAction::Command(CommandAction::CompleteInPlaceEdit {
                     index: idx,
                     new_text,
                 }),
-                InputAction::from(ComposeAction::ClearInput),
+                InputAction::Compose(ComposeAction::ClearInput),
             ],
             AppActionContext {
                 term_width,

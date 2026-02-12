@@ -188,6 +188,19 @@ impl AppActionDispatcher {
             });
         }
     }
+
+    pub fn dispatch_input_many<I>(&self, actions: I, ctx: AppActionContext)
+    where
+        I: IntoIterator,
+        I::Item: Into<InputAction>,
+    {
+        for action in actions.into_iter() {
+            let _ = self.tx.send(AppActionEnvelope {
+                action: AppAction::Input(action.into()),
+                context: ctx,
+            });
+        }
+    }
 }
 
 pub enum AppCommand {

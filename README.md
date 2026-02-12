@@ -493,7 +493,7 @@ Chabeau uses a modular design with focused components:
   - `registry.rs` – Static command metadata registry
 - `core/` – Core application components
   - `app/` – Application state and controllers
-    - `actions/` – Internal action definitions and dispatcher for chat loop updates
+    - `actions/` – Internal action definitions grouped by domain plus dispatcher routing
     - `app.rs` – Main `App` struct and event loop integration
     - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
     - `mod.rs` – App struct and module exports

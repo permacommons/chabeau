@@ -1,16 +1,13 @@
-use super::{input, App, AppAction, AppActionContext, AppCommand};
+use super::{input, App, AppActionContext, AppCommand, McpPromptAction};
 use crate::core::app::session::McpPromptRequest;
 
 pub(super) fn handle_mcp_prompt_action(
     app: &mut App,
-    action: AppAction,
+    action: McpPromptAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        AppAction::CompleteMcpPromptArg { value } => {
-            handle_complete_mcp_prompt_arg(app, value, ctx)
-        }
-        _ => unreachable!("non-mcp prompt action routed to mcp prompt handler"),
+        McpPromptAction::CompleteArg { value } => handle_complete_mcp_prompt_arg(app, value, ctx),
     }
 }
 

@@ -6,7 +6,10 @@ use ratatui::crossterm::event::{self, KeyCode};
 use ratatui::Terminal;
 
 use crate::core::app::ui_state::{EditSelectTarget, FilePromptKind};
-use crate::core::app::{AppAction, AppActionContext, AppActionDispatcher};
+use crate::core::app::{
+    AppAction, AppActionContext, AppActionDispatcher, FilePromptAction, InputAction,
+    McpPromptAction, PickerAction, StreamingAction,
+};
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::{ROLE_ASSISTANT, ROLE_USER};
 use crate::ui::osc_backend::OscBackend;
@@ -439,44 +442,44 @@ pub async fn handle_picker_key_event(
     if inspect_active {
         let page_lines = term_height.saturating_sub(8).max(1) as i32;
         match key.code {
-            event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
-            event::KeyCode::Up => actions.push(AppAction::PickerInspectScroll { lines: -1 }),
-            event::KeyCode::Down => actions.push(AppAction::PickerInspectScroll { lines: 1 }),
+            event::KeyCode::Esc => actions.push(PickerAction::PickerEscape),
+            event::KeyCode::Up => actions.push(PickerAction::PickerInspectScroll { lines: -1 }),
+            event::KeyCode::Down => actions.push(PickerAction::PickerInspectScroll { lines: 1 }),
             event::KeyCode::PageUp => {
-                actions.push(AppAction::PickerInspectScroll { lines: -page_lines })
+                actions.push(PickerAction::PickerInspectScroll { lines: -page_lines })
             }
             event::KeyCode::PageDown => {
-                actions.push(AppAction::PickerInspectScroll { lines: page_lines })
+                actions.push(PickerAction::PickerInspectScroll { lines: page_lines })
             }
-            event::KeyCode::Home => actions.push(AppAction::PickerInspectScrollToStart),
-            event::KeyCode::End => actions.push(AppAction::PickerInspectScrollToEnd),
+            event::KeyCode::Home => actions.push(PickerAction::PickerInspectScrollToStart),
+            event::KeyCode::End => actions.push(PickerAction::PickerInspectScrollToEnd),
             _ => {}
         }
     } else {
         match key.code {
-            event::KeyCode::Esc => actions.push(AppAction::PickerEscape),
-            event::KeyCode::Up => actions.push(AppAction::PickerMoveUp),
-            event::KeyCode::Down => actions.push(AppAction::PickerMoveDown),
-            event::KeyCode::Char('k') => actions.push(AppAction::PickerMoveUp),
+            event::KeyCode::Esc => actions.push(PickerAction::PickerEscape),
+            event::KeyCode::Up => actions.push(PickerAction::PickerMoveUp),
+            event::KeyCode::Down => actions.push(PickerAction::PickerMoveDown),
+            event::KeyCode::Char('k') => actions.push(PickerAction::PickerMoveUp),
             event::KeyCode::Char('j') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                actions.push(AppAction::PickerApplySelection { persistent: true });
+                actions.push(PickerAction::PickerApplySelection { persistent: true });
             }
-            event::KeyCode::Char('j') => actions.push(AppAction::PickerMoveDown),
-            event::KeyCode::Home => actions.push(AppAction::PickerMoveToStart),
-            event::KeyCode::End => actions.push(AppAction::PickerMoveToEnd),
-            event::KeyCode::F(6) => actions.push(AppAction::PickerCycleSortMode),
+            event::KeyCode::Char('j') => actions.push(PickerAction::PickerMoveDown),
+            event::KeyCode::Home => actions.push(PickerAction::PickerMoveToStart),
+            event::KeyCode::End => actions.push(PickerAction::PickerMoveToEnd),
+            event::KeyCode::F(6) => actions.push(PickerAction::PickerCycleSortMode),
             event::KeyCode::Enter => {
                 let persistent = key.modifiers.contains(event::KeyModifiers::ALT);
-                actions.push(AppAction::PickerApplySelection { persistent });
+                actions.push(PickerAction::PickerApplySelection { persistent });
             }
-            event::KeyCode::Delete => actions.push(AppAction::PickerUnsetDefault),
-            event::KeyCode::Backspace => actions.push(AppAction::PickerBackspace),
+            event::KeyCode::Delete => actions.push(PickerAction::PickerUnsetDefault),
+            event::KeyCode::Backspace => actions.push(PickerAction::PickerBackspace),
             event::KeyCode::Char('o') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                actions.push(AppAction::PickerInspectSelection);
+                actions.push(PickerAction::PickerInspectSelection);
             }
             event::KeyCode::Char(c) => {
                 if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                    actions.push(AppAction::PickerTypeChar { ch: c });
+                    actions.push(PickerAction::PickerTypeChar { ch: c });
                 }
             }
             _ => {}
@@ -514,15 +517,15 @@ pub async fn handle_external_editor_shortcut(
 
     terminal.clear().map_err(|e| e.to_string())?;
 
-    let mut actions = Vec::new();
+    let mut actions: Vec<AppAction> = Vec::new();
     if let Some(status) = outcome.status {
-        actions.push(AppAction::SetStatus { message: status });
+        actions.push(InputAction::SetStatus { message: status }.into());
     }
     if outcome.clear_input {
-        actions.push(AppAction::ClearInput);
+        actions.push(InputAction::ClearInput.into());
     }
     if let Some(message) = outcome.message {
-        actions.push(AppAction::SubmitMessage { message });
+        actions.push(StreamingAction::SubmitMessage { message }.into());
     }
 
     if !actions.is_empty() {
@@ -568,10 +571,10 @@ pub async fn process_input_submission(
     if editing_assistant {
         dispatcher.dispatch_many(
             [
-                AppAction::CompleteAssistantEdit {
+                InputAction::CompleteAssistantEdit {
                     content: input_text,
                 },
-                AppAction::ClearInput,
+                InputAction::ClearInput,
             ],
             ctx,
         );
@@ -580,8 +583,8 @@ pub async fn process_input_submission(
 
     dispatcher.dispatch_many(
         [
-            AppAction::ClearInput,
-            AppAction::ProcessCommand { input: input_text },
+            InputAction::ClearInput,
+            InputAction::ProcessCommand { input: input_text },
         ],
         ctx,
     );
@@ -610,7 +613,7 @@ pub async fn handle_enter_key(
             term_width,
             term_height,
         };
-        dispatcher.dispatch_many([AppAction::CompleteMcpPromptArg { value }], ctx);
+        dispatcher.dispatch_many([McpPromptAction::CompleteArg { value }], ctx);
         return Ok(Some(KeyLoopAction::Continue));
     }
 
@@ -637,7 +640,7 @@ pub async fn handle_enter_key(
         match prompt.kind {
             FilePromptKind::Dump => {
                 dispatcher.dispatch_many(
-                    [AppAction::CompleteFilePromptDump {
+                    [FilePromptAction::CompleteDump {
                         filename,
                         overwrite,
                     }],
@@ -647,7 +650,7 @@ pub async fn handle_enter_key(
             FilePromptKind::SaveCodeBlock => {
                 if let Some(content) = prompt.content {
                     dispatcher.dispatch_many(
-                        [AppAction::CompleteFilePromptSaveBlock {
+                        [FilePromptAction::CompleteSaveBlock {
                             filename,
                             content,
                             overwrite,
@@ -693,7 +696,7 @@ pub async fn handle_enter_key(
 
     if should_send_without_tools {
         dispatcher.dispatch_many(
-            [AppAction::McpSendPendingWithoutTools],
+            [StreamingAction::McpSendPendingWithoutTools],
             AppActionContext {
                 term_width,
                 term_height,
@@ -713,11 +716,11 @@ pub async fn handle_enter_key(
     if let Some((idx, new_text)) = in_place_edit {
         dispatcher.dispatch_many(
             [
-                AppAction::CompleteInPlaceEdit {
+                InputAction::CompleteInPlaceEdit {
                     index: idx,
                     new_text,
                 },
-                AppAction::ClearInput,
+                InputAction::ClearInput,
             ],
             AppActionContext {
                 term_width,
@@ -765,7 +768,7 @@ pub async fn handle_ctrl_j_shortcut(
 
     if should_send_without_tools {
         dispatcher.dispatch_many(
-            [AppAction::McpSendPendingWithoutTools],
+            [StreamingAction::McpSendPendingWithoutTools],
             AppActionContext {
                 term_width,
                 term_height,
@@ -782,7 +785,8 @@ pub async fn handle_ctrl_j_shortcut(
 mod tests {
     use super::*;
     use crate::core::app::actions::{
-        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, AppCommand,
+        apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, AppCommand, InputAction,
+        PromptAction,
     };
     use crate::core::chat_stream::ChatStreamService;
     use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
@@ -834,9 +838,14 @@ mod tests {
 
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert_eq!(envelopes.len(), 2);
-            assert!(matches!(envelopes[0].action, AppAction::ClearInput));
+            assert!(matches!(
+                envelopes[0].action,
+                AppAction::Input(InputAction::ClearInput)
+            ));
             match &envelopes[1].action {
-                AppAction::ProcessCommand { input } => assert_eq!(input, "hello"),
+                AppAction::Input(InputAction::ProcessCommand { input }) => {
+                    assert_eq!(input, "hello")
+                }
                 _ => panic!("unexpected action"),
             }
 
@@ -870,9 +879,10 @@ mod tests {
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert_eq!(envelopes.len(), 1);
             match &envelopes[0].action {
-                AppAction::CompleteFilePromptDump { filename, .. } => {
-                    assert_eq!(filename, "dump.txt")
-                }
+                AppAction::Prompt(PromptAction::File(FilePromptAction::CompleteDump {
+                    filename,
+                    ..
+                })) => assert_eq!(filename, "dump.txt"),
                 _ => panic!("unexpected action"),
             }
         });
@@ -1019,12 +1029,15 @@ mod tests {
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert_eq!(envelopes.len(), 2);
             match &envelopes[0].action {
-                AppAction::CompleteAssistantEdit { content } => {
+                AppAction::Input(InputAction::CompleteAssistantEdit { content }) => {
                     assert_eq!(content, "revised");
                 }
                 _ => panic!("unexpected action"),
             }
-            assert!(matches!(envelopes[1].action, AppAction::ClearInput));
+            assert!(matches!(
+                envelopes[1].action,
+                AppAction::Input(InputAction::ClearInput)
+            ));
 
             let commands = handle.update(|app| apply_actions(app, envelopes)).await;
             assert!(commands.is_empty());

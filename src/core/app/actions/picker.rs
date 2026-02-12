@@ -1,67 +1,67 @@
-use super::{input, App, AppAction, AppActionContext, AppCommand};
+use super::{input, App, AppActionContext, AppCommand, PickerAction};
 use crate::core::app::picker::PickerMode;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
 
 pub(super) fn handle_picker_action(
     app: &mut App,
-    action: AppAction,
+    action: PickerAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        AppAction::PickerEscape => {
+        PickerAction::PickerEscape => {
             handle_picker_escape(app, ctx);
             None
         }
-        AppAction::PickerMoveUp => {
+        PickerAction::PickerMoveUp => {
             handle_picker_movement(app, PickerMovement::Up);
             None
         }
-        AppAction::PickerMoveDown => {
+        PickerAction::PickerMoveDown => {
             handle_picker_movement(app, PickerMovement::Down);
             None
         }
-        AppAction::PickerMoveToStart => {
+        PickerAction::PickerMoveToStart => {
             handle_picker_movement(app, PickerMovement::Start);
             None
         }
-        AppAction::PickerMoveToEnd => {
+        PickerAction::PickerMoveToEnd => {
             handle_picker_movement(app, PickerMovement::End);
             None
         }
-        AppAction::PickerCycleSortMode => {
+        PickerAction::PickerCycleSortMode => {
             handle_picker_cycle_sort_mode(app);
             None
         }
-        AppAction::PickerApplySelection { persistent } => {
+        PickerAction::PickerApplySelection { persistent } => {
             handle_picker_apply_selection(app, persistent, ctx)
         }
-        AppAction::PickerUnsetDefault => handle_picker_unset_default(app, ctx),
-        AppAction::PickerBackspace => {
+        PickerAction::PickerUnsetDefault => handle_picker_unset_default(app, ctx),
+        PickerAction::PickerBackspace => {
             handle_picker_backspace(app);
             None
         }
-        AppAction::PickerTypeChar { ch } => {
+        PickerAction::PickerTypeChar { ch } => {
             handle_picker_type_char(app, ch);
             None
         }
-        AppAction::PickerInspectSelection => {
+        PickerAction::PickerInspectSelection => {
             handle_picker_inspect(app, ctx);
             None
         }
-        AppAction::PickerInspectScroll { lines } => {
+        PickerAction::PickerInspectScroll { lines } => {
             app.scroll_inspect(lines);
             None
         }
-        AppAction::PickerInspectScrollToStart => {
+        PickerAction::PickerInspectScrollToStart => {
             app.scroll_inspect_to_start();
             None
         }
-        AppAction::PickerInspectScrollToEnd => {
+        PickerAction::PickerInspectScrollToEnd => {
             app.scroll_inspect_to_end();
             None
         }
-        AppAction::ModelPickerLoaded {
+        PickerAction::ModelPickerLoaded {
             default_model_for_provider,
             models_response,
         } => {
@@ -72,12 +72,11 @@ pub(super) fn handle_picker_action(
             }
             None
         }
-        AppAction::ModelPickerLoadFailed { error } => {
+        PickerAction::ModelPickerLoadFailed { error } => {
             app.fail_model_picker_request();
             input::set_status_message(app, format!("Model picker error: {}", error), ctx);
             None
         }
-        _ => unreachable!("non-picker action routed to picker handler"),
     }
 }
 
@@ -770,11 +769,11 @@ mod tests {
         let original_color = app.ui.theme.background_color;
 
         app.open_theme_picker().expect("theme picker opens");
-        handle_picker_action(&mut app, AppAction::PickerMoveDown, ctx);
+        handle_picker_action(&mut app, PickerAction::PickerMoveDown, ctx);
 
         assert_ne!(app.ui.theme.background_color, original_color);
 
-        handle_picker_action(&mut app, AppAction::PickerEscape, ctx);
+        handle_picker_action(&mut app, PickerAction::PickerEscape, ctx);
 
         assert_eq!(app.ui.theme.background_color, original_color);
         assert!(app.picker_session().is_none());
@@ -820,7 +819,7 @@ mod tests {
             }),
         });
 
-        handle_picker_action(&mut app, AppAction::PickerEscape, ctx);
+        handle_picker_action(&mut app, PickerAction::PickerEscape, ctx);
 
         assert_eq!(app.session.provider_name, "old-prov");
         assert_eq!(app.session.provider_display_name, "Old Provider");
@@ -858,7 +857,7 @@ mod tests {
         assert!(app.picker_session().is_some());
         handle_picker_action(
             &mut app,
-            AppAction::PickerApplySelection { persistent: false },
+            PickerAction::PickerApplySelection { persistent: false },
             ctx,
         );
         assert!(app.picker_session().is_none());

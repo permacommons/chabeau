@@ -40,8 +40,8 @@ use crate::api::models::fetch_models;
 use crate::api::ChatRequest;
 use crate::character::CharacterService;
 use crate::core::app::{
-    apply_actions, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
-    InspectMode, ModelPickerRequest,
+    apply_actions, AppActionContext, AppActionDispatcher, AppActionEnvelope, AppCommand,
+    InputAction, InspectMode, ModelPickerRequest, PickerAction, StreamingAction,
 };
 use crate::core::chat_stream::{request_chat_completion, ChatStreamService, StreamMessage};
 use crate::core::mcp_auth::McpTokenStore;
@@ -78,11 +78,11 @@ fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: ModelPick
             .map_err(|e| e.to_string());
 
         let action = match fetch_result {
-            Ok(models_response) => AppAction::ModelPickerLoaded {
+            Ok(models_response) => PickerAction::ModelPickerLoaded {
                 default_model_for_provider,
                 models_response,
             },
-            Err(e) => AppAction::ModelPickerLoadFailed { error: e },
+            Err(e) => PickerAction::ModelPickerLoadFailed { error: e },
         };
 
         dispatcher.dispatch_many([action], AppActionContext::default());
@@ -97,7 +97,10 @@ fn spawn_mcp_initializer(
     tokio::spawn(async move {
         let mcp_disabled = app.read(|app| app.session.mcp_disabled).await;
         if mcp_disabled {
-            dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+            dispatcher.dispatch_many(
+                [StreamingAction::McpInitCompleted],
+                AppActionContext::default(),
+            );
             return;
         }
 
@@ -106,7 +109,10 @@ fn spawn_mcp_initializer(
             .await;
 
         if !has_enabled_servers {
-            dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+            dispatcher.dispatch_many(
+                [StreamingAction::McpInitCompleted],
+                AppActionContext::default(),
+            );
             return;
         }
 
@@ -135,7 +141,10 @@ fn spawn_mcp_initializer(
         })
         .await;
 
-        dispatcher.dispatch_many([AppAction::McpInitCompleted], AppActionContext::default());
+        dispatcher.dispatch_many(
+            [StreamingAction::McpInitCompleted],
+            AppActionContext::default(),
+        );
     });
 }
 
@@ -161,7 +170,7 @@ fn spawn_mcp_tool_call(
             Some(context) => context,
             None => {
                 dispatcher.dispatch_many(
-                    [AppAction::ToolCallCompleted {
+                    [StreamingAction::ToolCallCompleted {
                         tool_name: request.tool_name.clone(),
                         tool_call_id: request.tool_call_id.clone(),
                         result: Err("MCP server not available.".to_string()),
@@ -185,7 +194,7 @@ fn spawn_mcp_tool_call(
                 Some(uri) => uri.to_string(),
                 None => {
                     dispatcher.dispatch_many(
-                        [AppAction::ToolCallCompleted {
+                        [StreamingAction::ToolCallCompleted {
                             tool_name: request.tool_name.clone(),
                             tool_call_id: request.tool_call_id.clone(),
                             result: Err("Resource read requires uri.".to_string()),
@@ -208,7 +217,7 @@ fn spawn_mcp_tool_call(
         {
             let Some(arguments) = request.arguments.as_ref() else {
                 dispatcher.dispatch_many(
-                    [AppAction::ToolCallCompleted {
+                    [StreamingAction::ToolCallCompleted {
                         tool_name: request.tool_name.clone(),
                         tool_call_id: request.tool_call_id.clone(),
                         result: Err("Resource list arguments are required.".to_string()),
@@ -223,7 +232,7 @@ fn spawn_mcp_tool_call(
                     Ok(values) => values,
                     Err(err) => {
                         dispatcher.dispatch_many(
-                            [AppAction::ToolCallCompleted {
+                            [StreamingAction::ToolCallCompleted {
                                 tool_name: request.tool_name.clone(),
                                 tool_call_id: request.tool_call_id.clone(),
                                 result: Err(err),
@@ -266,7 +275,7 @@ fn spawn_mcp_tool_call(
         .await;
 
         dispatcher.dispatch_many(
-            [AppAction::ToolCallCompleted {
+            [StreamingAction::ToolCallCompleted {
                 tool_name: request.tool_name.clone(),
                 tool_call_id: request.tool_call_id.clone(),
                 result,
@@ -317,7 +326,7 @@ fn spawn_mcp_prompt_call(
             Some(context) => context,
             None => {
                 dispatcher.dispatch_many(
-                    [AppAction::McpPromptCompleted {
+                    [StreamingAction::McpPromptCompleted {
                         request,
                         result: Err("MCP server not available.".to_string()),
                     }],
@@ -337,7 +346,10 @@ fn spawn_mcp_prompt_call(
         })
         .await;
 
-        dispatcher.dispatch_many([AppAction::McpPromptCompleted { request, result }], ctx);
+        dispatcher.dispatch_many(
+            [StreamingAction::McpPromptCompleted { request, result }],
+            ctx,
+        );
     });
 }
 
@@ -417,7 +429,7 @@ fn spawn_mcp_sampling_call(
                     elapsed_ms = start.elapsed().as_millis(),
                     "MCP sampling context missing; aborting response"
                 );
-                dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+                dispatcher.dispatch_many([StreamingAction::McpSamplingFinished], ctx);
                 return;
             }
         };
@@ -478,7 +490,7 @@ fn spawn_mcp_sampling_call(
                 );
             })
             .await;
-            dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+            dispatcher.dispatch_many([StreamingAction::McpSamplingFinished], ctx);
             return;
         }
 
@@ -582,7 +594,7 @@ fn spawn_mcp_sampling_call(
             elapsed_ms = start.elapsed().as_millis(),
             "Finished MCP sampling flow"
         );
-        dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+        dispatcher.dispatch_many([StreamingAction::McpSamplingFinished], ctx);
     });
 }
 
@@ -606,7 +618,7 @@ fn spawn_mcp_server_error(
         {
             Some(context) => context,
             None => {
-                dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+                dispatcher.dispatch_many([StreamingAction::McpSamplingFinished], ctx);
                 return;
             }
         };
@@ -621,7 +633,7 @@ fn spawn_mcp_server_error(
         })
         .await;
 
-        dispatcher.dispatch_many([AppAction::McpSamplingFinished], ctx);
+        dispatcher.dispatch_many([StreamingAction::McpSamplingFinished], ctx);
     });
 }
 
@@ -640,7 +652,7 @@ fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id:
                     .end_activity(crate::core::app::ActivityKind::McpRefresh);
             })
             .await;
-            dispatcher.dispatch_many([AppAction::ClearStatus], AppActionContext::default());
+            dispatcher.dispatch_many([InputAction::ClearStatus], AppActionContext::default());
             return;
         }
 
@@ -684,7 +696,7 @@ fn spawn_mcp_refresh(app: AppHandle, dispatcher: AppActionDispatcher, server_id:
         })
         .await;
 
-        dispatcher.dispatch_many([AppAction::ClearStatus], AppActionContext::default());
+        dispatcher.dispatch_many([InputAction::ClearStatus], AppActionContext::default());
     });
 }
 
@@ -827,7 +839,7 @@ async fn route_keyboard_event(
             })
         ) {
             dispatcher.dispatch_many(
-                [AppAction::InspectToolResultsToggleView],
+                [InputAction::InspectToolResultsToggleView],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -851,7 +863,7 @@ async fn route_keyboard_event(
             .await;
         if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
             dispatcher.dispatch_many(
-                [AppAction::InspectToolResultsCopy],
+                [InputAction::InspectToolResultsCopy],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -875,7 +887,7 @@ async fn route_keyboard_event(
             .await;
         if matches!(inspect_mode, Some(InspectMode::ToolCalls { .. })) {
             dispatcher.dispatch_many(
-                [AppAction::InspectToolResultsToggleDecode],
+                [InputAction::InspectToolResultsToggleDecode],
                 AppActionContext {
                     term_width: term_size.width,
                     term_height: term_size.height,
@@ -1008,7 +1020,7 @@ pub(crate) async fn handle_paste_event(
     }
 
     dispatcher.dispatch_many(
-        [AppAction::InsertIntoInput {
+        [InputAction::InsertIntoInput {
             text: sanitized_text,
         }],
         AppActionContext {
@@ -1042,25 +1054,25 @@ fn process_stream_updates(
                 chunk_stream_id = Some(msg_stream_id);
             }
             StreamMessage::ToolCallDelta(delta) => {
-                followup_actions.push(AppAction::StreamToolCallDelta {
+                followup_actions.push(StreamingAction::StreamToolCallDelta {
                     delta,
                     stream_id: msg_stream_id,
                 });
             }
             StreamMessage::App { kind, content } => {
-                followup_actions.push(AppAction::StreamAppMessage {
+                followup_actions.push(StreamingAction::StreamAppMessage {
                     kind,
                     message: content,
                     stream_id: msg_stream_id,
                 });
             }
             StreamMessage::Error(err) => {
-                followup_actions.push(AppAction::StreamErrored {
+                followup_actions.push(StreamingAction::StreamErrored {
                     message: err,
                     stream_id: msg_stream_id,
                 });
             }
-            StreamMessage::End => followup_actions.push(AppAction::StreamCompleted {
+            StreamMessage::End => followup_actions.push(StreamingAction::StreamCompleted {
                 stream_id: msg_stream_id,
             }),
         }
@@ -1081,7 +1093,7 @@ fn process_stream_updates(
     let chunk = std::mem::take(&mut coalesced_chunks);
     if !chunk.is_empty() {
         if let Some(stream_id) = chunk_stream_id {
-            actions.push(AppAction::AppendResponseChunk {
+            actions.push(StreamingAction::AppendResponseChunk {
                 content: chunk,
                 stream_id,
             });
@@ -1225,7 +1237,7 @@ pub async fn run_chat(
                     term_height: term_size.height,
                 };
                 dispatcher.dispatch_many(
-                    [AppAction::McpServerRequestReceived {
+                    [StreamingAction::McpServerRequestReceived {
                         request: Box::new(request),
                     }],
                     ctx,
@@ -1437,7 +1449,7 @@ mod tests {
     use super::*;
     use crate::core::app::actions::{
         apply_action, AppAction, AppActionContext, AppActionDispatcher, AppActionEnvelope,
-        AppCommand,
+        AppCommand, InputAction, StreamingAction,
     };
     use crate::core::app::ui_state::EditSelectTarget;
     use crate::core::app::App;
@@ -1789,7 +1801,10 @@ mod tests {
             .await
             .expect("initializer should dispatch completion")
             .expect("action should be present");
-        assert!(matches!(action.action, AppAction::McpInitCompleted));
+        assert!(matches!(
+            action.action,
+            AppAction::Streaming(StreamingAction::McpInitCompleted)
+        ));
 
         let (init_complete, init_in_progress, alpha_error, beta_error) = app
             .read(|app| {
@@ -1839,9 +1854,10 @@ mod tests {
             .await;
 
             let envelopes: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-            assert!(envelopes
-                .iter()
-                .any(|env| matches!(env.action, AppAction::InsertIntoInput { .. })));
+            assert!(envelopes.iter().any(|env| matches!(
+                env.action,
+                AppAction::Input(InputAction::InsertIntoInput { .. })
+            )));
 
             let mut app = setup_app();
             let commands = apply_actions(&mut app, envelopes);
@@ -1900,10 +1916,10 @@ mod tests {
         let ctx = default_context();
         apply_action(
             &mut app,
-            AppAction::StreamErrored {
+            AppAction::Streaming(StreamingAction::StreamErrored {
                 message: "API Error:\n```\napi failure\n```\n".into(),
                 stream_id: 42,
-            },
+            }),
             ctx,
         );
 
@@ -1922,7 +1938,11 @@ mod tests {
         app.ui.current_response = "partial".into();
 
         let ctx = default_context();
-        apply_action(&mut app, AppAction::StreamCompleted { stream_id: 7 }, ctx);
+        apply_action(
+            &mut app,
+            AppAction::Streaming(StreamingAction::StreamCompleted { stream_id: 7 }),
+            ctx,
+        );
 
         assert!(!app.ui.is_streaming);
         assert!(app.session.retrying_message_index.is_none());
@@ -1934,9 +1954,9 @@ mod tests {
         let ctx = default_context();
         let result = apply_action(
             &mut app,
-            AppAction::SubmitMessage {
+            AppAction::Streaming(StreamingAction::SubmitMessage {
                 message: "Hello".into(),
-            },
+            }),
             ctx,
         );
         assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
@@ -1946,7 +1966,11 @@ mod tests {
     fn retry_last_message_returns_none_without_history() {
         let mut app = setup_app();
         let ctx = default_context();
-        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        let result = apply_action(
+            &mut app,
+            AppAction::Streaming(StreamingAction::RetryLastMessage),
+            ctx,
+        );
         assert!(result.is_none());
     }
 
@@ -1964,7 +1988,11 @@ mod tests {
         app.session.last_retry_time = Instant::now() - Duration::from_millis(500);
 
         let ctx = default_context();
-        let result = apply_action(&mut app, AppAction::RetryLastMessage, ctx);
+        let result = apply_action(
+            &mut app,
+            AppAction::Streaming(StreamingAction::RetryLastMessage),
+            ctx,
+        );
         assert!(matches!(result, Some(AppCommand::SpawnStream(_))));
     }
 }

@@ -1,22 +1,22 @@
 use std::fs;
 use std::path::Path;
 
-use super::{input, App, AppAction, AppActionContext, AppCommand};
+use super::{input, App, AppActionContext, AppCommand, FilePromptAction};
 
 pub(super) fn handle_file_prompt_action(
     app: &mut App,
-    action: AppAction,
+    action: FilePromptAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        AppAction::CompleteFilePromptDump {
+        FilePromptAction::CompleteDump {
             filename,
             overwrite,
         } => {
             handle_file_prompt_dump(app, filename, overwrite, ctx);
             None
         }
-        AppAction::CompleteFilePromptSaveBlock {
+        FilePromptAction::CompleteSaveBlock {
             filename,
             content,
             overwrite,
@@ -24,7 +24,6 @@ pub(super) fn handle_file_prompt_action(
             handle_file_prompt_save_block(app, filename, content, overwrite, ctx);
             None
         }
-        _ => unreachable!("non-file prompt action routed to file prompt handler"),
     }
 }
 

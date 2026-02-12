@@ -1,4 +1,4 @@
-use super::{streaming, App, AppAction, AppActionContext, AppCommand};
+use super::{streaming, App, AppActionContext, AppCommand, InputAction, StreamingAction};
 use crate::commands::{process_input, CommandResult};
 use crate::core::app::picker::build_inspect_text;
 use crate::core::app::session::{ToolCallRequest, ToolResultRecord, ToolResultStatus};
@@ -6,81 +6,80 @@ use crate::core::app::{InspectMode, ToolInspectKind, ToolInspectView};
 
 pub(super) fn handle_input_action(
     app: &mut App,
-    action: AppAction,
+    action: InputAction,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        AppAction::ClearStatus => {
+        InputAction::ClearStatus => {
             app.clear_status();
             None
         }
-        AppAction::ToggleComposeMode => {
+        InputAction::ToggleComposeMode => {
             app.toggle_compose_mode();
             None
         }
-        AppAction::CancelFilePrompt => {
+        InputAction::CancelFilePrompt => {
             app.cancel_file_prompt();
             None
         }
-        AppAction::CancelMcpPromptInput => {
+        InputAction::CancelMcpPromptInput => {
             app.ui.cancel_mcp_prompt_input();
             None
         }
-        AppAction::CancelInPlaceEdit => {
+        InputAction::CancelInPlaceEdit => {
             if app.has_in_place_edit() {
                 app.cancel_in_place_edit();
                 app.clear_input();
             }
             None
         }
-        AppAction::SetStatus { message } => {
+        InputAction::SetStatus { message } => {
             set_status_message(app, message, ctx);
             None
         }
-        AppAction::ClearInput => {
+        InputAction::ClearInput => {
             app.clear_input();
             if ctx.term_width > 0 {
                 app.recompute_input_layout_after_edit(ctx.term_width);
             }
             None
         }
-        AppAction::InsertIntoInput { text } => {
+        InputAction::InsertIntoInput { text } => {
             if !text.is_empty() {
                 app.insert_into_input(&text, ctx.term_width);
             }
             None
         }
-        AppAction::InspectToolResults => {
+        InputAction::InspectToolResults => {
             open_latest_tool_call_inspect(app, ctx);
             None
         }
-        AppAction::InspectToolResultsToggleView => {
+        InputAction::InspectToolResultsToggleView => {
             toggle_tool_call_inspect_view(app, ctx);
             None
         }
-        AppAction::InspectToolResultsStep { delta } => {
+        InputAction::InspectToolResultsStep { delta } => {
             step_tool_call_inspect(app, delta, ctx);
             None
         }
-        AppAction::InspectToolResultsCopy => {
+        InputAction::InspectToolResultsCopy => {
             copy_tool_call_inspect_data(app, ctx);
             None
         }
-        AppAction::InspectToolResultsToggleDecode => {
+        InputAction::InspectToolResultsToggleDecode => {
             toggle_tool_call_inspect_decode(app, ctx);
             None
         }
-        AppAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
-        AppAction::CompleteInPlaceEdit { index, new_text } => {
+        InputAction::ProcessCommand { input } => handle_process_command(app, input, ctx),
+        InputAction::CompleteInPlaceEdit { index, new_text } => {
             app.complete_in_place_edit(index, new_text);
             None
         }
-        AppAction::CompleteAssistantEdit { content } => {
+        InputAction::CompleteAssistantEdit { content } => {
             app.complete_assistant_edit(content);
             update_scroll_after_command(app, ctx);
             None
         }
-        _ => unreachable!("non-input action routed to input handler"),
     }
 }
 
@@ -138,7 +137,7 @@ fn handle_process_command(
             None
         }
         CommandResult::Refine(prompt) => {
-            let action = AppAction::RefineLastMessage { prompt };
+            let action = StreamingAction::RefineLastMessage { prompt };
             streaming::handle_streaming_action(app, action, ctx)
         }
         CommandResult::RunMcpPrompt(request) => Some(AppCommand::RunMcpPrompt(request)),
@@ -831,7 +830,7 @@ mod tests {
         let ctx = default_ctx();
         let cmd = handle_input_action(
             &mut app,
-            AppAction::ProcessCommand {
+            InputAction::ProcessCommand {
                 input: "hello there".into(),
             },
             ctx,
@@ -847,7 +846,7 @@ mod tests {
 
         let _ = handle_input_action(
             &mut app,
-            AppAction::ProcessCommand {
+            InputAction::ProcessCommand {
                 input: "/theme".into(),
             },
             ctx,
@@ -864,7 +863,7 @@ mod tests {
 
         let cmd = handle_input_action(
             &mut app,
-            AppAction::ProcessCommand {
+            InputAction::ProcessCommand {
                 input: "/help".into(),
             },
             ctx,
@@ -900,7 +899,7 @@ mod tests {
 
         let cmd = handle_input_action(
             &mut app,
-            AppAction::ProcessCommand {
+            InputAction::ProcessCommand {
                 input: "/mcp alpha".into(),
             },
             ctx,
@@ -983,7 +982,7 @@ mod tests {
                 batch_index: 0,
             });
 
-        let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
+        let cmd = handle_input_action(&mut app, InputAction::InspectToolResults, ctx);
 
         assert!(cmd.is_none());
         let inspect = app.inspect_state().expect("expected inspect state");
@@ -1014,7 +1013,7 @@ mod tests {
             assistant_message_index: None,
         });
 
-        let cmd = handle_input_action(&mut app, AppAction::InspectToolResults, ctx);
+        let cmd = handle_input_action(&mut app, InputAction::InspectToolResults, ctx);
 
         assert!(cmd.is_none());
         let inspect = app.inspect_state().expect("expected inspect state");

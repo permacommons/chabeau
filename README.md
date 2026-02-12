@@ -214,6 +214,7 @@ Chabeau lets you connect MCP servers (HTTP or stdio) and use their tools/resourc
 - Manage servers from the CLI: `chabeau mcp list`, `chabeau mcp add`, `chabeau mcp add -a`, `chabeau mcp edit <server-id>`, and `chabeau mcp remove <server-id>`.
 - `chabeau mcp add` runs in basic mode and prompts only for required settings; use `-a`/`--advanced` to configure optional fields during add.
 - HTTP servers can use bearer tokens with `chabeau mcp token list [server-id]`, `chabeau mcp token add <server-id>`, and `chabeau mcp token remove <server-id>`.
+- Streamable HTTP transport reuses pooled HTTP connections across MCP initialize/list/tool calls for lower request overhead.
 - `chabeau mcp add` probes OAuth discovery for HTTP/HTTPS servers and starts browser auth when available. You can also run `chabeau mcp oauth list [server-id]`, `chabeau mcp oauth add <server-id>`, and `chabeau mcp oauth remove <server-id>` directly. Use `chabeau mcp oauth add <server-id> -a` to provide an OAuth client id manually.
 - For OAuth-backed MCP HTTP servers, Chabeau automatically refreshes expiring access tokens when a refresh token is available; if refresh fails, re-run `chabeau mcp oauth add <server-id>`.
 - Stdio servers run a local command with optional `args` and `env`.

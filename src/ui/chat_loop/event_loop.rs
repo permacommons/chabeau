@@ -1104,7 +1104,7 @@ fn process_stream_updates(
     actions.extend(followup_actions);
 
     if !actions.is_empty() {
-        dispatcher.dispatch_many(actions, ctx);
+        dispatcher.dispatch_streaming_many(actions, ctx);
     }
 
     true

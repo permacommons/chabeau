@@ -206,6 +206,7 @@ impl KeyHandler for EscapeHandler {
     ) -> KeyResult {
         let actions = app
             .read(|app| {
+                // Escape can target picker, input, or streaming cancellation paths.
                 let mut actions: Vec<AppAction> = Vec::new();
                 if app.inspect_state().is_some() {
                     actions.push(PickerAction::PickerEscape.into());

@@ -201,6 +201,32 @@ impl AppActionDispatcher {
             });
         }
     }
+
+    pub fn dispatch_streaming_many<I>(&self, actions: I, ctx: AppActionContext)
+    where
+        I: IntoIterator,
+        I::Item: Into<StreamingAction>,
+    {
+        for action in actions.into_iter() {
+            let _ = self.tx.send(AppActionEnvelope {
+                action: AppAction::Streaming(action.into()),
+                context: ctx,
+            });
+        }
+    }
+
+    pub fn dispatch_picker_many<I>(&self, actions: I, ctx: AppActionContext)
+    where
+        I: IntoIterator,
+        I::Item: Into<PickerAction>,
+    {
+        for action in actions.into_iter() {
+            let _ = self.tx.send(AppActionEnvelope {
+                action: AppAction::Picker(action.into()),
+                context: ctx,
+            });
+        }
+    }
 }
 
 pub enum AppCommand {

@@ -7,8 +7,8 @@ use ratatui::Terminal;
 
 use crate::core::app::ui_state::{EditSelectTarget, FilePromptKind};
 use crate::core::app::{
-    AppAction, AppActionContext, AppActionDispatcher, CommandAction, ComposeAction,
-    FilePromptAction, InputAction, McpPromptAction, PickerAction, StatusAction, StreamingAction,
+    AppActionContext, AppActionDispatcher, CommandAction, ComposeAction, FilePromptAction,
+    InputAction, McpPromptAction, PickerAction, StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::ChatStreamService;
 use crate::core::message::{ROLE_ASSISTANT, ROLE_USER};
@@ -487,7 +487,7 @@ pub async fn handle_picker_key_event(
     }
 
     if !actions.is_empty() {
-        dispatcher.dispatch_many(
+        dispatcher.dispatch_picker_many(
             actions,
             AppActionContext {
                 term_width,
@@ -517,25 +517,27 @@ pub async fn handle_external_editor_shortcut(
 
     terminal.clear().map_err(|e| e.to_string())?;
 
-    let mut actions: Vec<AppAction> = Vec::new();
+    let mut input_actions: Vec<InputAction> = Vec::new();
     if let Some(status) = outcome.status {
-        actions.push(InputAction::Status(StatusAction::SetStatus { message: status }).into());
+        input_actions.push(InputAction::Status(StatusAction::SetStatus {
+            message: status,
+        }));
     }
     if outcome.clear_input {
-        actions.push(InputAction::Compose(ComposeAction::ClearInput).into());
-    }
-    if let Some(message) = outcome.message {
-        actions.push(StreamingAction::SubmitMessage { message }.into());
+        input_actions.push(InputAction::Compose(ComposeAction::ClearInput));
     }
 
-    if !actions.is_empty() {
-        dispatcher.dispatch_many(
-            actions,
-            AppActionContext {
-                term_width,
-                term_height,
-            },
-        );
+    let ctx = AppActionContext {
+        term_width,
+        term_height,
+    };
+
+    if !input_actions.is_empty() {
+        dispatcher.dispatch_input_many(input_actions, ctx);
+    }
+
+    if let Some(message) = outcome.message {
+        dispatcher.dispatch_streaming_many([StreamingAction::SubmitMessage { message }], ctx);
     }
 
     Ok(Some(KeyLoopAction::Continue))

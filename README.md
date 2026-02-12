@@ -566,6 +566,14 @@ cargo test scroll::           # Scroll functionality tests
 cargo test --release          # Faster execution
 ```
 
+### Local Quality Checks
+```bash
+cargo check
+cargo fmt
+cargo test
+cargo clippy --all-targets --all-features
+```
+
 ### Performance
 
 Chabeau includes lightweight performance checks in the unit test suite and supports optional Criterion benches.

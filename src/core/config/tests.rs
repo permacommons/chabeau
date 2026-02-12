@@ -687,7 +687,7 @@ fn test_mcp_server_config_persistence() {
     assert_eq!(server.base_url.as_deref(), Some("https://mcp.example.com"));
     assert_eq!(server.transport.as_deref(), Some("streamable-http"));
     assert_eq!(
-        server.allowed_tools.as_ref().map(|tools| tools.as_slice()),
+        server.allowed_tools.as_deref(),
         Some(&["alpha.tool".to_string()][..])
     );
     assert_eq!(server.protocol_version.as_deref(), Some("2024-11-05"));
@@ -737,7 +737,7 @@ fn test_mcp_server_stdio_config_persistence() {
     assert!(server.base_url.is_none());
     assert_eq!(server.command.as_deref(), Some("mcp-server"));
     assert_eq!(
-        server.args.as_ref().map(|args| args.as_slice()),
+        server.args.as_deref(),
         Some(&["--mode".to_string(), "stdio".to_string()][..])
     );
     assert_eq!(

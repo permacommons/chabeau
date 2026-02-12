@@ -571,10 +571,10 @@ pub async fn process_input_submission(
     if editing_assistant {
         dispatcher.dispatch_many(
             [
-                AppAction::from(InputAction::from(CommandAction::CompleteAssistantEdit {
+                InputAction::from(CommandAction::CompleteAssistantEdit {
                     content: input_text,
-                })),
-                AppAction::from(InputAction::from(ComposeAction::ClearInput)),
+                }),
+                InputAction::from(ComposeAction::ClearInput),
             ],
             ctx,
         );
@@ -583,10 +583,8 @@ pub async fn process_input_submission(
 
     dispatcher.dispatch_many(
         [
-            AppAction::from(InputAction::from(ComposeAction::ClearInput)),
-            AppAction::from(InputAction::from(CommandAction::ProcessCommand {
-                input: input_text,
-            })),
+            InputAction::from(ComposeAction::ClearInput),
+            InputAction::from(CommandAction::ProcessCommand { input: input_text }),
         ],
         ctx,
     );
@@ -718,11 +716,11 @@ pub async fn handle_enter_key(
     if let Some((idx, new_text)) = in_place_edit {
         dispatcher.dispatch_many(
             [
-                AppAction::from(InputAction::from(CommandAction::CompleteInPlaceEdit {
+                InputAction::from(CommandAction::CompleteInPlaceEdit {
                     index: idx,
                     new_text,
-                })),
-                AppAction::from(InputAction::from(ComposeAction::ClearInput)),
+                }),
+                InputAction::from(ComposeAction::ClearInput),
             ],
             AppActionContext {
                 term_width,

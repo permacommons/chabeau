@@ -4,6 +4,7 @@ mod mcp_prompt;
 mod picker;
 mod streaming;
 
+pub use input::{CommandAction, ComposeAction, InputAction, InspectAction, StatusAction};
 pub(crate) use streaming::{parse_resource_list_kind, ResourceListKind};
 
 use tokio::sync::mpsc;
@@ -73,25 +74,6 @@ pub enum StreamingAction {
     RetryLastMessage,
 }
 
-pub enum InputAction {
-    InspectToolResults,
-    InspectToolResultsToggleView,
-    InspectToolResultsStep { delta: i32 },
-    InspectToolResultsCopy,
-    InspectToolResultsToggleDecode,
-    ClearStatus,
-    ToggleComposeMode,
-    CancelFilePrompt,
-    CancelMcpPromptInput,
-    CancelInPlaceEdit,
-    SetStatus { message: String },
-    ClearInput,
-    InsertIntoInput { text: String },
-    ProcessCommand { input: String },
-    CompleteInPlaceEdit { index: usize, new_text: String },
-    CompleteAssistantEdit { content: String },
-}
-
 pub enum PickerAction {
     PickerEscape,
     PickerMoveUp,
@@ -146,12 +128,6 @@ pub enum McpPromptAction {
 impl From<StreamingAction> for AppAction {
     fn from(value: StreamingAction) -> Self {
         Self::Streaming(value)
-    }
-}
-
-impl From<InputAction> for AppAction {
-    fn from(value: InputAction) -> Self {
-        Self::Input(value)
     }
 }
 

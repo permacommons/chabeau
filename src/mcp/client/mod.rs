@@ -1,4 +1,3 @@
-use crate::core::app::session::ToolCallRequest;
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
 use crate::core::oauth::refresh_oauth_grant_if_needed;
@@ -6,18 +5,19 @@ use crate::mcp::events::McpServerRequest;
 pub use crate::mcp::transport::McpTransportKind;
 use crate::mcp::transport::{self, ListFetch};
 use futures_util::{stream, StreamExt};
+pub use operations::{
+    execute_prompt, execute_resource_list, execute_resource_read, execute_resource_template_list,
+    execute_tool_call, send_client_error, send_client_result,
+};
 use rust_mcp_schema::schema_utils::{
     ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
     ResultFromClient, ServerMessage,
 };
 use rust_mcp_schema::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientSampling,
-    GetPromptRequestParams, GetPromptResult, Implementation, InitializeRequestParams,
-    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult,
-    RequestId, RpcError, ServerCapabilities, LATEST_PROTOCOL_VERSION,
+    ClientCapabilities, ClientSampling, Implementation, InitializeRequestParams, InitializeResult,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, RequestId, RpcError, ServerCapabilities,
 };
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -26,6 +26,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
+
+mod operations;
+mod protocol;
+mod transport_http;
+mod transport_stdio;
 
 const MCP_MAX_TOOL_LIST: usize = 100;
 const MCP_STARTUP_CONCURRENCY_LIMIT: usize = 3;
@@ -513,7 +518,7 @@ impl StdioClient {
         let response = self
             .send_request(RequestFromClient::InitializeRequest(details))
             .await?;
-        let result = parse_initialize_result(response)?;
+        let result = protocol::parse_initialize_result(response)?;
         *self.server_details.write().await = Some(result.clone());
         self.send_notification(NotificationFromClient::InitializedNotification(None))
             .await?;
@@ -1054,7 +1059,7 @@ impl McpClientManager {
                                         server.auth_header.clone(),
                                         server.session_id.clone(),
                                         tx,
-                                        Some(effective_protocol_version(
+                                        Some(protocol::effective_protocol_version(
                                             &server.config,
                                             server
                                                 .server_details
@@ -1244,7 +1249,10 @@ impl McpClientManager {
             let response = self
                 .send_streamable_http_request(id, RequestFromClient::ListResourcesRequest(None))
                 .await;
-            return transport::streamable_http::fetch_list(response, parse_list_resources);
+            return transport::streamable_http::fetch_list(
+                response,
+                protocol::parse_list_resources,
+            );
         }
 
         let Some(client) = self
@@ -1257,7 +1265,7 @@ impl McpClientManager {
 
         transport::stdio::fetch_list(
             client.send_request(RequestFromClient::ListResourcesRequest(None)),
-            parse_list_resources,
+            protocol::parse_list_resources,
         )
         .await
     }
@@ -1277,7 +1285,10 @@ impl McpClientManager {
                     RequestFromClient::ListResourceTemplatesRequest(None),
                 )
                 .await;
-            return transport::streamable_http::fetch_list(response, parse_list_resource_templates);
+            return transport::streamable_http::fetch_list(
+                response,
+                protocol::parse_list_resource_templates,
+            );
         }
 
         let Some(client) = self
@@ -1290,7 +1301,7 @@ impl McpClientManager {
 
         transport::stdio::fetch_list(
             client.send_request(RequestFromClient::ListResourceTemplatesRequest(None)),
-            parse_list_resource_templates,
+            protocol::parse_list_resource_templates,
         )
         .await
     }
@@ -1304,7 +1315,7 @@ impl McpClientManager {
             let response = self
                 .send_streamable_http_request(id, RequestFromClient::ListPromptsRequest(None))
                 .await;
-            return transport::streamable_http::fetch_list(response, parse_list_prompts);
+            return transport::streamable_http::fetch_list(response, protocol::parse_list_prompts);
         }
 
         let Some(client) = self
@@ -1317,7 +1328,7 @@ impl McpClientManager {
 
         transport::stdio::fetch_list(
             client.send_request(RequestFromClient::ListPromptsRequest(None)),
-            parse_list_prompts,
+            protocol::parse_list_prompts,
         )
         .await
     }
@@ -1348,7 +1359,7 @@ impl McpClientManager {
         let response = self
             .send_streamable_http_request(id, RequestFromClient::InitializeRequest(client_details))
             .await?;
-        let initialize = parse_initialize_result(response)?;
+        let initialize = protocol::parse_initialize_result(response)?;
 
         if let Some(server) = self.server_mut(id) {
             server.server_details = Some(initialize);
@@ -1400,7 +1411,7 @@ impl McpClientManager {
                 require_http_base_url(&server.config)?,
                 server.auth_header.clone(),
                 server.session_id.clone(),
-                effective_protocol_version(
+                protocol::effective_protocol_version(
                     &server.config,
                     server
                         .server_details
@@ -1464,7 +1475,7 @@ impl McpClientManager {
                 server.auth_header.clone(),
                 server.session_id.clone(),
                 request_id,
-                effective_protocol_version(
+                protocol::effective_protocol_version(
                     &server.config,
                     server
                         .server_details
@@ -1753,7 +1764,7 @@ trait StreamableHttpContext {
     fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>);
 
     fn effective_protocol_version(&self) -> String {
-        effective_protocol_version(self.config(), self.negotiated_protocol_version())
+        protocol::effective_protocol_version(self.config(), self.negotiated_protocol_version())
     }
 }
 
@@ -1972,411 +1983,8 @@ impl McpClientManager {
     }
 }
 
-pub async fn execute_tool_call(
-    context: &mut McpToolCallContext,
-    request: &ToolCallRequest,
-) -> Result<CallToolResult, String> {
-    let mut params = CallToolRequestParams::new(&request.tool_name);
-    if let Some(arguments) = request.arguments.clone() {
-        params = params.with_arguments(arguments);
-    }
-
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            let response = client
-                .send_request(RequestFromClient::CallToolRequest(params))
-                .await?;
-            parse_call_tool(response)
-        }
-        McpTransportKind::StreamableHttp => {
-            ensure_streamable_http_session_context(context).await?;
-            let response = send_streamable_http_request_with_context(
-                context,
-                RequestFromClient::CallToolRequest(params),
-            )
-            .await?;
-            parse_call_tool(response)
-        }
-    }
-}
-
-pub async fn execute_resource_read(
-    context: &mut McpToolCallContext,
-    uri: &str,
-) -> Result<ReadResourceResult, String> {
-    let params = ReadResourceRequestParams {
-        meta: None,
-        uri: uri.to_string(),
-    };
-
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            let response = client
-                .send_request(RequestFromClient::ReadResourceRequest(params))
-                .await?;
-            parse_read_resource(response)
-        }
-        McpTransportKind::StreamableHttp => {
-            ensure_streamable_http_session_context(context).await?;
-            let response = send_streamable_http_request_with_context(
-                context,
-                RequestFromClient::ReadResourceRequest(params),
-            )
-            .await?;
-            parse_read_resource(response)
-        }
-    }
-}
-
-pub async fn execute_resource_list(
-    context: &mut McpToolCallContext,
-    cursor: Option<String>,
-) -> Result<ListResourcesResult, String> {
-    let params = cursor.map(|cursor| PaginatedRequestParams {
-        cursor: Some(cursor),
-        meta: None,
-    });
-
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            let response = client
-                .send_request(RequestFromClient::ListResourcesRequest(params))
-                .await?;
-            parse_list_resources(response)
-        }
-        McpTransportKind::StreamableHttp => {
-            ensure_streamable_http_session_context(context).await?;
-            let response = send_streamable_http_request_with_context(
-                context,
-                RequestFromClient::ListResourcesRequest(params),
-            )
-            .await?;
-            parse_list_resources(response)
-        }
-    }
-}
-
-pub async fn execute_resource_template_list(
-    context: &mut McpToolCallContext,
-    cursor: Option<String>,
-) -> Result<ListResourceTemplatesResult, String> {
-    let params = cursor.map(|cursor| PaginatedRequestParams {
-        cursor: Some(cursor),
-        meta: None,
-    });
-
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            let response = client
-                .send_request(RequestFromClient::ListResourceTemplatesRequest(params))
-                .await?;
-            parse_list_resource_templates(response)
-        }
-        McpTransportKind::StreamableHttp => {
-            ensure_streamable_http_session_context(context).await?;
-            let response = send_streamable_http_request_with_context(
-                context,
-                RequestFromClient::ListResourceTemplatesRequest(params),
-            )
-            .await?;
-            parse_list_resource_templates(response)
-        }
-    }
-}
-
-pub async fn execute_prompt(
-    context: &mut McpPromptContext,
-    request: &crate::core::app::session::McpPromptRequest,
-) -> Result<GetPromptResult, String> {
-    let params = if request.arguments.is_empty() {
-        GetPromptRequestParams {
-            name: request.prompt_name.clone(),
-            arguments: None,
-            meta: None,
-        }
-    } else {
-        GetPromptRequestParams {
-            name: request.prompt_name.clone(),
-            arguments: Some(request.arguments.clone()),
-            meta: None,
-        }
-    };
-
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            let response = client
-                .send_request(RequestFromClient::GetPromptRequest(params))
-                .await?;
-            parse_get_prompt(response)
-        }
-        McpTransportKind::StreamableHttp => {
-            ensure_prompt_streamable_http_session_context(context).await?;
-            let response = send_streamable_http_request_with_context_inner(
-                context,
-                RequestFromClient::GetPromptRequest(params),
-            )
-            .await?;
-            parse_get_prompt(response)
-        }
-    }
-}
-
-pub async fn send_client_result(
-    context: &mut McpServerRequestContext,
-    request_id: RequestId,
-    result: ResultFromClient,
-) -> Result<(), String> {
-    debug!(
-        server_id = %context.server_id,
-        request_id = ?request_id,
-        transport = ?context.transport_kind,
-        "Sending MCP client result"
-    );
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            client.send_result(request_id, result).await
-        }
-        McpTransportKind::StreamableHttp => {
-            let message = ClientMessage::from_message(
-                MessageFromClient::ResultFromClient(result),
-                Some(request_id),
-            )
-            .map_err(|err| err.to_string())?;
-            send_streamable_http_client_message(context, message).await
-        }
-    }
-}
-
-pub async fn send_client_error(
-    context: &mut McpServerRequestContext,
-    request_id: RequestId,
-    error: RpcError,
-) -> Result<(), String> {
-    debug!(
-        server_id = %context.server_id,
-        request_id = ?request_id,
-        transport = ?context.transport_kind,
-        "Sending MCP client error"
-    );
-    match context.transport_kind {
-        McpTransportKind::Stdio => {
-            let Some(client) = context.client.clone() else {
-                return Err("MCP client not connected.".to_string());
-            };
-            client.send_error(request_id, error).await
-        }
-        McpTransportKind::StreamableHttp => {
-            let message =
-                ClientMessage::from_message(MessageFromClient::Error(error), Some(request_id))
-                    .map_err(|err| err.to_string())?;
-            send_streamable_http_client_message(context, message).await
-        }
-    }
-}
-
-async fn ensure_streamable_http_session_context(
-    context: &mut McpToolCallContext,
-) -> Result<(), String> {
-    ensure_streamable_http_session_context_inner(context).await
-}
-
-async fn send_streamable_http_request_with_context(
-    context: &mut McpToolCallContext,
-    request: RequestFromClient,
-) -> Result<ServerMessage, String> {
-    send_streamable_http_request_with_context_inner(context, request).await
-}
-
-async fn ensure_prompt_streamable_http_session_context(
-    context: &mut McpPromptContext,
-) -> Result<(), String> {
-    ensure_streamable_http_session_context_inner(context).await
-}
-
-async fn send_streamable_http_client_message(
-    context: &mut McpServerRequestContext,
-    message: ClientMessage,
-) -> Result<(), String> {
-    send_streamable_http_client_message_with_context_inner(context, message).await
-}
-
-async fn ensure_streamable_http_session_context_inner<C: StreamableHttpContext>(
-    context: &mut C,
-) -> Result<(), String> {
-    if context.session_id().is_some() {
-        return Ok(());
-    }
-
-    let client_details = client_details_for(context.config());
-    let response = send_streamable_http_request_with_context_inner(
-        context,
-        RequestFromClient::InitializeRequest(client_details),
-    )
-    .await?;
-    let initialize = parse_initialize_result(response)?;
-    context.set_negotiated_protocol_version(Some(initialize.protocol_version));
-
-    if context.session_id().is_none() {
-        return Err("Missing session id on initialize response.".to_string());
-    }
-
-    send_streamable_http_notification_with_context_inner(
-        context,
-        NotificationFromClient::InitializedNotification(None),
-    )
-    .await?;
-
-    Ok(())
-}
-
-async fn send_streamable_http_notification_with_context_inner<C: StreamableHttpContext>(
-    context: &mut C,
-    notification: NotificationFromClient,
-) -> Result<(), String> {
-    let message = ClientMessage::from_message(
-        MessageFromClient::NotificationFromClient(notification),
-        None,
-    )
-    .map_err(|err| err.to_string())?;
-
-    send_streamable_http_client_message_with_context_inner(context, message).await
-}
-
-async fn send_streamable_http_client_message_with_context_inner<C: StreamableHttpContext>(
-    context: &mut C,
-    message: ClientMessage,
-) -> Result<(), String> {
-    let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-    let client = context
-        .http_client()
-        .ok_or_else(|| "MCP HTTP client not connected.".to_string())?;
-    let base_url = require_http_base_url(context.config())?;
-    let protocol_version = context.effective_protocol_version();
-    let mut request = apply_streamable_http_protocol_version_header(
-        apply_streamable_http_client_post_headers(client.post(base_url)),
-        Some(protocol_version.as_str()),
-    )
-    .body(payload);
-
-    if let Some(auth) = context.auth_header() {
-        request = request.header("Authorization", auth);
-    }
-    if let Some(session_id) = context.session_id() {
-        request = request.header("mcp-session-id", session_id);
-    }
-
-    let response = request.send().await.map_err(|err| err.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    if let Some(session_id) = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string())
-    {
-        context.set_session_id(Some(session_id));
-    }
-
-    Ok(())
-}
-
-async fn send_streamable_http_request_with_context_inner<C: StreamableHttpContext>(
-    context: &mut C,
-    request: RequestFromClient,
-) -> Result<ServerMessage, String> {
-    let request_id = context.next_request_id();
-
-    let message = ClientMessage::from_message(
-        MessageFromClient::RequestFromClient(request),
-        Some(RequestId::Integer(request_id)),
-    )
-    .map_err(|err| err.to_string())?;
-
-    let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
-
-    let client = context
-        .http_client()
-        .ok_or_else(|| "MCP HTTP client not connected.".to_string())?;
-    let base_url = require_http_base_url(context.config())?;
-    debug!(
-        server_id = %context.config().id,
-        request_id,
-        url = %base_url,
-        "Sending MCP HTTP request"
-    );
-    let protocol_version = context.effective_protocol_version();
-    let mut request = apply_streamable_http_protocol_version_header(
-        apply_streamable_http_client_post_headers(client.post(base_url)),
-        Some(protocol_version.as_str()),
-    )
-    .body(payload);
-
-    if let Some(auth) = context.auth_header() {
-        request = request.header("Authorization", auth);
-    }
-    if let Some(session_id) = context.session_id() {
-        request = request.header("mcp-session-id", session_id);
-    }
-
-    let response = request.send().await.map_err(|err| err.to_string())?;
-    debug!(
-        server_id = %context.config().id,
-        status = %response.status(),
-        "Received MCP HTTP response"
-    );
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    let session_id = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string());
-
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let server_message = if is_event_stream_content_type(&content_type) {
-        read_sse_response_messages(response, &context.config().id, None).await?
-    } else {
-        let body = response.bytes().await.map_err(|err| err.to_string())?;
-        serde_json::from_slice::<ServerMessage>(&body).map_err(|err| err.to_string())?
-    };
-
-    if let Some(session_id) = session_id {
-        context.set_session_id(Some(session_id));
-    }
-
-    Ok(server_message)
-}
-
 fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
-    let protocol_version = requested_protocol_version(config);
+    let protocol_version = protocol::requested_protocol_version(config);
     let capabilities = ClientCapabilities {
         sampling: Some(ClientSampling::default()),
         ..ClientCapabilities::default()
@@ -2393,80 +2001,6 @@ fn client_details_for(config: &McpServerConfig) -> InitializeRequestParams {
         },
         meta: None,
         protocol_version,
-    }
-}
-
-fn requested_protocol_version(config: &McpServerConfig) -> String {
-    config
-        .protocol_version
-        .clone()
-        .unwrap_or_else(|| LATEST_PROTOCOL_VERSION.to_string())
-}
-
-fn effective_protocol_version(
-    config: &McpServerConfig,
-    negotiated_version: Option<&str>,
-) -> String {
-    match negotiated_version {
-        Some(version) if !version.trim().is_empty() => version.to_string(),
-        _ => requested_protocol_version(config),
-    }
-}
-
-fn parse_initialize_result(message: ServerMessage) -> Result<InitializeResult, String> {
-    let value = parse_response_value(message)?;
-    let result =
-        serde_json::from_value::<InitializeResult>(value).map_err(|err| err.to_string())?;
-    if result.protocol_version.trim().is_empty() {
-        return Err("Unexpected initialize response.".to_string());
-    }
-    Ok(result)
-}
-
-fn parse_list_tools(message: ServerMessage) -> Result<ListToolsResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<ListToolsResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_list_resources(message: ServerMessage) -> Result<ListResourcesResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<ListResourcesResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_list_resource_templates(
-    message: ServerMessage,
-) -> Result<ListResourceTemplatesResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<ListResourceTemplatesResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_list_prompts(message: ServerMessage) -> Result<ListPromptsResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<ListPromptsResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_get_prompt(message: ServerMessage) -> Result<GetPromptResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<GetPromptResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_read_resource(message: ServerMessage) -> Result<ReadResourceResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<ReadResourceResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_call_tool(message: ServerMessage) -> Result<CallToolResult, String> {
-    let value = parse_response_value(message)?;
-    serde_json::from_value::<CallToolResult>(value).map_err(|err| err.to_string())
-}
-
-fn parse_response_value(message: ServerMessage) -> Result<Value, String> {
-    match message {
-        ServerMessage::Response(response) => {
-            serde_json::to_value(&response.result).map_err(|err| err.to_string())
-        }
-        ServerMessage::Error(error) => Err(format_rpc_error(&error.error)),
-        other => Err(format_unexpected_server_message(&other)),
     }
 }
 
@@ -2487,7 +2021,7 @@ async fn fetch_tools_page_stdio(
         .await;
     match response {
         Ok(message) if transport::is_method_not_found(&message) => Ok(None),
-        Ok(message) => parse_list_tools(message)
+        Ok(message) => protocol::parse_list_tools(message)
             .map(Some)
             .map_err(|err| err.to_string()),
         Err(err) => Err(err),
@@ -2503,7 +2037,7 @@ async fn fetch_tools_page_http(
     let response = manager
         .send_streamable_http_request(id, RequestFromClient::ListToolsRequest(params))
         .await;
-    let fetch = transport::streamable_http::fetch_list(response, parse_list_tools);
+    let fetch = transport::streamable_http::fetch_list(response, protocol::parse_list_tools);
     match fetch {
         ListFetch::Ok(list, _) => Ok(Some(list)),
         ListFetch::MethodNotFound(_) => Ok(None),

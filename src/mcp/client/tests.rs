@@ -1,4 +1,5 @@
 use super::*;
+use rust_mcp_schema::LATEST_PROTOCOL_VERSION;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -172,10 +173,13 @@ fn effective_protocol_version_prefers_negotiated_value() {
     config.protocol_version = Some("2025-01-01".to_string());
 
     assert_eq!(
-        effective_protocol_version(&config, Some("2025-11-25")),
+        protocol::effective_protocol_version(&config, Some("2025-11-25")),
         "2025-11-25"
     );
-    assert_eq!(effective_protocol_version(&config, None), "2025-01-01");
+    assert_eq!(
+        protocol::effective_protocol_version(&config, None),
+        "2025-01-01"
+    );
 }
 
 fn sample_tool(name: String) -> rust_mcp_schema::Tool {
@@ -487,14 +491,14 @@ async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
         .send_streamable_http_request("alpha", RequestFromClient::ListResourcesRequest(None))
         .await
         .expect("SSE request should succeed");
-    let value = parse_response_value(message).expect("response value should parse");
+    let value = protocol::parse_response_value(message).expect("response value should parse");
     assert_eq!(value.get("ok").and_then(|item| item.as_bool()), Some(true));
 
     let message = manager
         .send_streamable_http_request("alpha", RequestFromClient::ListResourcesRequest(None))
         .await
         .expect("second SSE request should succeed");
-    let value = parse_response_value(message).expect("response value should parse");
+    let value = protocol::parse_response_value(message).expect("response value should parse");
     assert_eq!(value.get("ok").and_then(|item| item.as_bool()), Some(true));
 
     server_task

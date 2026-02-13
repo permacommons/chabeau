@@ -23,40 +23,16 @@ use rust_mcp_schema::{
 use serde_json::{Map, Value};
 use tracing::debug;
 
-#[derive(Debug, Clone)]
-struct ToolResultMeta {
-    server_label: Option<String>,
-    server_id: Option<String>,
-    tool_call_id: Option<String>,
-    raw_arguments: Option<String>,
-    failure_kind: Option<ToolFailureKind>,
-}
-
-impl ToolResultMeta {
-    fn new(
-        server_label: Option<String>,
-        server_id: Option<String>,
-        tool_call_id: Option<String>,
-        raw_arguments: Option<String>,
-    ) -> Self {
-        Self {
-            server_label,
-            server_id,
-            tool_call_id,
-            raw_arguments,
-            failure_kind: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PendingToolError {
-    tool_name: String,
-    server_id: Option<String>,
-    tool_call_id: Option<String>,
-    raw_arguments: Option<String>,
-    error: String,
-}
+#[path = "mcp_gate.rs"]
+mod mcp_gate;
+#[path = "sampling.rs"]
+mod sampling;
+#[path = "stream_errors.rs"]
+mod stream_errors;
+#[path = "stream_lifecycle.rs"]
+mod stream_lifecycle;
+#[path = "tool_calls.rs"]
+mod tool_calls;
 
 pub(super) fn handle_streaming_action(
     app: &mut App,
@@ -64,13 +40,15 @@ pub(super) fn handle_streaming_action(
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     match action {
-        StreamingAction::McpInitCompleted => handle_mcp_init_completed(app, ctx),
-        StreamingAction::McpSendPendingWithoutTools => handle_mcp_send_without_tools(app, ctx),
+        StreamingAction::McpInitCompleted => mcp_gate::handle_mcp_init_completed(app, ctx),
+        StreamingAction::McpSendPendingWithoutTools => {
+            mcp_gate::handle_mcp_send_without_tools(app, ctx)
+        }
         StreamingAction::AppendResponseChunk { content, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
-            append_response_chunk(app, &content, ctx);
+            stream_lifecycle::append_response_chunk(app, &content, ctx);
             None
         }
         StreamingAction::StreamAppMessage {
@@ -81,50 +59,54 @@ pub(super) fn handle_streaming_action(
             if !app.is_current_stream(stream_id) {
                 return None;
             }
-            append_stream_app_message(app, kind, message, ctx);
+            stream_lifecycle::append_stream_app_message(app, kind, message, ctx);
             None
         }
         StreamingAction::StreamToolCallDelta { delta, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
-            append_tool_call_delta(app, delta);
+            stream_lifecycle::append_tool_call_delta(app, delta);
             None
         }
         StreamingAction::ToolPermissionDecision { decision } => {
-            handle_tool_permission_decision(app, decision, ctx)
+            tool_calls::handle_tool_permission_decision(app, decision, ctx)
         }
         StreamingAction::ToolCallCompleted {
             tool_name,
             tool_call_id,
             result,
-        } => handle_tool_call_completed(app, tool_name, tool_call_id, result, ctx),
+        } => tool_calls::handle_tool_call_completed(app, tool_name, tool_call_id, result, ctx),
         StreamingAction::McpPromptCompleted { request, result } => {
             handle_mcp_prompt_completed(app, request, result, ctx)
         }
         StreamingAction::McpServerRequestReceived { request } => {
-            handle_mcp_server_request(app, *request, ctx)
+            sampling::handle_mcp_server_request(app, *request, ctx)
         }
-        StreamingAction::McpSamplingFinished => handle_mcp_sampling_finished(app, ctx),
+        StreamingAction::McpSamplingFinished => sampling::handle_mcp_sampling_finished(app, ctx),
         StreamingAction::StreamErrored { message, stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
-            handle_stream_error(app, message, ctx)
+            stream_errors::handle_stream_error(app, message, ctx)
         }
         StreamingAction::StreamCompleted { stream_id } => {
             if !app.is_current_stream(stream_id) {
                 return None;
             }
-            finalize_stream(app, ctx)
+            stream_lifecycle::finalize_stream(app, ctx)
         }
         StreamingAction::CancelStreaming => {
             app.cancel_current_stream();
             None
         }
-        StreamingAction::SubmitMessage { message } => spawn_stream_for_message(app, message, ctx),
-        StreamingAction::RefineLastMessage { prompt } => refine_last_message(app, prompt, ctx),
-        StreamingAction::RetryLastMessage => retry_last_message(app, ctx),
+        StreamingAction::SubmitMessage { message } => {
+            stream_lifecycle::spawn_stream_for_message(app, message, ctx)
+        }
+        StreamingAction::RefineLastMessage { prompt } => {
+            stream_lifecycle::refine_last_message(app, prompt, ctx)
+        }
+        StreamingAction::RetryLastMessage => stream_lifecycle::retry_last_message(app, ctx),
     }
 }
 
@@ -425,7 +407,7 @@ fn handle_tool_permission_decision(
                 ToolPermissionDecision::Block => ToolResultStatus::Blocked,
                 _ => ToolResultStatus::Denied,
             };
-            let meta = ToolResultMeta::new(
+            let meta = tool_calls::ToolResultMeta::new(
                 Some(server_label),
                 Some(request.server_id.clone()),
                 request.tool_call_id.clone(),
@@ -618,7 +600,7 @@ fn handle_tool_call_completed(
     match result {
         Ok(payload) => {
             let is_tool_error = is_tool_error_payload(&payload);
-            let mut meta = ToolResultMeta::new(
+            let mut meta = tool_calls::ToolResultMeta::new(
                 server_label,
                 request.as_ref().map(|req| req.server_id.clone()),
                 tool_call_id.clone(),
@@ -641,7 +623,7 @@ fn handle_tool_call_completed(
             );
         }
         Err(err) => {
-            let mut meta = ToolResultMeta::new(
+            let mut meta = tool_calls::ToolResultMeta::new(
                 server_label,
                 request.as_ref().map(|req| req.server_id.clone()),
                 tool_call_id,
@@ -760,7 +742,7 @@ fn prepare_tool_flow(
 ) -> Option<AppCommand> {
     let mut tool_call_records = Vec::new();
     let mut pending_queue = VecDeque::new();
-    let mut pending_errors: Vec<PendingToolError> = Vec::new();
+    let mut pending_errors: Vec<tool_calls::PendingToolError> = Vec::new();
 
     for (index, call) in pending_tool_calls {
         let tool_name = call.name.clone().unwrap_or_else(|| "unknown".to_string());
@@ -780,7 +762,7 @@ fn prepare_tool_flow(
         });
 
         if call.name.is_none() {
-            pending_errors.push(PendingToolError {
+            pending_errors.push(tool_calls::PendingToolError {
                 tool_name: tool_name.clone(),
                 server_id: None,
                 tool_call_id: Some(tool_call_id.clone()),
@@ -795,7 +777,7 @@ fn prepare_tool_flow(
                 Ok((server_id, _kind, _cursor, arguments)) => {
                     match app.mcp.server(&server_id) {
                         Some(server) if !server.config.is_enabled() => {
-                            pending_errors.push(PendingToolError {
+                            pending_errors.push(tool_calls::PendingToolError {
                                 tool_name: tool_name.clone(),
                                 server_id: Some(server_id.clone()),
                                 tool_call_id: Some(tool_call_id.clone()),
@@ -805,7 +787,7 @@ fn prepare_tool_flow(
                             continue;
                         }
                         Some(server) if !server_supports_resources(server) => {
-                            pending_errors.push(PendingToolError {
+                            pending_errors.push(tool_calls::PendingToolError {
                                 tool_name: tool_name.clone(),
                                 server_id: Some(server_id.clone()),
                                 tool_call_id: Some(tool_call_id.clone()),
@@ -818,7 +800,7 @@ fn prepare_tool_flow(
                         }
                         Some(_) => {}
                         None => {
-                            pending_errors.push(PendingToolError {
+                            pending_errors.push(tool_calls::PendingToolError {
                                 tool_name: tool_name.clone(),
                                 server_id: Some(server_id.clone()),
                                 tool_call_id: Some(tool_call_id.clone()),
@@ -839,7 +821,7 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push(PendingToolError {
+                    pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
                         server_id: None,
                         tool_call_id: Some(tool_call_id.clone()),
@@ -855,7 +837,7 @@ fn prepare_tool_flow(
                     match app.mcp.server(&server_id) {
                         Some(server) if server.config.is_enabled() => {}
                         Some(_) => {
-                            pending_errors.push(PendingToolError {
+                            pending_errors.push(tool_calls::PendingToolError {
                                 tool_name: tool_name.clone(),
                                 server_id: Some(server_id.clone()),
                                 tool_call_id: Some(tool_call_id.clone()),
@@ -865,7 +847,7 @@ fn prepare_tool_flow(
                             continue;
                         }
                         None => {
-                            pending_errors.push(PendingToolError {
+                            pending_errors.push(tool_calls::PendingToolError {
                                 tool_name: tool_name.clone(),
                                 server_id: Some(server_id.clone()),
                                 tool_call_id: Some(tool_call_id.clone()),
@@ -885,7 +867,7 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push(PendingToolError {
+                    pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
                         server_id: None,
                         tool_call_id: Some(tool_call_id.clone()),
@@ -908,7 +890,7 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push(PendingToolError {
+                    pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
                         server_id: Some(MCP_SESSION_MEMORY_SERVER_ID.to_string()),
                         tool_call_id: Some(tool_call_id.clone()),
@@ -922,7 +904,7 @@ fn prepare_tool_flow(
             let server_id = match resolve_tool_server(app, &tool_name) {
                 Ok((server_id, _)) => server_id,
                 Err(err) => {
-                    pending_errors.push(PendingToolError {
+                    pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
                         server_id: None,
                         tool_call_id: Some(tool_call_id.clone()),
@@ -945,7 +927,7 @@ fn prepare_tool_flow(
                     continue;
                 }
                 Err(err) => {
-                    pending_errors.push(PendingToolError {
+                    pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
                         server_id: None,
                         tool_call_id: Some(tool_call_id.clone()),
@@ -964,7 +946,7 @@ fn prepare_tool_flow(
     app.session.tool_results.clear();
 
     for error in pending_errors {
-        let mut meta = ToolResultMeta::new(
+        let mut meta = tool_calls::ToolResultMeta::new(
             error
                 .server_id
                 .as_ref()
@@ -1013,7 +995,7 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
     {
         if decision == ToolPermissionDecision::Block {
             let server_label = resolve_server_label(app, &request.server_id);
-            let meta = ToolResultMeta::new(
+            let meta = tool_calls::ToolResultMeta::new(
                 Some(server_label),
                 Some(request.server_id.clone()),
                 request.tool_call_id.clone(),
@@ -1434,7 +1416,7 @@ fn recall_tool_payload(
 fn record_tool_result(
     app: &mut App,
     tool_name: &str,
-    meta: ToolResultMeta,
+    meta: tool_calls::ToolResultMeta,
     payload: String,
     status: ToolResultStatus,
     ctx: AppActionContext,
@@ -1594,7 +1576,7 @@ fn trim_tool_payload_history(app: &mut App, server_id: Option<&str>, window: usi
 
 fn build_tool_result_summary(
     tool_name: &str,
-    meta: &ToolResultMeta,
+    meta: &tool_calls::ToolResultMeta,
     status: ToolResultStatus,
 ) -> String {
     let mut summary = tool_name.to_string();
@@ -1761,304 +1743,5 @@ fn prepare_refine_stream(
         )))
     } else {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::message::{
-        AppMessageKind, ROLE_APP_ERROR, ROLE_APP_WARNING, ROLE_ASSISTANT, ROLE_TOOL_CALL,
-        ROLE_TOOL_RESULT, ROLE_USER,
-    };
-    use crate::utils::test_utils::create_test_app;
-
-    fn default_ctx() -> AppActionContext {
-        AppActionContext {
-            term_width: 80,
-            term_height: 24,
-        }
-    }
-
-    #[test]
-    fn stream_app_message_adds_trimmed_content_and_keeps_stream_alive() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-
-        let command = handle_streaming_action(
-            &mut app,
-            StreamingAction::SubmitMessage {
-                message: "Hello there".into(),
-            },
-            ctx,
-        );
-
-        let stream_id = match command {
-            Some(AppCommand::SpawnStream(params)) => params.stream_id,
-            Some(_) => panic!("unexpected app command returned for submit message"),
-            None => panic!("expected spawn stream command"),
-        };
-
-        assert!(app.ui.is_streaming);
-
-        let result = handle_streaming_action(
-            &mut app,
-            StreamingAction::StreamAppMessage {
-                kind: AppMessageKind::Warning,
-                message: "  invalid utf8  ".into(),
-                stream_id,
-            },
-            ctx,
-        );
-        assert!(result.is_none());
-
-        let last_message = app
-            .ui
-            .messages
-            .back()
-            .expect("expected trailing app message");
-        assert_eq!(last_message.role, ROLE_APP_WARNING);
-        assert_eq!(last_message.content, "invalid utf8");
-
-        assert!(app.ui.is_streaming);
-    }
-
-    #[test]
-    fn stream_errored_drops_empty_assistant_placeholder() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-
-        let command = handle_streaming_action(
-            &mut app,
-            StreamingAction::SubmitMessage {
-                message: "Hello there".into(),
-            },
-            ctx,
-        );
-
-        let stream_id = match command {
-            Some(AppCommand::SpawnStream(params)) => params.stream_id,
-            Some(_) => panic!("unexpected app command returned for submit message"),
-            None => panic!("expected spawn stream command"),
-        };
-
-        assert!(app
-            .ui
-            .messages
-            .iter()
-            .any(|msg| msg.role == ROLE_ASSISTANT && msg.content.is_empty()));
-
-        let result = handle_streaming_action(
-            &mut app,
-            StreamingAction::StreamErrored {
-                message: " network failure ".into(),
-                stream_id,
-            },
-            ctx,
-        );
-        assert!(result.is_none());
-
-        assert!(app
-            .ui
-            .messages
-            .iter()
-            .all(|msg| msg.role != ROLE_ASSISTANT || !msg.content.trim().is_empty()));
-
-        let last_message = app
-            .ui
-            .messages
-            .back()
-            .expect("expected trailing error message");
-        assert_eq!(last_message.role, ROLE_APP_ERROR);
-        assert_eq!(last_message.content, "network failure");
-
-        assert_eq!(app.ui.messages.len(), 2);
-        let first = app.ui.messages.front().expect("missing user message");
-        assert_eq!(first.role, ROLE_USER);
-        assert_eq!(first.content, "Hello there");
-    }
-
-    #[test]
-    fn stream_tool_call_delta_flushes_on_complete() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-
-        let command = handle_streaming_action(
-            &mut app,
-            StreamingAction::SubmitMessage {
-                message: "Run a tool".into(),
-            },
-            ctx,
-        );
-
-        let stream_id = match command {
-            Some(AppCommand::SpawnStream(params)) => params.stream_id,
-            Some(_) => panic!("unexpected app command returned for submit message"),
-            None => panic!("expected spawn stream command"),
-        };
-
-        handle_streaming_action(
-            &mut app,
-            StreamingAction::StreamToolCallDelta {
-                stream_id,
-                delta: crate::core::chat_stream::ToolCallDelta {
-                    index: 0,
-                    id: Some("call-1".into()),
-                    name: Some("lookup".into()),
-                    arguments: Some("{\"q\":".into()),
-                },
-            },
-            ctx,
-        );
-
-        handle_streaming_action(
-            &mut app,
-            StreamingAction::StreamToolCallDelta {
-                stream_id,
-                delta: crate::core::chat_stream::ToolCallDelta {
-                    index: 0,
-                    id: None,
-                    name: None,
-                    arguments: Some("\"mcp\"}".into()),
-                },
-            },
-            ctx,
-        );
-
-        let command = handle_streaming_action(
-            &mut app,
-            StreamingAction::StreamCompleted { stream_id },
-            ctx,
-        );
-
-        assert!(app.session.pending_tool_calls.is_empty());
-        assert!(matches!(command, Some(AppCommand::SpawnStream(_))));
-
-        let tool_call = app
-            .ui
-            .messages
-            .iter()
-            .find(|msg| msg.role == ROLE_TOOL_CALL)
-            .expect("missing tool call message");
-        assert_eq!(tool_call.content, "lookup | Arguments: q=\"mcp\"");
-
-        let tool_result = app
-            .ui
-            .messages
-            .iter()
-            .find(|msg| msg.role == ROLE_TOOL_RESULT)
-            .expect("missing tool result message");
-        assert!(tool_result.content.contains("lookup"));
-    }
-
-    #[test]
-    fn tool_call_completed_flags_tool_error_payloads() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        app.session.active_tool_request = Some(ToolCallRequest {
-            server_id: "alpha".to_string(),
-            tool_name: "lookup".to_string(),
-            arguments: None,
-            raw_arguments: "{}".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-        });
-
-        let payload = serde_json::json!({
-            "content": [],
-            "isError": true,
-        })
-        .to_string();
-
-        let result = handle_streaming_action(
-            &mut app,
-            StreamingAction::ToolCallCompleted {
-                tool_name: "lookup".to_string(),
-                tool_call_id: Some("call-1".to_string()),
-                result: Ok(payload),
-            },
-            ctx,
-        );
-        assert!(result.is_none());
-
-        let record = app
-            .session
-            .tool_result_history
-            .last()
-            .expect("missing tool result record");
-        assert_eq!(record.status, ToolResultStatus::Error);
-        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolError));
-    }
-
-    #[test]
-    fn tool_call_completed_flags_call_failures() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        app.session.active_tool_request = Some(ToolCallRequest {
-            server_id: "alpha".to_string(),
-            tool_name: "lookup".to_string(),
-            arguments: None,
-            raw_arguments: "{}".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-        });
-
-        let result = handle_streaming_action(
-            &mut app,
-            StreamingAction::ToolCallCompleted {
-                tool_name: "lookup".to_string(),
-                tool_call_id: Some("call-1".to_string()),
-                result: Err("timeout".to_string()),
-            },
-            ctx,
-        );
-        assert!(result.is_none());
-
-        let record = app
-            .session
-            .tool_result_history
-            .last()
-            .expect("missing tool result record");
-        assert_eq!(record.status, ToolResultStatus::Error);
-        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolCallFailure));
-    }
-
-    #[test]
-    fn tool_run_uses_activity_indicator_and_clears_on_completion() {
-        let mut app = create_test_app();
-        let ctx = default_ctx();
-        let request = ToolCallRequest {
-            server_id: "alpha".to_string(),
-            tool_name: "lookup".to_string(),
-            arguments: None,
-            raw_arguments: "{}".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-        };
-
-        set_status_for_tool_run(&mut app, &request, ctx);
-        assert!(app.has_interruptible_activity());
-        assert_eq!(app.ui.status, None);
-
-        app.session.active_tool_request = Some(request.clone());
-        let _ = handle_streaming_action(
-            &mut app,
-            StreamingAction::ToolCallCompleted {
-                tool_name: request.tool_name,
-                tool_call_id: request.tool_call_id,
-                result: Ok("{}".to_string()),
-            },
-            ctx,
-        );
-
-        assert!(!app.has_interruptible_activity());
-    }
-
-    #[test]
-    fn tool_unsupported_detection_requires_tool_signal() {
-        assert!(!is_tool_unsupported_error("API Error: not supported"));
-        assert!(is_tool_unsupported_error(
-            "API Error: tools are not supported for this model"
-        ));
-        assert!(is_tool_unsupported_error(
-            "API Error: Unknown field: tool_calls"
-        ));
     }
 }

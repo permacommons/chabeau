@@ -488,14 +488,21 @@ Chabeau uses a modular design with focused components:
   - `settings/` – Trait-based `set`/`unset` handler registry
   - `theme_list.rs` – Theme listing functionality
 - `commands/` – Chat command processing and registry-driven dispatch
-  - `mod.rs` – Command handlers and dispatcher
+  - `handlers/` – Domain-specific command handlers (`core`, `config`, `io`, `mcp`)
+  - `mcp_prompt_parser.rs` – `/server-id:prompt-id` parser and helpers
+  - `mod.rs` – Command dispatcher and command result plumbing
   - `refine.rs` – Message refinement logic
   - `registry.rs` – Static command metadata registry
 - `core/` – Core application components
   - `app/` – Application state and controllers
-    - `actions/` – Internal action definitions grouped by domain (streaming, input, picker, prompt) plus dispatcher routing
+    - `actions/` – Internal action definitions grouped by domain plus dispatcher routing
       - `input/` – Input subdomains for compose, command, inspect, and status actions
-      - `stream_*`/`tool_calls`/`sampling`/`mcp_gate` modules – Focused streaming action handlers for lifecycle, MCP gating, errors, sampling, and tool-call flows
+      - `mcp_gate.rs` – MCP initialization gating and deferred-send handling
+      - `sampling.rs` – MCP sampling request queueing and permission flow
+      - `stream_errors.rs` – Stream error handling and MCP unsupported fallback flow
+      - `stream_lifecycle.rs` – Stream creation, chunk/app-message appends, and finalization
+      - `streaming.rs` – Streaming action dispatcher
+      - `tool_calls.rs` – Tool permission and tool-result completion handling
     - `app.rs` – Main `App` struct and event loop integration
     - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
     - `mod.rs` – App struct and module exports
@@ -503,10 +510,12 @@ Chabeau uses a modular design with focused components:
     - `pickers.rs` – Picker constructors and helpers for each picker type
     - `session.rs` – Session bootstrap and provider/model state
     - `settings.rs` – Theme and provider controllers
-    - `streaming.rs` – Handles streaming responses from the API
+    - `streaming.rs` – Stream request construction, tool-flow orchestration, and MCP integration helpers
     - `ui_helpers.rs` – UI state transition helpers
     - `ui_state.rs` – UI state management and text input helpers
     - `builtin_presets.rs` – Built-in preset loader
+  - `builtin_mcp.rs` – Built-in MCP prompt/tool context injection helpers
+  - `builtin_oauth.rs` – Built-in OAuth callback assets and helpers
   - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
   - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
   - `config/` – Configuration data, defaults, caching, and persistence
@@ -517,8 +526,10 @@ Chabeau uses a modular design with focused components:
     - `orchestrator.rs` – Cached config loader, mutation orchestrator, and test isolation
     - `tests.rs` – Configuration module tests
   - `keyring.rs` – Secure storage for API keys
+  - `mcp_auth.rs` – Keyring-backed MCP token storage
+  - `mcp_sampling.rs` – MCP sampling request conversion and summarization helpers
+  - `message.rs` – Message data structures
   - `oauth.rs` – Shared MCP OAuth discovery, browser flow, callback handling, and token refresh helpers
-- `message.rs` – Message data structures
 - `mcp/` – Model Context Protocol client integration
   - `client/` – MCP client orchestration, transport plumbing, protocol parsing, and operations
     - `mod.rs` – Public MCP client manager API, state, and shared context types
@@ -535,9 +546,10 @@ Chabeau uses a modular design with focused components:
   - `mod.rs` – MCP module exports and tool name constants
   - `permissions.rs` – Per-tool permission decision store
   - `registry.rs` – Enabled MCP server registry
-- `mcp_auth.rs` – Keyring-backed MCP token storage
-- `persona.rs` – Persona management and variable substitution
+  - `persona.rs` – Persona management and variable substitution
   - `preset.rs` – System instruction preset management
+  - `providers.rs` – Provider selection and shared provider utilities
+  - `shared_selection.rs` – Shared current-selection helpers
   - `text_wrapping.rs` – Text wrapping utilities
 - `ui/` – Terminal interface rendering
   - `appearance.rs` – Theme and style definitions
@@ -551,19 +563,23 @@ Chabeau uses a modular design with focused components:
   - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
   - `markdown/` – Modular markdown pipeline (`parser.rs`, `render.rs`, `lists.rs`, `code.rs`, `metadata.rs`, `table.rs`) plus wrapping helpers and span-metadata tests
   - `mod.rs` – UI module declarations
-  - `osc/` – Crossterm backend wrapper that emits OSC 8 hyperlinks
+  - `osc.rs` / `osc_backend.rs` / `osc_state.rs` – OSC hyperlink and cursor-color support
   - `picker.rs` – Picker controls and rendering
   - `renderer.rs` – Terminal interface rendering (chat area, input, pickers)
   - `span.rs` – Span metadata for clickable links
   - `theme.rs` – Theme loading and management
   - `title.rs` – Header bar rendering
 - `utils/` – Utility functions and helpers
+  - `auth.rs` – Auth and provider utility helpers
   - `clipboard.rs` – Cross-platform clipboard helper
   - `color.rs` – Terminal color detection and palette quantization
   - `editor.rs` – External editor integration
+  - `input.rs` – Keyboard/input utility helpers
   - `logging.rs` – Chat logging functionality
   - `mod.rs` – Utility module declarations
   - `scroll.rs` – Text wrapping and scroll calculations
+  - `syntax.rs` – Syntax highlighting support helpers
+  - `url.rs` – URL parsing and normalization helpers
 
 ## Development
 

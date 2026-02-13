@@ -73,6 +73,13 @@ background work such as spawning a stream or running an MCP tool call.【F:src/u
 `dispatch_picker_many`) so same-domain dispatch paths avoid unnecessary wrapping, while `dispatch_many`
 remains the generic entrypoint for intentionally mixed-domain batches.
 
+## Streaming action handler layout
+Streaming reducers under `src/core/app/actions/` are intentionally split by concern. `streaming.rs`
+should stay focused on `StreamingAction` dispatch, while implementation logic lives in
+`mcp_gate.rs`, `stream_lifecycle.rs`, `stream_errors.rs`, `tool_calls.rs`, and `sampling.rs`.
+This keeps stream setup/finalization, MCP gating, error recovery, tool execution flow, and sampling
+flow changes localized to the owning module.
+
 ## Tool inspection and decode workflow
 Tool calls and results can be inspected via a full-screen overlay managed by `InspectController`, which
 tracks the current tool index, view (request vs result), and a decoded flag for nested JSON display.

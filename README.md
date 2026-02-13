@@ -495,6 +495,7 @@ Chabeau uses a modular design with focused components:
   - `app/` – Application state and controllers
     - `actions/` – Internal action definitions grouped by domain (streaming, input, picker, prompt) plus dispatcher routing
       - `input/` – Input subdomains for compose, command, inspect, and status actions
+      - `stream_*`/`tool_calls`/`sampling`/`mcp_gate` modules – Focused streaming action handlers for lifecycle, MCP gating, errors, sampling, and tool-call flows
     - `app.rs` – Main `App` struct and event loop integration
     - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
     - `mod.rs` – App struct and module exports

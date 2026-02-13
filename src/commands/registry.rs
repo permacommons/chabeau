@@ -231,7 +231,7 @@ const COMMANDS: &[Command] = &[
             description: "Show available commands and usage information.",
         }],
         extra_help: &[],
-        handler: super::handle_help,
+        handler: super::handlers::core::handle_help,
     },
     Command {
         name: "clear",
@@ -240,7 +240,7 @@ const COMMANDS: &[Command] = &[
             description: "Clear the conversation transcript.",
         }],
         extra_help: &[],
-        handler: super::handle_clear,
+        handler: super::handlers::core::handle_clear,
     },
     Command {
         name: "mcp",
@@ -267,7 +267,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_mcp,
+        handler: super::handlers::mcp::handle_mcp,
     },
     Command {
         name: "yolo",
@@ -286,7 +286,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_yolo,
+        handler: super::handlers::mcp::handle_yolo,
     },
     Command {
         name: "log",
@@ -296,7 +296,7 @@ const COMMANDS: &[Command] = &[
                 "Enable logging to a file, or toggle pause/resume when no filename is provided.",
         }],
         extra_help: &[],
-        handler: super::handle_log,
+        handler: super::handlers::io::handle_log,
     },
     Command {
         name: "dump",
@@ -306,7 +306,7 @@ const COMMANDS: &[Command] = &[
                 "Dump the full conversation to a file (default: `chabeau-log-YYYY-MM-DD.txt`).",
         }],
         extra_help: &[],
-        handler: super::handle_dump,
+        handler: super::handlers::io::handle_dump,
     },
     Command {
         name: "theme",
@@ -322,7 +322,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_theme,
+        handler: super::handlers::config::handle_theme,
     },
     Command {
         name: "model",
@@ -338,7 +338,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_model,
+        handler: super::handlers::config::handle_model,
     },
     Command {
         name: "provider",
@@ -353,7 +353,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_provider,
+        handler: super::handlers::config::handle_provider,
     },
     Command {
         name: "markdown",
@@ -362,7 +362,7 @@ const COMMANDS: &[Command] = &[
             description: "Toggle Markdown rendering and persist the preference to config.",
         }],
         extra_help: &[],
-        handler: super::handle_markdown,
+        handler: super::handlers::config::handle_markdown,
     },
     Command {
         name: "syntax",
@@ -371,7 +371,7 @@ const COMMANDS: &[Command] = &[
             description: "Toggle code syntax highlighting and persist the preference to config.",
         }],
         extra_help: &[],
-        handler: super::handle_syntax,
+        handler: super::handlers::config::handle_syntax,
     },
     Command {
         name: "character",
@@ -387,7 +387,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_character,
+        handler: super::handlers::config::handle_character,
     },
     Command {
         name: "persona",
@@ -402,7 +402,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_persona,
+        handler: super::handlers::config::handle_persona,
     },
     Command {
         name: "preset",
@@ -417,7 +417,7 @@ const COMMANDS: &[Command] = &[
             },
         ],
         extra_help: &[],
-        handler: super::handle_preset,
+        handler: super::handlers::config::handle_preset,
     },
     Command {
         name: "refine",

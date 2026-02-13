@@ -6,9 +6,11 @@ use crate::core::persona::PersonaManager;
 use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
 use rust_mcp_schema::{
     Implementation, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, ServerCapabilities,
+    ListResourcesResult, ListToolsResult, PromptArgument, ServerCapabilities,
 };
+use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use tempfile::tempdir;
@@ -197,7 +199,14 @@ fn test_dump_conversation() {
     let dump_file_path = temp_dir.path().join("test_dump.txt");
 
     // Test the dump_conversation function
-    assert!(dump_conversation(&app, dump_file_path.to_str().unwrap()).is_ok());
+    assert!(
+        crate::commands::handlers::io::dump_conversation_with_overwrite(
+            &app,
+            dump_file_path.to_str().unwrap(),
+            false
+        )
+        .is_ok()
+    );
 
     // Read the dumped file and verify its contents
     let mut file = File::open(&dump_file_path).unwrap();
@@ -324,7 +333,8 @@ fn test_dump_conversation_file_exists() {
 
     // Test the dump_conversation function with existing file
     // This should fail because the file already exists
-    let result = dump_conversation(&app, dump_filename);
+    let result =
+        crate::commands::handlers::io::dump_conversation_with_overwrite(&app, dump_filename, false);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("already exists"));
 
@@ -1125,14 +1135,15 @@ fn mcp_command_forget_clears_permissions_and_history() {
 
 #[test]
 fn parse_kv_args_supports_quotes() {
-    let args = parse_kv_args("topic=\"soil health\" lang=en").expect("parse");
+    let args =
+        super::mcp_prompt_parser::parse_kv_args("topic=\"soil health\" lang=en").expect("parse");
     assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
     assert_eq!(args.get("lang").map(String::as_str), Some("en"));
 }
 
 #[test]
 fn parse_kv_args_rejects_missing_equals() {
-    let err = parse_kv_args("topic").unwrap_err();
+    let err = super::mcp_prompt_parser::parse_kv_args("topic").unwrap_err();
     assert!(err.contains("key=value"));
 }
 
@@ -1144,7 +1155,7 @@ fn parse_prompt_args_single_argument_accepts_bare_value() {
         description: None,
         required: Some(true),
     }];
-    let args = parse_prompt_args("soil", &prompt_args).expect("parse");
+    let args = super::mcp_prompt_parser::parse_prompt_args("soil", &prompt_args).expect("parse");
     assert_eq!(args.get("topic").map(String::as_str), Some("soil"));
 }
 
@@ -1156,7 +1167,8 @@ fn parse_prompt_args_single_argument_accepts_quoted_value() {
         description: None,
         required: Some(true),
     }];
-    let args = parse_prompt_args("\"soil health\"", &prompt_args).expect("parse");
+    let args = super::mcp_prompt_parser::parse_prompt_args("\"soil health\"", &prompt_args)
+        .expect("parse");
     assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
 }
 
@@ -1168,7 +1180,8 @@ fn parse_prompt_args_single_argument_accepts_unquoted_spaces() {
         description: None,
         required: Some(true),
     }];
-    let args = parse_prompt_args("soil health", &prompt_args).expect("parse");
+    let args =
+        super::mcp_prompt_parser::parse_prompt_args("soil health", &prompt_args).expect("parse");
     assert_eq!(args.get("topic").map(String::as_str), Some("soil health"));
 }
 
@@ -1188,7 +1201,7 @@ fn parse_prompt_args_multiple_arguments_requires_key_value() {
             required: Some(true),
         },
     ];
-    let err = parse_prompt_args("soil", &prompt_args).unwrap_err();
+    let err = super::mcp_prompt_parser::parse_prompt_args("soil", &prompt_args).unwrap_err();
     assert!(err.contains("key=value"));
 }
 
@@ -1202,7 +1215,7 @@ fn validate_prompt_args_rejects_unknown_keys() {
     }];
     let mut args = HashMap::new();
     args.insert("foo".to_string(), "bar".to_string());
-    let err = validate_prompt_args(&args, &prompt_args).unwrap_err();
+    let err = super::mcp_prompt_parser::validate_prompt_args(&args, &prompt_args).unwrap_err();
     assert!(err.contains("Unknown prompt argument"));
     assert!(err.contains("topic"));
 }

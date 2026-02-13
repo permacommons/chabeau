@@ -124,3 +124,9 @@ Tests that need round-trip persistence (save then re-load) use `with_test_config
 `TempDir`, sets `XDG_CONFIG_HOME` to it, calls `Config::set_test_config_path()` to activate the test
 orchestrator, and restores everything on drop.【F:src/utils/test_utils.rs†L28-L106】 This guarantees that
 `cargo test` never writes to the user's real `config.toml`.
+
+## Test layout conventions
+Larger module test suites live in sibling files so runtime paths stay focused while tests still access
+private module behavior through `use super::*`. Current examples include `src/commands/tests.rs`,
+`src/cli/tests.rs`, and `src/ui/chat_loop/event_loop_tests.rs`, each with focused helper modules to keep
+failure scope localized and reduce churn in runtime files.

@@ -278,18 +278,6 @@ async fn paginate_tools_list_stops_when_first_page_is_full() {
     let calls = state.lock().await.calls.clone();
     assert_eq!(calls, vec![None]);
 }
-#[test]
-fn event_stream_content_type_parser_handles_parameters_and_case() {
-    assert!(is_event_stream_content_type("text/event-stream"));
-    assert!(is_event_stream_content_type(
-        "Text/Event-Stream; charset=UTF-8"
-    ));
-    assert!(is_event_stream_content_type(
-        "text/event-stream ; version=1"
-    ));
-    assert!(!is_event_stream_content_type("application/json"));
-}
-
 async fn read_http_request(
     stream: &mut tokio::net::TcpStream,
 ) -> Result<(String, Vec<(String, String)>, Vec<u8>), String> {

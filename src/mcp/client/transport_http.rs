@@ -1,14 +1,35 @@
 use super::{
     apply_streamable_http_client_post_headers, apply_streamable_http_protocol_version_header,
-    client_details_for, is_event_stream_content_type, read_sse_response_messages,
-    require_http_base_url, McpServerRequestContext, StreamableHttpContext,
+    client_details_for, protocol, require_http_base_url, McpServerRequestContext,
 };
+use crate::core::config::data::McpServerConfig;
+use crate::mcp::events::McpServerRequest;
+use crate::mcp::transport::streamable_http::{
+    is_event_stream_content_type, next_sse_server_message, sse_data_payload, SseLineBuffer,
+};
+use futures_util::StreamExt;
 use rust_mcp_schema::schema_utils::{
     ClientMessage, FromMessage, MessageFromClient, NotificationFromClient, RequestFromClient,
     ServerMessage,
 };
 use rust_mcp_schema::RequestId;
+use tokio::sync::mpsc;
 use tracing::debug;
+
+pub(crate) trait StreamableHttpContext {
+    fn config(&self) -> &McpServerConfig;
+    fn auth_header(&self) -> Option<&String>;
+    fn session_id(&self) -> Option<&String>;
+    fn http_client(&self) -> Option<&reqwest::Client>;
+    fn set_session_id(&mut self, session_id: Option<String>);
+    fn next_request_id(&mut self) -> i64;
+    fn negotiated_protocol_version(&self) -> Option<&str>;
+    fn set_negotiated_protocol_version(&mut self, protocol_version: Option<String>);
+
+    fn effective_protocol_version(&self) -> String {
+        protocol::effective_protocol_version(self.config(), self.negotiated_protocol_version())
+    }
+}
 
 pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
     context: &mut C,
@@ -21,6 +42,7 @@ pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
     let response = send_request_with_context(
         context,
         RequestFromClient::InitializeRequest(client_details),
+        None,
     )
     .await?;
     let initialize = super::protocol::parse_initialize_result(response)?;
@@ -40,6 +62,7 @@ pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
 pub(crate) async fn send_request_with_context<C: StreamableHttpContext>(
     context: &mut C,
     request: RequestFromClient,
+    request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
 ) -> Result<ServerMessage, String> {
     let request_id = context.next_request_id();
     let message = ClientMessage::from_message(
@@ -47,7 +70,7 @@ pub(crate) async fn send_request_with_context<C: StreamableHttpContext>(
         Some(RequestId::Integer(request_id)),
     )
     .map_err(|err| err.to_string())?;
-    send_message(context, message).await
+    send_message(context, message, request_tx).await
 }
 
 pub(crate) async fn send_server_result_message(
@@ -55,6 +78,95 @@ pub(crate) async fn send_server_result_message(
     message: ClientMessage,
 ) -> Result<(), String> {
     send_client_message_with_context(context, message).await
+}
+
+pub(crate) fn spawn_streamable_http_listener(
+    client: reqwest::Client,
+    server_id: String,
+    base_url: Option<String>,
+    auth_header: Option<String>,
+    session_id: Option<String>,
+    request_tx: mpsc::UnboundedSender<McpServerRequest>,
+    protocol_version: Option<String>,
+) {
+    let Some(base_url) = base_url else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        let mut request = apply_streamable_http_protocol_version_header(
+            client.get(&base_url).header("Accept", "text/event-stream"),
+            protocol_version.as_deref(),
+        );
+
+        if let Some(auth) = auth_header {
+            request = request.header("Authorization", auth);
+        }
+        if let Some(session_id) = session_id {
+            request = request.header("mcp-session-id", session_id);
+        }
+
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(_) => return,
+        };
+
+        if !response.status().is_success() {
+            return;
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !is_event_stream_content_type(content_type) {
+            return;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = SseLineBuffer::default();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => return,
+            };
+            for line in buffer.push(&chunk) {
+                let Some(payload) = sse_data_payload(&line) else {
+                    continue;
+                };
+                if payload.is_empty() {
+                    continue;
+                }
+                if let Ok(ServerMessage::Request(request)) =
+                    serde_json::from_str::<ServerMessage>(payload)
+                {
+                    let _ = request_tx.send(McpServerRequest {
+                        server_id: server_id.clone(),
+                        request,
+                    });
+                }
+            }
+        }
+
+        for line in buffer.finish() {
+            let Some(payload) = sse_data_payload(&line) else {
+                continue;
+            };
+            if payload.is_empty() {
+                continue;
+            }
+            if let Ok(ServerMessage::Request(request)) =
+                serde_json::from_str::<ServerMessage>(payload)
+            {
+                let _ = request_tx.send(McpServerRequest {
+                    server_id: server_id.clone(),
+                    request,
+                });
+            }
+        }
+    });
 }
 
 async fn send_notification<C: StreamableHttpContext>(
@@ -111,6 +223,7 @@ async fn send_client_message_with_context<C: StreamableHttpContext>(
 async fn send_message<C: StreamableHttpContext>(
     context: &mut C,
     message: ClientMessage,
+    request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
 ) -> Result<ServerMessage, String> {
     let payload = serde_json::to_string(&message).map_err(|err| err.to_string())?;
     let client = context
@@ -150,7 +263,18 @@ async fn send_message<C: StreamableHttpContext>(
         .to_string();
 
     let server_message = if is_event_stream_content_type(&content_type) {
-        read_sse_response_messages(response, &context.config().id, None).await?
+        let server_id = context.config().id.clone();
+        next_sse_server_message(response, move |message| {
+            if let ServerMessage::Request(request) = message {
+                if let Some(tx) = request_tx.as_ref() {
+                    let _ = tx.send(McpServerRequest {
+                        server_id: server_id.clone(),
+                        request: request.clone(),
+                    });
+                }
+            }
+        })
+        .await?
     } else {
         let body = response.bytes().await.map_err(|err| err.to_string())?;
         serde_json::from_slice::<ServerMessage>(&body).map_err(|err| err.to_string())?
@@ -165,7 +289,6 @@ async fn send_message<C: StreamableHttpContext>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::data::McpServerConfig;
 
     #[test]
     fn ensure_session_requires_http_client() {

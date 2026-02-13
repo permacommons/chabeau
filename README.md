@@ -523,14 +523,14 @@ Chabeau uses a modular design with focused components:
     - `mod.rs` – Public MCP client manager API, state, and shared context types
     - `operations.rs` – MCP `execute_*` entry points and shared request flow helpers
     - `protocol.rs` – MCP response parsing and protocol-version helpers
-    - `transport_http.rs` – Streamable HTTP session and request/message dispatch helpers
-    - `transport_stdio.rs` – Stdio request/result/error dispatch helpers
+    - `transport_http.rs` – Streamable HTTP session lifecycle, request exchange interface, and event listener helpers
+    - `transport_stdio.rs` – Stdio transport client lifecycle, request dispatch, and server I/O readers
     - `tests.rs` – MCP client manager integration-style unit tests
   - `events.rs` – MCP server request envelopes
   - `transport/` – MCP transport implementations and shared interfaces
     - `mod.rs` – Shared transport traits, enums, and list-fetch helpers
     - `stdio.rs` – Stdio transport request/list adapters
-    - `streamable_http.rs` – Streamable HTTP transport list adapters
+    - `streamable_http.rs` – Streamable HTTP list adapters plus shared SSE buffering/parsing utilities
   - `mod.rs` – MCP module exports and tool name constants
   - `permissions.rs` – Per-tool permission decision store
   - `registry.rs` – Enabled MCP server registry

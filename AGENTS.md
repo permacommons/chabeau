@@ -5,10 +5,12 @@ This repository contains Chabeau, an open source (CC-0) chatbot TUI for remote A
 - Follow best practices for Rust development and build/test/release processes.
 - Ensure new functionality does not introduce usability, security or accessibility regressions.
 - Add unit tests opportunistically.
-- Update the README.md after you've completed the main objective.
+- Update docs as needed after you've completed the main objective:
+  - Put user-facing behavior, usage guidance, and repository file-tree updates in `README.md`.
+  - Put architecture notes, internal module responsibilities, and design rationale in `ARCHITECTURE.md`.
 - Always run `cargo test`, `cargo check`, `cargo fmt` and `cargo clippy` after you've completed the main objective.
 - Feel free to suggest changes to WISHLIST.md after all these steps have been completed. Thanks for making Chabeau better!
- - Do not add bugfix notes to the README. Keep README focused on user-facing features and behavior; document fixes in commit messages.
+- Do not add bugfix notes to the README. Keep README focused on user-facing features and behavior; document fixes in commit messages.
 
 ## Additional style note for agents
 - Do not leave breadcrumb comments about past changes (e.g., "removed", "replaced", or historical notes in code). Keep comments focused on current behavior and intent only.

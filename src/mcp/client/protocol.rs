@@ -110,6 +110,7 @@ mod tests {
             command: None,
             args: None,
             env: None,
+            headers: None,
             transport: None,
             allowed_tools: None,
             protocol_version: Some("2025-01-01".to_string()),

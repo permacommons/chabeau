@@ -32,8 +32,8 @@ components can act without re-querying configuration.【F:src/core/app/session.r
 
 ## MCP configuration and authentication
 MCP servers are configured in `config.toml` using `McpServerConfig`, which supports HTTP base URLs, stdio
-commands, allowed tool lists, protocol overrides, payload retention policies, and per-server YOLO settings
-for auto-approval of tool calls.【F:src/core/config/data.rs†L70-L118】 Tokens for HTTP servers are stored in
+commands, optional custom HTTP request headers, allowed tool lists, protocol overrides, payload retention
+policies, and per-server YOLO settings for auto-approval of tool calls.【F:src/core/config/data.rs†L70-L118】 Tokens for HTTP servers are stored in
 the system keyring by `McpTokenStore`, mirroring provider auth behavior while keeping secrets out of
 config files.【F:src/core/mcp_auth.rs†L1-L63】
 

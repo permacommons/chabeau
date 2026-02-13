@@ -165,6 +165,7 @@ mod tests {
                 command: None,
                 args: None,
                 env: None,
+                headers: None,
                 enabled: Some(true),
                 allowed_tools: None,
                 protocol_version: None,

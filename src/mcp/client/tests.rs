@@ -11,6 +11,7 @@ fn sample_config() -> McpServerConfig {
         command: None,
         args: None,
         env: None,
+        headers: None,
         transport: Some("streamable-http".to_string()),
         allowed_tools: None,
         protocol_version: None,
@@ -83,6 +84,7 @@ async fn connect_all_attempts_each_enabled_server_when_one_fails() {
                 command: Some("/definitely-missing-command".to_string()),
                 args: None,
                 env: None,
+                headers: None,
                 transport: Some("stdio".to_string()),
                 allowed_tools: None,
                 protocol_version: None,
@@ -98,6 +100,7 @@ async fn connect_all_attempts_each_enabled_server_when_one_fails() {
                 command: Some("/definitely-missing-command-2".to_string()),
                 args: None,
                 env: None,
+                headers: None,
                 transport: Some("stdio".to_string()),
                 allowed_tools: None,
                 protocol_version: None,
@@ -200,8 +203,19 @@ struct ToolPageState {
     calls: Vec<Option<String>>,
 }
 
-type CapturedHttpRequests =
-    Arc<Mutex<Vec<(String, String, String, String, String, Option<String>)>>>;
+type CapturedHttpRequests = Arc<
+    Mutex<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )>,
+    >,
+>;
 
 async fn fetch_tools_page_test(
     state: &Arc<Mutex<ToolPageState>>,
@@ -376,6 +390,10 @@ async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("mcp-session-id"))
                 .map(|(_, value)| value.clone());
+            let context7_api_key = headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("context7_api_key"))
+                .map(|(_, value)| value.clone());
 
             let body_json: serde_json::Value =
                 serde_json::from_slice(&body).map_err(|err| err.to_string())?;
@@ -392,6 +410,7 @@ async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
                 content_type,
                 protocol_version,
                 session_id,
+                context7_api_key,
             ));
 
             let response = if method == "initialize" {
@@ -458,6 +477,14 @@ async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
             command: None,
             args: None,
             env: None,
+            headers: Some(
+                [(
+                    "CONTEXT7_API_KEY".to_string(),
+                    "test-context7-key".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
             transport: Some("streamable-http".to_string()),
             allowed_tools: None,
             protocol_version: None,
@@ -509,8 +536,12 @@ async fn streamable_http_end_to_end_handles_json_and_sse_responses() {
     assert_eq!(captured[1].4, "2025-12-31");
     assert_eq!(captured[2].4, "2025-12-31");
     assert_eq!(captured[2].5.as_deref(), Some("test-session"));
+    assert_eq!(captured[0].6.as_deref(), Some("test-context7-key"));
+    assert_eq!(captured[1].6.as_deref(), Some("test-context7-key"));
+    assert_eq!(captured[2].6.as_deref(), Some("test-context7-key"));
     assert_eq!(captured[3].1, "resources/list");
     assert_eq!(captured[3].5.as_deref(), Some("test-session-2"));
+    assert_eq!(captured[3].6.as_deref(), Some("test-context7-key"));
 
     let stored_session = manager
         .server("alpha")

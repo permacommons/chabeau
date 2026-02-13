@@ -655,6 +655,9 @@ fn test_mcp_server_config_persistence() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let config_path = temp_dir.path().join("test_mcp.toml");
 
+    let mut headers = HashMap::new();
+    headers.insert("CONTEXT7_API_KEY".to_string(), "test-key".to_string());
+
     let config = Config {
         mcp_servers: vec![McpServerConfig {
             id: "alpha".to_string(),
@@ -663,6 +666,7 @@ fn test_mcp_server_config_persistence() {
             command: None,
             args: None,
             env: None,
+            headers: Some(headers),
             transport: Some("streamable-http".to_string()),
             allowed_tools: Some(vec!["alpha.tool".to_string()]),
             protocol_version: Some("2024-11-05".to_string()),
@@ -686,6 +690,14 @@ fn test_mcp_server_config_persistence() {
     assert_eq!(server.display_name, "Alpha MCP");
     assert_eq!(server.base_url.as_deref(), Some("https://mcp.example.com"));
     assert_eq!(server.transport.as_deref(), Some("streamable-http"));
+    assert_eq!(
+        server
+            .headers
+            .as_ref()
+            .and_then(|headers| headers.get("CONTEXT7_API_KEY"))
+            .map(String::as_str),
+        Some("test-key")
+    );
     assert_eq!(
         server.allowed_tools.as_deref(),
         Some(&["alpha.tool".to_string()][..])
@@ -713,6 +725,7 @@ fn test_mcp_server_stdio_config_persistence() {
             command: Some("mcp-server".to_string()),
             args: Some(vec!["--mode".to_string(), "stdio".to_string()]),
             env: Some(env),
+            headers: None,
             transport: Some("stdio".to_string()),
             allowed_tools: None,
             protocol_version: None,

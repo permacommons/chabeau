@@ -16,6 +16,19 @@ use rust_mcp_schema::RequestId;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+fn apply_mcp_http_headers(
+    request: reqwest::RequestBuilder,
+    headers: Option<&std::collections::HashMap<String, String>>,
+) -> reqwest::RequestBuilder {
+    let mut request = request;
+    if let Some(headers) = headers {
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+    }
+    request
+}
+
 pub(crate) trait StreamableHttpContext {
     fn config(&self) -> &McpServerConfig;
     fn auth_header(&self) -> Option<&String>;
@@ -29,6 +42,15 @@ pub(crate) trait StreamableHttpContext {
     fn effective_protocol_version(&self) -> String {
         protocol::effective_protocol_version(self.config(), self.negotiated_protocol_version())
     }
+}
+
+pub(crate) struct StreamableHttpListenerConfig {
+    pub server_id: String,
+    pub base_url: Option<String>,
+    pub auth_header: Option<String>,
+    pub custom_headers: Option<std::collections::HashMap<String, String>>,
+    pub session_id: Option<String>,
+    pub protocol_version: Option<String>,
 }
 
 pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
@@ -47,10 +69,6 @@ pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
     .await?;
     let initialize = super::protocol::parse_initialize_result(response)?;
     context.set_negotiated_protocol_version(Some(initialize.protocol_version));
-
-    if context.session_id().is_none() {
-        return Err("Missing session id on initialize response.".to_string());
-    }
 
     send_notification(
         context,
@@ -82,13 +100,18 @@ pub(crate) async fn send_server_result_message(
 
 pub(crate) fn spawn_streamable_http_listener(
     client: reqwest::Client,
-    server_id: String,
-    base_url: Option<String>,
-    auth_header: Option<String>,
-    session_id: Option<String>,
     request_tx: mpsc::UnboundedSender<McpServerRequest>,
-    protocol_version: Option<String>,
+    listener: StreamableHttpListenerConfig,
 ) {
+    let StreamableHttpListenerConfig {
+        server_id,
+        base_url,
+        auth_header,
+        custom_headers,
+        session_id,
+        protocol_version,
+    } = listener;
+
     let Some(base_url) = base_url else {
         return;
     };
@@ -99,6 +122,7 @@ pub(crate) fn spawn_streamable_http_listener(
             protocol_version.as_deref(),
         );
 
+        request = apply_mcp_http_headers(request, custom_headers.as_ref());
         if let Some(auth) = auth_header {
             request = request.header("Authorization", auth);
         }
@@ -197,6 +221,7 @@ async fn send_client_message_with_context<C: StreamableHttpContext>(
     )
     .body(payload);
 
+    request = apply_mcp_http_headers(request, context.config().headers.as_ref());
     if let Some(auth) = context.auth_header() {
         request = request.header("Authorization", auth);
     }
@@ -238,6 +263,7 @@ async fn send_message<C: StreamableHttpContext>(
     )
     .body(payload);
 
+    request = apply_mcp_http_headers(request, context.config().headers.as_ref());
     if let Some(auth) = context.auth_header() {
         request = request.header("Authorization", auth);
     }
@@ -329,6 +355,7 @@ mod tests {
                 command: None,
                 args: None,
                 env: None,
+                headers: None,
                 transport: Some("streamable-http".to_string()),
                 allowed_tools: None,
                 protocol_version: None,

@@ -286,6 +286,9 @@ pub enum McpCommands {
     Edit {
         /// MCP server id from config.toml
         server: String,
+        /// Show optional MCP settings in the edit flow
+        #[arg(short = 'a', long = "advanced", action = clap::ArgAction::SetTrue)]
+        advanced: bool,
     },
     /// Remove an MCP server configuration
     Remove {
@@ -1147,7 +1150,7 @@ async fn handle_mcp_command(command: McpCommands, _env_only: bool) -> Result<(),
     match command {
         McpCommands::List => handle_mcp_list(),
         McpCommands::Add { advanced } => handle_mcp_add(advanced).await,
-        McpCommands::Edit { server } => handle_mcp_edit(&server),
+        McpCommands::Edit { server, advanced } => handle_mcp_edit(&server, advanced),
         McpCommands::Remove { server } => handle_mcp_remove(&server),
         McpCommands::Token { command } => handle_mcp_token(command),
         McpCommands::Oauth { command } => handle_mcp_oauth(command).await,
@@ -1214,6 +1217,7 @@ async fn handle_mcp_add(advanced: bool) -> Result<(), Box<dyn Error>> {
         command: None,
         args: None,
         env: None,
+        headers: None,
         transport: Some(prompt_transport(None)?.to_string()),
         allowed_tools: None,
         protocol_version: None,
@@ -1247,10 +1251,13 @@ async fn handle_mcp_add(advanced: bool) -> Result<(), Box<dyn Error>> {
     {
         if let Some(metadata) = probe_oauth_support(&server).await? {
             println!("Detected OAuth metadata for {}.", server.display_name);
-            if let Err(err) =
-                add_oauth_grant_for_server(&server, Some(metadata), false, advanced).await
-            {
-                eprintln!("⚠️ OAuth setup skipped: {err}");
+            let should_setup_oauth = prompt_bool_with_default("Configure OAuth now", true)?;
+            if should_setup_oauth {
+                if let Err(err) =
+                    add_oauth_grant_for_server(&server, Some(metadata), false, advanced).await
+                {
+                    eprintln!("⚠️ OAuth setup skipped: {err}");
+                }
             }
         } else if prompt_bool_with_default(
             "No OAuth metadata detected. Add bearer token now",
@@ -1265,8 +1272,13 @@ async fn handle_mcp_add(advanced: bool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_mcp_edit(server_input: &str) -> Result<(), Box<dyn Error>> {
+fn handle_mcp_edit(server_input: &str, advanced: bool) -> Result<(), Box<dyn Error>> {
     let mut config = Config::load()?;
+    if !advanced {
+        println!(
+            "Basic mode: advanced options are hidden. Re-run with `chabeau mcp edit {server_input} -a` for advanced settings."
+        );
+    }
     let current = resolve_mcp_server(&config, server_input)?.clone();
     let mut server = current.clone();
 
@@ -1282,13 +1294,15 @@ fn handle_mcp_edit(server_input: &str) -> Result<(), Box<dyn Error>> {
         .to_string();
     let transport = prompt_transport(Some(&current_transport))?;
     server.transport = Some(transport.to_string());
-    configure_mcp_transport_fields(&mut server, true, true)?;
+    configure_mcp_transport_fields(&mut server, true, advanced)?;
 
-    server.enabled = Some(prompt_bool_with_default("Enabled", current.is_enabled())?);
-    server.yolo = Some(prompt_bool_with_default(
-        "YOLO auto-approve",
-        current.is_yolo(),
-    )?);
+    if advanced {
+        server.enabled = Some(prompt_bool_with_default("Enabled", current.is_enabled())?);
+        server.yolo = Some(prompt_bool_with_default(
+            "YOLO auto-approve",
+            current.is_yolo(),
+        )?);
+    }
 
     if let Some(existing) = config
         .mcp_servers
@@ -1308,9 +1322,10 @@ fn handle_mcp_edit(server_input: &str) -> Result<(), Box<dyn Error>> {
 fn handle_mcp_remove(server_input: &str) -> Result<(), Box<dyn Error>> {
     let mut config = Config::load()?;
     let server = resolve_mcp_server(&config, server_input)?.clone();
+    let store = McpTokenStore::new();
     let confirmed = prompt_bool_with_default(
         &format!(
-            "Remove MCP server {} ({}) from config",
+            "Remove MCP server {} ({}) from config? Any associated OAuth tokens or configuration variables will also be removed",
             server.display_name, server.id
         ),
         false,
@@ -1324,6 +1339,24 @@ fn handle_mcp_remove(server_input: &str) -> Result<(), Box<dyn Error>> {
         .mcp_servers
         .retain(|candidate| !candidate.id.eq_ignore_ascii_case(&server.id));
     config.save()?;
+
+    match store.remove_oauth_grant(&server.id) {
+        Ok(true) => println!("✅ Removed stored OAuth grant for {}", server.display_name),
+        Ok(false) => println!("☑️ No stored OAuth grant found for {}", server.display_name),
+        Err(err) => eprintln!(
+            "⚠️ Could not remove stored OAuth grant for {}: {}",
+            server.display_name, err
+        ),
+    }
+    match store.remove_token(&server.id) {
+        Ok(true) => println!("✅ Removed stored MCP token for {}", server.display_name),
+        Ok(false) => println!("☑️ No stored MCP token found for {}", server.display_name),
+        Err(err) => eprintln!(
+            "⚠️ Could not remove stored MCP token for {}: {}",
+            server.display_name, err
+        ),
+    }
+
     println!(
         "✅ Removed MCP server {} ({})",
         server.display_name, server.id
@@ -1699,6 +1732,7 @@ fn configure_mcp_transport_fields(
     match server.transport.as_deref().unwrap_or("streamable-http") {
         "stdio" => {
             server.base_url = None;
+            server.headers = None;
             let command_prompt = if is_edit {
                 format!(
                     "Command [{}]: ",
@@ -1718,25 +1752,27 @@ fn configure_mcp_transport_fields(
                 server.command = Some(command_input);
             }
 
-            let args_default = server
-                .args
-                .as_ref()
-                .map(|args| args.join(" "))
-                .unwrap_or_default();
-            let args_input =
-                prompt_optional(&format!("Args (space-separated) [{}]: ", args_default))?;
-            if !args_input.is_empty() {
-                server.args = Some(
-                    args_input
-                        .split_whitespace()
-                        .map(ToString::to_string)
-                        .collect(),
-                );
-            } else if !is_edit {
-                server.args = None;
+            if advanced {
+                let args_default = server
+                    .args
+                    .as_ref()
+                    .map(|args| args.join(" "))
+                    .unwrap_or_default();
+                let args_input =
+                    prompt_optional(&format!("Args (space-separated) [{}]: ", args_default))?;
+                if !args_input.is_empty() {
+                    server.args = Some(
+                        args_input
+                            .split_whitespace()
+                            .map(ToString::to_string)
+                            .collect(),
+                    );
+                } else if !is_edit {
+                    server.args = None;
+                }
             }
 
-            if is_edit || advanced {
+            if advanced {
                 let env_default = server
                     .env
                     .as_ref()
@@ -1754,7 +1790,11 @@ fn configure_mcp_transport_fields(
                     env_default
                 ))?;
                 if !env_input.is_empty() {
-                    server.env = Some(parse_env_pairs(&env_input)?);
+                    server.env = Some(parse_key_value_pairs(
+                        &env_input,
+                        "env entry",
+                        "Environment variable name",
+                    )?);
                 } else if !is_edit {
                     server.env = None;
                 }
@@ -1785,10 +1825,31 @@ fn configure_mcp_transport_fields(
             } else {
                 server.base_url = Some(base_input);
             }
+
+            if advanced {
+                let headers_default = server
+                    .headers
+                    .as_ref()
+                    .map(format_key_value_pairs)
+                    .unwrap_or_default();
+                let headers_input = prompt_optional(&format!(
+                    "HTTP headers (KEY=VALUE, comma-separated, optional) [{}]: ",
+                    headers_default
+                ))?;
+                if !headers_input.is_empty() {
+                    server.headers = Some(parse_key_value_pairs(
+                        &headers_input,
+                        "header entry",
+                        "Header name",
+                    )?);
+                } else if !is_edit {
+                    server.headers = None;
+                }
+            }
         }
     }
 
-    if is_edit || advanced {
+    if advanced {
         let protocol_default = server.protocol_version.as_deref().unwrap_or_default();
         let protocol_input = prompt_optional(&format!(
             "Protocol version (optional) [{}]: ",
@@ -1825,25 +1886,36 @@ fn configure_mcp_transport_fields(
     Ok(())
 }
 
-fn parse_env_pairs(
+fn parse_key_value_pairs(
     input: &str,
+    entry_label: &str,
+    key_label: &str,
 ) -> Result<std::collections::HashMap<String, String>, Box<dyn Error>> {
-    let mut env = std::collections::HashMap::new();
+    let mut pairs = std::collections::HashMap::new();
     for pair in input
         .split(',')
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
     {
         let Some((key, value)) = pair.split_once('=') else {
-            return Err(format!("Invalid env entry '{pair}'. Expected KEY=VALUE.").into());
+            return Err(format!("Invalid {entry_label} '{pair}'. Expected KEY=VALUE.").into());
         };
         let key = key.trim();
         if key.is_empty() {
-            return Err("Environment variable name cannot be empty.".into());
+            return Err(format!("{key_label} cannot be empty.").into());
         }
-        env.insert(key.to_string(), value.trim().to_string());
+        pairs.insert(key.to_string(), value.trim().to_string());
     }
-    Ok(env)
+    Ok(pairs)
+}
+
+fn format_key_value_pairs(pairs: &std::collections::HashMap<String, String>) -> String {
+    let mut formatted: Vec<String> = pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    formatted.sort();
+    formatted.join(",")
 }
 
 fn resolve_mcp_server<'a>(

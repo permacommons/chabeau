@@ -202,12 +202,45 @@ fn test_mcp_edit_command_parsing() {
     let args = Args::try_parse_from(["chabeau", "mcp", "edit", "agpedia"]).unwrap();
     match args.command {
         Some(Commands::Mcp {
-            command: McpCommands::Edit { server },
+            command: McpCommands::Edit { server, advanced },
         }) => {
             assert_eq!(server, "agpedia");
+            assert!(!advanced);
         }
         _ => panic!("Expected mcp edit subcommand"),
     }
+}
+
+#[test]
+fn test_mcp_edit_advanced_flag_parsing() {
+    let args = Args::try_parse_from(["chabeau", "mcp", "edit", "agpedia", "--advanced"]).unwrap();
+    match args.command {
+        Some(Commands::Mcp {
+            command: McpCommands::Edit { server, advanced },
+        }) => {
+            assert_eq!(server, "agpedia");
+            assert!(advanced);
+        }
+        _ => panic!("Expected mcp edit --advanced"),
+    }
+}
+
+#[test]
+fn test_parse_key_value_pairs_accepts_headers() {
+    let pairs = parse_key_value_pairs("A=1, B = two", "header entry", "Header name")
+        .expect("pairs should parse");
+    assert_eq!(pairs.get("A").map(String::as_str), Some("1"));
+    assert_eq!(pairs.get("B").map(String::as_str), Some("two"));
+}
+
+#[test]
+fn test_parse_key_value_pairs_rejects_invalid_entry() {
+    let err = parse_key_value_pairs("A", "header entry", "Header name")
+        .expect_err("invalid pair should fail");
+    assert_eq!(
+        err.to_string(),
+        "Invalid header entry 'A'. Expected KEY=VALUE."
+    );
 }
 
 #[test]

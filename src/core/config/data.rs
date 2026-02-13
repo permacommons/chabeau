@@ -84,6 +84,7 @@ pub struct McpServerConfig {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, String>>,
     pub transport: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub protocol_version: Option<String>,

@@ -73,6 +73,7 @@ base_url = "http://localhost:3333"
 transport = "streamable-http"
 enabled = true
 allowed_tools = ["weather.lookup", "time.now"]
+# headers = { SOME_SERVICE_API_KEY = "your-key" } # Optional custom HTTP headers (advanced mode in CLI)
 # yolo = true  # Skip permission prompts for this server (use with care).
 # protocol_version = "2024-11-05" # If you need to specify an earlier version
 # tool_payloads = "turn" # Retention of raw tool payloads: turn | window | all

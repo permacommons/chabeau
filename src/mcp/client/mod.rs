@@ -543,21 +543,31 @@ impl McpClientManager {
                                             .http_client
                                             .clone()
                                             .expect("HTTP client should be available"),
-                                        server.config.id.clone(),
-                                        server.config.base_url.clone(),
-                                        server.auth_header.clone(),
-                                        server.session_id.clone(),
                                         tx,
-                                        Some(protocol::effective_protocol_version(
-                                            &server.config,
-                                            server.negotiated_protocol_version.as_deref().or_else(
-                                                || {
-                                                    server.server_details.as_ref().map(|details| {
-                                                        details.protocol_version.as_str()
-                                                    })
-                                                },
+                                        transport_http::StreamableHttpListenerConfig {
+                                            server_id: server.config.id.clone(),
+                                            base_url: server.config.base_url.clone(),
+                                            auth_header: server.auth_header.clone(),
+                                            custom_headers: server.config.headers.clone(),
+                                            session_id: server.session_id.clone(),
+                                            protocol_version: Some(
+                                                protocol::effective_protocol_version(
+                                                    &server.config,
+                                                    server
+                                                        .negotiated_protocol_version
+                                                        .as_deref()
+                                                        .or_else(|| {
+                                                            server.server_details.as_ref().map(
+                                                                |details| {
+                                                                    details
+                                                                        .protocol_version
+                                                                        .as_str()
+                                                                },
+                                                            )
+                                                        }),
+                                                ),
                                             ),
-                                        )),
+                                        },
                                     );
                                 }
                             }

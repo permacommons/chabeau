@@ -1,7 +1,10 @@
 //! Provider-keyed setting handlers for HashMap<String, String> settings.
 
 use crate::cli::settings::error::SettingError;
-use crate::cli::settings::helpers::{mutate_config, validate_provider};
+use crate::cli::settings::helpers::{
+    mutate_config_with_message, parse_provider_value, success_set_provider_value,
+    success_unset_provider_value, validate_provider,
+};
 use crate::cli::settings::{SetContext, SettingHandler};
 use crate::core::config::data::Config;
 
@@ -14,30 +17,22 @@ impl SettingHandler for DefaultModelHandler {
     }
 
     fn set(&self, args: &[String], ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
-        if args.len() < 2 {
-            return Err(SettingError::MissingArgs {
-                hint: "To set a default model, specify the provider and model:",
-                example: "chabeau set default-model openai gpt-4o",
-            });
-        }
+        let (provider, model) = parse_provider_value(
+            args,
+            ctx,
+            "To set a default model, specify the provider and model:",
+            "chabeau set default-model openai gpt-4o",
+        )?;
 
-        let provider_input = &args[0];
-        let model = args[1..].join(" ");
+        let message = success_set_provider_value("default-model", &provider, &model);
 
-        let resolved_provider = validate_provider(ctx.config, provider_input)?;
-
-        let provider_msg = resolved_provider.clone();
-        let model_msg = model.clone();
-
-        mutate_config(move |config| {
-            config.set_default_model(resolved_provider, model);
-            Ok(())
-        })?;
-
-        Ok(format!(
-            "✅ Set default-model for provider '{}' to: {}",
-            provider_msg, model_msg
-        ))
+        mutate_config_with_message(
+            move |config| {
+                config.set_default_model(provider, model);
+                Ok(())
+            },
+            message,
+        )
     }
 
     fn unset(&self, args: Option<&str>, ctx: &mut SetContext<'_>) -> Result<String, SettingError> {
@@ -46,17 +41,16 @@ impl SettingHandler for DefaultModelHandler {
             example: "chabeau unset default-model openai",
         })?;
 
-        let resolved_provider = validate_provider(ctx.config, provider)?;
-        let provider_msg = resolved_provider.clone();
+        let provider = validate_provider(ctx.config, provider)?;
+        let message = success_unset_provider_value("default-model", &provider);
 
-        mutate_config(move |config| {
-            config.unset_default_model(&resolved_provider);
-            Ok(())
-        })?;
-
-        Ok(format!(
-            "✅ Unset default-model for provider: {provider_msg}"
-        ))
+        mutate_config_with_message(
+            move |config| {
+                config.unset_default_model(&provider);
+                Ok(())
+            },
+            message,
+        )
     }
 
     fn format(&self, config: &Config) -> String {
@@ -69,7 +63,7 @@ impl SettingHandler for DefaultModelHandler {
             for (provider, model) in entries {
                 output.push_str(&format!("    {provider}: {model}\n"));
             }
-            output.pop(); // Remove trailing newline
+            output.pop();
             output
         }
     }

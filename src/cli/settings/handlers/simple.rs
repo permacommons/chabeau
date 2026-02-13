@@ -1,7 +1,9 @@
 //! Simple setting handlers for single-value settings.
 
 use crate::cli::settings::error::SettingError;
-use crate::cli::settings::helpers::{mutate_config, validate_provider, validate_theme};
+use crate::cli::settings::helpers::{
+    mutate_config_with_message, success_set, success_unset, validate_provider, validate_theme,
+};
 use crate::cli::settings::{SetContext, SettingHandler};
 use crate::core::config::data::Config;
 
@@ -21,16 +23,16 @@ impl SettingHandler for DefaultProviderHandler {
             });
         }
 
-        let provider_input = args.join(" ");
-        let resolved = validate_provider(ctx.config, &provider_input)?;
-        let msg = resolved.clone();
+        let provider = validate_provider(ctx.config, &args.join(" "))?;
+        let message = success_set("default-provider", &provider);
 
-        mutate_config(move |config| {
-            config.default_provider = Some(resolved);
-            Ok(())
-        })?;
-
-        Ok(format!("✅ Set default-provider to: {msg}"))
+        mutate_config_with_message(
+            move |config| {
+                config.default_provider = Some(provider);
+                Ok(())
+            },
+            message,
+        )
     }
 
     fn unset(
@@ -38,12 +40,13 @@ impl SettingHandler for DefaultProviderHandler {
         _args: Option<&str>,
         _ctx: &mut SetContext<'_>,
     ) -> Result<String, SettingError> {
-        mutate_config(|config| {
-            config.default_provider = None;
-            Ok(())
-        })?;
-
-        Ok("✅ Unset default-provider".to_string())
+        mutate_config_with_message(
+            |config| {
+                config.default_provider = None;
+                Ok(())
+            },
+            success_unset("default-provider"),
+        )
     }
 
     fn format(&self, config: &Config) -> String {
@@ -70,16 +73,16 @@ impl SettingHandler for ThemeHandler {
             });
         }
 
-        let theme_input = args.join(" ");
-        let resolved = validate_theme(ctx.config, &theme_input)?;
-        let msg = resolved.clone();
+        let theme = validate_theme(ctx.config, &args.join(" "))?;
+        let message = success_set("theme", &theme);
 
-        mutate_config(move |config| {
-            config.theme = Some(resolved);
-            Ok(())
-        })?;
-
-        Ok(format!("✅ Set theme to: {msg}"))
+        mutate_config_with_message(
+            move |config| {
+                config.theme = Some(theme);
+                Ok(())
+            },
+            message,
+        )
     }
 
     fn unset(
@@ -87,12 +90,13 @@ impl SettingHandler for ThemeHandler {
         _args: Option<&str>,
         _ctx: &mut SetContext<'_>,
     ) -> Result<String, SettingError> {
-        mutate_config(|config| {
-            config.theme = None;
-            Ok(())
-        })?;
-
-        Ok("✅ Unset theme".to_string())
+        mutate_config_with_message(
+            |config| {
+                config.theme = None;
+                Ok(())
+            },
+            success_unset("theme"),
+        )
     }
 
     fn format(&self, config: &Config) -> String {

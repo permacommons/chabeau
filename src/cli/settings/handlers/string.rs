@@ -1,7 +1,7 @@
 //! String setting handlers for text-based settings.
 
 use crate::cli::settings::error::SettingError;
-use crate::cli::settings::helpers::mutate_config;
+use crate::cli::settings::helpers::{mutate_config_with_message, success_set};
 use crate::cli::settings::{SetContext, SettingHandler};
 use crate::core::config::data::{Config, DEFAULT_REFINE_INSTRUCTIONS, DEFAULT_REFINE_PREFIX};
 
@@ -24,12 +24,13 @@ impl SettingHandler for RefineInstructionsHandler {
         let value = args.join(" ");
         let display = truncate_with_ellipsis(&value, 50);
 
-        mutate_config(move |config| {
-            config.refine_instructions = Some(value);
-            Ok(())
-        })?;
-
-        Ok(format!("✅ Set refine-instructions to: {display}"))
+        mutate_config_with_message(
+            move |config| {
+                config.refine_instructions = Some(value);
+                Ok(())
+            },
+            success_set("refine-instructions", &display),
+        )
     }
 
     fn unset(
@@ -37,12 +38,13 @@ impl SettingHandler for RefineInstructionsHandler {
         _args: Option<&str>,
         _ctx: &mut SetContext<'_>,
     ) -> Result<String, SettingError> {
-        mutate_config(|config| {
-            config.refine_instructions = None;
-            Ok(())
-        })?;
-
-        Ok("✅ Unset refine-instructions (will use default)".to_string())
+        mutate_config_with_message(
+            |config| {
+                config.refine_instructions = None;
+                Ok(())
+            },
+            "✅ Unset refine-instructions (will use default)".to_string(),
+        )
     }
 
     fn format(&self, config: &Config) -> String {
@@ -91,14 +93,15 @@ impl SettingHandler for RefinePrefixHandler {
         }
 
         let value = args.join(" ");
-        let msg = value.clone();
+        let message = success_set("refine-prefix", &value);
 
-        mutate_config(move |config| {
-            config.refine_prefix = Some(value);
-            Ok(())
-        })?;
-
-        Ok(format!("✅ Set refine-prefix to: {msg}"))
+        mutate_config_with_message(
+            move |config| {
+                config.refine_prefix = Some(value);
+                Ok(())
+            },
+            message,
+        )
     }
 
     fn unset(
@@ -106,15 +109,16 @@ impl SettingHandler for RefinePrefixHandler {
         _args: Option<&str>,
         _ctx: &mut SetContext<'_>,
     ) -> Result<String, SettingError> {
-        mutate_config(|config| {
-            config.refine_prefix = None;
-            Ok(())
-        })?;
-
-        Ok(format!(
-            "✅ Unset refine-prefix (will use default: {})",
-            DEFAULT_REFINE_PREFIX
-        ))
+        mutate_config_with_message(
+            |config| {
+                config.refine_prefix = None;
+                Ok(())
+            },
+            format!(
+                "✅ Unset refine-prefix (will use default: {})",
+                DEFAULT_REFINE_PREFIX
+            ),
+        )
     }
 
     fn format(&self, config: &Config) -> String {

@@ -30,15 +30,15 @@ where
         McpTransportKind::Stdio => transport_stdio::send_request(context.client(), request).await?,
         McpTransportKind::StreamableHttp => {
             transport_http::ensure_session_context(context).await?;
-            transport_http::send_request_with_context(context, request).await?
+            transport_http::send_request_with_context(context, request, None).await?
         }
     };
     parse(response)
 }
 
-trait OperationContext: super::StreamableHttpContext {
+trait OperationContext: transport_http::StreamableHttpContext {
     fn transport_kind(&self) -> McpTransportKind;
-    fn client(&self) -> Option<std::sync::Arc<super::StdioClient>>;
+    fn client(&self) -> Option<std::sync::Arc<super::transport_stdio::StdioClient>>;
 }
 
 impl OperationContext for McpToolCallContext {
@@ -46,7 +46,7 @@ impl OperationContext for McpToolCallContext {
         self.transport_kind
     }
 
-    fn client(&self) -> Option<std::sync::Arc<super::StdioClient>> {
+    fn client(&self) -> Option<std::sync::Arc<super::transport_stdio::StdioClient>> {
         self.client.clone()
     }
 }
@@ -56,7 +56,7 @@ impl OperationContext for McpPromptContext {
         self.transport_kind
     }
 
-    fn client(&self) -> Option<std::sync::Arc<super::StdioClient>> {
+    fn client(&self) -> Option<std::sync::Arc<super::transport_stdio::StdioClient>> {
         self.client.clone()
     }
 }

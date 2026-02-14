@@ -193,97 +193,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     };
     let indicator_label = activity_indicator_label(app);
 
-    let base_title: Cow<'_, str> = if app.ui.in_edit_select_mode() {
-        match app.ui.edit_select_target() {
-            Some(EditSelectTarget::Assistant) => {
-                Cow::Borrowed(
-                    "Select assistant message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)",
-                )
-            }
-            _ => {
-                Cow::Borrowed(
-                    "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • c=Copy • Esc=Cancel)",
-                )
-            }
-        }
-    } else if app.ui.in_block_select_mode() {
-        Cow::Borrowed("Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)")
-    } else if app.picker_session().is_some() {
-        // Show specific prompt for picker mode with global shortcuts
-        match app.current_picker_mode() {
-            Some(crate::core::app::PickerMode::Model) => {
-                Cow::Borrowed("Select a model (Esc=cancel • Ctrl+C=quit)")
-            }
-            Some(crate::core::app::PickerMode::Provider) => {
-                Cow::Borrowed("Select a provider (Esc=cancel • Ctrl+C=quit)")
-            }
-            Some(crate::core::app::PickerMode::Theme) => {
-                Cow::Borrowed("Select a theme (Esc=cancel • Ctrl+C=quit)")
-            }
-            Some(crate::core::app::PickerMode::Character) => {
-                Cow::Borrowed("Select a character (Esc=cancel • Ctrl+C=quit)")
-            }
-            Some(crate::core::app::PickerMode::Persona) => {
-                Cow::Borrowed("Select a persona (Esc=cancel • Ctrl+C=quit)")
-            }
-            Some(crate::core::app::PickerMode::Preset) => {
-                Cow::Borrowed("Select a preset (Esc=cancel • Ctrl+C=quit)")
-            }
-            _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
-        }
-    } else if let Some(prompt) = app.ui.tool_prompt() {
-        let tool_prompt_frame = {
-            const TOOL_PROMPT_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
-            const TOOL_PROMPT_ROTATIONS_PER_SECOND: f32 = 1.5;
-            let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
-            let total_frames =
-                (elapsed * TOOL_PROMPT_ROTATIONS_PER_SECOND * TOOL_PROMPT_FRAMES.len() as f32)
-                    .floor() as usize;
-            TOOL_PROMPT_FRAMES[total_frames % TOOL_PROMPT_FRAMES.len()]
-        };
-        let title = tool_prompt_title(prompt, chunks[1].width, tool_prompt_frame);
-        Cow::Owned(title)
-    } else if let Some(prompt) = app.ui.mcp_prompt_input() {
-        let label = prompt
-            .pending_args
-            .get(prompt.next_index)
-            .and_then(|arg| arg.title.as_deref())
-            .unwrap_or_else(|| {
-                prompt
-                    .pending_args
-                    .get(prompt.next_index)
-                    .map(|arg| arg.name.as_str())
-                    .unwrap_or("value")
-            });
-        Cow::Owned(format!(
-            "Prompt {} on {}: {} (Enter=Next • Esc=Cancel)",
-            prompt.prompt_name, prompt.server_name, label
-        ))
-    } else if app.ui.file_prompt().is_some() {
-        Cow::Borrowed("Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)")
-    } else if let Some(index) = app.ui.in_place_edit_index() {
-        let mut title = String::from("Edit in place: Enter=Apply • Esc=Cancel (no send)");
-        if app.ui.compose_mode {
-            if let Some(message) = app.ui.messages.get(index) {
-                if message.role == ROLE_ASSISTANT {
-                    title.push_str(" • F4: toggle compose mode");
-                }
-            }
-        }
-        Cow::Owned(title)
-    } else if app.ui.is_editing_assistant_message() {
-        if app.ui.compose_mode {
-            Cow::Owned(String::from("Edit message (F4: toggle compose mode)"))
-        } else {
-            Cow::Borrowed("Edit message")
-        }
-    } else if app.ui.compose_mode {
-        Cow::Borrowed("Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)")
-    } else if app.has_interruptible_activity() {
-        Cow::Borrowed("Type a new message (Esc=interrupt • Ctrl+R=retry)")
-    } else {
-        Cow::Borrowed("Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)")
-    };
+    let base_title = input_title_base(app, chunks[1].width);
     // Build a styled title with theme styling on base title and indicator
     let input_title: Line = if indicator.is_empty() {
         Line::from(Span::styled(
@@ -664,6 +574,100 @@ fn activity_indicator_label(app: &App) -> &'static str {
     }
 }
 
+fn input_title_base(app: &App, input_width: u16) -> Cow<'_, str> {
+    if app.ui.in_edit_select_mode() {
+        match app.ui.edit_select_target() {
+            Some(EditSelectTarget::Assistant) => {
+                Cow::Borrowed(
+                    "Select assistant message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • Esc=Cancel)",
+                )
+            }
+            _ => {
+                Cow::Borrowed(
+                    "Select user message (↑/↓ • Enter=Edit→Truncate • e=Edit in place • Del=Truncate • c=Copy • Esc=Cancel)",
+                )
+            }
+        }
+    } else if app.ui.in_block_select_mode() {
+        Cow::Borrowed("Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)")
+    } else if app.picker_session().is_some() {
+        // Show specific prompt for picker mode with global shortcuts
+        match app.current_picker_mode() {
+            Some(crate::core::app::PickerMode::Model) => {
+                Cow::Borrowed("Select a model (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::Provider) => {
+                Cow::Borrowed("Select a provider (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::Theme) => {
+                Cow::Borrowed("Select a theme (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::Character) => {
+                Cow::Borrowed("Select a character (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::Persona) => {
+                Cow::Borrowed("Select a persona (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::Preset) => {
+                Cow::Borrowed("Select a preset (Esc=cancel • Ctrl+C=quit)")
+            }
+            _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
+        }
+    } else if let Some(prompt) = app.ui.tool_prompt() {
+        let tool_prompt_frame = {
+            const TOOL_PROMPT_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+            const TOOL_PROMPT_ROTATIONS_PER_SECOND: f32 = 1.5;
+            let elapsed = app.ui.pulse_start.elapsed().as_secs_f32();
+            let total_frames =
+                (elapsed * TOOL_PROMPT_ROTATIONS_PER_SECOND * TOOL_PROMPT_FRAMES.len() as f32)
+                    .floor() as usize;
+            TOOL_PROMPT_FRAMES[total_frames % TOOL_PROMPT_FRAMES.len()]
+        };
+        let title = tool_prompt_title(prompt, input_width, tool_prompt_frame);
+        Cow::Owned(title)
+    } else if let Some(prompt) = app.ui.mcp_prompt_input() {
+        let label = prompt
+            .pending_args
+            .get(prompt.next_index)
+            .and_then(|arg| arg.title.as_deref())
+            .unwrap_or_else(|| {
+                prompt
+                    .pending_args
+                    .get(prompt.next_index)
+                    .map(|arg| arg.name.as_str())
+                    .unwrap_or("value")
+            });
+        Cow::Owned(format!(
+            "Prompt {} on {}: {} (Enter=Next • Esc=Cancel)",
+            prompt.prompt_name, prompt.server_name, label
+        ))
+    } else if app.ui.file_prompt().is_some() {
+        Cow::Borrowed("Specify new filename (Esc=Cancel • Alt+Enter=Overwrite)")
+    } else if let Some(index) = app.ui.in_place_edit_index() {
+        let mut title = String::from("Edit in place: Enter=Apply • Esc=Cancel (no send)");
+        if app.ui.compose_mode {
+            if let Some(message) = app.ui.messages.get(index) {
+                if message.role == ROLE_ASSISTANT {
+                    title.push_str(" • F4: toggle compose mode");
+                }
+            }
+        }
+        Cow::Owned(title)
+    } else if app.ui.is_editing_assistant_message() {
+        if app.ui.compose_mode {
+            Cow::Owned(String::from("Edit message (F4: toggle compose mode)"))
+        } else {
+            Cow::Borrowed("Edit message")
+        }
+    } else if app.ui.compose_mode {
+        Cow::Borrowed("Compose a message (F4=toggle compose mode, Enter=new line, Alt+Enter=send)")
+    } else if app.has_interruptible_activity() {
+        Cow::Borrowed("Type a new message (Esc=interrupt • Ctrl+R=retry)")
+    } else {
+        Cow::Borrowed("Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)")
+    }
+}
+
 fn tool_prompt_insert_index(
     messages: &VecDeque<crate::core::message::Message>,
     prompt: &ToolPrompt,
@@ -983,9 +987,10 @@ fn apply_code_block_highlight(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::{apply_actions, AppAction, AppActionContext, AppActionEnvelope};
     use crate::core::app::{
         App, CharacterPickerState, ModelPickerState, PickerData, PickerSession,
-        ProviderPickerState, ThemePickerState,
+        ProviderPickerState, StreamingAction, ThemePickerState,
     };
     use crate::ui::picker::PickerState;
     use crate::ui::theme::Theme;
@@ -1117,6 +1122,50 @@ mod tests {
 
         app.begin_mcp_operation();
         assert_eq!(activity_indicator_label(&app), " [MCP]");
+    }
+
+    #[test]
+    fn input_title_resets_after_stream_completion() {
+        let mut app = create_test_app();
+        let ctx = AppActionContext {
+            term_width: 80,
+            term_height: 24,
+        };
+
+        let idle_title = input_title_base(&app, 80).to_string();
+        assert_eq!(
+            idle_title,
+            "Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)"
+        );
+
+        let commands = apply_actions(
+            &mut app,
+            [AppActionEnvelope {
+                action: AppAction::Streaming(StreamingAction::SubmitMessage {
+                    message: "hello".to_string(),
+                }),
+                context: ctx,
+            }],
+        );
+        assert_eq!(commands.len(), 1);
+        assert_eq!(
+            input_title_base(&app, 80).to_string(),
+            "Type a new message (Esc=interrupt • Ctrl+R=retry)"
+        );
+
+        let stream_id = app.session.current_stream_id;
+        let completion_commands = apply_actions(
+            &mut app,
+            [AppActionEnvelope {
+                action: AppAction::Streaming(StreamingAction::StreamCompleted { stream_id }),
+                context: ctx,
+            }],
+        );
+        assert!(completion_commands.is_empty());
+        assert_eq!(
+            input_title_base(&app, 80).to_string(),
+            "Type a new message (Alt+Enter=new line • Ctrl+C=quit • More: Type /help)"
+        );
     }
 
     #[test]

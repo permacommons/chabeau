@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.1
+
+### Added
+- Added support for custom per-server HTTP headers in MCP streamable HTTP configurations.
+- Added automatic refresh for MCP OAuth access tokens when refresh tokens are available.
+
+### Changed
+- Updated `chabeau mcp add` and `chabeau mcp edit` basic mode prompts to request only required fields.
+- Improved MCP startup responsiveness by initializing and refreshing server metadata concurrently with bounded parallelism.
+- Reused pooled HTTP clients for streamable MCP server requests to reduce repeated connection setup overhead.
+- Unified MCP progress feedback with the pulsing status indicator, including MCP labeling and interruption-aware behavior.
+- Updated locked dependency versions to current compatible patch releases.
+
+### Fixed
+- Fixed streamable HTTP MCP handshake sequencing by sending `notifications/initialized` after successful initialize and before normal requests.
+- Fixed streamable HTTP event-stream handling by normalizing `Content-Type` parsing for SSE responses.
+- Fixed streamable HTTP protocol negotiation handling by sending the negotiated `MCP-Protocol-Version` header on MCP requests.
+
 ## 0.7.0
 
 ### Added

@@ -180,4 +180,19 @@ mod tests {
             .iter()
             .any(|msg| msg.role == ROLE_TOOL_RESULT));
     }
+
+    #[test]
+    fn finalize_stream_clears_interrupt_token_when_done() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+
+        let command = spawn_stream_for_message(&mut app, "Hello there".into(), ctx);
+        assert!(matches!(command, Some(AppCommand::SpawnStream(_))));
+        assert!(app.session.stream_cancel_token.is_some());
+
+        let command = finalize_stream(&mut app, ctx);
+        assert!(command.is_none());
+        assert!(app.session.stream_cancel_token.is_none());
+        assert!(!app.has_interruptible_activity());
+    }
 }

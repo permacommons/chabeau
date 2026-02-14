@@ -17,6 +17,7 @@ impl App {
 
     pub fn end_streaming(&mut self) {
         self.ui.end_streaming();
+        self.session.stream_cancel_token = None;
     }
 
     pub fn cancel_current_stream(&mut self) {

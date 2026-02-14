@@ -38,8 +38,8 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
 - [Syntax highlighting](https://permacommons.org/videos/chabeau-0.7.0/syntax.mp4)
 - [Code block selection](https://permacommons.org/videos/chabeau-0.7.0/codeblock.mp4)
 - [Complex tables](https://permacommons.org/videos/chabeau-0.7.0/table.mp4)
-- [MCP tool calls](https://permacommons.org/videos/chabeau-0.7.0/mcp.mp4)
-- [Inspecting MCP requests](https://permacommons.org/videos/chabeau-0.7.0/mcp-inspector.mp4)
+- [MCP tool calls](https://permacommons.org/videos/chabeau-0.7.2/mcp.mp4)
+- [Inspecting MCP requests](https://permacommons.org/videos/chabeau-0.7.2/mcp-inspector.mp4)
 
 The MCP server shown in the videos above is "[MCP Research Friend](https://github.com/permacommons/mcp-research-friend)", a Permacommons project.
 

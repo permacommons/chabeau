@@ -1,6 +1,6 @@
 [package]
 name = "chabeau"
-version = "0.7.2-dev"
+version = "0.7.2"
 edition = "2021"
 rust-version = "1.80"
 description = "A full-screen terminal chat interface that connects to various AI APIs for real-time conversations"

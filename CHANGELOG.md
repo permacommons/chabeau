@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2
+
+### Fixed
+- Restored the default input prompt title after a response finishes streaming so the UI no longer remains in interrupt/retry mode once activity ends.
+
 ## 0.7.1
 
 ### Added

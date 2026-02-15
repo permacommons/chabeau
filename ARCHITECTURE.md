@@ -116,6 +116,13 @@ Outgoing requests are encapsulated in `StreamParams` and executed by `ChatStream
 a Tokio task that posts SSE frames into an unbounded channel, normalizes malformed input, reports API errors
 with helpful Markdown summaries, and honors cancellation tokens so that user interrupts stop work promptly.【F:src/core/chat_stream.rs†L9-L349】
 
+## Release automation
+Release distribution is split across dedicated GitHub workflows under `.github/workflows/`.
+`publish.yml` handles crates.io publication from semver tags that are reachable from `main`.
+`nightly.yml` builds Linux/macOS release binaries on a nightly schedule (or manual dispatch),
+smoke-tests each artifact with `--version`/`--help`, then updates the moving `nightly`
+pre-release tag with checksummed archives.
+
 ## Configuration orchestrator and test isolation
 All configuration reads and writes go through `ConfigOrchestrator`, which caches the on-disk state and
 serializes mutations so that concurrent access is safe.【F:src/core/config/orchestrator.rs†L13-L80】 The

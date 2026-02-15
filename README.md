@@ -76,6 +76,22 @@ For features under consideration, see [WISHLIST.md](WISHLIST.md).
 cargo install chabeau
 ```
 
+Nightly pre-release binaries for Linux and macOS are published on the
+[GitHub Releases page](https://github.com/permacommons/chabeau/releases)
+under the `Nightly` pre-release tag.
+
+Each nightly artifact includes per-file SHA-256 checksums plus a combined
+`SHA256SUMS` file.
+
+On macOS, unsigned nightly binaries may be quarantined by Gatekeeper. If you
+trust the downloaded artifact, you can remove the quarantine attribute:
+
+```bash
+xattr -d com.apple.quarantine ./chabeau
+```
+
+Run unsigned binaries at your own risk.
+
 ### Configure Providers
 ```bash
 chabeau provider list
@@ -598,6 +614,11 @@ cargo fmt
 cargo test
 cargo clippy --all-targets --all-features
 ```
+
+### CI and Release Workflows
+- `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests.
+- `.github/workflows/publish.yml` publishes crates.io releases from semver tags that land on `main`.
+- `.github/workflows/nightly.yml` builds Linux/macOS release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts.
 
 ### Performance
 

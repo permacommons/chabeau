@@ -121,10 +121,11 @@ with helpful Markdown summaries, and honors cancellation tokens so that user int
 
 ## Release automation
 Release distribution is split across dedicated GitHub workflows under `.github/workflows/`.
-`publish.yml` handles crates.io publication from semver tags that are reachable from `main`.
-`nightly.yml` builds Linux/macOS release binaries on a nightly schedule (or manual dispatch),
-smoke-tests each artifact with `--version`/`--help`, then updates the moving `nightly`
-pre-release tag with checksummed archives.
+`publish.yml` selects the newest semver tag reachable from `main`, then runs stable
+publication in parallel: crates.io publication plus versioned GitHub Release binaries
+for Linux/macOS/Windows. `nightly.yml` builds Linux/macOS/Windows release binaries on a
+nightly schedule (or manual dispatch), smoke-tests each artifact with `--version`/`--help`,
+then updates the moving `nightly` pre-release tag with checksummed archives.
 
 ## Configuration orchestrator and test isolation
 All configuration reads and writes go through `ConfigOrchestrator`, which caches the on-disk state and

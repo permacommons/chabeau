@@ -1,15 +1,15 @@
-name: Publish crate when tag lands on main
+name: Publish release when tag lands on main
 
 on:
   push:
     branches: ['main']
 
 permissions:
-  contents: read
+  contents: write
 
-# Avoid double-publishes if multiple pushes land quickly
+# Avoid duplicate publishes if multiple pushes land quickly
 concurrency:
-  group: publish-crate
+  group: publish-release
   cancel-in-progress: false
 
 jobs:
@@ -52,7 +52,8 @@ jobs:
             exit 0
           fi
 
-          # Skip if already on crates.io — fail CLOSED on network/parse issues
+          # Skip if already on crates.io and already has a GitHub release.
+          # Fail CLOSED on network/parse issues for crates.io.
           crate_name="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
           tag_version="${candidate_tag#v}"
 
@@ -60,7 +61,6 @@ jobs:
           tmp="$(mktemp)"
           trap 'rm -f "$tmp"' EXIT
 
-          # Fetch with sensible timeouts/retries; treat any failure as "don't publish"
           if ! curl -fsS \
                 --connect-timeout 5 \
                 --max-time 15 \
@@ -75,7 +75,6 @@ jobs:
             exit 0
           fi
 
-          # Ensure the response is valid JSON; otherwise, fail closed
           if ! jq -e . "$tmp" >/dev/null 2>&1; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "reason=crates.io response not parseable; skipping publish" >> "$GITHUB_OUTPUT"
@@ -83,17 +82,38 @@ jobs:
             exit 0
           fi
 
-          # If the exact version already exists, skip publishing
+          crate_already_published=false
           if jq -e --arg v "$tag_version" 'any(.versions[]?; .num == $v)' "$tmp" >/dev/null 2>&1; then
+            crate_already_published=true
+          fi
+
+          # Check whether a GitHub release exists for the same tag.
+          # Use public API and tolerate 404 (release absent).
+          release_api="https://api.github.com/repos/${{ github.repository }}/releases/tags/${candidate_tag}"
+          release_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: curl' \
+            "$release_api")"
+
+          release_already_published=false
+          if [[ "$release_status" == "200" ]]; then
+            release_already_published=true
+          elif [[ "$release_status" != "404" ]]; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=version ${tag_version} already on crates.io" >> "$GITHUB_OUTPUT"
+            echo "reason=github release lookup returned HTTP ${release_status}; skipping publish" >> "$GITHUB_OUTPUT"
             echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Otherwise proceed
+          if [[ "$crate_already_published" == "true" && "$release_already_published" == "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=version ${tag_version} already on crates.io and GitHub Release exists" >> "$GITHUB_OUTPUT"
+            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "should_publish=true"  >> "$GITHUB_OUTPUT"
-          echo "reason=tag ${candidate_tag} is on ${DEFAULT_BRANCH} and not yet published" >> "$GITHUB_OUTPUT"
+          echo "reason=tag ${candidate_tag} is on ${DEFAULT_BRANCH} and release publication is pending" >> "$GITHUB_OUTPUT"
           echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Summary
@@ -105,7 +125,7 @@ jobs:
             echo "- Reason: ${{ steps.branch.outputs.reason }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
+  publish-crate:
     needs: check-branch
     if: needs.check-branch.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -154,3 +174,148 @@ jobs:
           set -euo pipefail
           cargo publish --locked --dry-run
           cargo publish --locked
+
+  build-binaries:
+    needs: check-branch
+    if: needs.check-branch.outputs.should_publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - os: macos-15
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check out tagged commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.check-branch.outputs.tag }}"
+          git checkout --quiet "$TAG"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Smoke test binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          BIN="target/$TARGET/release/chabeau"
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+
+      - name: Smoke test binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/chabeau.exe"
+          & $bin --version
+          & $bin --help | Out-Null
+
+      - name: Package release archive (Linux/macOS)
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.check-branch.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_DIR="target/$TARGET/release"
+          ASSET_TARGET="$TARGET"
+          ASSET_TARGET="${ASSET_TARGET/-unknown-/-}"
+          ARCHIVE="chabeau-${TAG}-${ASSET_TARGET}.tar.gz"
+          tar -C "$BIN_DIR" -czf "$ARCHIVE" chabeau
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          else
+            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          fi
+
+      - name: Package release archive (Windows)
+        if: runner.os == 'Windows'
+        env:
+          TAG: ${{ needs.check-branch.outputs.tag }}
+        shell: pwsh
+        run: |
+          $assetTarget = "${{ matrix.target }}".Replace("-pc-", "-")
+          $archive = "chabeau-$env:TAG-$assetTarget.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/chabeau.exe" -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz
+            chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz.sha256
+            chabeau-${{ needs.check-branch.outputs.tag }}-*.zip
+            chabeau-${{ needs.check-branch.outputs.tag }}-*.zip.sha256
+
+  publish-release:
+    needs: [check-branch, build-binaries]
+    if: needs.check-branch.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: false
+
+      - name: Build combined checksum file
+        env:
+          TAG: ${{ needs.check-branch.outputs.tag }}
+        run: |
+          set -euo pipefail
+          find dist/release-* -type f -name "chabeau-${TAG}-*.sha256" -print0 \
+            | sort -z \
+            | xargs -0 cat > dist/SHA256SUMS
+
+      - name: Publish or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-branch.outputs.tag }}
+          name: Chabeau ${{ needs.check-branch.outputs.tag }}
+          target_commitish: ${{ needs.check-branch.outputs.tag }}
+          body: |
+            Automated release artifacts for `${{ needs.check-branch.outputs.tag }}`.
+
+            Artifacts include Linux, macOS, and Windows binaries with per-archive SHA-256 checksums.
+          files: |
+            dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz
+            dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.zip
+            dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz.sha256
+            dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.zip.sha256
+            dist/SHA256SUMS
+          overwrite_files: true

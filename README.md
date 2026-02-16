@@ -76,9 +76,13 @@ For features under consideration, see [WISHLIST.md](WISHLIST.md).
 cargo install chabeau
 ```
 
-Nightly pre-release binaries for Linux and macOS are published on the
+Versioned release binaries (tagged semver releases) are published on the
 [GitHub Releases page](https://github.com/permacommons/chabeau/releases)
-under the `Nightly` pre-release tag.
+after the release tag becomes reachable from `main` (for example, when a
+`release/*` branch carrying the tag is merged).
+
+Nightly pre-release binaries are also published under the `Nightly`
+pre-release tag.
 
 Each nightly artifact includes per-file SHA-256 checksums plus a combined
 `SHA256SUMS` file.
@@ -617,8 +621,8 @@ cargo clippy --all-targets --all-features
 
 ### CI and Release Workflows
 - `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests.
-- `.github/workflows/publish.yml` publishes crates.io releases from semver tags that land on `main`.
-- `.github/workflows/nightly.yml` builds Linux/macOS release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts.
+- `.github/workflows/publish.yml` selects the newest semver tag reachable from `main`, then publishes the matching crates.io release and GitHub Release binaries.
+- `.github/workflows/nightly.yml` builds Linux/macOS/Windows release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts.
 
 ### Performance
 

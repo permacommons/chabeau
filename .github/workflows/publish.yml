@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 # Avoid duplicate publishes if multiple pushes land quickly
 concurrency:
@@ -302,6 +303,17 @@ jobs:
             | sort -z \
             | xargs -0 cat > dist/SHA256SUMS
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksum manifest (keyless)
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature dist/SHA256SUMS.sig \
+            --output-certificate dist/SHA256SUMS.pem \
+            dist/SHA256SUMS
+
       - name: Publish or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -312,10 +324,13 @@ jobs:
             Automated release artifacts for `${{ needs.check-branch.outputs.tag }}`.
 
             Artifacts include Linux, macOS, and Windows binaries with per-archive SHA-256 checksums.
+            The checksum manifest is signed with keyless Sigstore via GitHub Actions OIDC.
           files: |
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.zip
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz.sha256
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.zip.sha256
             dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+            dist/SHA256SUMS.pem
           overwrite_files: true

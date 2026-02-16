@@ -1,13 +1,7 @@
-use crate::utils::input::sanitize_text_input;
-use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
-};
+use crate::utils::line_editor::{prompt_line_editor, LineEditorOptions, MaskMode};
 use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, Write};
-use std::time::Duration;
 
 const MASKED_INPUT_PROMPT: &str = "Enter your API token (press F2 to reveal last 4 chars): ";
 const INVALID_CHOICE_MSG: &str = "Invalid choice";
@@ -75,31 +69,6 @@ impl fmt::Display for UiError {
 }
 
 impl std::error::Error for UiError {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct MaskedInputState {
-    pub value: String,
-    pub reveal_last_four: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MaskedInputAction {
-    Insert(char),
-    Backspace,
-    ToggleReveal,
-    ClearAll,
-    DeleteWord,
-    Paste(String),
-    Submit,
-    Cancel,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MaskedInputOutcome {
-    Continue { redraw: bool },
-    Submit(String),
-    Cancelled,
-}
 
 pub fn prompt_auth_menu(providers: &[ProviderMenuItem]) -> Result<AuthMenuSelection, UiError> {
     println!("🔐 Chabeau Authentication Setup");
@@ -295,162 +264,12 @@ pub fn prompt_deauth_menu(
 }
 
 pub fn prompt_masked_input() -> Result<String, UiError> {
-    enable_raw_mode().map_err(|err| UiError::new(err.to_string()))?;
-
-    let mut stdout = io::stdout();
-    execute!(stdout, event::EnableBracketedPaste).map_err(|err| UiError::new(err.to_string()))?;
-
-    let mut state = MaskedInputState::default();
-    let mut needs_redraw = true;
-
-    let result = loop {
-        if needs_redraw {
-            display_masked_prompt(&state).map_err(|err| UiError::new(err.to_string()))?;
-            needs_redraw = false;
-        }
-
-        if event::poll(Duration::from_millis(100)).map_err(|err| UiError::new(err.to_string()))? {
-            match event::read().map_err(|err| UiError::new(err.to_string()))? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    let action = map_key_event_to_action(&key);
-                    if let Some(action) = action {
-                        match handle_masked_input_action(&mut state, action) {
-                            MaskedInputOutcome::Continue { redraw } => needs_redraw = redraw,
-                            MaskedInputOutcome::Submit(value) => break Ok(value),
-                            MaskedInputOutcome::Cancelled => {
-                                break Err(UiError::new("Cancelled by user"))
-                            }
-                        }
-                    }
-                }
-                Event::Paste(text) => {
-                    let sanitized = sanitize_text_input(&text);
-                    match handle_masked_input_action(
-                        &mut state,
-                        MaskedInputAction::Paste(sanitized),
-                    ) {
-                        MaskedInputOutcome::Continue { redraw } => needs_redraw = redraw,
-                        MaskedInputOutcome::Submit(value) => break Ok(value),
-                        MaskedInputOutcome::Cancelled => {
-                            break Err(UiError::new("Cancelled by user"))
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+    let options = LineEditorOptions {
+        initial_text: String::new(),
+        allow_cancel: true,
+        mask_mode: MaskMode::RevealTail { tail_chars: 4 },
     };
-
-    disable_raw_mode().map_err(|err| UiError::new(err.to_string()))?;
-    execute!(stdout, event::DisableBracketedPaste).map_err(|err| UiError::new(err.to_string()))?;
-    println!();
-
-    result
-}
-
-fn map_key_event_to_action(key: &event::KeyEvent) -> Option<MaskedInputAction> {
-    match key.code {
-        KeyCode::Enter => Some(MaskedInputAction::Submit),
-        KeyCode::Esc => Some(MaskedInputAction::Cancel),
-        KeyCode::Backspace | KeyCode::Delete => Some(MaskedInputAction::Backspace),
-        KeyCode::F(2) => Some(MaskedInputAction::ToggleReveal),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(MaskedInputAction::ClearAll)
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(MaskedInputAction::DeleteWord)
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(MaskedInputAction::Cancel)
-        }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if c == '\n' || c == '\r' {
-                Some(MaskedInputAction::Submit)
-            } else {
-                Some(MaskedInputAction::Insert(c))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn display_masked_prompt(state: &MaskedInputState) -> io::Result<()> {
-    print!("\r\x1b[K");
-    if state.reveal_last_four && state.value.len() >= 4 {
-        let masked_part = "*".repeat(state.value.len() - 4);
-        let visible_part = &state.value[state.value.len() - 4..];
-        print!("{}{}{}", MASKED_INPUT_PROMPT, masked_part, visible_part);
-    } else {
-        let masked = "*".repeat(state.value.len());
-        print!("{}{}", MASKED_INPUT_PROMPT, masked);
-    }
-    io::stdout().flush()
-}
-
-pub fn handle_masked_input_action(
-    state: &mut MaskedInputState,
-    action: MaskedInputAction,
-) -> MaskedInputOutcome {
-    match action {
-        MaskedInputAction::Insert(c) => {
-            state.value.push(c);
-            state.reveal_last_four = false;
-            MaskedInputOutcome::Continue { redraw: true }
-        }
-        MaskedInputAction::Backspace => {
-            if !state.value.is_empty() {
-                state.value.pop();
-                state.reveal_last_four = false;
-                MaskedInputOutcome::Continue { redraw: true }
-            } else {
-                MaskedInputOutcome::Continue { redraw: false }
-            }
-        }
-        MaskedInputAction::ToggleReveal => {
-            state.reveal_last_four = !state.reveal_last_four;
-            MaskedInputOutcome::Continue { redraw: true }
-        }
-        MaskedInputAction::ClearAll => {
-            if state.value.is_empty() {
-                MaskedInputOutcome::Continue { redraw: false }
-            } else {
-                state.value.clear();
-                state.reveal_last_four = false;
-                MaskedInputOutcome::Continue { redraw: true }
-            }
-        }
-        MaskedInputAction::DeleteWord => {
-            if state.value.is_empty() {
-                MaskedInputOutcome::Continue { redraw: false }
-            } else {
-                delete_last_word(&mut state.value);
-                state.reveal_last_four = false;
-                MaskedInputOutcome::Continue { redraw: true }
-            }
-        }
-        MaskedInputAction::Paste(text) => {
-            if text.contains('\n') {
-                let before_newline = text.split('\n').next().unwrap_or("");
-                state.value.push_str(before_newline);
-                MaskedInputOutcome::Submit(state.value.clone())
-            } else {
-                state.value.push_str(&text);
-                state.reveal_last_four = false;
-                MaskedInputOutcome::Continue { redraw: true }
-            }
-        }
-        MaskedInputAction::Submit => MaskedInputOutcome::Submit(state.value.clone()),
-        MaskedInputAction::Cancel => MaskedInputOutcome::Cancelled,
-    }
-}
-
-pub fn delete_last_word(input: &mut String) {
-    while input.ends_with(' ') {
-        input.pop();
-    }
-    while !input.is_empty() && !input.ends_with(' ') {
-        input.pop();
-    }
+    prompt_line_editor(MASKED_INPUT_PROMPT, &options).map_err(|err| UiError::new(err.to_string()))
 }
 
 pub fn parse_confirmation(input: &str) -> Result<ConfirmationChoice, UiError> {
@@ -552,40 +371,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn masked_input_insert_and_backspace() {
-        let mut state = MaskedInputState::default();
-        assert_eq!(
-            handle_masked_input_action(&mut state, MaskedInputAction::Insert('a')),
-            MaskedInputOutcome::Continue { redraw: true }
-        );
-        assert_eq!(state.value, "a");
-        assert_eq!(
-            handle_masked_input_action(&mut state, MaskedInputAction::Backspace),
-            MaskedInputOutcome::Continue { redraw: true }
-        );
-        assert_eq!(state.value, "");
-    }
-
-    #[test]
-    fn masked_input_cancel() {
-        let mut state = MaskedInputState::default();
-        assert_eq!(
-            handle_masked_input_action(&mut state, MaskedInputAction::Cancel),
-            MaskedInputOutcome::Cancelled
-        );
-    }
-
-    #[test]
-    fn masked_input_submit_after_paste_with_newline() {
-        let mut state = MaskedInputState::default();
-        let outcome = handle_masked_input_action(
-            &mut state,
-            MaskedInputAction::Paste("token\nignored".to_string()),
-        );
-        assert_eq!(outcome, MaskedInputOutcome::Submit("token".to_string()));
-    }
-
-    #[test]
     fn confirmation_parsing_handles_empty_and_cancel() {
         assert_eq!(parse_confirmation(" ").unwrap(), ConfirmationChoice::No);
         assert_eq!(
@@ -640,19 +425,5 @@ mod tests {
             err.message,
             "Provider with ID 'openai' already exists".to_string()
         );
-    }
-
-    #[test]
-    fn delete_last_word_removes_trailing_word() {
-        let mut input = String::from("hello world");
-        delete_last_word(&mut input);
-        assert_eq!(input, "hello ");
-    }
-
-    #[test]
-    fn delete_last_word_handles_spaces_only() {
-        let mut input = String::from("   ");
-        delete_last_word(&mut input);
-        assert_eq!(input, "");
     }
 }

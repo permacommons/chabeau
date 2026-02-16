@@ -11,6 +11,9 @@ Execution begins in `src/main.rs`, which delegates to the CLI module and exits w
 on failure so that shell scripting remains predictable.【F:src/main.rs†L1-L12】 The CLI builds a Tokio
 runtime, parses arguments with Clap, and routes subcommands such as `auth`, `deauth`, `set`, `say`,
 and MCP token management without touching the UI stack.【F:src/cli/mod.rs†L201-L415】【F:src/cli/mod.rs†L726-L781】
+Interactive CLI prompts and auth token entry share a lightweight raw-mode line editor in
+`utils::line_editor`, so keyboard editing behavior stays consistent across provider/MCP setup flows
+without pulling in the full TUI input stack.
 Global flags like `--debug-mcp` (trace logging) and `--disable-mcp` (session-wide MCP disable) are
 wired into the same entry path, ensuring they apply consistently to both TUI and one-shot `say`
 commands.【F:src/cli/mod.rs†L167-L739】【F:src/cli/say.rs†L267-L333】

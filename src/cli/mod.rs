@@ -11,7 +11,7 @@ pub mod theme_list;
 
 use std::error::Error;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -36,6 +36,7 @@ use crate::core::oauth::{
 };
 use crate::core::persona::PersonaManager;
 use crate::ui::chat_loop::run_chat;
+use crate::utils::line_editor::{prompt_line_editor, LineEditorOptions, MaskMode};
 use crate::utils::url::normalize_base_url;
 use tracing_subscriber::EnvFilter;
 
@@ -1685,6 +1686,17 @@ fn prompt_required(prompt: &str) -> Result<String, Box<dyn Error>> {
 }
 
 fn prompt_optional(prompt: &str) -> Result<String, Box<dyn Error>> {
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        let options = LineEditorOptions {
+            initial_text: String::new(),
+            allow_cancel: true,
+            mask_mode: MaskMode::None,
+        };
+        return prompt_line_editor(prompt, &options)
+            .map(|value| value.trim().to_string())
+            .map_err(|err| Box::new(err) as Box<dyn Error>);
+    }
+
     print!("{prompt}");
     io::stdout().flush()?;
     let mut input = String::new();

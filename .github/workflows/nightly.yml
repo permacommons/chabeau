@@ -24,6 +24,8 @@ jobs:
             target: x86_64-apple-darwin
           - os: macos-15
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -41,21 +43,31 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Build release binary
-        env:
-          TARGET: ${{ matrix.target }}
-        run: cargo build --locked --release --target "$TARGET"
+        run: cargo build --locked --release --target ${{ matrix.target }}
 
-      - name: Smoke test binary
+      - name: Smoke test binary (Linux/macOS)
+        if: runner.os != 'Windows'
         env:
           TARGET: ${{ matrix.target }}
+        shell: bash
         run: |
           BIN="target/$TARGET/release/chabeau"
           "$BIN" --version
           "$BIN" --help > /dev/null
 
-      - name: Package release archive
+      - name: Smoke test binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/chabeau.exe"
+          & $bin --version
+          & $bin --help | Out-Null
+
+      - name: Package release archive (Linux/macOS)
+        if: runner.os != 'Windows'
         env:
           TARGET: ${{ matrix.target }}
+        shell: bash
         run: |
           set -euo pipefail
           BIN_DIR="target/$TARGET/release"
@@ -69,6 +81,16 @@ jobs:
             shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           fi
 
+      - name: Package release archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $assetTarget = "${{ matrix.target }}".Replace("-pc-", "-")
+          $archive = "chabeau-nightly-$assetTarget.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/chabeau.exe" -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +98,8 @@ jobs:
           path: |
             chabeau-nightly-*.tar.gz
             chabeau-nightly-*.tar.gz.sha256
+            chabeau-nightly-*.zip
+            chabeau-nightly-*.zip.sha256
 
   release:
     needs: build
@@ -96,7 +120,9 @@ jobs:
       - name: Build combined checksum file
         run: |
           set -euo pipefail
-          cat dist/nightly-*/chabeau-nightly-*.tar.gz.sha256 > dist/SHA256SUMS
+          find dist/nightly-* -type f -name 'chabeau-nightly-*.sha256' -print0 \
+            | sort -z \
+            | xargs -0 cat > dist/SHA256SUMS
 
       - name: Move nightly tag to this commit
         env:
@@ -117,10 +143,12 @@ jobs:
           body: |
             Nightly build from commit `${{ github.sha }}`.
 
-            Artifacts include Linux and macOS binaries with per-archive SHA-256 checksums.
+            Artifacts include Linux, macOS, and Windows binaries with per-archive SHA-256 checksums.
           files: |
             dist/nightly-*/chabeau-nightly-*.tar.gz
+            dist/nightly-*/chabeau-nightly-*.zip
             dist/nightly-*/chabeau-nightly-*.tar.gz.sha256
+            dist/nightly-*/chabeau-nightly-*.zip.sha256
             dist/SHA256SUMS
           overwrite_files: true
 

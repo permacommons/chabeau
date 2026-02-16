@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod color;
 pub mod editor;
 pub mod input;
+pub mod line_editor;
 pub mod logging;
 pub mod scroll;
 pub mod syntax;

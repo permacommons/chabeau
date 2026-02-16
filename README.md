@@ -137,7 +137,6 @@ Most users only need `provider add`; it can either attach a token to a
 built-in provider or create a custom provider and prompt for a token.
 Use `chabeau provider token ...` commands later when rotating or removing
 credentials.
-
 Environment variables are used only if no providers are configured, or when you pass `--env`.
 
 ```bash
@@ -592,6 +591,7 @@ Chabeau uses a modular design with focused components:
   - `color.rs` – Terminal color detection and palette quantization
   - `editor.rs` – External editor integration
   - `input.rs` – Keyboard/input utility helpers
+  - `line_editor.rs` – Shared single-line terminal editor for interactive CLI/auth prompts
   - `logging.rs` – Chat logging functionality
   - `mod.rs` – Utility module declarations
   - `scroll.rs` – Text wrapping and scroll calculations

@@ -1,0 +1,162 @@
+name: Nightly pre-release binaries
+
+on:
+  schedule:
+    - cron: '20 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Build release binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --locked --release --target "$TARGET"
+
+      - name: Smoke test binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          BIN="target/$TARGET/release/chabeau"
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+
+      - name: Package release archive
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          BIN_DIR="target/$TARGET/release"
+          ASSET_TARGET="$TARGET"
+          ASSET_TARGET="${ASSET_TARGET/-unknown-/-}"
+          ARCHIVE="chabeau-nightly-$ASSET_TARGET.tar.gz"
+          tar -C "$BIN_DIR" -czf "$ARCHIVE" chabeau
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          else
+            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          fi
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: |
+            chabeau-nightly-*.tar.gz
+            chabeau-nightly-*.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nightly-*
+          merge-multiple: false
+
+      - name: Build combined checksum file
+        run: |
+          set -euo pipefail
+          cat dist/nightly-*/chabeau-nightly-*.tar.gz.sha256 > dist/SHA256SUMS
+
+      - name: Move nightly tag to this commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git tag -f nightly "$GITHUB_SHA"
+          git push origin refs/tags/nightly --force
+
+      - name: Publish or update nightly pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          body: |
+            Nightly build from commit `${{ github.sha }}`.
+
+            Artifacts include Linux and macOS binaries with per-archive SHA-256 checksums.
+          files: |
+            dist/nightly-*/chabeau-nightly-*.tar.gz
+            dist/nightly-*/chabeau-nightly-*.tar.gz.sha256
+            dist/SHA256SUMS
+          overwrite_files: true
+
+      - name: Remove stale nightly assets
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const distDir = path.join(process.env.GITHUB_WORKSPACE, "dist");
+
+            const keep = new Set();
+            for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const dir = path.join(distDir, entry.name);
+              for (const file of fs.readdirSync(dir)) {
+                keep.add(file);
+              }
+            }
+            keep.add("SHA256SUMS");
+
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag: "nightly",
+            });
+
+            for (const asset of release.assets) {
+              if (!keep.has(asset.name)) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner,
+                  repo,
+                  asset_id: asset.id,
+                });
+              }
+            }

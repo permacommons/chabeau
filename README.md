@@ -106,7 +106,7 @@ You can verify them with:
 cosign verify-blob \
   --signature SHA256SUMS.sig \
   --certificate SHA256SUMS.pem \
-  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\\.github/workflows/publish\\.yml@refs/heads/main' \
+  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\.github/workflows/publish\.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 
@@ -114,7 +114,7 @@ cosign verify-blob \
 cosign verify-blob \
   --signature SHA256SUMS.sig \
   --certificate SHA256SUMS.pem \
-  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\\.github/workflows/nightly\\.yml@refs/heads/main' \
+  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\.github/workflows/nightly\.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 

@@ -17,7 +17,9 @@ jobs:
   check-branch:
     runs-on: ubuntu-latest
     outputs:
-      should_publish: ${{ steps.branch.outputs.should_publish }}
+      should_publish_any: ${{ steps.branch.outputs.should_publish_any }}
+      should_publish_crate: ${{ steps.branch.outputs.should_publish_crate }}
+      should_publish_release: ${{ steps.branch.outputs.should_publish_release }}
       reason: ${{ steps.branch.outputs.reason }}
       tag: ${{ steps.branch.outputs.tag }}
     steps:
@@ -47,14 +49,17 @@ jobs:
           done < <(git tag -l 'v*' --sort=-v:refname)
 
           if [[ -z "${candidate_tag}" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_any=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_crate=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_release=false" >> "$GITHUB_OUTPUT"
             echo "reason=no release tags reachable from $DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Skip if already on crates.io and already has a GitHub release.
-          # Fail CLOSED on network/parse issues for crates.io.
+          # Determine crate publish eligibility. Fail CLOSED for crate publish
+          # on crates.io network/parse issues, but keep evaluating GitHub
+          # release publication independently.
           crate_name="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
           tag_version="${candidate_tag#v}"
 
@@ -62,6 +67,8 @@ jobs:
           tmp="$(mktemp)"
           trap 'rm -f "$tmp"' EXIT
 
+          should_publish_crate=true
+          crate_status_note=""
           if ! curl -fsS \
                 --connect-timeout 5 \
                 --max-time 15 \
@@ -70,51 +77,73 @@ jobs:
                 --retry-all-errors \
                 -H "User-Agent: curl" \
                 -o "$tmp" "$check_url"; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=crates.io check unreachable; skipping publish for now" >> "$GITHUB_OUTPUT"
-            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if ! jq -e . "$tmp" >/dev/null 2>&1; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=crates.io response not parseable; skipping publish" >> "$GITHUB_OUTPUT"
-            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          crate_already_published=false
-          if jq -e --arg v "$tag_version" 'any(.versions[]?; .num == $v)' "$tmp" >/dev/null 2>&1; then
-            crate_already_published=true
+            should_publish_crate=false
+            crate_status_note="crate publish disabled: crates.io check unreachable"
+          elif ! jq -e . "$tmp" >/dev/null 2>&1; then
+            should_publish_crate=false
+            crate_status_note="crate publish disabled: crates.io response not parseable"
+          elif jq -e --arg v "$tag_version" 'any(.versions[]?; .num == $v)' "$tmp" >/dev/null 2>&1; then
+            should_publish_crate=false
+            crate_status_note="crate version ${tag_version} already on crates.io"
           fi
 
           # Check whether a GitHub release exists for the same tag.
-          # Use public API and tolerate 404 (release absent).
+          # Treat lookup transport failures as "do not publish release now"
+          # rather than crashing this selection step.
           release_api="https://api.github.com/repos/${{ github.repository }}/releases/tags/${candidate_tag}"
-          release_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+          should_publish_release=true
+          release_status_note=""
+          if ! release_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 5 \
+            --max-time 15 \
+            --retry 5 \
+            --retry-delay 2 \
+            --retry-all-errors \
             -H 'Accept: application/vnd.github+json' \
             -H 'User-Agent: curl' \
-            "$release_api")"
-
-          release_already_published=false
-          if [[ "$release_status" == "200" ]]; then
-            release_already_published=true
+            "$release_api")"; then
+            should_publish_release=false
+            release_status_note="GitHub release lookup unreachable"
+          elif [[ "$release_status" == "200" ]]; then
+            should_publish_release=false
+            release_status_note="GitHub release for ${candidate_tag} already exists"
           elif [[ "$release_status" != "404" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=github release lookup returned HTTP ${release_status}; skipping publish" >> "$GITHUB_OUTPUT"
+            should_publish_release=false
+            release_status_note="GitHub release lookup returned HTTP ${release_status}"
+          fi
+
+          should_publish_any=false
+          if [[ "$should_publish_crate" == "true" || "$should_publish_release" == "true" ]]; then
+            should_publish_any=true
+          fi
+
+          if [[ "$should_publish_any" == "false" ]]; then
+            echo "should_publish_any=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_crate=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_release=false" >> "$GITHUB_OUTPUT"
+            reason="no publication needed or possible for ${candidate_tag}"
+            if [[ -n "$crate_status_note" ]]; then
+              reason="${reason}; ${crate_status_note}"
+            fi
+            if [[ -n "$release_status_note" ]]; then
+              reason="${reason}; ${release_status_note}"
+            fi
+            echo "reason=${reason}" >> "$GITHUB_OUTPUT"
             echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [[ "$crate_already_published" == "true" && "$release_already_published" == "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "reason=version ${tag_version} already on crates.io and GitHub Release exists" >> "$GITHUB_OUTPUT"
-            echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
-            exit 0
+          echo "should_publish_any=true"  >> "$GITHUB_OUTPUT"
+          echo "should_publish_crate=${should_publish_crate}" >> "$GITHUB_OUTPUT"
+          echo "should_publish_release=${should_publish_release}" >> "$GITHUB_OUTPUT"
+          reason="tag ${candidate_tag} is on ${DEFAULT_BRANCH}; publication pending"
+          if [[ -n "$crate_status_note" ]]; then
+            reason="${reason}; ${crate_status_note}"
           fi
-
-          echo "should_publish=true"  >> "$GITHUB_OUTPUT"
-          echo "reason=tag ${candidate_tag} is on ${DEFAULT_BRANCH} and release publication is pending" >> "$GITHUB_OUTPUT"
+          if [[ -n "$release_status_note" ]]; then
+            reason="${reason}; ${release_status_note}"
+          fi
+          echo "reason=${reason}" >> "$GITHUB_OUTPUT"
           echo "tag=${candidate_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Summary
@@ -122,13 +151,15 @@ jobs:
           {
             echo "### Publish on tag — selection"
             echo "- Tag: \`${{ steps.branch.outputs.tag || 'n/a' }}\`"
-            echo "- Should publish: **${{ steps.branch.outputs.should_publish }}**"
+            echo "- Should publish anything: **${{ steps.branch.outputs.should_publish_any }}**"
+            echo "- Should publish crate: **${{ steps.branch.outputs.should_publish_crate }}**"
+            echo "- Should publish GitHub release: **${{ steps.branch.outputs.should_publish_release }}**"
             echo "- Reason: ${{ steps.branch.outputs.reason }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-crate:
     needs: check-branch
-    if: needs.check-branch.outputs.should_publish == 'true'
+    if: needs.check-branch.outputs.should_publish_crate == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (need tags)
@@ -178,7 +209,7 @@ jobs:
 
   build-binaries:
     needs: check-branch
-    if: needs.check-branch.outputs.should_publish == 'true'
+    if: needs.check-branch.outputs.should_publish_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -284,7 +315,7 @@ jobs:
 
   publish-release:
     needs: [check-branch, build-binaries]
-    if: needs.check-branch.outputs.should_publish == 'true'
+    if: needs.check-branch.outputs.should_publish_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download packaged artifacts

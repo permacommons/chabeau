@@ -409,7 +409,7 @@ fn handle_mcp_forget(app: &mut App, server_id: &str) -> CommandResult {
     };
 
     app.mcp_permissions.clear_server(server_id);
-    app.session.clear_mcp_tool_records(server_id);
+    app.session.tool_pipeline.clear_server_records(server_id);
 
     let persist_note = if saved {
         "saved to config.toml"

@@ -54,10 +54,16 @@ pub struct SessionContext {
     pub active_character: Option<CharacterCard>,
     pub character_greeting_shown: bool,
     pub has_received_assistant_message: bool,
+    pub tool_pipeline: ToolPipelineState,
+    pub mcp_init: McpInitState,
+    pub active_assistant_message_index: Option<usize>,
+    pub mcp_tools_enabled: bool,
+    pub mcp_tools_unsupported: bool,
+}
+
+#[derive(Default, Clone)]
+pub struct ToolPipelineState {
     pub pending_tool_calls: BTreeMap<u32, PendingToolCall>,
-    pub mcp_init_in_progress: bool,
-    pub mcp_init_complete: bool,
-    pub pending_mcp_message: Option<String>,
     pub pending_tool_queue: VecDeque<ToolCallRequest>,
     pub active_tool_request: Option<ToolCallRequest>,
     pub pending_sampling_queue: VecDeque<McpSamplingRequest>,
@@ -66,11 +72,20 @@ pub struct SessionContext {
     pub tool_results: Vec<ChatMessage>,
     pub tool_result_history: Vec<ToolResultRecord>,
     pub tool_payload_history: Vec<ToolPayloadHistoryEntry>,
-    pub active_assistant_message_index: Option<usize>,
-    pub last_stream_api_messages: Option<Vec<ChatMessage>>,
-    pub last_stream_api_messages_base: Option<Vec<ChatMessage>>,
-    pub mcp_tools_enabled: bool,
-    pub mcp_tools_unsupported: bool,
+    pub continuation_messages: Option<StreamContinuation>,
+}
+
+#[derive(Clone)]
+pub struct StreamContinuation {
+    pub api_messages: Vec<ChatMessage>,
+    pub api_messages_base: Vec<ChatMessage>,
+}
+
+#[derive(Default)]
+pub struct McpInitState {
+    pub in_progress: bool,
+    pub complete: bool,
+    pub deferred_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,15 +248,111 @@ impl SessionContext {
         self.character_greeting_shown = true;
     }
 
-    pub fn prune_tool_records_for_assistant_index(&mut self, index: usize) {
-        self.prune_tool_records(|candidate| candidate == index);
+    #[cfg(test)]
+    pub fn for_test(provider_name: &str, model: &str) -> Self {
+        Self {
+            client: Client::new(),
+            model: model.to_string(),
+            api_key: "test-api-key".to_string(),
+            base_url: "https://example.invalid".to_string(),
+            provider_name: provider_name.to_string(),
+            provider_display_name: provider_name.to_string(),
+            logging: LoggingState::new(None).expect("test logging"),
+            stream_cancel_token: None,
+            current_stream_id: 0,
+            last_retry_time: Instant::now(),
+            retrying_message_index: None,
+            is_refining: false,
+            original_refining_content: None,
+            last_refine_prompt: None,
+            refine_instructions: DEFAULT_REFINE_INSTRUCTIONS.to_string(),
+            refine_prefix: DEFAULT_REFINE_PREFIX.to_string(),
+            startup_env_only: false,
+            mcp_disabled: false,
+            active_character: None,
+            character_greeting_shown: false,
+            has_received_assistant_message: false,
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
+            active_assistant_message_index: None,
+            mcp_tools_enabled: false,
+            mcp_tools_unsupported: false,
+        }
+    }
+}
+
+impl ToolPipelineState {
+    pub fn reset(&mut self) {
+        self.pending_tool_calls.clear();
+        self.pending_tool_queue.clear();
+        self.active_tool_request = None;
+        self.pending_sampling_queue.clear();
+        self.active_sampling_request = None;
+        self.tool_call_records.clear();
+        self.tool_results.clear();
+        self.continuation_messages = None;
     }
 
-    pub fn prune_tool_records_from_index(&mut self, start_index: usize) {
-        self.prune_tool_records(|candidate| candidate >= start_index);
+    pub fn advance_tool_queue(&mut self) -> Option<&ToolCallRequest> {
+        let request = self.pending_tool_queue.pop_front()?;
+        self.active_tool_request = Some(request);
+        self.active_tool_request.as_ref()
     }
 
-    fn prune_tool_records<F>(&mut self, predicate: F)
+    pub fn advance_sampling_queue(&mut self) -> Option<&McpSamplingRequest> {
+        let request = self.pending_sampling_queue.pop_front()?;
+        self.active_sampling_request = Some(request);
+        self.active_sampling_request.as_ref()
+    }
+
+    pub fn record_result(
+        &mut self,
+        record: ToolResultRecord,
+        payload: Option<ToolPayloadHistoryEntry>,
+    ) {
+        self.tool_result_history.push(record);
+        if let Some(payload) = payload {
+            self.tool_payload_history.push(payload);
+        }
+    }
+
+    pub fn prune_for_assistant_index(&mut self, index: usize) {
+        self.prune_records(|candidate| candidate == index);
+    }
+
+    pub fn prune_from_index(&mut self, start: usize) {
+        self.prune_records(|candidate| candidate >= start);
+    }
+
+    pub fn clear_server_records(&mut self, server_id: &str) {
+        self.tool_result_history.retain(|record| {
+            record
+                .server_id
+                .as_deref()
+                .map(|id| !id.eq_ignore_ascii_case(server_id))
+                .unwrap_or(true)
+        });
+        self.tool_payload_history.retain(|entry| {
+            entry
+                .server_id
+                .as_deref()
+                .map(|id| !id.eq_ignore_ascii_case(server_id))
+                .unwrap_or(true)
+        });
+    }
+
+    pub fn set_continuation(&mut self, messages: Vec<ChatMessage>, base: Vec<ChatMessage>) {
+        self.continuation_messages = Some(StreamContinuation {
+            api_messages: messages,
+            api_messages_base: base,
+        });
+    }
+
+    pub fn take_continuation(&mut self) -> Option<StreamContinuation> {
+        self.continuation_messages.take()
+    }
+
+    fn prune_records<F>(&mut self, predicate: F)
     where
         F: Fn(usize) -> bool,
     {
@@ -257,28 +368,29 @@ impl SessionContext {
                 .map(|idx| !predicate(idx))
                 .unwrap_or(true)
         });
-        if let Some(active) = self.active_assistant_message_index {
-            if predicate(active) {
-                self.active_assistant_message_index = None;
-            }
-        }
+    }
+}
+
+impl McpInitState {
+    pub fn begin(&mut self) {
+        self.in_progress = true;
+        self.complete = false;
     }
 
-    pub fn clear_mcp_tool_records(&mut self, server_id: &str) {
-        self.tool_result_history.retain(|record| {
-            record
-                .server_id
-                .as_deref()
-                .map(|id| !id.eq_ignore_ascii_case(server_id))
-                .unwrap_or(true)
-        });
-        self.tool_payload_history.retain(|entry| {
-            entry
-                .server_id
-                .as_deref()
-                .map(|id| !id.eq_ignore_ascii_case(server_id))
-                .unwrap_or(true)
-        });
+    pub fn complete(&mut self) -> Option<String> {
+        self.in_progress = false;
+        self.complete = true;
+        self.deferred_message.take()
+    }
+
+    pub fn should_defer(&self) -> bool {
+        self.in_progress && !self.complete
+    }
+
+    pub fn reset(&mut self) {
+        self.in_progress = false;
+        self.complete = false;
+        self.deferred_message = None;
     }
 }
 
@@ -475,21 +587,9 @@ pub(crate) async fn prepare_with_auth(
         active_character,
         character_greeting_shown: false,
         has_received_assistant_message: false,
-        pending_tool_calls: BTreeMap::new(),
-        mcp_init_in_progress: false,
-        mcp_init_complete: false,
-        pending_mcp_message: None,
-        pending_tool_queue: VecDeque::new(),
-        active_tool_request: None,
-        pending_sampling_queue: VecDeque::new(),
-        active_sampling_request: None,
-        tool_call_records: Vec::new(),
-        tool_results: Vec::new(),
-        tool_result_history: Vec::new(),
-        tool_payload_history: Vec::new(),
+        tool_pipeline: ToolPipelineState::default(),
+        mcp_init: McpInitState::default(),
         active_assistant_message_index: None,
-        last_stream_api_messages: None,
-        last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
         mcp_tools_unsupported: false,
     };
@@ -533,21 +633,9 @@ pub(crate) async fn prepare_uninitialized(
         active_character: None,
         character_greeting_shown: false,
         has_received_assistant_message: false,
-        pending_tool_calls: BTreeMap::new(),
-        mcp_init_in_progress: false,
-        mcp_init_complete: false,
-        pending_mcp_message: None,
-        pending_tool_queue: VecDeque::new(),
-        active_tool_request: None,
-        pending_sampling_queue: VecDeque::new(),
-        active_sampling_request: None,
-        tool_call_records: Vec::new(),
-        tool_results: Vec::new(),
-        tool_result_history: Vec::new(),
-        tool_payload_history: Vec::new(),
+        tool_pipeline: ToolPipelineState::default(),
+        mcp_init: McpInitState::default(),
         active_assistant_message_index: None,
-        last_stream_api_messages: None,
-        last_stream_api_messages_base: None,
         mcp_tools_enabled: false,
         mcp_tools_unsupported: false,
     };
@@ -686,6 +774,129 @@ mod tests {
     }
 
     #[test]
+    fn tool_pipeline_reset_clears_active_and_queues() {
+        let mut pipeline = ToolPipelineState::default();
+        pipeline.pending_tool_queue.push_back(ToolCallRequest {
+            server_id: "s".into(),
+            tool_name: "t".into(),
+            arguments: None,
+            raw_arguments: "{}".into(),
+            tool_call_id: Some("call".into()),
+        });
+        pipeline.active_tool_request = pipeline.pending_tool_queue.front().cloned();
+        pipeline.set_continuation(Vec::new(), Vec::new());
+
+        pipeline.reset();
+
+        assert!(pipeline.pending_tool_queue.is_empty());
+        assert!(pipeline.pending_sampling_queue.is_empty());
+        assert!(pipeline.active_tool_request.is_none());
+        assert!(pipeline.active_sampling_request.is_none());
+        assert!(pipeline.continuation_messages.is_none());
+    }
+
+    #[test]
+    fn tool_pipeline_advance_tool_queue_handles_empty_and_item() {
+        let mut pipeline = ToolPipelineState::default();
+        assert!(pipeline.advance_tool_queue().is_none());
+
+        pipeline.pending_tool_queue.push_back(ToolCallRequest {
+            server_id: "s".into(),
+            tool_name: "t".into(),
+            arguments: None,
+            raw_arguments: "{}".into(),
+            tool_call_id: None,
+        });
+
+        let request = pipeline.advance_tool_queue().expect("advanced");
+        assert_eq!(request.tool_name, "t");
+        assert!(pipeline.pending_tool_queue.is_empty());
+    }
+
+    #[test]
+    fn tool_pipeline_prune_for_assistant_index_removes_matching_records() {
+        let mut pipeline = ToolPipelineState::default();
+        pipeline.tool_result_history.push(ToolResultRecord {
+            tool_name: "keep".into(),
+            server_name: None,
+            server_id: Some("server".into()),
+            status: ToolResultStatus::Success,
+            failure_kind: None,
+            content: "ok".into(),
+            summary: "ok".into(),
+            tool_call_id: Some("keep".into()),
+            raw_arguments: None,
+            assistant_message_index: Some(1),
+        });
+        pipeline.tool_result_history.push(ToolResultRecord {
+            tool_name: "drop".into(),
+            server_name: None,
+            server_id: Some("server".into()),
+            status: ToolResultStatus::Error,
+            failure_kind: Some(ToolFailureKind::ToolError),
+            content: "fail".into(),
+            summary: "fail".into(),
+            tool_call_id: Some("drop".into()),
+            raw_arguments: None,
+            assistant_message_index: Some(3),
+        });
+
+        pipeline.prune_for_assistant_index(3);
+
+        assert_eq!(pipeline.tool_result_history.len(), 1);
+        assert_eq!(pipeline.tool_result_history[0].tool_name, "keep");
+    }
+
+    #[test]
+    fn tool_pipeline_continuation_round_trip_and_drain() {
+        let mut pipeline = ToolPipelineState::default();
+        pipeline.set_continuation(Vec::new(), Vec::new());
+
+        assert!(pipeline.take_continuation().is_some());
+        assert!(pipeline.take_continuation().is_none());
+    }
+
+    #[test]
+    fn mcp_init_state_complete_returns_message_and_clears_progress() {
+        let mut state = McpInitState::default();
+        state.begin();
+        state.deferred_message = Some("hello".into());
+
+        let deferred = state.complete();
+
+        assert_eq!(deferred.as_deref(), Some("hello"));
+        assert!(state.complete);
+        assert!(!state.in_progress);
+        assert!(state.deferred_message.is_none());
+    }
+
+    #[test]
+    fn mcp_init_state_should_defer_only_while_in_progress() {
+        let mut state = McpInitState::default();
+        assert!(!state.should_defer());
+
+        state.begin();
+        assert!(state.should_defer());
+
+        state.complete();
+        assert!(!state.should_defer());
+    }
+
+    #[test]
+    fn mcp_init_state_reset_restores_default() {
+        let mut state = McpInitState {
+            in_progress: true,
+            complete: true,
+            deferred_message: Some("queued".into()),
+        };
+
+        state.reset();
+
+        assert!(!state.in_progress);
+        assert!(!state.complete);
+        assert!(state.deferred_message.is_none());
+    }
+    #[test]
     fn session_context_set_character() {
         use crate::character::card::{CharacterCard, CharacterData};
 
@@ -711,21 +922,9 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -800,21 +999,9 @@ mod tests {
             }),
             character_greeting_shown: true,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -868,21 +1055,9 @@ mod tests {
             }),
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -939,21 +1114,9 @@ mod tests {
             }),
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -1164,21 +1327,9 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -1213,21 +1364,9 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -1300,21 +1439,9 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };
@@ -1379,21 +1506,9 @@ mod tests {
             active_character: None,
             character_greeting_shown: false,
             has_received_assistant_message: false,
-            pending_tool_calls: BTreeMap::new(),
-            mcp_init_in_progress: false,
-            mcp_init_complete: false,
-            pending_mcp_message: None,
-            pending_tool_queue: VecDeque::new(),
-            active_tool_request: None,
-            pending_sampling_queue: VecDeque::new(),
-            active_sampling_request: None,
-            tool_call_records: Vec::new(),
-            tool_results: Vec::new(),
-            tool_result_history: Vec::new(),
-            tool_payload_history: Vec::new(),
+            tool_pipeline: ToolPipelineState::default(),
+            mcp_init: McpInitState::default(),
             active_assistant_message_index: None,
-            last_stream_api_messages: None,
-            last_stream_api_messages_base: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
         };

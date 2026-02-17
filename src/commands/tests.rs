@@ -1042,9 +1042,8 @@ fn mcp_command_forget_clears_permissions_and_history() {
             crate::mcp::permissions::ToolPermissionDecision::Block,
         );
 
-        app.session
-            .tool_result_history
-            .push(crate::core::app::session::ToolResultRecord {
+        app.session.tool_pipeline.tool_result_history.push(
+            crate::core::app::session::ToolResultRecord {
                 tool_name: "tool-a".to_string(),
                 server_name: Some("Alpha".to_string()),
                 server_id: Some("alpha".to_string()),
@@ -1055,10 +1054,10 @@ fn mcp_command_forget_clears_permissions_and_history() {
                 tool_call_id: None,
                 raw_arguments: None,
                 assistant_message_index: None,
-            });
-        app.session
-            .tool_result_history
-            .push(crate::core::app::session::ToolResultRecord {
+            },
+        );
+        app.session.tool_pipeline.tool_result_history.push(
+            crate::core::app::session::ToolResultRecord {
                 tool_name: "tool-b".to_string(),
                 server_name: Some("Beta".to_string()),
                 server_id: Some("beta".to_string()),
@@ -1069,10 +1068,10 @@ fn mcp_command_forget_clears_permissions_and_history() {
                 tool_call_id: None,
                 raw_arguments: None,
                 assistant_message_index: None,
-            });
-        app.session
-            .tool_payload_history
-            .push(crate::core::app::session::ToolPayloadHistoryEntry {
+            },
+        );
+        app.session.tool_pipeline.tool_payload_history.push(
+            crate::core::app::session::ToolPayloadHistoryEntry {
                 server_id: Some("alpha".to_string()),
                 tool_call_id: Some("1".to_string()),
                 assistant_message: crate::api::ChatMessage {
@@ -1090,10 +1089,10 @@ fn mcp_command_forget_clears_permissions_and_history() {
                     tool_calls: None,
                 },
                 assistant_message_index: None,
-            });
-        app.session
-            .tool_payload_history
-            .push(crate::core::app::session::ToolPayloadHistoryEntry {
+            },
+        );
+        app.session.tool_pipeline.tool_payload_history.push(
+            crate::core::app::session::ToolPayloadHistoryEntry {
                 server_id: Some("beta".to_string()),
                 tool_call_id: Some("2".to_string()),
                 assistant_message: crate::api::ChatMessage {
@@ -1111,7 +1110,8 @@ fn mcp_command_forget_clears_permissions_and_history() {
                     tool_calls: None,
                 },
                 assistant_message_index: None,
-            });
+            },
+        );
 
         let result = process_input(&mut app, "/mcp alpha forget");
         assert!(matches!(result, CommandResult::Continue));
@@ -1120,14 +1120,18 @@ fn mcp_command_forget_clears_permissions_and_history() {
             .decision_for("alpha", "tool-a")
             .is_none());
         assert!(app.mcp_permissions.decision_for("beta", "tool-b").is_some());
-        assert_eq!(app.session.tool_result_history.len(), 1);
-        assert_eq!(app.session.tool_payload_history.len(), 1);
+        assert_eq!(app.session.tool_pipeline.tool_result_history.len(), 1);
+        assert_eq!(app.session.tool_pipeline.tool_payload_history.len(), 1);
         assert_eq!(
-            app.session.tool_result_history[0].server_id.as_deref(),
+            app.session.tool_pipeline.tool_result_history[0]
+                .server_id
+                .as_deref(),
             Some("beta")
         );
         assert_eq!(
-            app.session.tool_payload_history[0].server_id.as_deref(),
+            app.session.tool_pipeline.tool_payload_history[0]
+                .server_id
+                .as_deref(),
             Some("beta")
         );
 

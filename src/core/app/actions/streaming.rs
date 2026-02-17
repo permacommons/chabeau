@@ -406,10 +406,10 @@ fn prepare_tool_flow(
         }
     }
 
-    app.session.tool_call_records = tool_call_records;
-    app.session.pending_tool_queue = pending_queue;
-    app.session.active_tool_request = None;
-    app.session.tool_results.clear();
+    app.session.tool_pipeline.tool_call_records = tool_call_records;
+    app.session.tool_pipeline.pending_tool_queue = pending_queue;
+    app.session.tool_pipeline.active_tool_request = None;
+    app.session.tool_pipeline.tool_results.clear();
 
     for error in pending_errors {
         let mut meta = tool_calls::ToolResultMeta::new(
@@ -436,21 +436,21 @@ fn prepare_tool_flow(
 }
 
 fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
-    if app.session.active_tool_request.is_some() {
+    if app.session.tool_pipeline.active_tool_request.is_some() {
         return None;
     }
 
-    let Some(request) = app.session.pending_tool_queue.pop_front() else {
+    let Some(request) = app.session.tool_pipeline.pending_tool_queue.pop_front() else {
         return spawn_stream_after_tools(app, ctx);
     };
 
     if is_instant_recall_tool(&request.tool_name) {
-        app.session.active_tool_request = Some(request.clone());
+        app.session.tool_pipeline.active_tool_request = Some(request.clone());
         return handle_instant_recall_tool_request(app, request, ctx);
     }
 
     if is_mcp_yolo_enabled(app, &request.server_id) {
-        app.session.active_tool_request = Some(request.clone());
+        app.session.tool_pipeline.active_tool_request = Some(request.clone());
         set_status_for_tool_run(app, &request, ctx);
         return Some(AppCommand::RunMcpTool(request));
     }
@@ -478,7 +478,7 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
             return advance_tool_queue(app, ctx);
         }
 
-        app.session.active_tool_request = Some(request.clone());
+        app.session.tool_pipeline.active_tool_request = Some(request.clone());
         set_status_for_tool_run(app, &request, ctx);
         return Some(AppCommand::RunMcpTool(request));
     }
@@ -494,13 +494,14 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
         .as_ref()
         .and_then(|id| {
             app.session
+                .tool_pipeline
                 .tool_call_records
                 .iter()
                 .position(|record| record.id.as_str() == id.as_str())
         })
         .unwrap_or(0);
     let display_name = format!("Allow {} to run {}?", server_name, tool_name);
-    app.session.active_tool_request = Some(request);
+    app.session.tool_pipeline.active_tool_request = Some(request);
     app.ui.start_tool_prompt(ToolPromptRequest {
         server_id,
         server_name,
@@ -515,11 +516,11 @@ fn advance_tool_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand
 
 fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
     debug!(
-        pending = app.session.pending_sampling_queue.len(),
-        active = app.session.active_sampling_request.is_some(),
+        pending = app.session.tool_pipeline.pending_sampling_queue.len(),
+        active = app.session.tool_pipeline.active_sampling_request.is_some(),
         "Advance MCP sampling queue"
     );
-    if app.session.active_sampling_request.is_some() {
+    if app.session.tool_pipeline.active_sampling_request.is_some() {
         return None;
     }
 
@@ -527,16 +528,20 @@ fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCom
         return None;
     }
 
-    let request = app.session.pending_sampling_queue.pop_front()?;
+    let request = app
+        .session
+        .tool_pipeline
+        .pending_sampling_queue
+        .pop_front()?;
     debug!(
         server_id = %request.server_id,
         request_id = ?request.request.id,
-        pending = app.session.pending_sampling_queue.len(),
+        pending = app.session.tool_pipeline.pending_sampling_queue.len(),
         "Dequeued MCP sampling request"
     );
 
     if is_mcp_yolo_enabled(app, &request.server_id) {
-        app.session.active_sampling_request = Some(request.clone());
+        app.session.tool_pipeline.active_sampling_request = Some(request.clone());
         set_status_for_sampling_run(app, &request, ctx);
         return Some(AppCommand::RunMcpSampling(Box::new(request)));
     }
@@ -563,7 +568,7 @@ fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCom
                 request_id = ?request.request.id,
                 "Auto-allowing sampling for session"
             );
-            app.session.active_sampling_request = Some(request.clone());
+            app.session.tool_pipeline.active_sampling_request = Some(request.clone());
             set_status_for_sampling_run(app, &request, ctx);
             return Some(AppCommand::RunMcpSampling(Box::new(request)));
         }
@@ -577,7 +582,7 @@ fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCom
         request_id = ?request.request.id,
         "Prompting user for sampling permission"
     );
-    app.session.active_sampling_request = Some(request.clone());
+    app.session.tool_pipeline.active_sampling_request = Some(request.clone());
     let display_name = format!(
         "Allow {} to generate text with {}?",
         server_name, app.session.model
@@ -595,20 +600,25 @@ fn advance_sampling_queue(app: &mut App, ctx: AppActionContext) -> Option<AppCom
 }
 
 fn spawn_stream_after_tools(app: &mut App, ctx: AppActionContext) -> Option<AppCommand> {
-    let base_messages = app.session.last_stream_api_messages.clone()?;
+    let base_messages = app
+        .session
+        .tool_pipeline
+        .continuation_messages
+        .as_ref()
+        .map(|continuation| continuation.api_messages.clone())?;
 
     let mut api_messages = base_messages;
-    if !app.session.tool_call_records.is_empty() {
+    if !app.session.tool_pipeline.tool_call_records.is_empty() {
         api_messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: String::new(),
             name: None,
             tool_call_id: None,
-            tool_calls: Some(app.session.tool_call_records.clone()),
+            tool_calls: Some(app.session.tool_pipeline.tool_call_records.clone()),
         });
     }
 
-    api_messages.extend(app.session.tool_results.clone());
+    api_messages.extend(app.session.tool_pipeline.tool_results.clone());
 
     if ctx.term_width == 0 || ctx.term_height == 0 {
         return None;
@@ -845,10 +855,10 @@ fn handle_instant_recall_tool_request(
         tool_call_id,
         tool_calls: None,
     };
-    app.session.tool_results.push(tool_message);
+    app.session.tool_pipeline.tool_results.push(tool_message);
 
     app.clear_status();
-    app.session.active_tool_request = None;
+    app.session.tool_pipeline.active_tool_request = None;
     advance_tool_queue(app, ctx)
 }
 
@@ -871,6 +881,7 @@ fn recall_tool_payload(
     }
     let record = app
         .session
+        .tool_pipeline
         .tool_result_history
         .iter()
         .find(|entry| entry.tool_call_id.as_deref() == Some(tool_call_id.as_str()))
@@ -926,7 +937,7 @@ fn record_tool_result(
         | McpToolPayloadRetention::All => payload.clone(),
     };
 
-    app.session.tool_results.push(ChatMessage {
+    app.session.tool_pipeline.tool_results.push(ChatMessage {
         role: "tool".to_string(),
         content: context_payload.clone(),
         name: None,
@@ -934,18 +945,21 @@ fn record_tool_result(
         tool_calls: None,
     });
 
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: tool_name.to_string(),
-        server_name: server_label,
-        server_id: server_id.clone(),
-        status,
-        failure_kind,
-        content: payload.clone(),
-        summary,
-        tool_call_id: tool_call_id.clone(),
-        raw_arguments: raw_arguments.clone(),
-        assistant_message_index,
-    });
+    app.session
+        .tool_pipeline
+        .tool_result_history
+        .push(ToolResultRecord {
+            tool_name: tool_name.to_string(),
+            server_name: server_label,
+            server_id: server_id.clone(),
+            status,
+            failure_kind,
+            content: payload.clone(),
+            summary,
+            tool_call_id: tool_call_id.clone(),
+            raw_arguments: raw_arguments.clone(),
+            assistant_message_index,
+        });
 
     if matches!(
         payload_policy,
@@ -974,6 +988,7 @@ fn record_tool_result(
                 tool_calls: None,
             };
             app.session
+                .tool_pipeline
                 .tool_payload_history
                 .push(ToolPayloadHistoryEntry {
                     server_id: server_id.clone(),
@@ -1011,6 +1026,7 @@ fn trim_tool_payload_history(app: &mut App, server_id: Option<&str>, window: usi
     };
     let count = app
         .session
+        .tool_pipeline
         .tool_payload_history
         .iter()
         .filter(|entry| {
@@ -1024,9 +1040,9 @@ fn trim_tool_payload_history(app: &mut App, server_id: Option<&str>, window: usi
         return;
     }
 
-    let mut keep = Vec::with_capacity(app.session.tool_payload_history.len());
+    let mut keep = Vec::with_capacity(app.session.tool_pipeline.tool_payload_history.len());
     let mut drop = count - window;
-    for entry in app.session.tool_payload_history.iter() {
+    for entry in app.session.tool_pipeline.tool_payload_history.iter() {
         let matches = entry
             .server_id
             .as_deref()
@@ -1037,7 +1053,7 @@ fn trim_tool_payload_history(app: &mut App, server_id: Option<&str>, window: usi
         }
         keep.push(entry.clone());
     }
-    app.session.tool_payload_history = keep;
+    app.session.tool_pipeline.tool_payload_history = keep;
 }
 
 fn build_tool_result_summary(

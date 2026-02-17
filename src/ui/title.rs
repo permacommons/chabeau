@@ -196,7 +196,7 @@ fn mcp_field(app: &App) -> Option<FieldVariant> {
 
     let status = if app.session.mcp_tools_unsupported {
         "unsupported"
-    } else if app.session.mcp_init_in_progress {
+    } else if app.session.mcp_init.in_progress {
         "loading"
     } else if enabled_servers
         .iter()
@@ -205,7 +205,7 @@ fn mcp_field(app: &App) -> Option<FieldVariant> {
         "error"
     } else if enabled_servers.iter().any(|server| server.connected) {
         "connected"
-    } else if app.session.mcp_init_complete {
+    } else if app.session.mcp_init.complete {
         "error"
     } else {
         "loading"

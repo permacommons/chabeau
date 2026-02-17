@@ -162,13 +162,15 @@ impl LayoutEngine {
 mod tests {
     use super::{LayoutConfig, LayoutEngine, Theme};
     use crate::core::message::Message;
+    #[cfg(test)]
+    use crate::core::message::TranscriptRole;
     use std::collections::VecDeque;
 
     #[test]
     fn markdown_layout_populates_span_metadata() {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "Testing a [link](https://example.com) span.".into(),
         });
         let theme = Theme::dark_default();
@@ -189,7 +191,7 @@ mod tests {
     fn plain_text_layout_synthesizes_metadata() {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
-            role: "user".into(),
+            role: TranscriptRole::User,
             content: "Hello there".into(),
         });
         let theme = Theme::dark_default();
@@ -212,7 +214,7 @@ mod tests {
     fn layout_lines_can_be_encoded_with_osc_links() {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "[Rust](https://www.rust-lang.org) and [Go](https://go.dev)".into(),
         });
         let theme = Theme::dark_default();
@@ -233,7 +235,7 @@ mod tests {
     fn link_metadata_spans_cover_spaces_within_link_text() {
         let mut messages = VecDeque::new();
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "[associative trails](https://example.com)".into(),
         });
         let theme = Theme::dark_default();

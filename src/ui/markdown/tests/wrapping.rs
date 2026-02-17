@@ -2,7 +2,7 @@
 use super::helpers::{
     assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
 };
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 fn shared_renderer_with_metadata_matches_details_wrapper() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "A [link](https://example.com) and a code block.\n\n```rust\nfn main() {}\n```"
             .into(),
     };
@@ -64,7 +64,7 @@ fn shared_renderer_with_metadata_matches_details_wrapper() {
 fn markdown_links_wrap_at_word_boundaries_with_width() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "abcd efgh [hypertext dreams](https://docs.hypertext.org) and more text".into(),
     };
 
@@ -101,7 +101,7 @@ fn markdown_links_wrap_at_word_boundaries_with_width() {
 fn markdown_links_wrap_in_long_paragraph_without_mid_word_break() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: SAMPLE_HYPERTEXT_PARAGRAPH.to_string(),
     };
 
@@ -219,7 +219,7 @@ fn emphasis_ending_one_after_width() {
     // Test when italic word extends one char past the width
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally* good.".into(),
     };
 
@@ -243,7 +243,7 @@ fn strong_emphasis_ending_at_width() {
     // Test with **bold** text
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is **fundamentally** useful.".into(),
     };
 
@@ -266,7 +266,7 @@ fn inline_code_ending_at_width() {
     // Test with `code` text
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "The function is `very_important_func` today.".into(),
     };
 
@@ -306,7 +306,7 @@ fn link_ending_at_width() {
     // Test with [text](url) links
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Check out [this important resource](http://example.com) here.".into(),
     };
 
@@ -329,7 +329,7 @@ fn strikethrough_ending_at_width() {
     // Test with ~~strikethrough~~ text
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "This approach is ~~fundamentally~~ useful.".into(),
     };
 
@@ -352,7 +352,7 @@ fn emphasis_with_punctuation_at_width() {
     // Test emphasis followed by punctuation then space
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally*, I think, useful.".into(),
     };
 
@@ -377,7 +377,7 @@ fn emphasis_with_paren_inside_at_width() {
     // Test paren INSIDE emphasis: *(word)* next
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *(fundamentally)* useful.".into(),
     };
 
@@ -418,7 +418,7 @@ fn emphasis_with_paren_outside_one_past_width() {
     // Then ")" is at position 37 (1 past boundary)
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally_x*) useful.".into(),
     };
 
@@ -455,7 +455,7 @@ fn code_with_closing_paren_at_width() {
     // Test inline code followed by closing paren: `code`) next
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "The function is `very_important_func`) today.".into(),
     };
 
@@ -494,7 +494,7 @@ fn emphasis_with_multiple_adjacent_punctuation() {
     // Then "))) more" - width limit is 37, so first ) fits but not all
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally*))) more.".into(),
     };
 
@@ -535,7 +535,7 @@ fn emphasis_preserves_style_during_backtracking() {
     // The word "fundamentally_x" MUST remain italic on the wrapped line
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally_x*) useful.".into(),
     };
 
@@ -585,7 +585,7 @@ fn emphasis_fills_entire_width_with_adjacent_punct() {
     // Create a word that's exactly 36 chars
     let word = "a_very_long_italicized_word_here"; // 32 chars
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: format!("*{}*) more.", word),
     };
 

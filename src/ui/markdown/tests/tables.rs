@@ -2,7 +2,7 @@
 use super::helpers::{
     assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
 };
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 fn metadata_marks_table_links() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r"| Label | Value |
 |-------|-------|
 | Mixed | plain text and [Example](https://example.com) with trailing words |
@@ -97,7 +97,7 @@ fn debug_table_events() {
 fn table_rendering_works() {
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r###"Here's a table:
 
 | Header 1 | Header 2 | Header 3 |
@@ -138,7 +138,7 @@ End of table."###
 fn table_renders_emoji_and_br_correctly() {
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r"| Header | Data |
 |---|---|
 | Abc | 123 |
@@ -455,7 +455,7 @@ fn test_table_no_content_truncation_wide_terminal() {
     // This test defines our goal: no content should ever be truncated with ellipsis
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r"| Short | Medium Content Here | Very Long Column With Lots Of Text That Should Not Be Truncated |
 |-------|---------------------|------------------------------------------------------------------|
 | A     | Some content here   | This is a very long piece of text that contains important information that the user needs to see in full without any truncation or ellipsis |
@@ -510,7 +510,7 @@ fn test_table_content_wrapping_medium_terminal() {
     // Test that content wraps within cells when terminal is narrower
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r"| Name | Description |
 |------|-------------|
 | API  | This is a detailed description of how the API works with multiple parameters and return values |
@@ -565,7 +565,7 @@ fn test_table_should_not_wrap_borders() {
     // This test reproduces the real-world issue where table borders get wrapped
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r#"| System of Government | Definition | Key Features | Examples |
 |---------------------|------------|--------------|----------|
 | Democracy | Government by the people, either directly or through elected representatives. | Universal suffrage, free elections, protection of civil liberties. | United States, India, Germany |
@@ -622,7 +622,7 @@ fn test_styled_words_wrap_at_boundaries_in_table() {
     // boundaries (including hyphen breaks), not inside the styled words.
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"| Feature | Benefits |
 |---------|----------|
 | X | **Dramatically** _improved_ decision-making capabilities with ***real-time*** analytics |
@@ -683,7 +683,7 @@ fn test_table_wrapping_with_mixed_content() {
     // Test wrapping behavior with mixed short and long content
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r"| ID | Status | Details |
 |----|--------|----------|
 | 1  | OK     | Everything is working perfectly and all systems are operational |
@@ -739,7 +739,7 @@ fn test_table_with_emoji_and_unicode_no_truncation() {
     // Test that emoji and Unicode characters are handled without truncation
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r"| Status | Message | Details |
 |--------|---------|----------|
 | ✅     | Success | Operation completed successfully with all parameters validated |
@@ -788,7 +788,7 @@ fn table_preserves_words_with_available_space() {
 
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: markdown.to_string(),
     });
 
@@ -829,7 +829,7 @@ fn test_government_systems_table_from_testcase() {
     // 2. Vertical borders remain aligned
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r#"| Government Type | Description | Key Characteristics | Examples |
 |-----------------|-------------|--------------------|---------|
 | **Democracy** | A system where power is vested in the people, who rule either *directly* or through elected representatives. | - Free and fair elections<br/>- Protection of individual rights and freedoms<br/>- Rule of law and separation of powers | - *United States*, *India*, *Germany* |
@@ -925,7 +925,7 @@ fn test_table_cell_word_wrapping_regression() {
     // Reproduce the table wrapping issue - test that words wrap within table cells
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r###"Here's a table with long content that should wrap:
 
 | Column A | Column B | Column C |

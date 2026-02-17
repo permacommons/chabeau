@@ -14,7 +14,7 @@ use crate::core::app::{
     InspectAction, InspectMode, PickerAction, StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::ChatStreamService;
-use crate::core::message::ROLE_ASSISTANT;
+use crate::core::message::TranscriptRole;
 use crate::mcp::permissions::ToolPermissionDecision;
 use crate::ui::chat_loop::keybindings::registry::{KeyHandler, KeyResult};
 use crate::ui::chat_loop::modes::{
@@ -893,11 +893,10 @@ impl KeyHandler for CtrlNHandler {
         let (last_prompt, can_retry) = app
             .read(|app| {
                 let prompt = app.session.last_refine_prompt.clone();
-                let can_retry = app
-                    .ui
-                    .messages
-                    .iter()
-                    .any(|msg| msg.role == ROLE_ASSISTANT && !msg.content.is_empty());
+                let can_retry =
+                    app.ui.messages.iter().any(|msg| {
+                        msg.role == TranscriptRole::Assistant && !msg.content.is_empty()
+                    });
                 (prompt, can_retry)
             })
             .await;
@@ -1187,7 +1186,7 @@ mod tests {
         apply_actions, AppAction, AppActionDispatcher, AppActionEnvelope, ComposeAction,
         InputAction, StatusAction, StreamingAction,
     };
-    use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+    use crate::core::message::{Message, TranscriptRole};
     use crate::ui::chat_loop::AppHandle;
     use crate::utils::test_utils::create_test_app;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1210,11 +1209,11 @@ mod tests {
         let mut app = create_test_app();
         app.session.last_refine_prompt = Some("Tighten it up".to_string());
         app.ui.messages.push_back(Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "Question".to_string(),
         });
         app.ui.messages.push_back(Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content: "Answer".to_string(),
         });
 
@@ -1244,11 +1243,11 @@ mod tests {
         let handler = CtrlNHandler;
         let mut app = create_test_app();
         app.ui.messages.push_back(Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "Question".to_string(),
         });
         app.ui.messages.push_back(Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content: "Answer".to_string(),
         });
 
@@ -1279,7 +1278,7 @@ mod tests {
         let mut app = create_test_app();
         app.session.last_refine_prompt = Some("Polish it".to_string());
         app.ui.messages.push_back(Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "Question".to_string(),
         });
         // No assistant message added

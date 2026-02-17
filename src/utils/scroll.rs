@@ -1,4 +1,4 @@
-use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{Message, TranscriptRole};
 #[cfg(test)]
 use crate::ui::markdown::build_markdown_display_lines;
 use crate::ui::span::SpanKind;
@@ -388,7 +388,7 @@ impl ScrollCalculator {
 
         if let Some(sel) = selected_index {
             if let Some(msg) = messages.get(sel) {
-                if msg.role == ROLE_USER || msg.role == ROLE_ASSISTANT {
+                if msg.role == TranscriptRole::User || msg.role == TranscriptRole::Assistant {
                     if let Some(span) = layout.message_spans.get(sel) {
                         let highlight_style = theme.selection_highlight_style.patch(highlight);
                         for (offset, (line, kinds)) in layout
@@ -692,7 +692,8 @@ mod tests {
     use crate::ui::span::SpanKind;
     use crate::ui::theme::Theme;
     use crate::utils::test_utils::{
-        create_test_message, create_test_messages, SAMPLE_HYPERTEXT_PARAGRAPH,
+        create_test_message, create_test_message_with_role, create_test_messages,
+        SAMPLE_HYPERTEXT_PARAGRAPH,
     };
     use ratatui::style::Style;
     use ratatui::text::Line as TLine;
@@ -779,7 +780,7 @@ mod tests {
         let mut messages: VecDeque<Message> = VecDeque::new();
         let content = "Short line\n\nThis is a much longer line that might wrap depending on terminal width\nAnother short one";
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: content.into(),
         });
 
@@ -819,7 +820,7 @@ mod tests {
         let mut messages: VecDeque<Message> = VecDeque::new();
         let long = "This is a very long plain text line without explicit newlines that should wrap when markdown is disabled";
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: long.into(),
         });
 
@@ -946,7 +947,7 @@ mod tests {
         let theme = Theme::dark_default();
         let mut messages = VecDeque::new();
         messages.push_back(Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: SAMPLE_HYPERTEXT_PARAGRAPH.into(),
         });
 
@@ -1059,8 +1060,8 @@ mod tests {
     #[test]
     fn test_app_message_formatting() {
         let mut messages = VecDeque::new();
-        messages.push_back(create_test_message(
-            crate::core::message::ROLE_APP_INFO,
+        messages.push_back(create_test_message_with_role(
+            crate::core::message::TranscriptRole::AppInfo,
             "App message",
         ));
 

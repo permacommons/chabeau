@@ -1,6 +1,6 @@
 use super::App;
 use crate::commands::matching_commands;
-use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::span::SpanKind;
 use ratatui::text::Line;
 
@@ -130,13 +130,13 @@ impl App {
             return;
         }
 
-        let role = self.ui.messages[actual_index].role.clone();
-        if role != ROLE_USER && role != ROLE_ASSISTANT {
+        let role = self.ui.messages[actual_index].role;
+        if !role.is_user() && !role.is_assistant() {
             return;
         }
 
         self.ui.messages[actual_index].content = new_text;
-        if role == ROLE_ASSISTANT {
+        if role.is_assistant() {
             self.session
                 .prune_tool_records_for_assistant_index(actual_index);
         }
@@ -154,10 +154,9 @@ impl App {
             return;
         }
 
-        self.ui.messages.push_back(Message {
-            role: ROLE_ASSISTANT.to_string(),
-            content: new_text,
-        });
+        self.ui
+            .messages
+            .push_back(Message::new(TranscriptRole::Assistant, new_text));
         self.invalidate_prewrap_cache();
         let user_display_name = self.persona_manager.get_display_name();
         let _ = self

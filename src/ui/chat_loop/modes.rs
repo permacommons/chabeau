@@ -11,7 +11,6 @@ use crate::core::app::{
     InputAction, McpPromptAction, PickerAction, StatusAction, StreamingAction,
 };
 use crate::core::chat_stream::ChatStreamService;
-use crate::core::message::{ROLE_ASSISTANT, ROLE_USER};
 use crate::ui::osc_backend::OscBackend;
 use crate::utils::editor::{launch_external_editor, ExternalEditorOutcome};
 
@@ -162,10 +161,8 @@ pub async fn handle_edit_select_mode_event(
                 if let Some(idx) = idx_opt {
                     if idx < app.ui.messages.len() {
                         let role_matches = match target {
-                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
-                            EditSelectTarget::Assistant => {
-                                app.ui.messages[idx].role == ROLE_ASSISTANT
-                            }
+                            EditSelectTarget::User => app.ui.messages[idx].is_user(),
+                            EditSelectTarget::Assistant => app.ui.messages[idx].is_assistant(),
                         };
 
                         if role_matches {
@@ -213,10 +210,8 @@ pub async fn handle_edit_select_mode_event(
                 if let Some(idx) = idx_opt {
                     if idx < app.ui.messages.len() {
                         let role_matches = match target {
-                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
-                            EditSelectTarget::Assistant => {
-                                app.ui.messages[idx].role == ROLE_ASSISTANT
-                            }
+                            EditSelectTarget::User => app.ui.messages[idx].is_user(),
+                            EditSelectTarget::Assistant => app.ui.messages[idx].is_assistant(),
                         };
 
                         if role_matches {
@@ -238,10 +233,8 @@ pub async fn handle_edit_select_mode_event(
                 if let Some(idx) = idx_opt {
                     if idx < app.ui.messages.len() {
                         let role_matches = match target {
-                            EditSelectTarget::User => app.ui.messages[idx].role == ROLE_USER,
-                            EditSelectTarget::Assistant => {
-                                app.ui.messages[idx].role == ROLE_ASSISTANT
-                            }
+                            EditSelectTarget::User => app.ui.messages[idx].is_user(),
+                            EditSelectTarget::Assistant => app.ui.messages[idx].is_assistant(),
                         };
 
                         if role_matches {
@@ -274,7 +267,7 @@ pub async fn handle_edit_select_mode_event(
                 if matches!(target, EditSelectTarget::User) {
                     if let Some(idx) = app.ui.selected_user_message_index() {
                         if let Some(message) = app.ui.messages.get(idx) {
-                            if message.role == ROLE_USER {
+                            if message.is_user() {
                                 match crate::utils::clipboard::copy_to_clipboard(&message.content) {
                                     Ok(()) => app.conversation().set_status("Copied message"),
                                     Err(_e) => app.conversation().set_status("Clipboard error"),
@@ -791,7 +784,7 @@ mod tests {
         PromptAction,
     };
     use crate::core::chat_stream::ChatStreamService;
-    use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+    use crate::core::message::{Message, TranscriptRole};
     use crate::ui::theme::Theme;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
@@ -898,7 +891,7 @@ mod tests {
             handle
                 .update(|app| {
                     app.ui.messages.push_back(Message {
-                        role: ROLE_USER.to_string(),
+                        role: TranscriptRole::User,
                         content: "rewrite me".into(),
                     });
                     app.ui.enter_edit_select_mode(EditSelectTarget::User);
@@ -933,11 +926,11 @@ mod tests {
             handle
                 .update(|app| {
                     app.ui.messages.push_back(Message {
-                        role: ROLE_USER.to_string(),
+                        role: TranscriptRole::User,
                         content: "keep".into(),
                     });
                     app.ui.messages.push_back(Message {
-                        role: ROLE_ASSISTANT.to_string(),
+                        role: TranscriptRole::Assistant,
                         content: "adjust me".into(),
                     });
                     app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
@@ -972,11 +965,11 @@ mod tests {
             handle
                 .update(|app| {
                     app.ui.messages.push_back(Message {
-                        role: ROLE_ASSISTANT.to_string(),
+                        role: TranscriptRole::Assistant,
                         content: "to remove".into(),
                     });
                     app.ui.messages.push_back(Message {
-                        role: ROLE_USER.to_string(),
+                        role: TranscriptRole::User,
                         content: "later".into(),
                     });
                     app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
@@ -1004,11 +997,11 @@ mod tests {
             handle
                 .update(|app| {
                     app.ui.messages.push_back(Message {
-                        role: ROLE_USER.to_string(),
+                        role: TranscriptRole::User,
                         content: "keep".into(),
                     });
                     app.ui.messages.push_back(Message {
-                        role: ROLE_ASSISTANT.to_string(),
+                        role: TranscriptRole::Assistant,
                         content: "to edit".into(),
                     });
                     app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
@@ -1051,7 +1044,7 @@ mod tests {
                     let last = app.ui.messages.back().cloned();
                     (
                         app.ui.messages.len(),
-                        last.as_ref().map(|m| m.role.clone()),
+                        last.as_ref().map(|m| m.role),
                         last.map(|m| m.content.clone()),
                         app.ui.is_editing_assistant_message(),
                     )
@@ -1059,7 +1052,7 @@ mod tests {
                 .await;
 
             assert_eq!(message_count, 2);
-            assert_eq!(last_role.as_deref(), Some(ROLE_ASSISTANT));
+            assert_eq!(last_role.map(|role| role.as_str()), Some("assistant"));
             assert_eq!(last_content.as_deref(), Some("revised"));
             assert!(!editing_flag);
         });
@@ -1211,7 +1204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_interleaved_blocks_have_unique_indices() {
-        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+        use crate::core::message::{Message, TranscriptRole};
 
         let app_handle = setup_app();
 
@@ -1219,15 +1212,15 @@ mod tests {
         app_handle
             .update(|app| {
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "First block:\n```rust\nfn first() {}\n```".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "Show me more code".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "Second block:\n```python\ndef second():\n    pass\n```".to_string(),
                 });
             })
@@ -1268,7 +1261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exact_user_scenario_two_assistant_code_blocks() {
-        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+        use crate::core::message::{Message, TranscriptRole};
 
         let app_handle = setup_app();
 
@@ -1280,29 +1273,29 @@ mod tests {
             .update(|app| {
                 // Message 1
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "Show me Rust code".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "Here it is:\n```rust\nfn first() {}\n```".to_string(),
                 });
                 // Message 2
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "Thanks, what about Python?".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "Sure, let me explain first...".to_string(),
                 });
                 // Message 3
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "Show me the Python code".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "Here you go:\n```python\ndef second():\n    pass\n```".to_string(),
                 });
             })
@@ -1368,7 +1361,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incremental_cache_update_preserves_global_indices() {
-        use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+        use crate::core::message::{Message, TranscriptRole};
 
         let app_handle = setup_app();
 
@@ -1376,11 +1369,11 @@ mod tests {
         app_handle
             .update(|app| {
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "Show me code".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "```rust\nfn first() {}\n```".to_string(),
                 });
             })
@@ -1397,11 +1390,11 @@ mod tests {
         app_handle
             .update(|app| {
                 app.ui.messages.push_back(Message {
-                    role: ROLE_USER.to_string(),
+                    role: TranscriptRole::User,
                     content: "And another".to_string(),
                 });
                 app.ui.messages.push_back(Message {
-                    role: ROLE_ASSISTANT.to_string(),
+                    role: TranscriptRole::Assistant,
                     content: "```python\ndef second():\n    pass\n```".to_string(),
                 });
             })

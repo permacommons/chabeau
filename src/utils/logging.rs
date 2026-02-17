@@ -1,4 +1,4 @@
-use crate::core::message::{Message, ROLE_APP_LOG, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{Message, TranscriptRole};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -140,19 +140,19 @@ impl LoggingState {
             if Some(i) == skip_index {
                 continue;
             }
-            if msg.role == ROLE_USER {
+            if msg.role == TranscriptRole::User {
                 // Write user messages with the current user display name prefix
                 for line in format!("{}: {}", user_display_name, msg.content).lines() {
                     writeln!(temp_file, "{line}")?;
                 }
                 writeln!(temp_file)?; // Empty line for spacing
-            } else if msg.role == ROLE_ASSISTANT && !msg.content.is_empty() {
+            } else if msg.role == TranscriptRole::Assistant && !msg.content.is_empty() {
                 // Write assistant messages as-is (no prefix)
                 for line in msg.content.lines() {
                     writeln!(temp_file, "{line}")?;
                 }
                 writeln!(temp_file)?; // Empty line for spacing
-            } else if msg.role == ROLE_APP_LOG {
+            } else if msg.role == TranscriptRole::AppLog {
                 // Write log-type app messages with ## prefix
                 for line in format!("## {}", msg.content).lines() {
                     writeln!(temp_file, "{line}")?;

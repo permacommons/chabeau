@@ -2,7 +2,7 @@
 use super::helpers::{
     assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
 };
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 fn wrapped_list_items_align_under_text() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "- Parent item that wraps within the width budget and keeps alignment.\n  - Child item that wraps nicely under its parent alignment requirement.\n    - Grandchild entry that wraps and keeps deeper indentation consistent.".into(),
         };
 
@@ -85,7 +85,7 @@ fn wrapped_list_items_align_under_text() {
 fn gfm_callout_blockquotes_render_content() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "> [!NOTE]\n> Always document parser upgrades.".into(),
     };
 
@@ -108,7 +108,7 @@ fn gfm_callout_blockquotes_render_content() {
 fn ordered_list_item_code_block_is_indented_under_marker() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "1. Intro text\n\n   ```\n   fn greet() {}\n   ```\n\n   Follow up text".into(),
     };
 
@@ -143,7 +143,7 @@ fn ordered_list_item_code_block_is_indented_under_marker() {
 fn multi_item_ordered_list_keeps_code_block_with_correct_item() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "1. **Open a new terminal** on your local machine (keeping your SSH session open) and run `scp` as above.\n2. **Use `scp` in reverse** from the remote side *to* your local machine (if remote can reach your local machine and SSH is accessible), e.g.:\n   ```bash\n   scp /path/to/file you@your_local_IP:/path/to/local/destination/\n   ```\n   But this only works if your local machine is running an SSH server and is network-reachable — rarely the case.\n3. **Use `rsync` over SSH** similarly to `scp`."
                 .into(),
         };
@@ -193,7 +193,7 @@ fn multi_item_ordered_list_keeps_code_block_with_correct_item() {
 fn nested_bullet_lists_render_with_indentation() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "* Item 1\n    * Sub-item 1.1\n    * Sub-item 1.2\n        * Sub-sub-item 1.2.1"
             .into(),
     };
@@ -238,7 +238,7 @@ fn nested_bullet_lists_render_with_indentation() {
 fn nested_lists_dont_add_blank_lines_between_same_level_items() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content:
             "- Budget tree, branch one\n  - Emergency fund\n    - Sub-sticky note\n  - Groceries"
                 .into(),
@@ -278,7 +278,7 @@ fn list_with_source_blank_lines_preserves_spacing_between_top_level_items() {
     // those should be preserved to provide visual breathing room
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: "- Strategic Foundations\n  - Long-Horizon Thinking\n    - Scenario Branches\n\n- Implementation Patterns\n  - Knowledge Architecture\n    - Modular repositories\n\n- Resilience\n  - Stressors".into(),
         };
 
@@ -316,7 +316,7 @@ fn list_without_source_blank_lines_has_no_spacing_between_top_level_items() {
     // they should render consecutively without extra spacing
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "- First section\n  - Nested item\n- Second section\n  - Another nested".into(),
     };
 
@@ -347,7 +347,7 @@ fn list_preceded_by_paragraph_has_blank_line_before() {
     // A list preceded by a paragraph should have a blank line separating them
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Here is some introductory text.\n\n- First item\n- Second item".into(),
     };
 
@@ -378,7 +378,7 @@ fn list_followed_by_paragraph_has_blank_line_after() {
     // A list followed by a paragraph should have a blank line separating them
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "- First item\n- Second item\n\nThis is concluding text.".into(),
     };
 
@@ -409,7 +409,7 @@ fn list_preceded_by_heading_has_blank_line_before() {
     // A list preceded by a heading should have a blank line separating them
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "## My Section\n\n- First item\n- Second item".into(),
     };
 
@@ -437,7 +437,7 @@ fn list_followed_by_heading_has_blank_line_after() {
     // A list followed by a heading should have a blank line separating them
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "- First item\n- Second item\n\n## Next Section".into(),
     };
 
@@ -472,7 +472,7 @@ fn complex_nested_lists_with_long_text_preserve_blank_lines() {
     // and blank lines at various nesting depths
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r#"### Architecture Overview
 
 1. **Primary Concept: The Architecture of a Modern Knowledge System**
@@ -622,7 +622,7 @@ fn blank_line_before_paragraph_doesnt_cause_blank_before_later_list_item() {
     // get a blank line because there's no blank immediately before it.
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"- First item
 Paragraph text after first item.
 
@@ -677,7 +677,7 @@ fn lists_with_numeric_text_before_them_dont_shift_indices() {
     // to appear at wrong positions
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"2024 roadmap includes several initiatives.
 
 1. First initiative
@@ -729,7 +729,7 @@ fn lists_with_plus_markers_preserve_blank_lines() {
     // blank lines from source, just like - and * markers
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"+ First item
 + Second item
 
@@ -787,7 +787,7 @@ fn code_blocks_dont_shift_list_item_indices() {
     // blank lines to appear at wrong positions
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"Example code:
 ```
 - not a real item
@@ -843,7 +843,7 @@ fn list_items_with_multiple_paragraphs_preserve_blank_lines() {
     // should be preserved, not suppressed by the "skip blank after paragraph in list" logic
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"- First paragraph in item
 
   Second paragraph in same item
@@ -902,7 +902,7 @@ fn list_items_preserve_blank_lines_before_all_block_elements() {
     // within list items should be preserved, not just blank lines before paragraphs
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"- Introduction paragraph
 
   ```python
@@ -976,7 +976,7 @@ fn list_items_preserve_blank_lines_before_all_block_elements() {
 fn list_paragraphs_keep_indent_after_blank_lines() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r#"- **Primary Concept**
   In designing a contemporary knowledge system, several foundational components must be conceptualized.
 
@@ -1013,7 +1013,7 @@ fn list_paragraphs_keep_indent_after_blank_lines() {
 fn list_paragraphs_with_soft_breaks_keep_indent() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-            role: "assistant".into(),
+            role: TranscriptRole::Assistant,
             content: r#"- **Primary Concept: The Architecture of a Modern Knowledge System**
   In designing a contemporary knowledge system, several foundational components must be conceptualized, integrated, and optimized for scalability.
   The architecture should balance **information retrieval efficiency**, **semantic accuracy**, and **human-centered accessibility**.
@@ -1061,7 +1061,7 @@ fn nested_lists_with_single_blank_line_dont_double_space() {
     // peeking ahead and seeing Tag::List, and another from Tag::Item preprocessing)
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"- parent
 
   - child one
@@ -1099,7 +1099,7 @@ fn blockquote_followed_by_list_has_single_blank_line() {
     // inside the blockquote, and another from TagEnd::BlockQuote)
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"> "Relax," it squeals, "we're diversified in hope and overdue library fines."
 
 - **Merit:** it funds the dream of four walls and a window box."#
@@ -1135,7 +1135,7 @@ fn blockquote_followed_by_paragraph_has_single_blank_line() {
     // the single blank line from the source, not double it
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"> Important quote here.
 
 This is a paragraph after the quote."#
@@ -1176,7 +1176,7 @@ fn blockquote_followed_by_heading_has_single_blank_line() {
     // Same issue with headings after blockquotes
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"> Important quote here.
 
 ## Next Section"#
@@ -1217,7 +1217,7 @@ fn blockquote_with_code_block_followed_by_paragraph() {
     // Test what happens when a blockquote contains a code block
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r#"> ```python
 > code_here()
 > ```

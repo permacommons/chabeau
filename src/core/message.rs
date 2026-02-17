@@ -1,19 +1,122 @@
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum TranscriptRole {
+    User,
+    Assistant,
+    AppInfo,
+    AppWarning,
+    AppError,
+    AppLog,
+    ToolCall,
+    ToolResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role: String,
+    pub role: TranscriptRole,
     pub content: String,
 }
 
-/// Prefix applied to transcript messages emitted by Chabeau itself.
-pub const APP_MESSAGE_ROLE_PREFIX: &str = "app";
-pub const ROLE_USER: &str = "user";
-pub const ROLE_ASSISTANT: &str = "assistant";
-pub const ROLE_APP_INFO: &str = "app/info";
-pub const ROLE_APP_WARNING: &str = "app/warning";
-pub const ROLE_APP_ERROR: &str = "app/error";
-pub const ROLE_APP_LOG: &str = "app/log";
-pub const ROLE_TOOL_CALL: &str = "tool/call";
-pub const ROLE_TOOL_RESULT: &str = "tool/result";
+impl TranscriptRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TranscriptRole::User => "user",
+            TranscriptRole::Assistant => "assistant",
+            TranscriptRole::AppInfo => "app/info",
+            TranscriptRole::AppWarning => "app/warning",
+            TranscriptRole::AppError => "app/error",
+            TranscriptRole::AppLog => "app/log",
+            TranscriptRole::ToolCall => "tool/call",
+            TranscriptRole::ToolResult => "tool/result",
+        }
+    }
+
+    pub fn to_api_role(self) -> Option<&'static str> {
+        match self {
+            TranscriptRole::User => Some("user"),
+            TranscriptRole::Assistant => Some("assistant"),
+            _ => None,
+        }
+    }
+
+    pub fn from_api_role(role: &str) -> Result<Self, String> {
+        Self::try_from(role)
+    }
+
+    pub fn is_user(self) -> bool {
+        self == TranscriptRole::User
+    }
+
+    pub fn is_assistant(self) -> bool {
+        self == TranscriptRole::Assistant
+    }
+
+    pub fn is_app(self) -> bool {
+        matches!(
+            self,
+            TranscriptRole::AppInfo
+                | TranscriptRole::AppWarning
+                | TranscriptRole::AppError
+                | TranscriptRole::AppLog
+        )
+    }
+
+    pub fn app_kind(self) -> Option<AppMessageKind> {
+        match self {
+            TranscriptRole::AppInfo => Some(AppMessageKind::Info),
+            TranscriptRole::AppWarning => Some(AppMessageKind::Warning),
+            TranscriptRole::AppError => Some(AppMessageKind::Error),
+            TranscriptRole::AppLog => Some(AppMessageKind::Log),
+            _ => None,
+        }
+    }
+}
+
+impl AsRef<str> for TranscriptRole {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq<&str> for TranscriptRole {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl TryFrom<&str> for TranscriptRole {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "user" => Ok(TranscriptRole::User),
+            "assistant" => Ok(TranscriptRole::Assistant),
+            "app/info" => Ok(TranscriptRole::AppInfo),
+            "app/warning" => Ok(TranscriptRole::AppWarning),
+            "app/error" => Ok(TranscriptRole::AppError),
+            "app/log" => Ok(TranscriptRole::AppLog),
+            "tool/call" => Ok(TranscriptRole::ToolCall),
+            "tool/result" => Ok(TranscriptRole::ToolResult),
+            _ => Err(format!("invalid transcript role: {value}")),
+        }
+    }
+}
+
+impl TryFrom<String> for TranscriptRole {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl From<TranscriptRole> for String {
+    fn from(value: TranscriptRole) -> Self {
+        value.as_str().to_string()
+    }
+}
 
 /// Severity for app-authored messages rendered in the transcript but never
 /// transmitted to the remote API.
@@ -33,94 +136,79 @@ pub enum AppMessageKind {
 }
 
 impl AppMessageKind {
-    pub fn as_role(self) -> &'static str {
+    pub fn as_role(self) -> TranscriptRole {
         match self {
-            AppMessageKind::Info => ROLE_APP_INFO,
-            AppMessageKind::Warning => ROLE_APP_WARNING,
-            AppMessageKind::Error => ROLE_APP_ERROR,
-            AppMessageKind::Log => ROLE_APP_LOG,
-        }
-    }
-
-    pub fn from_suffix(suffix: &str) -> Self {
-        match suffix {
-            "warning" => AppMessageKind::Warning,
-            "error" => AppMessageKind::Error,
-            "log" => AppMessageKind::Log,
-            _ => AppMessageKind::Info,
+            AppMessageKind::Info => TranscriptRole::AppInfo,
+            AppMessageKind::Warning => TranscriptRole::AppWarning,
+            AppMessageKind::Error => TranscriptRole::AppError,
+            AppMessageKind::Log => TranscriptRole::AppLog,
         }
     }
 }
 
 impl Message {
-    pub fn app(kind: AppMessageKind, content: impl Into<String>) -> Self {
-        let content = content.into();
-        match kind {
-            AppMessageKind::Info => Self::app_info(content),
-            AppMessageKind::Warning => Self::app_warning(content),
-            AppMessageKind::Error => Self::app_error(content),
-            AppMessageKind::Log => Self::app_log(content),
+    pub fn new(role: TranscriptRole, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
         }
+    }
+
+    pub fn is_user(&self) -> bool {
+        self.role.is_user()
+    }
+
+    pub fn is_assistant(&self) -> bool {
+        self.role.is_assistant()
+    }
+
+    pub fn is_app(&self) -> bool {
+        self.role.is_app()
+    }
+
+    pub fn app(kind: AppMessageKind, content: impl Into<String>) -> Self {
+        Self::new(kind.as_role(), content)
     }
 
     pub fn app_info(content: impl Into<String>) -> Self {
-        Self {
-            role: AppMessageKind::Info.as_role().to_string(),
-            content: content.into(),
-        }
+        Self::new(AppMessageKind::Info.as_role(), content)
     }
 
     pub fn app_warning(content: impl Into<String>) -> Self {
-        Self {
-            role: AppMessageKind::Warning.as_role().to_string(),
-            content: content.into(),
-        }
+        Self::new(AppMessageKind::Warning.as_role(), content)
     }
 
     pub fn app_error(content: impl Into<String>) -> Self {
-        Self {
-            role: AppMessageKind::Error.as_role().to_string(),
-            content: content.into(),
-        }
+        Self::new(AppMessageKind::Error.as_role(), content)
     }
 
     pub fn app_log(content: impl Into<String>) -> Self {
-        Self {
-            role: AppMessageKind::Log.as_role().to_string(),
-            content: content.into(),
-        }
+        Self::new(AppMessageKind::Log.as_role(), content)
     }
 
     pub fn tool_call(content: impl Into<String>) -> Self {
-        Self {
-            role: ROLE_TOOL_CALL.to_string(),
-            content: content.into(),
-        }
+        Self::new(TranscriptRole::ToolCall, content)
     }
 
     pub fn tool_result(content: impl Into<String>) -> Self {
-        Self {
-            role: ROLE_TOOL_RESULT.to_string(),
-            content: content.into(),
-        }
+        Self::new(TranscriptRole::ToolResult, content)
     }
 }
 
-pub fn is_app_message_role(role: &str) -> bool {
-    role == ROLE_APP_INFO
-        || role == ROLE_APP_WARNING
-        || role == ROLE_APP_ERROR
-        || role == ROLE_APP_LOG
-        || role.starts_with("app/")
+pub fn is_app_message_role(role: impl AsRef<str>) -> bool {
+    matches!(
+        role.as_ref(),
+        "app/info" | "app/warning" | "app/error" | "app/log"
+    )
 }
 
-pub fn app_message_kind_from_role(role: &str) -> AppMessageKind {
-    if let Some((prefix, suffix)) = role.split_once('/') {
-        if prefix == APP_MESSAGE_ROLE_PREFIX {
-            return AppMessageKind::from_suffix(suffix);
-        }
+pub fn app_message_kind_from_role(role: impl AsRef<str>) -> AppMessageKind {
+    match role.as_ref() {
+        "app/warning" => AppMessageKind::Warning,
+        "app/error" => AppMessageKind::Error,
+        "app/log" => AppMessageKind::Log,
+        _ => AppMessageKind::Info,
     }
-    AppMessageKind::Info
 }
 
 #[cfg(test)]
@@ -129,15 +217,20 @@ mod tests {
 
     #[test]
     fn tool_roles_are_not_app_roles() {
-        assert!(!is_app_message_role(ROLE_TOOL_CALL));
-        assert!(!is_app_message_role(ROLE_TOOL_RESULT));
+        assert!(!is_app_message_role(TranscriptRole::ToolCall));
+        assert!(!is_app_message_role(TranscriptRole::ToolResult));
     }
 
     #[test]
     fn tool_messages_set_roles() {
         let call = Message::tool_call("call");
         let result = Message::tool_result("result");
-        assert_eq!(call.role, ROLE_TOOL_CALL);
-        assert_eq!(result.role, ROLE_TOOL_RESULT);
+        assert_eq!(call.role, TranscriptRole::ToolCall);
+        assert_eq!(result.role, TranscriptRole::ToolResult);
+    }
+
+    #[test]
+    fn invalid_role_strings_are_rejected() {
+        assert!(TranscriptRole::try_from("app/unknown").is_err());
     }
 }

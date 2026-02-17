@@ -2,7 +2,7 @@
 use super::helpers::{
     assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
 };
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
@@ -39,7 +39,7 @@ fn tool_call_arguments_do_not_render_markdown() {
 fn markdown_images_emit_clickable_links() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Look at this sketch: ![diagram](https://example.com/diagram.png) neat, right?"
             .into(),
     };
@@ -76,7 +76,7 @@ fn markdown_images_emit_clickable_links() {
 fn horizontal_rules_render_as_centered_lines() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Above\n\n---\n\nBelow".into(),
     };
 
@@ -117,7 +117,7 @@ fn horizontal_rules_render_as_centered_lines() {
 fn superscript_and_subscript_render_without_markers() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Subscripts: ~abc~ alongside superscripts: ^def^.".into(),
     };
 
@@ -206,7 +206,7 @@ fn test_extremely_narrow_terminal_no_truncation() {
     // Test that even extremely narrow terminals never truncate content
     let mut messages = VecDeque::new();
     messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: r"| A | B |
 |---|---|
 | VeryLongUnbreakableWord | AnotherLongWord |
@@ -261,7 +261,7 @@ fn emphasis_with_standalone_paren() {
     // But let's test when the ) is 1 past by using fundamentally_x
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Space exploration is *fundamentally_x* )".into(),
     };
 

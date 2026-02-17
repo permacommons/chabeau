@@ -458,13 +458,13 @@ mod tests {
 }
 #[test]
 fn test_message_rendering_with_persona_display_name() {
-    use crate::core::message::Message;
+    use crate::core::message::{Message, TranscriptRole};
     use crate::ui::markdown::{render_message_with_config, MessageRenderConfig};
     use crate::ui::theme::Theme;
 
     let theme = Theme::dark_default();
     let message = Message {
-        role: "user".to_string(),
+        role: TranscriptRole::User,
         content: "Hello world".to_string(),
     };
 

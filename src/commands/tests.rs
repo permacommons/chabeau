@@ -1,9 +1,11 @@
 use super::*;
 use crate::character::card::{CharacterCard, CharacterData};
 use crate::core::config::data::{Config, McpServerConfig, Persona};
-use crate::core::message::ROLE_ASSISTANT;
+use crate::core::message::TranscriptRole;
 use crate::core::persona::PersonaManager;
-use crate::utils::test_utils::{create_test_app, create_test_message, with_test_config_env};
+use crate::utils::test_utils::{
+    create_test_app, create_test_message, create_test_message_with_role, with_test_config_env,
+};
 use rust_mcp_schema::{
     Implementation, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PromptArgument, ServerCapabilities,
@@ -88,9 +90,10 @@ fn clear_command_shows_character_greeting_when_available() {
     app.session.set_character(character);
     app.session.character_greeting_shown = true;
     app.session.has_received_assistant_message = true;
-    app.ui
-        .messages
-        .push_back(create_test_message(ROLE_ASSISTANT, &greeting_text));
+    app.ui.messages.push_back(create_test_message_with_role(
+        TranscriptRole::Assistant,
+        &greeting_text,
+    ));
     app.ui
         .messages
         .push_back(create_test_message("user", "Hi!"));
@@ -100,7 +103,7 @@ fn clear_command_shows_character_greeting_when_available() {
     assert_eq!(app.ui.status.as_deref(), Some("Transcript cleared"));
     assert_eq!(app.ui.messages.len(), 1);
     let greeting = app.ui.messages.front().unwrap();
-    assert_eq!(greeting.role, ROLE_ASSISTANT);
+    assert_eq!(greeting.role, TranscriptRole::Assistant);
     assert_eq!(greeting.content, greeting_text);
     assert!(app.session.character_greeting_shown);
     assert!(!app.session.has_received_assistant_message);
@@ -189,8 +192,8 @@ fn test_dump_conversation() {
     app.ui
         .messages
         .push_back(create_test_message("assistant", "Hi there!"));
-    app.ui.messages.push_back(create_test_message(
-        crate::core::message::ROLE_APP_INFO,
+    app.ui.messages.push_back(create_test_message_with_role(
+        crate::core::message::TranscriptRole::AppInfo,
         "App message",
     ));
 

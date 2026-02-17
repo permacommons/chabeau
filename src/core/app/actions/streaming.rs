@@ -11,7 +11,7 @@ use crate::core::app::ui_state::ToolPromptRequest;
 use crate::core::chat_stream::StreamParams;
 use crate::core::config::data::McpToolPayloadRetention;
 use crate::core::mcp_sampling::{serialize_sampling_params, summarize_sampling_request};
-use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{AppMessageKind, Message, TranscriptRole};
 use crate::mcp::permissions::ToolPermissionDecision;
 use crate::mcp::{MCP_INSTANT_RECALL_TOOL, MCP_SESSION_MEMORY_SERVER_ID};
 use rust_mcp_schema::{ContentBlock, PromptMessage, Role, RpcError};
@@ -159,13 +159,10 @@ fn handle_mcp_prompt_completed(
         for message in prompt_result.messages.iter() {
             let content = prompt_message_content_to_string(message);
             let role = match message.role {
-                Role::User => ROLE_USER,
-                Role::Assistant => ROLE_ASSISTANT,
+                Role::User => TranscriptRole::User,
+                Role::Assistant => TranscriptRole::Assistant,
             };
-            conversation.add_message(Message {
-                role: role.to_string(),
-                content,
-            });
+            conversation.add_message(Message::new(role, content));
         }
 
         conversation.add_app_message(

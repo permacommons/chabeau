@@ -107,7 +107,7 @@ fn is_tool_unsupported_error(message: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::app::actions::AppCommand;
-    use crate::core::message::{ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
+    use crate::core::message::TranscriptRole;
     use crate::utils::test_utils::create_test_app;
 
     fn default_ctx() -> AppActionContext {
@@ -136,10 +136,13 @@ mod tests {
             .ui
             .messages
             .iter()
-            .all(|m| m.role != ROLE_ASSISTANT || !m.content.trim().is_empty()));
+            .all(|m| m.role != TranscriptRole::Assistant || !m.content.trim().is_empty()));
         let last = app.ui.messages.back().expect("last");
-        assert_eq!(last.role, ROLE_APP_ERROR);
+        assert_eq!(last.role, TranscriptRole::AppError);
         assert_eq!(last.content, "network failure");
-        assert_eq!(app.ui.messages.front().expect("first").role, ROLE_USER);
+        assert_eq!(
+            app.ui.messages.front().expect("first").role,
+            TranscriptRole::User
+        );
     }
 }

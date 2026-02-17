@@ -1,5 +1,5 @@
 use chabeau::core::app::App;
-use chabeau::core::message::Message;
+use chabeau::core::message::{Message, TranscriptRole};
 use chabeau::ui::theme::Theme;
 use chabeau::utils::scroll::ScrollCalculator;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -9,11 +9,19 @@ fn make_messages(n_pairs: usize, base: &str) -> VecDeque<Message> {
     let mut v = VecDeque::new();
     for i in 0..n_pairs {
         v.push_back(Message {
-            role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+            role: if i % 2 == 0 {
+                TranscriptRole::User
+            } else {
+                TranscriptRole::Assistant
+            },
             content: base.into(),
         });
         v.push_back(Message {
-            role: if i % 2 == 0 { "assistant" } else { "user" }.into(),
+            role: if i % 2 == 0 {
+                TranscriptRole::Assistant
+            } else {
+                TranscriptRole::User
+            },
             content: base.into(),
         });
     }

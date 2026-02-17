@@ -2,7 +2,7 @@ use std::error::Error;
 
 use crate::{
     auth::{AuthManager, ProviderAuthStatus},
-    core::message::{Message, ROLE_ASSISTANT},
+    core::message::{Message, TranscriptRole},
     core::{builtin_providers::find_builtin_provider, config::data::Config},
     ui::{
         layout::TableOverflowPolicy,
@@ -59,7 +59,7 @@ pub async fn list_providers() -> Result<(), Box<dyn Error>> {
     let terminal_width = terminal::size().ok().map(|(w, _)| w as usize);
     let rendered = markdown::render_message_with_config(
         &Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content,
         },
         &monochrome_theme,

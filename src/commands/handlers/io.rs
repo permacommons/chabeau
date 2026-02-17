@@ -100,7 +100,9 @@ pub fn dump_conversation_with_overwrite(
         .ui
         .messages
         .iter()
-        .filter(|msg| !message::is_app_message_role(&msg.role) || msg.role == message::ROLE_APP_LOG)
+        .filter(|msg| {
+            !message::is_app_message_role(msg.role) || msg.role == message::TranscriptRole::AppLog
+        })
         .collect();
 
     if conversation_messages.is_empty() {
@@ -120,11 +122,15 @@ pub fn dump_conversation_with_overwrite(
     let user_display_name = app.persona_manager.get_display_name();
 
     for msg in conversation_messages {
-        match msg.role.as_str() {
-            "user" => writeln!(writer, "{}: {}", user_display_name, msg.content)?,
-            message::ROLE_APP_LOG => writeln!(writer, "## {}", msg.content)?,
-            message::ROLE_TOOL_CALL => writeln!(writer, "Tool call: {}", msg.content)?,
-            message::ROLE_TOOL_RESULT => writeln!(writer, "Tool result: {}", msg.content)?,
+        match msg.role {
+            message::TranscriptRole::User => {
+                writeln!(writer, "{}: {}", user_display_name, msg.content)?
+            }
+            message::TranscriptRole::AppLog => writeln!(writer, "## {}", msg.content)?,
+            message::TranscriptRole::ToolCall => writeln!(writer, "Tool call: {}", msg.content)?,
+            message::TranscriptRole::ToolResult => {
+                writeln!(writer, "Tool result: {}", msg.content)?
+            }
             _ => writeln!(writer, "{}", msg.content)?,
         }
         writeln!(writer)?;

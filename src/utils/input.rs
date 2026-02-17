@@ -13,14 +13,19 @@
 /// This is used by both the chat loop and masked input to ensure consistent
 /// text handling across the application.
 pub fn sanitize_text_input(text: &str) -> String {
-    text.replace('\t', "    ") // Convert tabs to 4 spaces
-        .replace('\r', "\n") // Convert carriage returns to newlines
-        .chars()
-        .filter(|&c| {
-            // Allow printable characters and newlines, filter out other control characters
-            c == '\n' || !c.is_control()
-        })
-        .collect::<String>()
+    let mut sanitized = String::with_capacity(text.len());
+
+    for c in text.chars() {
+        match c {
+            '\t' => sanitized.push_str("    "),
+            '\r' => sanitized.push('\n'),
+            '\n' => sanitized.push(c),
+            _ if !c.is_control() => sanitized.push(c),
+            _ => {}
+        }
+    }
+
+    sanitized
 }
 
 #[cfg(test)]
@@ -67,5 +72,13 @@ mod tests {
         let input = "hello\x01\x02world\x03";
         let result = sanitize_text_input(input);
         assert_eq!(result, "helloworld");
+    }
+
+    #[test]
+    fn test_sanitize_text_input_long_mixed_input() {
+        let input = "start\thello\x07middle\rend\n".repeat(256) + "tail\x00\t\rline";
+        let result = sanitize_text_input(&input);
+        let expected = "start    hellomiddle\nend\n".repeat(256) + "tail    \nline";
+        assert_eq!(result, expected);
     }
 }

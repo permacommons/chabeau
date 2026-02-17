@@ -91,21 +91,6 @@ impl SpanKind {
     }
 
     #[inline]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn is_text(&self) -> bool {
-        matches!(self, SpanKind::Text)
-    }
-
-    #[inline]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn link_href(&self) -> Option<&str> {
-        match self {
-            SpanKind::Link(meta) => Some(meta.href()),
-            _ => None,
-        }
-    }
-
-    #[inline]
     pub fn link(href: impl Into<String>) -> Self {
         SpanKind::Link(LinkMeta::new(href))
     }
@@ -129,6 +114,22 @@ impl SpanKind {
     #[inline]
     pub fn code_block(language: Option<impl Into<String>>, block_index: usize) -> Self {
         SpanKind::CodeBlock(CodeBlockMeta::new(language, block_index))
+    }
+}
+
+#[cfg(test)]
+impl SpanKind {
+    #[inline]
+    pub fn is_text(&self) -> bool {
+        matches!(self, SpanKind::Text)
+    }
+
+    #[inline]
+    pub fn link_href(&self) -> Option<&str> {
+        match self {
+            SpanKind::Link(meta) => Some(meta.href()),
+            _ => None,
+        }
     }
 }
 
@@ -179,7 +180,6 @@ impl LinkMeta {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn href(&self) -> &str {
         &self.href
     }

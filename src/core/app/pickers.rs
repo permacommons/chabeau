@@ -23,7 +23,7 @@ impl App {
         self.picker.session()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn picker_session_mut(&mut self) -> Option<&mut PickerSession> {
         self.picker.session_mut()
     }

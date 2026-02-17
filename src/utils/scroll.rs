@@ -149,7 +149,7 @@ impl ScrollCalculator {
     /// Pre-wrap the given lines to a specific width, preserving styles and wrapping at word
     /// boundaries consistent with the input wrapper (also breaks long tokens when needed).
     /// This allows rendering without ratatui's built-in wrapping, ensuring counts match output.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn prewrap_lines(lines: &[Line], terminal_width: u16) -> Vec<Line<'static>> {
         Self::prewrap_lines_with_metadata(lines, None, terminal_width).0
     }
@@ -360,7 +360,7 @@ impl ScrollCalculator {
     }
 
     /// Build display lines with selection highlighting and terminal width for table balancing
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn build_display_lines_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,

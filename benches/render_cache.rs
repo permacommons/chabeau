@@ -38,7 +38,7 @@ fn redraw_no_cache(
     let built = ScrollCalculator::build_display_lines_with_theme_and_flags_and_width(
         messages, theme, markdown, syntax, None,
     );
-    let _pre = ScrollCalculator::prewrap_lines(&built, width);
+    let _pre = ScrollCalculator::prewrap_lines_with_metadata(&built, None, width).0;
 }
 
 fn redraw_with_cache(app: &mut App, width: u16) {

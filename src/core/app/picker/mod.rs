@@ -1,4 +1,4 @@
-use super::{SessionContext, UiState};
+use super::{session::SessionContext, ui_state::UiState};
 use crate::api::models::sort_models;
 use crate::api::ModelsResponse;
 use crate::auth::AuthManager;

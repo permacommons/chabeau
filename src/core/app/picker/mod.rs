@@ -112,11 +112,10 @@ pub struct PresetPickerState {
 }
 
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum PickerData {
-    Theme(ThemePickerState),
-    Model(ModelPickerState),
-    Provider(ProviderPickerState),
+    Theme(Box<ThemePickerState>),
+    Model(Box<ModelPickerState>),
+    Provider(Box<ProviderPickerState>),
     Character(CharacterPickerState),
     Persona(PersonaPickerState),
     Preset(PresetPickerState),
@@ -415,12 +414,12 @@ impl PickerController {
         let picker_state = PickerState::new("Pick Theme", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
-            data: PickerData::Theme(ThemePickerState {
+            data: PickerData::Theme(Box::new(ThemePickerState {
                 search_filter: String::new(),
                 all_items: items,
                 before_theme: Some(ui.theme.clone()),
                 before_theme_id: cfg.theme.clone(),
-            }),
+            })),
         };
 
         self.start_picker_session(session, active_theme_id);
@@ -541,12 +540,12 @@ impl PickerController {
         let picker_state = PickerState::new("Pick Model", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
-            data: PickerData::Model(ModelPickerState {
+            data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: String::new(),
                 all_items: items,
                 before_model: Some(session_context.model.clone()),
                 has_dates,
-            }),
+            })),
         };
 
         self.start_picker_session(session, Some(session_context.model.clone()));
@@ -857,14 +856,14 @@ impl PickerController {
         let picker_state = PickerState::new("Pick Provider", items.clone(), selected);
         let session = PickerSession {
             state: picker_state,
-            data: PickerData::Provider(ProviderPickerState {
+            data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: String::new(),
                 all_items: items,
                 before_provider: Some((
                     session_context.provider_name.clone(),
                     session_context.provider_display_name.clone(),
                 )),
-            }),
+            })),
         };
 
         self.start_picker_session(session, Some(session_context.provider_name.clone()));
@@ -1203,12 +1202,12 @@ mod tests {
 
         let mut session = PickerSession {
             state: picker_state,
-            data: PickerData::Model(ModelPickerState {
+            data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: "GPT".to_string(),
                 all_items: items,
                 before_model: None,
                 has_dates: false,
-            }),
+            })),
         };
         session.state.sort_mode = session.default_sort_mode();
 
@@ -1331,6 +1330,17 @@ mod tests {
         assert_eq!(session.state.items.len(), 2);
         assert_eq!(session.state.items[0].id, TURN_OFF_PRESET_ID);
         assert!(session.state.items.iter().any(|item| item.id == "focus"));
+    }
+
+    #[test]
+    fn test_picker_data_variant_footprint_is_normalized() {
+        use std::mem::size_of;
+
+        let small_inline = size_of::<CharacterPickerState>();
+        assert!(size_of::<ModelPickerState>() > small_inline);
+        assert!(size_of::<ProviderPickerState>() > small_inline);
+        assert!(size_of::<ThemePickerState>() > small_inline);
+        assert!(size_of::<PickerData>() < size_of::<ModelPickerState>());
     }
 
     #[test]

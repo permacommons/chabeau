@@ -1012,12 +1012,12 @@ mod tests {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
             state: picker_state,
-            data: PickerData::Model(ModelPickerState {
+            data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: search_filter.to_string(),
                 all_items: items,
                 before_model: None,
                 has_dates,
-            }),
+            })),
         });
     }
 
@@ -1030,12 +1030,12 @@ mod tests {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
             state: picker_state,
-            data: PickerData::Theme(ThemePickerState {
+            data: PickerData::Theme(Box::new(ThemePickerState {
                 search_filter: search_filter.to_string(),
                 all_items: items,
                 before_theme: None,
                 before_theme_id: None,
-            }),
+            })),
         });
     }
 
@@ -1048,11 +1048,11 @@ mod tests {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
         app.picker.picker_session = Some(PickerSession {
             state: picker_state,
-            data: PickerData::Provider(ProviderPickerState {
+            data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: search_filter.to_string(),
                 all_items: items,
                 before_provider: None,
-            }),
+            })),
         });
     }
 

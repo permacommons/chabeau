@@ -46,12 +46,12 @@ impl ToolInspectSnapshot {
 
 fn tool_inspect_snapshot(app: &App) -> ToolInspectSnapshot {
     let mut pending = Vec::new();
-    if let Some(request) = app.session.active_tool_request.clone() {
+    if let Some(request) = app.session.tool_pipeline.active_tool_request.clone() {
         pending.push(request);
     }
-    pending.extend(app.session.pending_tool_queue.iter().cloned());
+    pending.extend(app.session.tool_pipeline.pending_tool_queue.iter().cloned());
     ToolInspectSnapshot {
-        results: app.session.tool_result_history.clone(),
+        results: app.session.tool_pipeline.tool_result_history.clone(),
         pending,
     }
 }
@@ -728,25 +728,31 @@ mod tests {
     fn inspect_tool_calls_prefers_pending_prompt() {
         let mut app = create_test_app();
         let ctx = default_ctx();
-        app.session.tool_result_history.push(ToolResultRecord {
-            tool_name: "completed_tool".to_string(),
-            server_name: Some("Alpha MCP".to_string()),
-            server_id: Some("alpha".to_string()),
-            status: ToolResultStatus::Success,
-            failure_kind: None,
-            content: "{}".to_string(),
-            summary: "completed_tool on Alpha MCP (success)".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-            raw_arguments: Some("{\"ok\":true}".to_string()),
-            assistant_message_index: None,
-        });
-        app.session.pending_tool_queue.push_back(ToolCallRequest {
-            server_id: "alpha".to_string(),
-            tool_name: "pending_tool".to_string(),
-            arguments: None,
-            raw_arguments: "{\"q\":\"pending\"}".to_string(),
-            tool_call_id: Some("call-2".to_string()),
-        });
+        app.session
+            .tool_pipeline
+            .tool_result_history
+            .push(ToolResultRecord {
+                tool_name: "completed_tool".to_string(),
+                server_name: Some("Alpha MCP".to_string()),
+                server_id: Some("alpha".to_string()),
+                status: ToolResultStatus::Success,
+                failure_kind: None,
+                content: "{}".to_string(),
+                summary: "completed_tool on Alpha MCP (success)".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                raw_arguments: Some("{\"ok\":true}".to_string()),
+                assistant_message_index: None,
+            });
+        app.session
+            .tool_pipeline
+            .pending_tool_queue
+            .push_back(ToolCallRequest {
+                server_id: "alpha".to_string(),
+                tool_name: "pending_tool".to_string(),
+                arguments: None,
+                raw_arguments: "{\"q\":\"pending\"}".to_string(),
+                tool_call_id: Some("call-2".to_string()),
+            });
         app.ui
             .start_tool_prompt(crate::core::app::ui_state::ToolPromptRequest {
                 server_id: "alpha".to_string(),
@@ -776,18 +782,21 @@ mod tests {
     fn inspect_tool_calls_labels_completed() {
         let mut app = create_test_app();
         let ctx = default_ctx();
-        app.session.tool_result_history.push(ToolResultRecord {
-            tool_name: "completed_tool".to_string(),
-            server_name: Some("Alpha MCP".to_string()),
-            server_id: Some("alpha".to_string()),
-            status: ToolResultStatus::Success,
-            failure_kind: None,
-            content: "{}".to_string(),
-            summary: "completed_tool on Alpha MCP (success)".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-            raw_arguments: Some("{\"ok\":true}".to_string()),
-            assistant_message_index: None,
-        });
+        app.session
+            .tool_pipeline
+            .tool_result_history
+            .push(ToolResultRecord {
+                tool_name: "completed_tool".to_string(),
+                server_name: Some("Alpha MCP".to_string()),
+                server_id: Some("alpha".to_string()),
+                status: ToolResultStatus::Success,
+                failure_kind: None,
+                content: "{}".to_string(),
+                summary: "completed_tool on Alpha MCP (success)".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                raw_arguments: Some("{\"ok\":true}".to_string()),
+                assistant_message_index: None,
+            });
 
         let cmd = handle_inspect_action(&mut app, InspectAction::Open, ctx);
 
@@ -806,18 +815,21 @@ mod tests {
     #[test]
     fn tool_call_inspect_copy_data_uses_request_payload() {
         let mut app = create_test_app();
-        app.session.tool_result_history.push(ToolResultRecord {
-            tool_name: "mcp_read_resource".to_string(),
-            server_name: Some("Alpha MCP".to_string()),
-            server_id: Some("alpha".to_string()),
-            status: ToolResultStatus::Success,
-            failure_kind: None,
-            content: "{\"ok\":true}".to_string(),
-            summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-            raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
-            assistant_message_index: None,
-        });
+        app.session
+            .tool_pipeline
+            .tool_result_history
+            .push(ToolResultRecord {
+                tool_name: "mcp_read_resource".to_string(),
+                server_name: Some("Alpha MCP".to_string()),
+                server_id: Some("alpha".to_string()),
+                status: ToolResultStatus::Success,
+                failure_kind: None,
+                content: "{\"ok\":true}".to_string(),
+                summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
+                assistant_message_index: None,
+            });
         app.open_tool_call_inspect(
             "Inspect".to_string(),
             "Body".to_string(),
@@ -835,18 +847,21 @@ mod tests {
     #[test]
     fn tool_call_inspect_copy_data_uses_response_payload() {
         let mut app = create_test_app();
-        app.session.tool_result_history.push(ToolResultRecord {
-            tool_name: "mcp_read_resource".to_string(),
-            server_name: Some("Alpha MCP".to_string()),
-            server_id: Some("alpha".to_string()),
-            status: ToolResultStatus::Success,
-            failure_kind: None,
-            content: "{\"ok\":true}".to_string(),
-            summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-            raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
-            assistant_message_index: None,
-        });
+        app.session
+            .tool_pipeline
+            .tool_result_history
+            .push(ToolResultRecord {
+                tool_name: "mcp_read_resource".to_string(),
+                server_name: Some("Alpha MCP".to_string()),
+                server_id: Some("alpha".to_string()),
+                status: ToolResultStatus::Success,
+                failure_kind: None,
+                content: "{\"ok\":true}".to_string(),
+                summary: "mcp_read_resource on Alpha MCP (success)".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                raw_arguments: Some("{\"uri\":\"mcp://alpha/doc\"}".to_string()),
+                assistant_message_index: None,
+            });
         app.open_tool_call_inspect(
             "Inspect".to_string(),
             "Body".to_string(),
@@ -864,19 +879,22 @@ mod tests {
     #[test]
     fn tool_call_inspect_copy_data_decodes_nested_json() {
         let mut app = create_test_app();
-        app.session.tool_result_history.push(ToolResultRecord {
-            tool_name: "mcp_list_documents".to_string(),
-            server_name: Some("Alpha MCP".to_string()),
-            server_id: Some("alpha".to_string()),
-            status: ToolResultStatus::Success,
-            failure_kind: None,
-            content: "{\"content\":[{\"text\":\"{\\\"ok\\\":true}\",\"type\":\"text\"}]}"
-                .to_string(),
-            summary: "mcp_list_documents on Alpha MCP (success)".to_string(),
-            tool_call_id: Some("call-1".to_string()),
-            raw_arguments: Some("{\"q\":\"nested\"}".to_string()),
-            assistant_message_index: None,
-        });
+        app.session
+            .tool_pipeline
+            .tool_result_history
+            .push(ToolResultRecord {
+                tool_name: "mcp_list_documents".to_string(),
+                server_name: Some("Alpha MCP".to_string()),
+                server_id: Some("alpha".to_string()),
+                status: ToolResultStatus::Success,
+                failure_kind: None,
+                content: "{\"content\":[{\"text\":\"{\\\"ok\\\":true}\",\"type\":\"text\"}]}"
+                    .to_string(),
+                summary: "mcp_list_documents on Alpha MCP (success)".to_string(),
+                tool_call_id: Some("call-1".to_string()),
+                raw_arguments: Some("{\"q\":\"nested\"}".to_string()),
+                assistant_message_index: None,
+            });
         app.open_tool_call_inspect(
             "Inspect".to_string(),
             "Body".to_string(),

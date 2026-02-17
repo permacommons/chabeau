@@ -1,6 +1,9 @@
 use super::*;
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
-use crate::core::app::session::{ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus};
+use crate::core::app::session::{
+    PendingToolCall, StreamContinuation, ToolCallRequest, ToolPayloadHistoryEntry,
+    ToolResultRecord, ToolResultStatus,
+};
 use crate::core::config::data::McpServerConfig;
 use crate::core::message::{Message, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
@@ -139,6 +142,8 @@ fn clear_transcript_resets_transcript_state() {
     app.session.last_refine_prompt = Some("prompt".to_string());
     app.session.has_received_assistant_message = true;
     app.session.character_greeting_shown = true;
+    app.session.mcp_init.begin();
+    app.session.mcp_init.deferred_message = Some("queued".to_string());
 
     app.get_prewrapped_lines_cached(80);
     assert!(app.ui.prewrap_cache.is_some());
@@ -157,6 +162,143 @@ fn clear_transcript_resets_transcript_state() {
     assert!(app.session.last_refine_prompt.is_none());
     assert!(!app.session.has_received_assistant_message);
     assert!(!app.session.character_greeting_shown);
+    assert!(app.session.mcp_init.in_progress);
+    assert!(!app.session.mcp_init.complete);
+    assert_eq!(
+        app.session.mcp_init.deferred_message.as_deref(),
+        Some("queued")
+    );
+}
+
+#[test]
+fn start_new_stream_preserves_tool_history_and_clears_transient_state() {
+    let mut app = create_test_app();
+    app.session.tool_pipeline.pending_tool_calls.insert(
+        0,
+        PendingToolCall {
+            id: Some("call-1".to_string()),
+            name: Some("lookup".to_string()),
+            arguments: "{\"q\":\"now\"}".to_string(),
+        },
+    );
+    app.session
+        .tool_pipeline
+        .pending_tool_queue
+        .push_back(ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "lookup".to_string(),
+            arguments: None,
+            raw_arguments: "{\"q\":\"next\"}".to_string(),
+            tool_call_id: Some("call-2".to_string()),
+        });
+    app.session.tool_pipeline.active_tool_request = Some(ToolCallRequest {
+        server_id: "alpha".to_string(),
+        tool_name: "lookup".to_string(),
+        arguments: None,
+        raw_arguments: "{\"q\":\"active\"}".to_string(),
+        tool_call_id: Some("call-3".to_string()),
+    });
+    app.session
+        .tool_pipeline
+        .tool_call_records
+        .push(ChatToolCall {
+            id: "call-1".to_string(),
+            kind: "function".to_string(),
+            function: ChatToolCallFunction {
+                name: "lookup".to_string(),
+                arguments: "{\"q\":\"now\"}".to_string(),
+            },
+        });
+    app.session.tool_pipeline.tool_results.push(ChatMessage {
+        role: "tool".to_string(),
+        content: "{\"ok\":true}".to_string(),
+        name: None,
+        tool_call_id: Some("call-1".to_string()),
+        tool_calls: None,
+    });
+    app.session.tool_pipeline.continuation_messages = Some(StreamContinuation {
+        api_messages: vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: "partial".to_string(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }],
+        api_messages_base: vec![],
+    });
+
+    app.session
+        .tool_pipeline
+        .tool_result_history
+        .push(ToolResultRecord {
+            tool_name: "lookup".to_string(),
+            server_name: Some("Alpha MCP".to_string()),
+            server_id: Some("alpha".to_string()),
+            status: ToolResultStatus::Success,
+            failure_kind: None,
+            content: "{\"ok\":true}".to_string(),
+            summary: "lookup on Alpha MCP (success)".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+            raw_arguments: Some("{\"q\":\"now\"}".to_string()),
+            assistant_message_index: Some(0),
+        });
+    app.session
+        .tool_pipeline
+        .tool_payload_history
+        .push(ToolPayloadHistoryEntry {
+            server_id: Some("alpha".to_string()),
+            tool_call_id: Some("call-1".to_string()),
+            assistant_message: ChatMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "call-1".to_string(),
+                    kind: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: "lookup".to_string(),
+                        arguments: "{\"q\":\"now\"}".to_string(),
+                    },
+                }]),
+            },
+            tool_message: ChatMessage {
+                role: "tool".to_string(),
+                content: "{\"ok\":true}".to_string(),
+                name: None,
+                tool_call_id: Some("call-1".to_string()),
+                tool_calls: None,
+            },
+            assistant_message_index: Some(0),
+        });
+
+    {
+        let mut conversation = app.conversation();
+        let (_token, stream_id) = conversation.start_new_stream();
+        assert_eq!(stream_id, 1);
+    }
+
+    assert!(app.session.tool_pipeline.pending_tool_calls.is_empty());
+    assert!(app.session.tool_pipeline.pending_tool_queue.is_empty());
+    assert!(app.session.tool_pipeline.active_tool_request.is_none());
+    assert!(app.session.tool_pipeline.tool_call_records.is_empty());
+    assert!(app.session.tool_pipeline.tool_results.is_empty());
+    assert!(app.session.tool_pipeline.continuation_messages.is_none());
+
+    assert_eq!(app.session.tool_pipeline.tool_result_history.len(), 1);
+    assert_eq!(app.session.tool_pipeline.tool_payload_history.len(), 1);
+    assert_eq!(
+        app.session.tool_pipeline.tool_result_history[0]
+            .tool_call_id
+            .as_deref(),
+        Some("call-1")
+    );
+    assert_eq!(
+        app.session.tool_pipeline.tool_payload_history[0]
+            .tool_call_id
+            .as_deref(),
+        Some("call-1")
+    );
 }
 
 #[test]
@@ -468,30 +610,36 @@ fn build_stream_params_includes_tool_history_and_payloads() {
         yolo: None,
     });
     app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success)".to_string(),
-        tool_call_id: Some("call-1".to_string()),
-        raw_arguments: Some("{\"q\":\"test\"}".to_string()),
-        assistant_message_index: None,
-    });
-    app.session.tool_result_history.push(ToolResultRecord {
-        tool_name: "lookup".to_string(),
-        server_name: Some("Alpha MCP".to_string()),
-        server_id: Some("alpha".to_string()),
-        status: ToolResultStatus::Success,
-        failure_kind: None,
-        content: "{\"ok\":true}".to_string(),
-        summary: "lookup on Alpha MCP (success) args: {\"q\":\"missing\"}".to_string(),
-        tool_call_id: Some("call-2".to_string()),
-        raw_arguments: Some("{\"q\":\"missing\"}".to_string()),
-        assistant_message_index: None,
-    });
+    app.session
+        .tool_pipeline
+        .tool_result_history
+        .push(ToolResultRecord {
+            tool_name: "lookup".to_string(),
+            server_name: Some("Alpha MCP".to_string()),
+            server_id: Some("alpha".to_string()),
+            status: ToolResultStatus::Success,
+            failure_kind: None,
+            content: "{\"ok\":true}".to_string(),
+            summary: "lookup on Alpha MCP (success)".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+            raw_arguments: Some("{\"q\":\"test\"}".to_string()),
+            assistant_message_index: None,
+        });
+    app.session
+        .tool_pipeline
+        .tool_result_history
+        .push(ToolResultRecord {
+            tool_name: "lookup".to_string(),
+            server_name: Some("Alpha MCP".to_string()),
+            server_id: Some("alpha".to_string()),
+            status: ToolResultStatus::Success,
+            failure_kind: None,
+            content: "{\"ok\":true}".to_string(),
+            summary: "lookup on Alpha MCP (success) args: {\"q\":\"missing\"}".to_string(),
+            tool_call_id: Some("call-2".to_string()),
+            raw_arguments: Some("{\"q\":\"missing\"}".to_string()),
+            assistant_message_index: None,
+        });
 
     let assistant_message = ChatMessage {
         role: "assistant".to_string(),
@@ -515,6 +663,7 @@ fn build_stream_params_includes_tool_history_and_payloads() {
         tool_calls: None,
     };
     app.session
+        .tool_pipeline
         .tool_payload_history
         .push(ToolPayloadHistoryEntry {
             server_id: Some("alpha".to_string()),

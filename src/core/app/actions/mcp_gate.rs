@@ -4,10 +4,9 @@ pub(super) fn handle_mcp_init_completed(
     app: &mut App,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    app.session.mcp_init_complete = true;
-    app.session.mcp_init_in_progress = false;
+    let deferred_message = app.session.mcp_init.complete();
     app.end_mcp_operation_if_active();
-    if let Some(message) = app.session.pending_mcp_message.take() {
+    if let Some(message) = deferred_message {
         super::stream_lifecycle::spawn_stream_for_message(app, message, ctx)
     } else {
         None
@@ -18,7 +17,7 @@ pub(super) fn handle_mcp_send_without_tools(
     app: &mut App,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    if let Some(message) = app.session.pending_mcp_message.take() {
+    if let Some(message) = app.session.mcp_init.deferred_message.take() {
         app.end_mcp_operation_if_active();
         Some(AppCommand::SpawnStream(
             super::prepare_stream_params_for_message(app, message, ctx),
@@ -29,10 +28,7 @@ pub(super) fn handle_mcp_send_without_tools(
 }
 
 pub(super) fn should_defer_for_mcp(app: &App) -> bool {
-    if app.session.mcp_tools_unsupported
-        || app.session.mcp_init_complete
-        || !app.session.mcp_init_in_progress
-    {
+    if app.session.mcp_tools_unsupported || !app.session.mcp_init.should_defer() {
         return false;
     }
 
@@ -64,7 +60,7 @@ mod tests {
     #[test]
     fn mcp_init_completed_spawns_pending_message() {
         let mut app = create_test_app();
-        app.session.pending_mcp_message = Some("hi".into());
+        app.session.mcp_init.deferred_message = Some("hi".into());
         let command = handle_mcp_init_completed(&mut app, default_ctx());
         assert!(matches!(command, Some(AppCommand::SpawnStream(_))));
     }

@@ -138,7 +138,8 @@ impl App {
         self.ui.messages[actual_index].content = new_text;
         if role.is_assistant() {
             self.session
-                .prune_tool_records_for_assistant_index(actual_index);
+                .tool_pipeline
+                .prune_for_assistant_index(actual_index);
         }
         self.invalidate_prewrap_cache();
         let user_display_name = self.persona_manager.get_display_name();

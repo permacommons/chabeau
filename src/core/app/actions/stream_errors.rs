@@ -48,7 +48,12 @@ fn handle_mcp_unsupported_error(app: &mut App, ctx: AppActionContext) -> Option<
     }
     app.end_streaming();
 
-    let base_messages = app.session.last_stream_api_messages_base.clone()?;
+    let base_messages = app
+        .session
+        .tool_pipeline
+        .continuation_messages
+        .as_ref()
+        .map(|continuation| continuation.api_messages_base.clone())?;
 
     if ctx.term_width == 0 || ctx.term_height == 0 {
         return None;

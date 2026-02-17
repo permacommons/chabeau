@@ -59,6 +59,7 @@ pub(super) fn handle_mcp_server_request(
     };
 
     app.session
+        .tool_pipeline
         .pending_sampling_queue
         .push_back(McpSamplingRequest {
             server_id: request.server_id,
@@ -105,7 +106,7 @@ pub(super) fn handle_sampling_permission_decision(
         });
     }
 
-    app.session.active_sampling_request = Some(request.clone());
+    app.session.tool_pipeline.active_sampling_request = Some(request.clone());
     super::set_status_for_sampling_run(app, &request, ctx);
     Some(AppCommand::RunMcpSampling(Box::new(request)))
 }
@@ -114,8 +115,8 @@ pub(super) fn handle_mcp_sampling_finished(
     app: &mut App,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    app.session.active_sampling_request = None;
-    if let Some(request) = app.session.active_tool_request.clone() {
+    app.session.tool_pipeline.active_sampling_request = None;
+    if let Some(request) = app.session.tool_pipeline.active_tool_request.clone() {
         super::set_status_for_tool_run(app, &request, ctx);
     } else {
         app.end_mcp_operation_if_active();
@@ -152,15 +153,16 @@ mod tests {
             tool_choice: None,
             tools: vec![],
         };
-        app.session.active_sampling_request = Some(crate::core::app::session::McpSamplingRequest {
-            server_id: "s".into(),
-            request: rust_mcp_schema::CreateMessageRequest::new(
-                rust_mcp_schema::RequestId::Integer(1),
-                params,
-            ),
-            messages: vec![],
-        });
+        app.session.tool_pipeline.active_sampling_request =
+            Some(crate::core::app::session::McpSamplingRequest {
+                server_id: "s".into(),
+                request: rust_mcp_schema::CreateMessageRequest::new(
+                    rust_mcp_schema::RequestId::Integer(1),
+                    params,
+                ),
+                messages: vec![],
+            });
         let _ = handle_mcp_sampling_finished(&mut app, default_ctx());
-        assert!(app.session.active_sampling_request.is_none());
+        assert!(app.session.tool_pipeline.active_sampling_request.is_none());
     }
 }

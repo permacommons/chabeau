@@ -171,7 +171,16 @@ pub async fn handle_edit_select_mode_event(
                                 let mut conversation = app.conversation();
                                 conversation.cancel_current_stream();
                             }
-                            app.session.prune_tool_records_from_index(idx);
+                            app.end_mcp_operation_if_active();
+                            app.session.tool_pipeline.reset();
+                            app.session.tool_pipeline.prune_from_index(idx);
+                            if app
+                                .session
+                                .active_assistant_message_index
+                                .is_some_and(|active| active >= idx)
+                            {
+                                app.session.active_assistant_message_index = None;
+                            }
                             app.ui.messages.truncate(idx);
                             app.invalidate_prewrap_cache();
                             let user_display_name = app.persona_manager.get_display_name();
@@ -242,7 +251,16 @@ pub async fn handle_edit_select_mode_event(
                                 let mut conversation = app.conversation();
                                 conversation.cancel_current_stream();
                             }
-                            app.session.prune_tool_records_from_index(idx);
+                            app.end_mcp_operation_if_active();
+                            app.session.tool_pipeline.reset();
+                            app.session.tool_pipeline.prune_from_index(idx);
+                            if app
+                                .session
+                                .active_assistant_message_index
+                                .is_some_and(|active| active >= idx)
+                            {
+                                app.session.active_assistant_message_index = None;
+                            }
                             app.ui.messages.truncate(idx);
                             app.invalidate_prewrap_cache();
                             let user_display_name = app.persona_manager.get_display_name();
@@ -683,8 +701,8 @@ pub async fn handle_enter_key(
 
     let should_send_without_tools = app
         .read(|app| {
-            app.session.mcp_init_in_progress
-                && app.session.pending_mcp_message.is_some()
+            app.session.mcp_init.in_progress
+                && app.session.mcp_init.deferred_message.is_some()
                 && app.ui.get_input_text().trim().is_empty()
         })
         .await;
@@ -755,8 +773,8 @@ pub async fn handle_ctrl_j_shortcut(
 
     let should_send_without_tools = app
         .read(|app| {
-            app.session.mcp_init_in_progress
-                && app.session.pending_mcp_message.is_some()
+            app.session.mcp_init.in_progress
+                && app.session.mcp_init.deferred_message.is_some()
                 && app.ui.get_input_text().trim().is_empty()
         })
         .await;
@@ -933,6 +951,7 @@ mod tests {
                         role: TranscriptRole::Assistant,
                         content: "adjust me".into(),
                     });
+                    app.session.active_assistant_message_index = Some(1);
                     app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
                 })
                 .await;
@@ -941,12 +960,13 @@ mod tests {
             let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
             assert!(handled);
 
-            let (input_text, edit_flag, remaining_messages) = handle
+            let (input_text, edit_flag, remaining_messages, active_index) = handle
                 .read(|app| {
                     (
                         app.ui.get_input_text().to_string(),
                         app.ui.is_editing_assistant_message(),
                         app.ui.messages.len(),
+                        app.session.active_assistant_message_index,
                     )
                 })
                 .await;
@@ -954,6 +974,7 @@ mod tests {
             assert_eq!(input_text, "adjust me");
             assert!(edit_flag);
             assert_eq!(remaining_messages, 1);
+            assert!(active_index.is_none());
         });
     }
 
@@ -972,6 +993,38 @@ mod tests {
                         role: TranscriptRole::User,
                         content: "later".into(),
                     });
+                    app.session.active_assistant_message_index = Some(0);
+                    app.session.tool_pipeline.active_tool_request =
+                        Some(crate::core::app::session::ToolCallRequest {
+                            server_id: "alpha".to_string(),
+                            tool_name: "lookup".to_string(),
+                            arguments: None,
+                            raw_arguments: "{\"q\":\"stale\"}".to_string(),
+                            tool_call_id: Some("call-stale".to_string()),
+                        });
+                    app.session.tool_pipeline.pending_sampling_queue.push_back(
+                        crate::core::app::session::McpSamplingRequest {
+                            server_id: "alpha".to_string(),
+                            request: rust_mcp_schema::CreateMessageRequest::new(
+                                rust_mcp_schema::RequestId::Integer(1),
+                                rust_mcp_schema::CreateMessageRequestParams {
+                                    include_context: None,
+                                    max_tokens: 8,
+                                    messages: vec![],
+                                    meta: None,
+                                    metadata: None,
+                                    model_preferences: None,
+                                    stop_sequences: vec![],
+                                    system_prompt: None,
+                                    task: None,
+                                    temperature: None,
+                                    tool_choice: None,
+                                    tools: vec![],
+                                },
+                            ),
+                            messages: vec![],
+                        },
+                    );
                     app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
                 })
                 .await;
@@ -980,12 +1033,23 @@ mod tests {
             let handled = handle_edit_select_mode_event(&handle, &key, 80, 24).await;
             assert!(handled);
 
-            let (message_count, edit_flag) = handle
-                .read(|app| (app.ui.messages.len(), app.ui.is_editing_assistant_message()))
+            let (message_count, edit_flag, active_index, active_tool, pending_sampling) = handle
+                .read(|app| {
+                    (
+                        app.ui.messages.len(),
+                        app.ui.is_editing_assistant_message(),
+                        app.session.active_assistant_message_index,
+                        app.session.tool_pipeline.active_tool_request.is_some(),
+                        app.session.tool_pipeline.pending_sampling_queue.len(),
+                    )
+                })
                 .await;
 
             assert_eq!(message_count, 0);
             assert!(!edit_flag);
+            assert!(active_index.is_none());
+            assert!(!active_tool);
+            assert_eq!(pending_sampling, 0);
         });
     }
 

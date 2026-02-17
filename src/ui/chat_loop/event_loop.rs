@@ -604,8 +604,7 @@ pub async fn run_chat(
         .await;
     if has_enabled_mcp {
         app.update(|app| {
-            app.session.mcp_init_in_progress = true;
-            app.session.mcp_init_complete = false;
+            app.session.mcp_init.begin();
         })
         .await;
     }

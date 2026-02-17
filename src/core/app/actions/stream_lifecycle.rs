@@ -7,7 +7,7 @@ pub(super) fn spawn_stream_for_message(
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
     if super::mcp_gate::should_defer_for_mcp(app) {
-        app.session.pending_mcp_message = Some(message);
+        app.session.mcp_init.deferred_message = Some(message);
         super::mcp_gate::set_status_for_mcp_wait(app, ctx);
         return None;
     }
@@ -45,7 +45,7 @@ pub(super) fn finalize_stream(app: &mut App, ctx: AppActionContext) -> Option<Ap
     app.end_streaming();
 
     if pending_tool_calls.is_empty() {
-        app.session.last_stream_api_messages = None;
+        app.session.tool_pipeline.continuation_messages = None;
         return None;
     }
 
@@ -89,6 +89,7 @@ pub(super) fn append_tool_call_delta(
 ) {
     let entry = app
         .session
+        .tool_pipeline
         .pending_tool_calls
         .entry(delta.index)
         .or_insert_with(|| crate::core::app::session::PendingToolCall {

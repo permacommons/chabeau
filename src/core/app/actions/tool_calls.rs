@@ -52,11 +52,11 @@ pub(super) fn handle_tool_permission_decision(
     );
 
     if prompt_tool.as_deref() == Some(crate::mcp::MCP_SAMPLING_TOOL) {
-        let request = app.session.active_sampling_request.take()?;
+        let request = app.session.tool_pipeline.active_sampling_request.take()?;
         return super::sampling::handle_sampling_permission_decision(app, request, decision, ctx);
     }
 
-    if let Some(request) = app.session.active_tool_request.take() {
+    if let Some(request) = app.session.tool_pipeline.active_tool_request.take() {
         app.ui.cancel_tool_prompt();
         app.clear_status();
 
@@ -100,7 +100,7 @@ pub(super) fn handle_tool_permission_decision(
             return super::advance_tool_queue(app, ctx);
         }
 
-        app.session.active_tool_request = Some(request.clone());
+        app.session.tool_pipeline.active_tool_request = Some(request.clone());
         if super::is_instant_recall_tool(&request.tool_name) {
             return super::handle_instant_recall_tool_request(app, request, ctx);
         }
@@ -108,7 +108,7 @@ pub(super) fn handle_tool_permission_decision(
         return Some(AppCommand::RunMcpTool(request));
     }
 
-    let request = app.session.active_sampling_request.take()?;
+    let request = app.session.tool_pipeline.active_sampling_request.take()?;
     super::sampling::handle_sampling_permission_decision(app, request, decision, ctx)
 }
 
@@ -119,10 +119,25 @@ pub(super) fn handle_tool_call_completed(
     result: Result<String, String>,
     ctx: AppActionContext,
 ) -> Option<AppCommand> {
-    let request = app.session.active_tool_request.take();
-    let server_label = request
-        .as_ref()
-        .map(|req| super::resolve_server_label(app, &req.server_id));
+    let Some(active_request) = app.session.tool_pipeline.active_tool_request.as_ref() else {
+        app.end_mcp_operation_if_active();
+        return None;
+    };
+    if let (Some(active_id), Some(completed_id)) = (
+        active_request.tool_call_id.as_deref(),
+        tool_call_id.as_deref(),
+    ) {
+        if active_id != completed_id {
+            return None;
+        }
+    }
+    let request = app
+        .session
+        .tool_pipeline
+        .active_tool_request
+        .take()
+        .expect("active tool request should still be present");
+    let server_label = Some(super::resolve_server_label(app, &request.server_id));
     app.end_mcp_operation_if_active();
 
     match result {
@@ -130,9 +145,9 @@ pub(super) fn handle_tool_call_completed(
             let is_tool_error = is_tool_error_payload(&payload);
             let mut meta = ToolResultMeta::new(
                 server_label,
-                request.as_ref().map(|req| req.server_id.clone()),
+                Some(request.server_id.clone()),
                 tool_call_id.clone(),
-                request.as_ref().map(|req| req.raw_arguments.clone()),
+                Some(request.raw_arguments.clone()),
             );
             if is_tool_error {
                 meta.failure_kind = Some(ToolFailureKind::ToolError);
@@ -153,9 +168,9 @@ pub(super) fn handle_tool_call_completed(
         Err(err) => {
             let mut meta = ToolResultMeta::new(
                 server_label,
-                request.as_ref().map(|req| req.server_id.clone()),
+                Some(request.server_id.clone()),
                 tool_call_id,
-                request.as_ref().map(|req| req.raw_arguments.clone()),
+                Some(request.raw_arguments.clone()),
             );
             meta.failure_kind = Some(ToolFailureKind::ToolCallFailure);
             super::record_tool_result(
@@ -196,7 +211,7 @@ mod tests {
     fn tool_call_completed_flags_tool_error_payloads() {
         let mut app = create_test_app();
         let ctx = default_ctx();
-        app.session.active_tool_request = Some(ToolCallRequest {
+        app.session.tool_pipeline.active_tool_request = Some(ToolCallRequest {
             server_id: "alpha".to_string(),
             tool_name: "lookup".to_string(),
             arguments: None,
@@ -214,8 +229,68 @@ mod tests {
         );
         assert!(result.is_none());
 
-        let record = app.session.tool_result_history.last().expect("record");
+        let record = app
+            .session
+            .tool_pipeline
+            .tool_result_history
+            .last()
+            .expect("record");
         assert_eq!(record.status, ToolResultStatus::Error);
         assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolError));
+    }
+
+    #[test]
+    fn tool_call_completed_ignores_stale_completion_without_active_request() {
+        let mut app = create_test_app();
+        app.session.active_assistant_message_index = Some(2);
+        app.begin_mcp_operation();
+        let ctx = default_ctx();
+
+        let result = handle_tool_call_completed(
+            &mut app,
+            "lookup".to_string(),
+            Some("call-old".to_string()),
+            Ok("{\"ok\":true}".to_string()),
+            ctx,
+        );
+
+        assert!(result.is_none());
+        assert!(app.session.tool_pipeline.tool_result_history.is_empty());
+        assert!(!app.ui.messages.iter().any(|message| matches!(
+            message.role,
+            crate::core::message::TranscriptRole::ToolResult
+        )));
+    }
+
+    #[test]
+    fn tool_call_completed_ignores_stale_completion_with_mismatched_call_id() {
+        let mut app = create_test_app();
+        let ctx = default_ctx();
+        app.session.tool_pipeline.active_tool_request = Some(ToolCallRequest {
+            server_id: "alpha".to_string(),
+            tool_name: "lookup".to_string(),
+            arguments: None,
+            raw_arguments: "{}".to_string(),
+            tool_call_id: Some("call-current".to_string()),
+        });
+
+        let result = handle_tool_call_completed(
+            &mut app,
+            "lookup".to_string(),
+            Some("call-stale".to_string()),
+            Ok("{\"ok\":true}".to_string()),
+            ctx,
+        );
+
+        assert!(result.is_none());
+        assert!(app.session.tool_pipeline.tool_result_history.is_empty());
+        assert_eq!(
+            app.session
+                .tool_pipeline
+                .active_tool_request
+                .as_ref()
+                .and_then(|request| request.tool_call_id.as_deref()),
+            Some("call-current")
+        );
     }
 }

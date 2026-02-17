@@ -82,7 +82,7 @@ impl<'a> ConversationController<'a> {
         self.session.last_refine_prompt = None;
         self.session.has_received_assistant_message = false;
         self.session.character_greeting_shown = false;
-        self.session.pending_mcp_message = None;
+        self.session.tool_pipeline.reset();
     }
 
     pub fn remove_trailing_empty_assistant_messages(&mut self) {
@@ -254,7 +254,7 @@ impl<'a> ConversationController<'a> {
     }
 
     pub fn take_pending_tool_calls(&mut self) -> Vec<(u32, PendingToolCall)> {
-        if self.session.pending_tool_calls.is_empty() {
+        if self.session.tool_pipeline.pending_tool_calls.is_empty() {
             return Vec::new();
         }
 
@@ -263,7 +263,7 @@ impl<'a> ConversationController<'a> {
             self.remove_trailing_empty_assistant_messages();
         }
 
-        let pending_map = std::mem::take(&mut self.session.pending_tool_calls);
+        let pending_map = std::mem::take(&mut self.session.tool_pipeline.pending_tool_calls);
         let pending: Vec<(u32, PendingToolCall)> = pending_map.into_iter().collect();
 
         for (_, tool_call) in pending.iter() {
@@ -289,7 +289,7 @@ impl<'a> ConversationController<'a> {
     }
 
     pub fn clear_pending_tool_calls(&mut self) {
-        self.session.pending_tool_calls.clear();
+        self.session.tool_pipeline.pending_tool_calls.clear();
     }
 
     pub fn add_tool_result_message(&mut self, content: String) {
@@ -428,15 +428,7 @@ impl<'a> ConversationController<'a> {
 
     pub fn start_new_stream(&mut self) -> (CancellationToken, u64) {
         self.cancel_current_stream();
-        self.clear_pending_tool_calls();
-        self.session.pending_tool_queue.clear();
-        self.session.active_tool_request = None;
-        self.session.pending_sampling_queue.clear();
-        self.session.active_sampling_request = None;
-        self.session.tool_call_records.clear();
-        self.session.tool_results.clear();
-        self.session.last_stream_api_messages = None;
-        self.session.last_stream_api_messages_base = None;
+        self.session.tool_pipeline.reset();
         self.session.mcp_tools_enabled = false;
 
         self.session.current_stream_id += 1;
@@ -469,7 +461,8 @@ impl<'a> ConversationController<'a> {
             if retry_index < self.ui.messages.len() {
                 self.session.active_assistant_message_index = Some(retry_index);
                 self.session
-                    .prune_tool_records_for_assistant_index(retry_index);
+                    .tool_pipeline
+                    .prune_for_assistant_index(retry_index);
                 if !self.session.has_received_assistant_message {
                     if let Some(greeting) = self.character_greeting_text() {
                         if let Some(msg) = self.ui.messages.get_mut(retry_index) {
@@ -516,7 +509,7 @@ impl<'a> ConversationController<'a> {
 
                 self.session.retrying_message_index = Some(index);
                 self.session.active_assistant_message_index = Some(index);
-                self.session.prune_tool_records_for_assistant_index(index);
+                self.session.tool_pipeline.prune_for_assistant_index(index);
 
                 if let Some(msg) = self.ui.messages.get_mut(index) {
                     msg.content.clear();

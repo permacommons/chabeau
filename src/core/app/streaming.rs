@@ -58,7 +58,7 @@ impl App {
         cancel_token: CancellationToken,
         stream_id: u64,
     ) -> StreamParams {
-        self.session.last_stream_api_messages_base = Some(api_messages.clone());
+        let base_messages = api_messages.clone();
         let tools = if self.session.mcp_tools_unsupported {
             None
         } else {
@@ -79,7 +79,9 @@ impl App {
         }
         self.inject_tool_payload_history(&mut api_messages);
         self.inject_tool_summary_history(&mut api_messages);
-        self.session.last_stream_api_messages = Some(api_messages.clone());
+        self.session
+            .tool_pipeline
+            .set_continuation(api_messages.clone(), base_messages);
         StreamParams {
             client: self.session.client.clone(),
             base_url: self.session.base_url.clone(),
@@ -369,7 +371,7 @@ impl App {
     }
 
     fn inject_tool_payload_history(&self, api_messages: &mut Vec<ChatMessage>) {
-        if self.session.tool_payload_history.is_empty() {
+        if self.session.tool_pipeline.tool_payload_history.is_empty() {
             return;
         }
 
@@ -383,7 +385,7 @@ impl App {
         }
 
         let mut history_messages = Vec::new();
-        for entry in &self.session.tool_payload_history {
+        for entry in &self.session.tool_pipeline.tool_payload_history {
             if let Some(id) = entry.tool_call_id.as_ref() {
                 if existing.contains(id) {
                     continue;
@@ -405,24 +407,24 @@ impl App {
     }
 
     fn inject_tool_summary_history(&self, api_messages: &mut Vec<ChatMessage>) {
-        if self.session.tool_result_history.is_empty() {
+        if self.session.tool_pipeline.tool_result_history.is_empty() {
             return;
         }
 
         let mut raw_ids = HashSet::new();
-        for entry in &self.session.tool_payload_history {
+        for entry in &self.session.tool_pipeline.tool_payload_history {
             if let Some(id) = entry.tool_call_id.as_ref() {
                 raw_ids.insert(id.clone());
             }
         }
-        for message in &self.session.tool_results {
+        for message in &self.session.tool_pipeline.tool_results {
             if let Some(id) = message.tool_call_id.as_ref() {
                 raw_ids.insert(id.clone());
             }
         }
 
         let mut summaries = Vec::new();
-        for record in &self.session.tool_result_history {
+        for record in &self.session.tool_pipeline.tool_result_history {
             if let Some(id) = record.tool_call_id.as_ref() {
                 if raw_ids.contains(id) {
                     continue;

@@ -52,8 +52,8 @@ pub fn spawn_mcp_initializer(
 
         app.update(|app| {
             app.mcp = mcp;
-            app.session.mcp_init_in_progress = false;
-            app.session.mcp_init_complete = true;
+            app.session.mcp_init.in_progress = false;
+            app.session.mcp_init.complete = true;
         })
         .await;
 
@@ -120,8 +120,8 @@ mod tests {
         app.update(|app| {
             app.config.mcp_servers = failing_servers.clone();
             app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
-            app.session.mcp_init_in_progress = true;
-            app.session.mcp_init_complete = false;
+            app.session.mcp_init.in_progress = true;
+            app.session.mcp_init.complete = false;
         })
         .await;
 
@@ -143,8 +143,8 @@ mod tests {
         let (init_complete, init_in_progress) = app
             .read(|app| {
                 (
-                    app.session.mcp_init_complete,
-                    app.session.mcp_init_in_progress,
+                    app.session.mcp_init.complete,
+                    app.session.mcp_init.in_progress,
                 )
             })
             .await;

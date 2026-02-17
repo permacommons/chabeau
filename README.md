@@ -646,7 +646,7 @@ cargo clippy --all-targets --all-features
 
 ### CI and Release Workflows
 - `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests.
-- `.github/workflows/publish.yml` selects the newest semver tag reachable from `main`, then publishes the matching crates.io release and GitHub Release binaries with SHA-256 checksums and a keyless Sigstore-signed checksum manifest.
+- `.github/workflows/publish.yml` selects the newest semver tag reachable from `main`, then publishes the matching crates.io release and GitHub Release binaries with SHA-256 checksums, a keyless Sigstore-signed checksum manifest, and a GitHub Release description extracted from the matching `CHANGELOG.md` version section.
 - `.github/workflows/nightly.yml` builds Linux/macOS/Windows release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts and a keyless Sigstore-signed checksum manifest.
 
 ### Performance

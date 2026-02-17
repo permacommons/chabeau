@@ -76,12 +76,17 @@ For features under consideration, see [WISHLIST.md](WISHLIST.md).
 cargo install chabeau
 ```
 
-Nightly pre-release binaries for Linux and macOS are published on the
+Versioned release binaries (tagged semver releases) are published on the
 [GitHub Releases page](https://github.com/permacommons/chabeau/releases)
-under the `Nightly` pre-release tag.
+after the release tag becomes reachable from `main` (for example, when a
+`release/*` branch carrying the tag is merged).
+
+Nightly pre-release binaries are also published under the `Nightly`
+pre-release tag.
 
 Each nightly artifact includes per-file SHA-256 checksums plus a combined
-`SHA256SUMS` file.
+`SHA256SUMS` file. Nightly releases also include `SHA256SUMS.sig` and
+`SHA256SUMS.pem`, produced by keyless Sigstore signing in GitHub Actions.
 
 On macOS, unsigned nightly binaries may be quarantined by Gatekeeper. If you
 trust the downloaded artifact, you can remove the quarantine attribute:
@@ -91,6 +96,30 @@ xattr -d com.apple.quarantine ./chabeau
 ```
 
 Run unsigned binaries at your own risk.
+
+Stable release artifacts are signed by `.github/workflows/publish.yml`.
+Nightly checksum manifests are signed by `.github/workflows/nightly.yml`.
+You can verify them with:
+
+```bash
+# Stable release checksums
+cosign verify-blob \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\.github/workflows/publish\.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+
+# Nightly checksums
+cosign verify-blob \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp 'https://github.com/permacommons/chabeau/\.github/workflows/nightly\.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+
+sha256sum -c SHA256SUMS
+```
 
 ### Configure Providers
 ```bash
@@ -617,8 +646,8 @@ cargo clippy --all-targets --all-features
 
 ### CI and Release Workflows
 - `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests.
-- `.github/workflows/publish.yml` publishes crates.io releases from semver tags that land on `main`.
-- `.github/workflows/nightly.yml` builds Linux/macOS release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts.
+- `.github/workflows/publish.yml` selects the newest semver tag reachable from `main`, then publishes the matching crates.io release and GitHub Release binaries with SHA-256 checksums and a keyless Sigstore-signed checksum manifest.
+- `.github/workflows/nightly.yml` builds Linux/macOS/Windows release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts and a keyless Sigstore-signed checksum manifest.
 
 ### Performance
 

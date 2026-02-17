@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: nightly-release
@@ -124,6 +125,17 @@ jobs:
             | sort -z \
             | xargs -0 cat > dist/SHA256SUMS
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksum manifest (keyless)
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature dist/SHA256SUMS.sig \
+            --output-certificate dist/SHA256SUMS.pem \
+            dist/SHA256SUMS
+
       - name: Move nightly tag to this commit
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,12 +156,15 @@ jobs:
             Nightly build from commit `${{ github.sha }}`.
 
             Artifacts include Linux, macOS, and Windows binaries with per-archive SHA-256 checksums.
+            The checksum manifest is signed with keyless Sigstore via GitHub Actions OIDC.
           files: |
             dist/nightly-*/chabeau-nightly-*.tar.gz
             dist/nightly-*/chabeau-nightly-*.zip
             dist/nightly-*/chabeau-nightly-*.tar.gz.sha256
             dist/nightly-*/chabeau-nightly-*.zip.sha256
             dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+            dist/SHA256SUMS.pem
           overwrite_files: true
 
       - name: Remove stale nightly assets
@@ -172,6 +187,8 @@ jobs:
               }
             }
             keep.add("SHA256SUMS");
+            keep.add("SHA256SUMS.sig");
+            keep.add("SHA256SUMS.pem");
 
             const { data: release } = await github.rest.repos.getReleaseByTag({
               owner,

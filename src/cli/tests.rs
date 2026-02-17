@@ -12,27 +12,74 @@ mod test_helpers {
         guard.set_var(var, value);
         guard
     }
+
+    pub(super) fn parse_args(argv: &[&str]) -> Args {
+        Args::try_parse_from(argv)
+            .unwrap_or_else(|err| panic!("argv={argv:?} should parse successfully: {err}"))
+    }
+
+    pub(super) fn assert_optional_flag_value(
+        actual: Option<&str>,
+        expected: Option<&str>,
+        flag_name: &str,
+        argv: &[&str],
+    ) {
+        assert_eq!(
+            actual, expected,
+            "unexpected value for {flag_name} when parsing argv={argv:?}"
+        );
+    }
+
+    pub(super) fn assert_provider_add_command(
+        args: Args,
+        expected_provider: Option<&str>,
+        expected_advanced: bool,
+        argv: &[&str],
+    ) {
+        match args.command {
+            Some(Commands::Provider {
+                command: ProviderCommands::Add { provider, advanced },
+            }) => {
+                assert_eq!(
+                    provider.as_deref(),
+                    expected_provider,
+                    "unexpected provider shortcut for argv={argv:?}"
+                );
+                assert_eq!(
+                    advanced, expected_advanced,
+                    "unexpected advanced flag for argv={argv:?}"
+                );
+            }
+            _ => panic!("expected provider add subcommand for argv={argv:?}"),
+        }
+    }
 }
 
-use test_helpers::env_guard;
+use test_helpers::{
+    assert_optional_flag_value, assert_provider_add_command, env_guard, parse_args,
+};
 
 #[test]
 fn test_character_flag_parsing() {
-    // Test short flag
-    let args = Args::try_parse_from(["chabeau", "-c", "alice"]).unwrap();
-    assert_eq!(args.character, Some("alice".to_string()));
+    let cases: [(&[&str], Option<&str>); 4] = [
+        (&["chabeau", "-c", "alice"], Some("alice")),
+        (&["chabeau", "--character", "bob"], Some("bob")),
+        (&["chabeau"], None),
+        (
+            &["chabeau", "-c", "path/to/card.json"],
+            Some("path/to/card.json"),
+        ),
+    ];
 
-    // Test long flag
-    let args = Args::try_parse_from(["chabeau", "--character", "bob"]).unwrap();
-    assert_eq!(args.character, Some("bob".to_string()));
-
-    // Test no character flag
-    let args = Args::try_parse_from(["chabeau"]).unwrap();
-    assert_eq!(args.character, None);
-
-    // Test character flag with path
-    let args = Args::try_parse_from(["chabeau", "-c", "path/to/card.json"]).unwrap();
-    assert_eq!(args.character, Some("path/to/card.json".to_string()));
+    for (argv, expected_character) in cases {
+        let args = parse_args(argv);
+        assert_optional_flag_value(
+            args.character.as_deref(),
+            expected_character,
+            "character",
+            argv,
+        );
+    }
 }
 
 #[test]
@@ -47,13 +94,15 @@ fn test_character_flag_with_other_flags() {
 
 #[test]
 fn test_persona_flag_parsing() {
-    // Test persona flag
-    let args = Args::try_parse_from(["chabeau", "--persona", "alice-dev"]).unwrap();
-    assert_eq!(args.persona, Some("alice-dev".to_string()));
+    let cases: [(&[&str], Option<&str>); 2] = [
+        (&["chabeau", "--persona", "alice-dev"], Some("alice-dev")),
+        (&["chabeau"], None),
+    ];
 
-    // Test no persona flag
-    let args = Args::try_parse_from(["chabeau"]).unwrap();
-    assert_eq!(args.persona, None);
+    for (argv, expected_persona) in cases {
+        let args = parse_args(argv);
+        assert_optional_flag_value(args.persona.as_deref(), expected_persona, "persona", argv);
+    }
 }
 
 #[test]
@@ -79,61 +128,45 @@ fn test_persona_flag_with_other_flags() {
 
 #[test]
 fn test_preset_flag_parsing() {
-    let args = Args::try_parse_from(["chabeau", "--preset", "focus"]).unwrap();
-    assert_eq!(args.preset, Some("focus".to_string()));
+    let cases: [(&[&str], Option<&str>); 2] = [
+        (&["chabeau", "--preset", "focus"], Some("focus")),
+        (&["chabeau"], None),
+    ];
 
-    let args = Args::try_parse_from(["chabeau"]).unwrap();
-    assert_eq!(args.preset, None);
+    for (argv, expected_preset) in cases {
+        let args = parse_args(argv);
+        assert_optional_flag_value(args.preset.as_deref(), expected_preset, "preset", argv);
+    }
 }
 
 #[test]
 fn test_disable_mcp_flag_parsing() {
-    let args = Args::try_parse_from(["chabeau", "-d"]).unwrap();
-    assert!(args.disable_mcp);
+    let cases: [(&[&str], bool); 3] = [
+        (&["chabeau", "-d"], true),
+        (&["chabeau", "--disable-mcp"], true),
+        (&["chabeau"], false),
+    ];
 
-    let args = Args::try_parse_from(["chabeau", "--disable-mcp"]).unwrap();
-    assert!(args.disable_mcp);
+    for (argv, expected_disable_mcp) in cases {
+        let args = parse_args(argv);
+        assert_eq!(
+            args.disable_mcp, expected_disable_mcp,
+            "unexpected disable_mcp value for argv={argv:?}"
+        );
+    }
 }
 
 #[test]
 fn test_provider_add_command_parsing() {
-    let args = Args::try_parse_from(["chabeau", "provider", "add"]).unwrap();
-    match args.command {
-        Some(Commands::Provider {
-            command: ProviderCommands::Add { provider, advanced },
-        }) => {
-            assert!(provider.is_none());
-            assert!(!advanced);
-        }
-        _ => panic!("Expected provider add subcommand"),
-    }
-}
+    let cases: [(&[&str], Option<&str>, bool); 3] = [
+        (&["chabeau", "provider", "add"], None, false),
+        (&["chabeau", "provider", "add", "-a"], None, true),
+        (&["chabeau", "provider", "add", "poe"], Some("poe"), false),
+    ];
 
-#[test]
-fn test_provider_add_advanced_flag_parsing() {
-    let args = Args::try_parse_from(["chabeau", "provider", "add", "-a"]).unwrap();
-    match args.command {
-        Some(Commands::Provider {
-            command: ProviderCommands::Add { provider, advanced },
-        }) => {
-            assert!(provider.is_none());
-            assert!(advanced);
-        }
-        _ => panic!("Expected provider add -a subcommand"),
-    }
-}
-
-#[test]
-fn test_provider_add_with_provider_shortcut_parsing() {
-    let args = Args::try_parse_from(["chabeau", "provider", "add", "poe"]).unwrap();
-    match args.command {
-        Some(Commands::Provider {
-            command: ProviderCommands::Add { provider, advanced },
-        }) => {
-            assert_eq!(provider.as_deref(), Some("poe"));
-            assert!(!advanced);
-        }
-        _ => panic!("Expected provider add -a subcommand"),
+    for (argv, expected_provider, expected_advanced) in cases {
+        let args = parse_args(argv);
+        assert_provider_add_command(args, expected_provider, expected_advanced, argv);
     }
 }
 

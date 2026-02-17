@@ -50,6 +50,18 @@ use super::lifecycle::{
 use super::setup::bootstrap_app;
 use super::AppHandle;
 
+pub struct RunChatOptions {
+    pub model: String,
+    pub log: Option<String>,
+    pub provider: Option<String>,
+    pub env_only: bool,
+    pub character: Option<String>,
+    pub persona: Option<String>,
+    pub preset: Option<String>,
+    pub disable_mcp: bool,
+    pub character_service: CharacterService,
+}
+
 #[derive(Debug)]
 pub enum UiEvent {
     Crossterm(Event),
@@ -542,30 +554,8 @@ fn spawn_event_reader(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_chat(
-    model: String,
-    log: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
-    character: Option<String>,
-    persona: Option<String>,
-    preset: Option<String>,
-    disable_mcp: bool,
-    character_service: CharacterService,
-) -> Result<(), Box<dyn Error>> {
-    let app = bootstrap_app(
-        model.clone(),
-        log.clone(),
-        provider.clone(),
-        env_only,
-        character,
-        persona,
-        preset,
-        disable_mcp,
-        character_service,
-    )
-    .await?;
+pub async fn run_chat(options: RunChatOptions) -> Result<(), Box<dyn Error>> {
+    let app = bootstrap_app(options).await?;
 
     app.update(|app| {
         app.conversation().show_character_greeting_if_needed();

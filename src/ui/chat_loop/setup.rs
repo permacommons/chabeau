@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use super::AppHandle;
+use super::{AppHandle, RunChatOptions};
 
 use crate::{
     auth::AuthManager,
-    character::CharacterService,
     core::{
         app,
         app::session::{exit_if_env_only_missing_env, exit_with_provider_resolution_error},
@@ -20,18 +19,20 @@ use crate::{
 ///
 /// This logic was historically embedded inside `run_chat`; extracting it keeps the event loop
 /// focused on UI concerns while centralising provider/model setup policy.
-#[allow(clippy::too_many_arguments)]
 pub async fn bootstrap_app(
-    model: String,
-    log: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
-    character: Option<String>,
-    persona: Option<String>,
-    preset: Option<String>,
-    disable_mcp: bool,
-    character_service: CharacterService,
+    options: RunChatOptions,
 ) -> Result<AppHandle, Box<dyn std::error::Error>> {
+    let RunChatOptions {
+        model,
+        log,
+        provider,
+        env_only,
+        character,
+        persona,
+        preset,
+        disable_mcp,
+        character_service,
+    } = options;
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
 

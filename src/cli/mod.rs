@@ -616,36 +616,36 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                         }
                         Some(model) => {
                             // -m was provided with a value, use it for chat
-                            run_chat(
-                                model.to_string(),
-                                args.log,
-                                provider_for_operations,
-                                args.env_only,
-                                character_for_operations,
-                                args.persona,
-                                preset_for_operations.clone(),
-                                args.disable_mcp,
-                                service_for_run
+                            run_chat(crate::ui::chat_loop::RunChatOptions {
+                                model: model.to_string(),
+                                log: args.log,
+                                provider: provider_for_operations,
+                                env_only: args.env_only,
+                                character: character_for_operations,
+                                persona: args.persona,
+                                preset: preset_for_operations.clone(),
+                                disable_mcp: args.disable_mcp,
+                                character_service: service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
-                            )
+                            })
                             .await
                         }
                         None => {
                             // -m was not provided, use default model for chat
-                            run_chat(
-                                "default".to_string(),
-                                args.log,
-                                provider_for_operations,
-                                args.env_only,
-                                character_for_operations,
-                                args.persona,
-                                preset_for_operations,
-                                args.disable_mcp,
-                                service_for_run
+                            run_chat(crate::ui::chat_loop::RunChatOptions {
+                                model: "default".to_string(),
+                                log: args.log,
+                                provider: provider_for_operations,
+                                env_only: args.env_only,
+                                character: character_for_operations,
+                                persona: args.persona,
+                                preset: preset_for_operations,
+                                disable_mcp: args.disable_mcp,
+                                character_service: service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
-                            )
+                            })
                             .await
                         }
                     }
@@ -669,15 +669,15 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
             }
         }
         Some(Commands::Say { prompt }) => {
-            say::run_say(
+            say::run_say(say::RunSayOptions {
                 prompt,
-                args.model,
-                args.provider,
-                args.env_only,
-                args.character,
-                args.persona,
-                args.preset,
-            )
+                model: args.model,
+                provider: args.provider,
+                env_only: args.env_only,
+                character: args.character,
+                persona: args.persona,
+                preset: args.preset,
+            })
             .await
         }
         Some(Commands::Mcp { command }) => handle_mcp_command(command, args.env_only).await,

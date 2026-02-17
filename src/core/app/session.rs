@@ -205,6 +205,17 @@ pub struct UninitializedSessionBootstrap {
     pub startup_requires_provider: bool,
 }
 
+pub(crate) struct PrepareWithAuthInput<'a> {
+    pub model: String,
+    pub log_file: Option<String>,
+    pub provider: Option<String>,
+    pub env_only: bool,
+    pub config: &'a Config,
+    pub pre_resolved_session: Option<ProviderSession>,
+    pub character: Option<String>,
+    pub character_service: &'a mut CharacterService,
+}
+
 impl SessionContext {
     /// Set the active character card
     pub fn set_character(&mut self, card: CharacterCard) {
@@ -514,17 +525,20 @@ pub(crate) fn resolve_theme(config: &Config) -> Theme {
     quantize_theme_for_current_terminal(resolved_theme)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_with_auth(
-    model: String,
-    log_file: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
-    config: &Config,
-    pre_resolved_session: Option<ProviderSession>,
-    character: Option<String>,
-    character_service: &mut CharacterService,
+    input: PrepareWithAuthInput<'_>,
 ) -> Result<SessionBootstrap, Box<dyn std::error::Error>> {
+    let PrepareWithAuthInput {
+        model,
+        log_file,
+        provider,
+        env_only,
+        config,
+        pre_resolved_session,
+        character,
+        character_service,
+    } = input;
+
     let session = if let Some(session) = pre_resolved_session {
         session
     } else if env_only {
@@ -700,16 +714,16 @@ mod tests {
         let mut service = crate::character::CharacterService::new();
 
         let bootstrap = runtime
-            .block_on(super::prepare_with_auth(
-                "default".to_string(),
-                None,
-                None,
-                false,
-                &config,
-                Some(provider_session.clone()),
-                None,
-                &mut service,
-            ))
+            .block_on(super::prepare_with_auth(super::PrepareWithAuthInput {
+                model: "default".to_string(),
+                log_file: None,
+                provider: None,
+                env_only: false,
+                config: &config,
+                pre_resolved_session: Some(provider_session.clone()),
+                character: None,
+                character_service: &mut service,
+            }))
             .expect("prepare_with_auth");
 
         assert_eq!(bootstrap.session.api_key, provider_session.api_key);
@@ -739,16 +753,16 @@ mod tests {
         let mut service = crate::character::CharacterService::new();
 
         let bootstrap = runtime
-            .block_on(super::prepare_with_auth(
-                "default".to_string(),
-                None,
-                None,
-                true,
-                &config,
-                None,
-                None,
-                &mut service,
-            ))
+            .block_on(super::prepare_with_auth(super::PrepareWithAuthInput {
+                model: "default".to_string(),
+                log_file: None,
+                provider: None,
+                env_only: true,
+                config: &config,
+                pre_resolved_session: None,
+                character: None,
+                character_service: &mut service,
+            }))
             .expect("prepare_with_auth");
 
         assert_eq!(bootstrap.session.api_key, "sk-env");

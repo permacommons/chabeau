@@ -318,6 +318,19 @@ jobs:
     if: needs.check-branch.outputs.should_publish_release == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check out tagged commit
+        env:
+          TAG: ${{ needs.check-branch.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --quiet "$TAG"
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.3
+
+### Changed
+- Unified interactive CLI input handling behind a shared line editor so auth and MCP setup flows behave more consistently.
+- Improved input sanitization performance for interactive text entry paths.
+- Updated locked dependency versions to current compatible patch releases.
+
 ## 0.7.2
 
 ### Fixed

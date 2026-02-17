@@ -9,6 +9,8 @@
 //! module also provides action dispatching for UI events and background commands.
 
 use crate::character::service::CharacterService;
+use crate::core::app::picker::PickerController;
+use crate::core::app::ui_state::UiState;
 use crate::core::config::data::Config;
 use crate::core::message::AppMessageKind;
 use crate::core::providers::ProviderSession;
@@ -36,22 +38,15 @@ pub use actions::{
     CommandAction, ComposeAction, FilePromptAction, InputAction, InspectAction, McpPromptAction,
     PickerAction, PromptAction, StatusAction, StreamingAction,
 };
-#[allow(unused_imports)]
-pub use conversation::ConversationController;
 pub use inspect::{InspectController, InspectMode, InspectState, ToolInspectKind, ToolInspectView};
 #[cfg(test)]
 pub use picker::PickerData;
-#[allow(unused_imports)]
-pub use picker::{
-    CharacterPickerState, ModelPickerState, PersonaPickerState, PickerController, PickerMode,
-    PickerSession, PresetPickerState, ProviderPickerState, ThemePickerState,
-};
+// This module intentionally re-exports the high-level picker enums commonly used
+// by UI and command orchestration code to keep `core::app` imports concise.
+pub use picker::PickerMode;
 pub use pickers::ModelPickerRequest;
 pub use session::{SessionBootstrap, SessionContext, UninitializedSessionBootstrap};
-#[allow(unused_imports)]
-pub use settings::{ProviderController, ThemeController};
-#[allow(unused_imports)]
-pub use ui_state::{ActivityKind, UiState, VerticalCursorDirection};
+pub use ui_state::ActivityKind;
 
 /// Configuration parameters for initializing an App with authentication.
 ///

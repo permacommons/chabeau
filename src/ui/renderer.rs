@@ -987,11 +987,12 @@ fn apply_code_block_highlight(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::{apply_actions, AppAction, AppActionContext, AppActionEnvelope};
-    use crate::core::app::{
-        App, CharacterPickerState, ModelPickerState, PickerData, PickerSession,
-        ProviderPickerState, StreamingAction, ThemePickerState,
+    use crate::core::app::picker::{
+        CharacterPickerState, ModelPickerState, PickerData, PickerSession, ProviderPickerState,
+        ThemePickerState,
     };
+    use crate::core::app::{apply_actions, AppAction, AppActionContext, AppActionEnvelope};
+    use crate::core::app::{App, StreamingAction};
     use crate::ui::picker::PickerState;
     use crate::ui::theme::Theme;
 

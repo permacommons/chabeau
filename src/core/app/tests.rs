@@ -1,9 +1,13 @@
 use super::*;
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
+use crate::core::app::picker::{
+    ModelPickerState, PickerData, PickerSession, ProviderPickerState, ThemePickerState,
+};
 use crate::core::app::session::{
     PendingToolCall, StreamContinuation, ToolCallRequest, ToolPayloadHistoryEntry,
     ToolResultRecord, ToolResultStatus,
 };
+use crate::core::app::ui_state::VerticalCursorDirection;
 use crate::core::config::data::McpServerConfig;
 use crate::core::message::{Message, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};

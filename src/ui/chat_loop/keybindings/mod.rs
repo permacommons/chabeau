@@ -8,7 +8,9 @@ pub mod registry;
 
 // Public exports
 pub use handlers::{scroll_block_into_view, wrap_next_index, wrap_previous_index};
-pub use registry::{KeyContext, KeyResult, ModeAwareRegistry};
+pub use registry::{
+    KeyContext, KeyExecutionContext, KeyHandlingContext, KeyResult, ModeAwareRegistry,
+};
 
 /// Action to take in the main event loop
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

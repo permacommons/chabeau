@@ -43,7 +43,10 @@ use super::executors::mcp_tools::{
 };
 use super::executors::model_loader::spawn_model_picker_loader;
 use super::executors::ExecutorContext;
-use super::keybindings::{build_mode_aware_registry, KeyContext, KeyResult, ModeAwareRegistry};
+use super::keybindings::{
+    build_mode_aware_registry, KeyContext, KeyExecutionContext, KeyHandlingContext, KeyResult,
+    ModeAwareRegistry,
+};
 use super::lifecycle::{
     apply_cursor_color_to_terminal, restore_terminal, setup_terminal, SharedTerminal,
 };
@@ -332,13 +335,14 @@ async fn route_keyboard_event(
 
     let registry_result = mode_registry
         .handle_key_event(
-            app,
-            dispatcher,
             &key,
             context,
-            term_size.width,
-            term_size.height,
-            Some(*last_input_layout_update),
+            KeyExecutionContext { app, dispatcher },
+            KeyHandlingContext {
+                term_width: term_size.width,
+                term_height: term_size.height,
+                last_input_layout_update: Some(*last_input_layout_update),
+            },
         )
         .await;
 

@@ -60,6 +60,20 @@ pub trait KeyHandler: Send + Sync {
     ) -> KeyResult;
 }
 
+/// Execution context shared across key handlers.
+pub struct KeyExecutionContext<'a> {
+    pub app: &'a AppHandle,
+    pub dispatcher: &'a AppActionDispatcher,
+}
+
+/// Terminal/layout context for handling a single key event.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyHandlingContext {
+    pub term_width: u16,
+    pub term_height: u16,
+    pub last_input_layout_update: Option<std::time::Instant>,
+}
+
 /// Pattern for matching key events
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyPattern {
@@ -283,16 +297,12 @@ impl ModeAwareRegistry {
     }
 
     /// Handle a key event in the given context
-    #[allow(clippy::too_many_arguments)]
     pub async fn handle_key_event(
         &self,
-        app: &AppHandle,
-        dispatcher: &AppActionDispatcher,
         key: &KeyEvent,
         context: KeyContext,
-        term_width: u16,
-        term_height: u16,
-        last_input_layout_update: Option<std::time::Instant>,
+        execution: KeyExecutionContext<'_>,
+        handling: KeyHandlingContext,
     ) -> ModeAwareResult {
         // First try context-specific handlers (they have priority)
         if let Some(context_handlers) = self.handlers.get(&context) {
@@ -301,19 +311,19 @@ impl ModeAwareRegistry {
                 if pattern.matches(key) && !is_wildcard_pattern(pattern) {
                     let result = handler
                         .handle(
-                            app,
-                            dispatcher,
+                            execution.app,
+                            execution.dispatcher,
                             key,
-                            term_width,
-                            term_height,
-                            last_input_layout_update,
+                            handling.term_width,
+                            handling.term_height,
+                            handling.last_input_layout_update,
                         )
                         .await;
                     // Only return if the handler actually handled the key
                     if result != KeyResult::NotHandled {
                         return ModeAwareResult {
                             result,
-                            updated_layout_time: last_input_layout_update,
+                            updated_layout_time: handling.last_input_layout_update,
                         };
                     }
                 }
@@ -324,19 +334,19 @@ impl ModeAwareRegistry {
                 if pattern.matches(key) && is_wildcard_pattern(pattern) {
                     let result = handler
                         .handle(
-                            app,
-                            dispatcher,
+                            execution.app,
+                            execution.dispatcher,
                             key,
-                            term_width,
-                            term_height,
-                            last_input_layout_update,
+                            handling.term_width,
+                            handling.term_height,
+                            handling.last_input_layout_update,
                         )
                         .await;
                     // Only return if the handler actually handled the key
                     if result != KeyResult::NotHandled {
                         return ModeAwareResult {
                             result,
-                            updated_layout_time: last_input_layout_update,
+                            updated_layout_time: handling.last_input_layout_update,
                         };
                     }
                     // If handler returned NotHandled, continue to try other handlers

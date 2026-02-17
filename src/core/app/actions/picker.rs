@@ -811,12 +811,12 @@ mod tests {
 
         app.picker.picker_session = Some(PickerSession {
             state: picker_state,
-            data: PickerData::Model(ModelPickerState {
+            data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: String::new(),
                 all_items: items,
                 before_model: Some("old-model".into()),
                 has_dates: false,
-            }),
+            })),
         });
 
         handle_picker_action(&mut app, PickerAction::PickerEscape, ctx);

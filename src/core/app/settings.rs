@@ -319,11 +319,11 @@ mod tests {
 
         app.picker.picker_session = Some(PickerSession {
             state: PickerState::new("Pick Provider", items.clone(), 0),
-            data: PickerData::Provider(ProviderPickerState {
+            data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: String::new(),
                 all_items: items,
                 before_provider: Some(("other".into(), "Other".into())),
-            }),
+            })),
         });
 
         let (result, should_open_model_picker) = {

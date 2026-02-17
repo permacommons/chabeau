@@ -67,12 +67,12 @@ fn model_picker_title_uses_az_when_no_dates() {
     picker_state.sort_mode = crate::ui::picker::SortMode::Name;
     app.picker.picker_session = Some(PickerSession {
         state: picker_state,
-        data: PickerData::Model(ModelPickerState {
+        data: PickerData::Model(Box::new(ModelPickerState {
             search_filter: String::new(),
             all_items: items,
             before_model: None,
             has_dates: false,
-        }),
+        })),
     });
     app.update_picker_title();
     let picker = app.picker_state().unwrap();
@@ -311,12 +311,12 @@ fn default_sort_mode_helper_behaviour() {
     // Theme picker prefers alphabetical → Name
     app.picker.picker_session = Some(PickerSession {
         state: PickerState::new("Pick Theme", vec![], 0),
-        data: PickerData::Theme(ThemePickerState {
+        data: PickerData::Theme(Box::new(ThemePickerState {
             search_filter: String::new(),
             all_items: Vec::new(),
             before_theme: None,
             before_theme_id: None,
-        }),
+        })),
     });
     assert!(matches!(
         app.picker_session().unwrap().default_sort_mode(),
@@ -325,11 +325,11 @@ fn default_sort_mode_helper_behaviour() {
     // Provider picker prefers alphabetical → Name
     app.picker.picker_session = Some(PickerSession {
         state: PickerState::new("Pick Provider", vec![], 0),
-        data: PickerData::Provider(ProviderPickerState {
+        data: PickerData::Provider(Box::new(ProviderPickerState {
             search_filter: String::new(),
             all_items: Vec::new(),
             before_provider: None,
-        }),
+        })),
     });
     assert!(matches!(
         app.picker_session().unwrap().default_sort_mode(),
@@ -338,12 +338,12 @@ fn default_sort_mode_helper_behaviour() {
     // Model picker with dates → Date
     app.picker.picker_session = Some(PickerSession {
         state: PickerState::new("Pick Model", vec![], 0),
-        data: PickerData::Model(ModelPickerState {
+        data: PickerData::Model(Box::new(ModelPickerState {
             search_filter: String::new(),
             all_items: Vec::new(),
             before_model: None,
             has_dates: true,
-        }),
+        })),
     });
     assert!(matches!(
         app.picker_session().unwrap().default_sort_mode(),

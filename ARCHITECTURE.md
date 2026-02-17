@@ -125,6 +125,8 @@ Release distribution is split across dedicated GitHub workflows under `.github/w
 publication in parallel: crates.io publication plus versioned GitHub Release binaries
 for Linux/macOS/Windows. The stable release job also generates `SHA256SUMS` and signs it
 with keyless Sigstore using GitHub Actions OIDC before uploading release assets.
+Stable GitHub Release descriptions are generated from the matching version section in
+`CHANGELOG.md` (falling back to a short default note when missing).
 `nightly.yml` builds Linux/macOS/Windows release binaries on a nightly schedule (or manual
 dispatch), smoke-tests each artifact with `--version`/`--help`, signs nightly `SHA256SUMS`
 with keyless Sigstore using GitHub Actions OIDC, then updates the moving `nightly`

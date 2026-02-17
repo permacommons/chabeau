@@ -345,16 +345,45 @@ jobs:
             --output-certificate dist/SHA256SUMS.pem \
             dist/SHA256SUMS
 
+      - name: Build release notes from changelog
+        env:
+          TAG: ${{ needs.check-branch.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NOTES_FILE="dist/RELEASE_NOTES.md"
+
+          {
+            echo "## Chabeau ${TAG}"
+            echo
+            echo "Automated release artifacts for \`${TAG}\`."
+            echo
+          } > "$NOTES_FILE"
+
+          section="$(awk -v ver="$VERSION" '
+            $0 == "## " ver { in_sec=1; print; next }
+            in_sec && /^## / { exit }
+            in_sec { print }
+          ' CHANGELOG.md)"
+
+          if [[ -n "$section" ]]; then
+            printf '%s\n' "$section" >> "$NOTES_FILE"
+            echo >> "$NOTES_FILE"
+            echo "_Release notes extracted from CHANGELOG.md._" >> "$NOTES_FILE"
+          else
+            {
+              echo "### Notes"
+              echo "- See CHANGELOG.md for a full history of changes."
+            } >> "$NOTES_FILE"
+          fi
+
       - name: Publish or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-branch.outputs.tag }}
           name: Chabeau ${{ needs.check-branch.outputs.tag }}
-          body: |
-            Automated release artifacts for `${{ needs.check-branch.outputs.tag }}`.
-
-            Artifacts include Linux, macOS, and Windows binaries with per-archive SHA-256 checksums.
-            The checksum manifest is signed with keyless Sigstore via GitHub Actions OIDC.
+          body_path: dist/RELEASE_NOTES.md
           files: |
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.tar.gz
             dist/release-*/chabeau-${{ needs.check-branch.outputs.tag }}-*.zip
@@ -363,4 +392,5 @@ jobs:
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
             dist/SHA256SUMS.pem
+            dist/RELEASE_NOTES.md
           overwrite_files: true

@@ -321,7 +321,7 @@ impl Default for CharacterService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::test_helpers::helpers::create_temp_cards_dir_with_cards;
+    use crate::character::test_helpers::helpers::{create_temp_cards_dir, create_test_character};
     use crate::utils::test_utils::TestEnvVarGuard;
     use std::fs;
     use std::thread;
@@ -329,7 +329,13 @@ mod tests {
 
     #[test]
     fn resolves_updates_after_file_change() {
-        let (_dir, cards_dir) = create_temp_cards_dir_with_cards(&[("Alice", "Hello there!")]);
+        let (_dir, cards_dir) = create_temp_cards_dir();
+        let card = create_test_character("Alice", "Hello there!");
+        fs::write(
+            cards_dir.join("alice.json"),
+            serde_json::to_string(&card).unwrap(),
+        )
+        .unwrap();
         let mut env_guard = TestEnvVarGuard::new();
         env_guard.set_var("CHABEAU_CARDS_DIR", &cards_dir);
 

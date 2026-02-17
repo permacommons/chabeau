@@ -226,7 +226,8 @@ pub fn validate_card(card: &CharacterCard) -> Result<(), CardLoadError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::{png_text, CharacterData};
+    use crate::character::png_text;
+    use crate::character::test_helpers::helpers::{create_test_character, create_valid_card_json};
     use crate::utils::test_utils::TestEnvVarGuard;
     use crc32fast::Hasher;
     use std::fs;
@@ -255,52 +256,27 @@ mod tests {
         }
     }
 
-    fn create_valid_card_json() -> String {
-        serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Test Character",
-                "description": "A test character for unit tests",
-                "personality": "Friendly and helpful",
-                "scenario": "Testing environment",
-                "first_mes": "Hello! I'm a test character.",
-                "mes_example": "{{user}}: Hi\n{{char}}: Hello!"
-            }
-        })
-        .to_string()
-    }
-
     fn create_simple_test_card_json() -> String {
-        serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Simple Test Character",
-                "description": "A simple test character for validation",
-                "personality": "Friendly and helpful",
-                "scenario": "Testing the character card loader",
-                "first_mes": "Hello! I'm a test character.",
-                "mes_example": "{{user}}: Hi\n{{char}}: Hello there!"
-            }
-        })
-        .to_string()
+        let mut card: CharacterCard = serde_json::from_str(&create_valid_card_json()).unwrap();
+        card.data.name = "Simple Test Character".to_string();
+        card.data.description = "A simple test character for validation".to_string();
+        card.data.scenario = "Testing the character card loader".to_string();
+        card.data.mes_example = "{{user}}: Hi
+{{char}}: Hello there!"
+            .to_string();
+        serde_json::to_string(&card).unwrap()
     }
 
     fn create_invalid_test_card_json() -> String {
-        serde_json::json!({
-            "spec": "wrong_spec",
-            "spec_version": "2.0",
-            "data": {
-                "name": "",
-                "description": "Invalid card",
-                "personality": "Test",
-                "scenario": "Test",
-                "first_mes": "Test",
-                "mes_example": "Test"
-            }
-        })
-        .to_string()
+        let mut card: CharacterCard = serde_json::from_str(&create_valid_card_json()).unwrap();
+        card.spec = "wrong_spec".to_string();
+        card.data.name.clear();
+        card.data.description = "Invalid card".to_string();
+        card.data.personality = "Test".to_string();
+        card.data.scenario = "Test".to_string();
+        card.data.first_mes = "Test".to_string();
+        card.data.mes_example = "Test".to_string();
+        serde_json::to_string(&card).unwrap()
     }
 
     fn write_json_to_tempfile(contents: &str) -> NamedTempFile {
@@ -482,25 +458,7 @@ mod tests {
 
     #[test]
     fn test_validate_card_valid() {
-        let card = CharacterCard {
-            spec: "chara_card_v2".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: "Test".to_string(),
-                description: "Test description".to_string(),
-                personality: "Test personality".to_string(),
-                scenario: "Test scenario".to_string(),
-                first_mes: "Hello".to_string(),
-                mes_example: "Example".to_string(),
-                creator_notes: None,
-                system_prompt: None,
-                post_history_instructions: None,
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        };
+        let card = create_test_character("Test", "Hello");
 
         let result = validate_card(&card);
         assert!(result.is_ok());
@@ -508,25 +466,8 @@ mod tests {
 
     #[test]
     fn test_validate_card_invalid_spec() {
-        let card = CharacterCard {
-            spec: "invalid_spec".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: "Test".to_string(),
-                description: "Test description".to_string(),
-                personality: "Test personality".to_string(),
-                scenario: "Test scenario".to_string(),
-                first_mes: "Hello".to_string(),
-                mes_example: "Example".to_string(),
-                creator_notes: None,
-                system_prompt: None,
-                post_history_instructions: None,
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        };
+        let mut card = create_test_character("Test", "Hello");
+        card.spec = "invalid_spec".to_string();
 
         let result = validate_card(&card);
         assert!(result.is_err());
@@ -542,25 +483,8 @@ mod tests {
 
     #[test]
     fn test_validate_card_empty_name() {
-        let card = CharacterCard {
-            spec: "chara_card_v2".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: "".to_string(),
-                description: "Test description".to_string(),
-                personality: "Test personality".to_string(),
-                scenario: "Test scenario".to_string(),
-                first_mes: "Hello".to_string(),
-                mes_example: "Example".to_string(),
-                creator_notes: None,
-                system_prompt: None,
-                post_history_instructions: None,
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        };
+        let mut card = create_test_character("Test", "Hello");
+        card.data.name.clear();
 
         let result = validate_card(&card);
         assert!(result.is_err());
@@ -575,25 +499,13 @@ mod tests {
 
     #[test]
     fn test_validate_card_multiple_errors() {
-        let card = CharacterCard {
-            spec: "invalid_spec".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: "".to_string(),
-                description: "".to_string(),
-                personality: "".to_string(),
-                scenario: "".to_string(),
-                first_mes: "".to_string(),
-                mes_example: "Example".to_string(),
-                creator_notes: None,
-                system_prompt: None,
-                post_history_instructions: None,
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        };
+        let mut card = create_test_character("Test", "Hello");
+        card.spec = "invalid_spec".to_string();
+        card.data.name.clear();
+        card.data.description.clear();
+        card.data.personality.clear();
+        card.data.scenario.clear();
+        card.data.first_mes.clear();
 
         let result = validate_card(&card);
         assert!(result.is_err());
@@ -609,25 +521,12 @@ mod tests {
     #[test]
     fn test_validate_card_empty_fields_allowed() {
         // Test that empty strings are allowed for most fields (except name)
-        let card = CharacterCard {
-            spec: "chara_card_v2".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: "Test".to_string(),
-                description: "".to_string(),
-                personality: "".to_string(),
-                scenario: "".to_string(),
-                first_mes: "".to_string(),
-                mes_example: "".to_string(),
-                creator_notes: None,
-                system_prompt: None,
-                post_history_instructions: None,
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        };
+        let mut card = create_test_character("Test", "Hello");
+        card.data.description.clear();
+        card.data.personality.clear();
+        card.data.scenario.clear();
+        card.data.first_mes.clear();
+        card.data.mes_example.clear();
 
         let result = validate_card(&card);
         assert!(result.is_ok());

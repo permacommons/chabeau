@@ -3,57 +3,24 @@
 
 #[cfg(test)]
 mod integration_tests {
-
     use crate::character::card::{CharacterCard, CharacterData};
     use crate::character::import::{import_card, ImportError};
+    use crate::character::test_helpers::helpers::{
+        create_temp_card_file, create_temp_cards_dir, create_test_character,
+    };
     use crate::core::app::conversation::ConversationController;
     use crate::core::app::session::load_character_for_session;
     use crate::core::config::data::Config;
     use crate::utils::test_utils::{create_test_app, TestEnvVarGuard};
     use std::fs;
     use std::io::Write;
-
-    use tempfile::{NamedTempFile, TempDir};
-
-    /// Helper to create a test character card
-    fn create_test_character(name: &str, greeting: &str) -> CharacterCard {
-        CharacterCard {
-            spec: "chara_card_v2".to_string(),
-            spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: name.to_string(),
-                description: format!("Test character {}", name),
-                personality: "Friendly and helpful".to_string(),
-                scenario: "Testing environment".to_string(),
-                first_mes: greeting.to_string(),
-                mes_example: "{{user}}: Hi\n{{char}}: Hello!".to_string(),
-                creator_notes: None,
-                system_prompt: Some(format!("You are {}.", name)),
-                post_history_instructions: Some("Always be polite.".to_string()),
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
-        }
-    }
-
-    /// Helper to create a temporary character card file
-    fn create_temp_card_file(card: &CharacterCard) -> NamedTempFile {
-        let mut temp_file = NamedTempFile::with_suffix(".json").unwrap();
-        let json = serde_json::to_string(card).unwrap();
-        temp_file.write_all(json.as_bytes()).unwrap();
-        temp_file.flush().unwrap();
-        temp_file
-    }
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_import_then_select_via_cli_workflow() {
         // This test simulates: import card → start session with CLI flag → verify character loaded
 
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
+        let (_temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Step 1: Create a character card file
         let character = create_test_character("TestCLI", "Hello from CLI!");
@@ -86,9 +53,7 @@ mod integration_tests {
     fn test_import_then_select_via_picker_workflow() {
         // This test simulates: import card → list cards for picker → select card
 
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
+        let (_temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Step 1: Import multiple cards
         let char1 = create_test_character("PickerChar1", "Hello 1!");
@@ -127,9 +92,7 @@ mod integration_tests {
     fn test_import_set_default_start_session_workflow() {
         // This test simulates: import card → set as default → start session → verify auto-loaded
 
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
+        let (_temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Step 1: Import a card
         let character = create_test_character("DefaultChar", "Hello by default!");
@@ -398,7 +361,7 @@ mod integration_tests {
     fn test_config_persistence_with_multiple_defaults() {
         // Test that default characters persist across config save/load
 
-        let temp_dir = TempDir::new().unwrap();
+        let (temp_dir, _cards_dir) = create_temp_cards_dir();
         let config_path = temp_dir.path().join("test_config.toml");
 
         // Create config with multiple default characters
@@ -446,9 +409,7 @@ mod integration_tests {
     fn test_character_precedence_cli_over_default() {
         // Test that CLI-specified character takes precedence over default
 
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
+        let (_temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Create two cards
         let default_char = create_test_character("DefaultChar", "I'm the default");
@@ -538,9 +499,7 @@ mod integration_tests {
     fn test_import_overwrite_protection() {
         // Test that import prevents overwriting without force flag
 
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
-        fs::create_dir_all(&cards_dir).unwrap();
+        let (temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Create initial card
         let char1 = create_test_character("OverwriteTest", "Version 1");

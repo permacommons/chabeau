@@ -121,7 +121,7 @@ impl<'a> OscHyperlink<'a> {
         buf.push_str(self.suffix);
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn as_encoded_string(&self) -> String {
         let mut out =
             String::with_capacity(self.prefix.len() + self.text.len() + self.suffix.len());

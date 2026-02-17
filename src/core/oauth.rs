@@ -239,34 +239,40 @@ async fn fetch_oauth_metadata(client: &reqwest::Client, url: &str) -> Option<OAu
 }
 
 pub fn open_in_browser(url: &str) -> Result<(), Box<dyn Error>> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = std::process::Command::new("open").arg(url).status()?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err("failed to launch browser with open".into());
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err("failed to launch browser with start".into());
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let status = std::process::Command::new("xdg-open").arg(url).status()?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err("failed to launch browser with xdg-open".into());
-    }
+    open_in_browser_impl(url)
+}
 
-    #[allow(unreachable_code)]
+#[cfg(target_os = "macos")]
+fn open_in_browser_impl(url: &str) -> Result<(), Box<dyn Error>> {
+    let status = std::process::Command::new("open").arg(url).status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err("failed to launch browser with open".into())
+}
+
+#[cfg(target_os = "windows")]
+fn open_in_browser_impl(url: &str) -> Result<(), Box<dyn Error>> {
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err("failed to launch browser with start".into())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_in_browser_impl(url: &str) -> Result<(), Box<dyn Error>> {
+    let status = std::process::Command::new("xdg-open").arg(url).status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err("failed to launch browser with xdg-open".into())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+fn open_in_browser_impl(url: &str) -> Result<(), Box<dyn Error>> {
     Err(format!("no browser launcher configured for URL: {url}").into())
 }
 

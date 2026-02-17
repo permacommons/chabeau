@@ -1,22 +1,14 @@
-#![allow(unused_imports)]
-use super::helpers::{
-    assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
-};
+use super::helpers::{line_texts, render_markdown_for_test};
 use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
+use crate::ui::markdown::render_message_markdown_details_with_policy_and_user_name;
 use crate::ui::markdown::table::TableRenderer;
-use crate::ui::markdown::{
-    render_message_markdown_details_with_policy_and_user_name, render_message_with_config,
-    MessageRenderConfig,
-};
 use crate::ui::span::SpanKind;
 use crate::utils::test_utils::SAMPLE_HYPERTEXT_PARAGRAPH;
-use pulldown_cmark::{Options, Parser};
 use ratatui::style::Modifier;
 use ratatui::text::Span;
-use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
 
 #[test]

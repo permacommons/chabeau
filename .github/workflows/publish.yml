@@ -350,7 +350,6 @@ jobs:
         with:
           tag_name: ${{ needs.check-branch.outputs.tag }}
           name: Chabeau ${{ needs.check-branch.outputs.tag }}
-          target_commitish: ${{ needs.check-branch.outputs.tag }}
           body: |
             Automated release artifacts for `${{ needs.check-branch.outputs.tag }}`.
 

@@ -2,7 +2,7 @@
 use super::helpers::{
     assert_first_span_is_space_indented, assert_line_text, line_texts, render_markdown_for_test,
 };
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::markdown::render::{
     MarkdownRenderer, MarkdownRendererConfig, MarkdownWidthConfig, RoleKind,
 };
@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 fn markdown_details_metadata_matches_lines_and_tags() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Testing metadata with a [link](https://example.com) inside.".into(),
     };
 
@@ -72,7 +72,7 @@ fn markdown_details_metadata_matches_lines_and_tags() {
 fn metadata_marks_user_prefix() {
     let theme = crate::ui::theme::Theme::dark_default();
     let message = Message {
-        role: "user".into(),
+        role: TranscriptRole::User,
         content: "Hello world".into(),
     };
 

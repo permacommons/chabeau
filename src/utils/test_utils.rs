@@ -189,7 +189,19 @@ pub fn create_test_app() -> App {
 #[cfg(test)]
 pub fn create_test_message(role: &str, content: &str) -> Message {
     Message {
-        role: role.to_string(),
+        role: crate::core::message::TranscriptRole::try_from(role.to_string())
+            .expect("invalid test role"),
+        content: content.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub fn create_test_message_with_role(
+    role: crate::core::message::TranscriptRole,
+    content: &str,
+) -> Message {
+    Message {
+        role,
         content: content.to_string(),
     }
 }

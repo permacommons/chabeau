@@ -112,9 +112,7 @@ pub(super) fn append_tool_call_delta(
 mod tests {
     use super::*;
     use crate::core::app::actions::AppCommand;
-    use crate::core::message::{
-        AppMessageKind, ROLE_APP_WARNING, ROLE_TOOL_CALL, ROLE_TOOL_RESULT,
-    };
+    use crate::core::message::{AppMessageKind, TranscriptRole};
     use crate::utils::test_utils::create_test_app;
 
     fn default_ctx() -> AppActionContext {
@@ -142,7 +140,7 @@ mod tests {
         let result = finalize_stream(&mut app, ctx);
         assert!(result.is_none() || matches!(result, Some(AppCommand::SpawnStream(_))));
         let last = app.ui.messages.back().expect("message");
-        assert_eq!(last.role, ROLE_APP_WARNING);
+        assert_eq!(last.role, TranscriptRole::AppWarning);
         assert_eq!(last.content, "invalid utf8");
         assert!(app.ui.is_streaming || stream_id > 0);
     }
@@ -173,12 +171,16 @@ mod tests {
         );
         let command = finalize_stream(&mut app, ctx);
         assert!(matches!(command, Some(AppCommand::SpawnStream(_))));
-        assert!(app.ui.messages.iter().any(|msg| msg.role == ROLE_TOOL_CALL));
         assert!(app
             .ui
             .messages
             .iter()
-            .any(|msg| msg.role == ROLE_TOOL_RESULT));
+            .any(|msg| msg.role == TranscriptRole::ToolCall));
+        assert!(app
+            .ui
+            .messages
+            .iter()
+            .any(|msg| msg.role == TranscriptRole::ToolResult));
     }
 
     #[test]

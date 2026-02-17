@@ -2,10 +2,12 @@ use super::*;
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::session::{ToolPayloadHistoryEntry, ToolResultRecord, ToolResultStatus};
 use crate::core::config::data::McpServerConfig;
-use crate::core::message::Message;
+use crate::core::message::{Message, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::picker::{PickerItem, PickerState};
-use crate::utils::test_utils::{create_test_app, create_test_message};
+use crate::utils::test_utils::{
+    create_test_app, create_test_message, create_test_message_with_role,
+};
 use rust_mcp_schema::{
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, Resource, ResourceTemplate,
     Tool, ToolInputSchema,
@@ -593,7 +595,11 @@ fn test_prewrap_cache_reuse_when_unchanged() {
     let mut app = create_test_app();
     for i in 0..50 {
         app.ui.messages.push_back(Message {
-            role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+            role: if i % 2 == 0 {
+                TranscriptRole::User
+            } else {
+                TranscriptRole::Assistant
+            },
             content: "lorem ipsum dolor sit amet consectetur adipiscing elit".into(),
         });
     }
@@ -758,11 +764,11 @@ fn prewrap_cache_plain_text_last_message_wrapping() {
 
     // Start with two assistant messages
     app.ui.messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "Short".into(),
     });
     app.ui.messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: "This is a very long plain text line that should wrap when width is small".into(),
     });
 
@@ -1385,7 +1391,7 @@ fn test_scroll_height_consistency_with_tables_regression() {
 "#;
 
     app.ui.messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: table_content.to_string(),
     });
 
@@ -1465,7 +1471,7 @@ fn test_scroll_height_consistency_narrow_terminal_regression() {
 Some additional text after the table."#;
 
     app.ui.messages.push_back(Message {
-        role: "assistant".into(),
+        role: TranscriptRole::Assistant,
         content: wide_table.to_string(),
     });
 
@@ -1612,8 +1618,8 @@ fn test_prev_next_user_message_index_navigation() {
     app.ui
         .messages
         .push_back(create_test_message("assistant", "a1"));
-    app.ui.messages.push_back(create_test_message(
-        crate::core::message::ROLE_APP_INFO,
+    app.ui.messages.push_back(create_test_message_with_role(
+        crate::core::message::TranscriptRole::AppInfo,
         "s1",
     ));
     app.ui.messages.push_back(create_test_message("user", "u2"));

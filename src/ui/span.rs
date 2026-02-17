@@ -573,13 +573,13 @@ mod tests {
 
     #[test]
     fn extract_content_omits_list_indent() {
-        use crate::core::message::Message;
+        use crate::core::message::{Message, TranscriptRole};
         use crate::ui::markdown::{render_message_with_config, MessageRenderConfig};
         use crate::ui::theme::Theme;
 
         // Create a message with code in a list
         let msg = Message {
-            role: "assistant".to_string(),
+            role: TranscriptRole::Assistant,
             content: "1. Step one\n\n   ```python\n   def foo():\n       pass\n   ```\n"
                 .to_string(),
         };

@@ -11,7 +11,7 @@
 use crate::core::app::ui_state::{EditSelectTarget, ToolPrompt};
 use crate::core::app::App;
 use crate::core::app::InspectMode;
-use crate::core::message::{AppMessageKind, ROLE_ASSISTANT, ROLE_TOOL_CALL};
+use crate::core::message::{AppMessageKind, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig};
 use crate::ui::layout::{LayoutConfig, LayoutEngine, TableOverflowPolicy};
 use crate::ui::osc_state::{compute_render_state, set_render_state, OscRenderState};
@@ -647,7 +647,7 @@ fn input_title_base(app: &App, input_width: u16) -> Cow<'_, str> {
         let mut title = String::from("Edit in place: Enter=Apply • Esc=Cancel (no send)");
         if app.ui.compose_mode {
             if let Some(message) = app.ui.messages.get(index) {
-                if message.role == ROLE_ASSISTANT {
+                if message.role == TranscriptRole::Assistant {
                     title.push_str(" • F4: toggle compose mode");
                 }
             }
@@ -680,7 +680,7 @@ fn tool_prompt_insert_index(
 
     let mut last_tool_call = None;
     for (idx, message) in messages.iter().enumerate().rev() {
-        if message.role == ROLE_TOOL_CALL {
+        if message.role == TranscriptRole::ToolCall {
             last_tool_call = Some(idx);
             break;
         }
@@ -690,7 +690,7 @@ fn tool_prompt_insert_index(
     let mut first_in_batch = last_tool_call;
     for idx in (0..=last_tool_call).rev() {
         let message = &messages[idx];
-        if message.role == ROLE_TOOL_CALL {
+        if message.role == TranscriptRole::ToolCall {
             first_in_batch = idx;
         } else {
             break;

@@ -1,5 +1,5 @@
 use crate::core::config::data::Config;
-use crate::core::message::{AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{AppMessageKind, Message, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig, WrappedCursorLayout};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
@@ -312,7 +312,7 @@ impl UiState {
         }
     }
 
-    fn last_message_index_with_role(&self, role: &str) -> Option<usize> {
+    fn last_message_index_with_role(&self, role: TranscriptRole) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
@@ -321,7 +321,11 @@ impl UiState {
             .map(|(i, _)| i)
     }
 
-    fn prev_message_index_with_role(&self, role: &str, from_index: usize) -> Option<usize> {
+    fn prev_message_index_with_role(
+        &self,
+        role: TranscriptRole,
+        from_index: usize,
+    ) -> Option<usize> {
         if from_index == 0 {
             return None;
         }
@@ -335,7 +339,11 @@ impl UiState {
             .map(|(i, _)| i)
     }
 
-    fn next_message_index_with_role(&self, role: &str, from_index: usize) -> Option<usize> {
+    fn next_message_index_with_role(
+        &self,
+        role: TranscriptRole,
+        from_index: usize,
+    ) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
@@ -344,7 +352,7 @@ impl UiState {
             .map(|(i, _)| i)
     }
 
-    fn first_message_index_with_role(&self, role: &str) -> Option<usize> {
+    fn first_message_index_with_role(&self, role: TranscriptRole) -> Option<usize> {
         self.messages
             .iter()
             .enumerate()
@@ -353,35 +361,35 @@ impl UiState {
     }
 
     pub fn last_user_message_index(&self) -> Option<usize> {
-        self.last_message_index_with_role(ROLE_USER)
+        self.last_message_index_with_role(TranscriptRole::User)
     }
 
     pub fn prev_user_message_index(&self, from_index: usize) -> Option<usize> {
-        self.prev_message_index_with_role(ROLE_USER, from_index)
+        self.prev_message_index_with_role(TranscriptRole::User, from_index)
     }
 
     pub fn next_user_message_index(&self, from_index: usize) -> Option<usize> {
-        self.next_message_index_with_role(ROLE_USER, from_index)
+        self.next_message_index_with_role(TranscriptRole::User, from_index)
     }
 
     pub fn first_user_message_index(&self) -> Option<usize> {
-        self.first_message_index_with_role(ROLE_USER)
+        self.first_message_index_with_role(TranscriptRole::User)
     }
 
     pub fn last_assistant_message_index(&self) -> Option<usize> {
-        self.last_message_index_with_role(ROLE_ASSISTANT)
+        self.last_message_index_with_role(TranscriptRole::Assistant)
     }
 
     pub fn prev_assistant_message_index(&self, from_index: usize) -> Option<usize> {
-        self.prev_message_index_with_role(ROLE_ASSISTANT, from_index)
+        self.prev_message_index_with_role(TranscriptRole::Assistant, from_index)
     }
 
     pub fn next_assistant_message_index(&self, from_index: usize) -> Option<usize> {
-        self.next_message_index_with_role(ROLE_ASSISTANT, from_index)
+        self.next_message_index_with_role(TranscriptRole::Assistant, from_index)
     }
 
     pub fn first_assistant_message_index(&self) -> Option<usize> {
-        self.first_message_index_with_role(ROLE_ASSISTANT)
+        self.first_message_index_with_role(TranscriptRole::Assistant)
     }
 
     pub fn enter_edit_select_mode(&mut self, target: EditSelectTarget) {

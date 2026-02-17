@@ -6,7 +6,7 @@ use super::metadata::RenderedMessageDetails;
 use super::parser::find_items_needing_blank_lines;
 use super::table::TableRenderer;
 use super::wrap::wrap_spans_to_width_generic_shared;
-use crate::core::message::{self, AppMessageKind, Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{self, AppMessageKind, Message, TranscriptRole};
 use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -44,16 +44,16 @@ pub enum RoleKind {
 
 impl RoleKind {
     fn from_message(msg: &Message) -> Self {
-        if msg.role == ROLE_USER {
+        if msg.role == TranscriptRole::User {
             RoleKind::User
-        } else if msg.role == ROLE_ASSISTANT {
+        } else if msg.role == TranscriptRole::Assistant {
             RoleKind::Assistant
-        } else if msg.role == message::ROLE_TOOL_CALL {
+        } else if msg.role == message::TranscriptRole::ToolCall {
             RoleKind::ToolCall
-        } else if msg.role == message::ROLE_TOOL_RESULT {
+        } else if msg.role == message::TranscriptRole::ToolResult {
             RoleKind::ToolResult
-        } else if message::is_app_message_role(&msg.role) {
-            RoleKind::App(message::app_message_kind_from_role(&msg.role))
+        } else if message::is_app_message_role(msg.role) {
+            RoleKind::App(message::app_message_kind_from_role(msg.role))
         } else {
             RoleKind::Assistant
         }

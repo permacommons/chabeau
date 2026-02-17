@@ -3,14 +3,14 @@
 //! Provides canonical test cases covering edge cases for code block
 //! rendering and metadata extraction.
 
-use crate::core::message::{Message, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{Message, TranscriptRole};
 
 /// Test fixture: single code block in assistant message.
 ///
 /// Tests basic code block rendering with a language tag.
 pub fn single_block() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: "Here's a function:\n\n```rust\nfn main() {}\n```\n".to_string(),
     }
 }
@@ -21,7 +21,7 @@ pub fn single_block() -> Message {
 /// multiple blocks in a single message.
 pub fn multiple_blocks() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: concat!(
             "First, here's some Rust:\n\n",
             "```rust\nfn main() {\n    println!(\"Hello\");\n}\n```\n\n",
@@ -40,19 +40,19 @@ pub fn multiple_blocks() -> Message {
 pub fn blocks_across_messages() -> Vec<Message> {
     vec![
         Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "Show me Rust code".to_string(),
         },
         Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content: "```rust\nfn first() {}\n```".to_string(),
         },
         Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "And Python?".to_string(),
         },
         Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content: "```python\ndef second():\n    pass\n```".to_string(),
         },
     ]
@@ -64,7 +64,7 @@ pub fn blocks_across_messages() -> Vec<Message> {
 /// tracked with metadata.
 pub fn nested_in_list() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: concat!(
             "1. First step\n\n",
             "   ```rust\n",
@@ -84,7 +84,7 @@ pub fn nested_in_list() -> Message {
 /// Tests that metadata is preserved across wrapped lines.
 pub fn wrapped_code() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: concat!(
             "```rust\n",
             "fn very_long_function_name_that_will_definitely_wrap_on_narrow_terminals() {\n",
@@ -101,7 +101,7 @@ pub fn wrapped_code() -> Message {
 /// Tests handling of code blocks with no content.
 pub fn empty_block() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: "Here's an empty block:\n\n```\n```\n\nDone.".to_string(),
     }
 }
@@ -111,7 +111,7 @@ pub fn empty_block() -> Message {
 /// Tests that blocks without language tags still get metadata.
 pub fn no_language_tag() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: "```\nplain code\nno language\n```".to_string(),
     }
 }
@@ -121,7 +121,7 @@ pub fn no_language_tag() -> Message {
 /// Tests parsing when there's no whitespace around code blocks.
 pub fn adjacent_to_text() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: "Before```rust\nfn adjacent() {}\n```After".to_string(),
     }
 }
@@ -131,7 +131,7 @@ pub fn adjacent_to_text() -> Message {
 /// Tests that user messages render code blocks with metadata.
 pub fn user_message_with_code() -> Message {
     Message {
-        role: ROLE_USER.to_string(),
+        role: TranscriptRole::User,
         content: "Can you explain this?\n\n```python\ndef mystery():\n    pass\n```".to_string(),
     }
 }
@@ -141,7 +141,7 @@ pub fn user_message_with_code() -> Message {
 /// Tests that code block metadata coexists with link metadata.
 pub fn code_and_links() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: concat!(
             "Check [the docs](https://example.com) for details:\n\n",
             "```rust\nfn example() {}\n```\n\n",
@@ -156,7 +156,7 @@ pub fn code_and_links() -> Message {
 /// Tests language tag handling for common languages.
 pub fn various_languages() -> Message {
     Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: concat!(
             "```bash\necho 'hello'\n```\n\n",
             "```javascript\nconsole.log('hi');\n```\n\n",

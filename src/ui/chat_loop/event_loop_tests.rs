@@ -5,7 +5,7 @@ use crate::core::app::actions::{
 };
 use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
-use crate::core::message::{self, Message, ROLE_APP_ERROR, ROLE_ASSISTANT, ROLE_USER};
+use crate::core::message::{self, Message, TranscriptRole};
 use crate::ui::theme::Theme;
 use crate::utils::test_utils::create_test_app;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -131,7 +131,7 @@ async fn tab_does_not_switch_focus_in_edit_select_mode() {
     let app = new_app_handle();
     app.update(|app| {
         app.ui.messages.push_back(Message {
-            role: ROLE_USER.to_string(),
+            role: TranscriptRole::User,
             content: "hello".into(),
         });
         app.ui.enter_edit_select_mode(EditSelectTarget::User);
@@ -166,7 +166,7 @@ async fn tab_does_not_switch_focus_in_assistant_edit_select_mode() {
     let app = new_app_handle();
     app.update(|app| {
         app.ui.messages.push_back(Message {
-            role: ROLE_ASSISTANT.to_string(),
+            role: TranscriptRole::Assistant,
             content: "response".into(),
         });
         app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
@@ -356,7 +356,7 @@ fn process_stream_updates_dispatches_actions() {
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<AppActionEnvelope>();
     app.session.current_stream_id = 42;
     app.ui.messages.push_back(Message {
-        role: ROLE_ASSISTANT.to_string(),
+        role: TranscriptRole::Assistant,
         content: String::new(),
     });
     app.ui.is_streaming = true;
@@ -381,7 +381,7 @@ fn process_stream_updates_dispatches_actions() {
         .messages
         .iter()
         .rev()
-        .find(|msg| message::is_app_message_role(&msg.role));
+        .find(|msg| message::is_app_message_role(msg.role));
     assert!(last_message.is_none(), "non-matching error message ignored");
 }
 
@@ -403,7 +403,7 @@ fn error_messages_add_system_entries_and_stop_streaming() {
 
     assert!(!app.ui.is_streaming);
     let last_message = app.ui.messages.back().expect("app message added");
-    assert_eq!(last_message.role, ROLE_APP_ERROR);
+    assert_eq!(last_message.role, TranscriptRole::AppError);
     assert_eq!(last_message.content, "API Error:\n```\napi failure\n```");
 }
 
@@ -456,11 +456,11 @@ fn retry_last_message_returns_none_without_history() {
 fn retry_last_message_emits_command_with_history() {
     let mut app = setup_app();
     app.ui.messages.push_back(Message {
-        role: "user".to_string(),
+        role: TranscriptRole::User,
         content: "Hi".into(),
     });
     app.ui.messages.push_back(Message {
-        role: "assistant".to_string(),
+        role: TranscriptRole::Assistant,
         content: "Hello".into(),
     });
     app.session.last_retry_time = Instant::now() - Duration::from_millis(500);

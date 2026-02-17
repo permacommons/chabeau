@@ -13,7 +13,7 @@ use crate::ui::markdown::{
 };
 use crate::ui::span::SpanKind;
 use crate::utils::test_utils::SAMPLE_HYPERTEXT_PARAGRAPH;
-use pulldown_cmark::{Options, Parser};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::Modifier;
 use ratatui::text::Span;
 use std::collections::VecDeque;
@@ -78,19 +78,46 @@ fn metadata_marks_table_links() {
 }
 
 #[test]
-fn debug_table_events() {
-    let markdown = r###"| Header 1 | Header 2 | Header 3 |
-|----------|----------|----------|
-| Cell 1   | Cell 2   | Cell 3   |
-| Cell 4   | Cell 5   | Cell 6   |"###;
+fn table_parser_emits_expected_event_sequence() {
+    let markdown = r###"| H1 | H2 |
+|----|----|
+| C1 | C2 |"###;
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(markdown, options);
+    let events: Vec<Event<'_>> = Parser::new_ext(markdown, options).collect();
 
-    for event in parser {
-        println!("{:?}", event);
-    }
+    assert!(
+        matches!(events.first(), Some(Event::Start(Tag::Table(_)))),
+        "table should start with a table start event"
+    );
+    assert!(
+        matches!(events.get(1), Some(Event::Start(Tag::TableHead))),
+        "second event should start the table header"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Start(Tag::TableRow))),
+        "table should contain a row start event"
+    );
+
+    let cell_start_count = events
+        .iter()
+        .filter(|event| matches!(event, Event::Start(Tag::TableCell)))
+        .count();
+    let cell_end_count = events
+        .iter()
+        .filter(|event| matches!(event, Event::End(TagEnd::TableCell)))
+        .count();
+
+    assert_eq!(cell_start_count, 4, "expected 4 table cells");
+    assert_eq!(cell_end_count, 4, "expected 4 table cell endings");
+
+    assert!(
+        matches!(events.last(), Some(Event::End(TagEnd::Table))),
+        "table should end with a table end event"
+    );
 }
 
 #[test]

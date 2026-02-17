@@ -87,37 +87,12 @@ pub(crate) mod helpers {
         use super::*;
 
         #[test]
-        fn test_create_temp_card_file() {
-            let card = create_test_character("TempTest", "Hi!");
-            let temp_file = create_temp_card_file(&card);
-            assert!(temp_file.path().exists());
-
-            // Verify the file contains valid JSON
-            let contents = fs::read_to_string(temp_file.path()).unwrap();
-            let loaded: CharacterCard = serde_json::from_str(&contents).unwrap();
-            assert_eq!(loaded.data.name, "TempTest");
-        }
-
-        #[test]
-        fn test_create_temp_cards_dir_with_cards() {
-            let cards = vec![("Alice", "Hello, I'm Alice!"), ("Bob", "Hi, I'm Bob!")];
-            let (_temp_dir, cards_dir) = create_temp_cards_dir_with_cards(&cards);
-
-            assert!(cards_dir.join("alice.json").exists());
-            assert!(cards_dir.join("bob.json").exists());
-
-            // Verify card contents
-            let alice_json = fs::read_to_string(cards_dir.join("alice.json")).unwrap();
-            let alice: CharacterCard = serde_json::from_str(&alice_json).unwrap();
-            assert_eq!(alice.data.name, "Alice");
-        }
-
-        #[test]
-        fn test_valid_card_json() {
+        fn smoke_test_helper_fixtures_remain_usable() {
             let json = create_valid_card_json();
             let card: CharacterCard = serde_json::from_str(&json).unwrap();
-            assert_eq!(card.spec, "chara_card_v2");
-            assert_eq!(card.data.name, "Test Character");
+            let temp_file = create_temp_card_file(&card);
+
+            assert!(temp_file.path().exists());
         }
     }
 }

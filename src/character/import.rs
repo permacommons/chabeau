@@ -103,6 +103,7 @@ fn import_card_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::test_helpers::helpers::{create_temp_card_file, create_valid_card_json};
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -119,29 +120,16 @@ mod tests {
         result
     }
 
-    fn create_valid_card_json() -> String {
-        serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Test Import Character",
-                "description": "A test character for import tests",
-                "personality": "Friendly",
-                "scenario": "Testing",
-                "first_mes": "Hello!",
-                "mes_example": "Example"
-            }
-        })
-        .to_string()
-    }
-
     fn create_valid_card_file() -> NamedTempFile {
-        let mut temp_file = NamedTempFile::with_suffix(".json").unwrap();
-        temp_file
-            .write_all(create_valid_card_json().as_bytes())
-            .unwrap();
-        temp_file.flush().unwrap();
-        temp_file
+        let mut card: crate::character::card::CharacterCard =
+            serde_json::from_str(&create_valid_card_json()).unwrap();
+        card.data.name = "Test Import Character".to_string();
+        card.data.description = "A test character for import tests".to_string();
+        card.data.personality = "Friendly".to_string();
+        card.data.scenario = "Testing".to_string();
+        card.data.first_mes = "Hello!".to_string();
+        card.data.mes_example = "Example".to_string();
+        create_temp_card_file(&card)
     }
 
     #[test]

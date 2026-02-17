@@ -9,26 +9,36 @@ pub(crate) mod helpers {
     use std::path::PathBuf;
     use tempfile::{NamedTempFile, TempDir};
 
+    fn base_character_data() -> CharacterData {
+        CharacterData {
+            name: "Test Character".to_string(),
+            description: "A test character for unit tests".to_string(),
+            personality: "Friendly and helpful".to_string(),
+            scenario: "Testing environment".to_string(),
+            first_mes: "Hello! I'm a test character.".to_string(),
+            mes_example: "{{user}}: Hi\n{{char}}: Hello!".to_string(),
+            creator_notes: None,
+            system_prompt: Some("You are Test Character.".to_string()),
+            post_history_instructions: Some("Always be polite.".to_string()),
+            alternate_greetings: None,
+            tags: None,
+            creator: None,
+            character_version: None,
+        }
+    }
+
     /// Create a test character card with the given name and greeting
     pub fn create_test_character(name: &str, greeting: &str) -> CharacterCard {
+        let mut data = base_character_data();
+        data.name = name.to_string();
+        data.description = format!("Test character {}", name);
+        data.first_mes = greeting.to_string();
+        data.system_prompt = Some(format!("You are {}.", name));
+
         CharacterCard {
             spec: "chara_card_v2".to_string(),
             spec_version: "2.0".to_string(),
-            data: CharacterData {
-                name: name.to_string(),
-                description: format!("Test character {}", name),
-                personality: "Friendly and helpful".to_string(),
-                scenario: "Testing environment".to_string(),
-                first_mes: greeting.to_string(),
-                mes_example: "{{user}}: Hi\n{{char}}: Hello!".to_string(),
-                creator_notes: None,
-                system_prompt: Some(format!("You are {}.", name)),
-                post_history_instructions: Some("Always be polite.".to_string()),
-                alternate_greetings: None,
-                tags: None,
-                creator: None,
-                character_version: None,
-            },
+            data,
         }
     }
 
@@ -41,9 +51,7 @@ pub(crate) mod helpers {
         temp_file
     }
 
-    /// Create a temporary cards directory with test cards
-    /// Returns the temp directory and the cards directory path
-    /// The directory will be automatically cleaned up when the TempDir is dropped
+    /// Create a temporary cards directory and return the temp dir + cards dir path
     pub fn create_temp_cards_dir() -> (TempDir, PathBuf) {
         let temp_dir = TempDir::new().unwrap();
         let cards_dir = temp_dir.path().join("cards");
@@ -51,35 +59,14 @@ pub(crate) mod helpers {
         (temp_dir, cards_dir)
     }
 
-    /// Create a temporary cards directory with pre-populated test cards
-    pub fn create_temp_cards_dir_with_cards(cards: &[(&str, &str)]) -> (TempDir, PathBuf) {
-        let (temp_dir, cards_dir) = create_temp_cards_dir();
-
-        for (name, greeting) in cards {
-            let card = create_test_character(name, greeting);
-            let card_json = serde_json::to_string(&card).unwrap();
-            let filename = format!("{}.json", name.to_lowercase().replace(' ', "_"));
-            fs::write(cards_dir.join(filename), card_json).unwrap();
-        }
-
-        (temp_dir, cards_dir)
-    }
-
     /// Helper to create a minimal valid character card JSON string
     pub fn create_valid_card_json() -> String {
-        serde_json::json!({
-            "spec": "chara_card_v2",
-            "spec_version": "2.0",
-            "data": {
-                "name": "Test Character",
-                "description": "A test character for unit tests",
-                "personality": "Friendly and helpful",
-                "scenario": "Testing environment",
-                "first_mes": "Hello! I'm a test character.",
-                "mes_example": "{{user}}: Hi\n{{char}}: Hello!"
-            }
-        })
-        .to_string()
+        let card = CharacterCard {
+            spec: "chara_card_v2".to_string(),
+            spec_version: "2.0".to_string(),
+            data: base_character_data(),
+        };
+        serde_json::to_string(&card).unwrap()
     }
 
     #[cfg(test)]

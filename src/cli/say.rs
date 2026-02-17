@@ -234,6 +234,17 @@ fn plain_text_lines(lines: &[Line<'_>]) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Default)]
+pub struct RunSayOptions {
+    pub prompt: Vec<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub env_only: bool,
+    pub character: Option<String>,
+    pub persona: Option<String>,
+    pub preset: Option<String>,
+}
+
 fn resolve_prompt_from_args(
     mut prompt: String,
     stdin: &mut dyn Read,
@@ -255,16 +266,16 @@ fn resolve_prompt_from_args(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_say(
-    prompt: Vec<String>,
-    model: Option<String>,
-    provider: Option<String>,
-    env_only: bool,
-    character: Option<String>,
-    persona: Option<String>,
-    preset: Option<String>,
-) -> Result<(), Box<dyn Error>> {
+pub async fn run_say(options: RunSayOptions) -> Result<(), Box<dyn Error>> {
+    let RunSayOptions {
+        prompt,
+        model,
+        provider,
+        env_only,
+        character,
+        persona,
+        preset,
+    } = options;
     let mut stdin = io::stdin();
     let stdin_is_terminal = stdin.is_terminal();
     let prompt = match resolve_prompt_from_args(prompt.join(" "), &mut stdin, stdin_is_terminal)? {

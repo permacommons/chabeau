@@ -15,6 +15,50 @@ use unicode_width::UnicodeWidthStr;
 /// Handles all scroll-related calculations and line building
 pub struct ScrollCalculator;
 
+struct WrapContext<'a> {
+    out_lines: &'a mut Vec<Line<'static>>,
+    out_metadata: &'a mut Vec<Vec<SpanKind>>,
+    width: usize,
+}
+
+struct LineEmitState {
+    cur_spans: Vec<Span<'static>>,
+    cur_kinds: Vec<SpanKind>,
+    cur_len: usize,
+    emitted_any: bool,
+}
+
+impl LineEmitState {
+    fn new(initial_capacity: usize) -> Self {
+        Self {
+            cur_spans: Vec::with_capacity(initial_capacity),
+            cur_kinds: Vec::with_capacity(initial_capacity),
+            cur_len: 0,
+            emitted_any: false,
+        }
+    }
+
+    fn emit_line(&mut self, wrap: &mut WrapContext<'_>) {
+        ScrollCalculator::push_emitted_line(
+            &mut self.cur_spans,
+            &mut self.cur_kinds,
+            wrap.out_lines,
+            wrap.out_metadata,
+        );
+        self.emitted_any = true;
+        self.cur_len = 0;
+    }
+}
+
+pub struct SelectionLayoutInput {
+    pub selected_index: Option<usize>,
+    pub highlight: ratatui::style::Style,
+    pub markdown_enabled: bool,
+    pub syntax_enabled: bool,
+    pub terminal_width: Option<usize>,
+    pub user_display_name: Option<String>,
+}
+
 impl ScrollCalculator {
     fn push_emitted_line(
         collector_spans: &mut Vec<Span<'static>>,
@@ -56,33 +100,30 @@ impl ScrollCalculator {
         collector_kinds.push(kind);
     }
 
-    // Optimized word placement that avoids borrowing issues by taking explicit mutable refs
-    #[allow(clippy::too_many_arguments)]
     fn process_word(
         word: &str,
         style: Style,
         kind: &SpanKind,
-        cur_spans: &mut Vec<Span<'static>>,
-        cur_kinds: &mut Vec<SpanKind>,
-        out_lines: &mut Vec<Line<'static>>,
-        out_metadata: &mut Vec<Vec<SpanKind>>,
-        cur_len: &mut usize,
-        emitted_any: &mut bool,
-        width: usize,
+        line_state: &mut LineEmitState,
+        wrap: &mut WrapContext<'_>,
     ) {
         if word.is_empty() {
             return;
         }
         let w = UnicodeWidthStr::width(word);
-        if *cur_len > 0 && *cur_len + w > width {
-            ScrollCalculator::push_emitted_line(cur_spans, cur_kinds, out_lines, out_metadata);
-            *emitted_any = true;
-            *cur_len = 0;
+        if line_state.cur_len > 0 && line_state.cur_len + w > wrap.width {
+            line_state.emit_line(wrap);
         }
 
-        if w <= width {
-            ScrollCalculator::append_run(cur_spans, cur_kinds, style, kind.clone(), word);
-            *cur_len += w;
+        if w <= wrap.width {
+            ScrollCalculator::append_run(
+                &mut line_state.cur_spans,
+                &mut line_state.cur_kinds,
+                style,
+                kind.clone(),
+                word,
+            );
+            line_state.cur_len += w;
         } else {
             // Fallback: split oversized word into graphemes only when needed
             for g in UnicodeSegmentation::graphemes(word, true) {
@@ -90,18 +131,17 @@ impl ScrollCalculator {
                 if gw == 0 {
                     continue;
                 }
-                if *cur_len > 0 && *cur_len + gw > width {
-                    ScrollCalculator::push_emitted_line(
-                        cur_spans,
-                        cur_kinds,
-                        out_lines,
-                        out_metadata,
-                    );
-                    *emitted_any = true;
-                    *cur_len = 0;
+                if line_state.cur_len > 0 && line_state.cur_len + gw > wrap.width {
+                    line_state.emit_line(wrap);
                 }
-                ScrollCalculator::append_run(cur_spans, cur_kinds, style, kind.clone(), g);
-                *cur_len += gw;
+                ScrollCalculator::append_run(
+                    &mut line_state.cur_spans,
+                    &mut line_state.cur_kinds,
+                    style,
+                    kind.clone(),
+                    g,
+                );
+                line_state.cur_len += gw;
             }
         }
     }
@@ -157,10 +197,12 @@ impl ScrollCalculator {
                 continue;
             }
 
-            let mut cur_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 4);
-            let mut cur_kinds: Vec<SpanKind> = Vec::with_capacity(line.spans.len() + 4);
-            let mut cur_len: usize = 0;
-            let mut emitted_any = false;
+            let mut line_state = LineEmitState::new(line.spans.len() + 4);
+            let mut wrap_context = WrapContext {
+                out_lines: &mut out_lines,
+                out_metadata: &mut out_metadata,
+                width,
+            };
 
             // Using helper: ScrollCalculator::append_run to merge adjacent runs
 
@@ -193,42 +235,30 @@ impl ScrollCalculator {
                             word,
                             s.style,
                             &span_kind,
-                            &mut cur_spans,
-                            &mut cur_kinds,
-                            &mut out_lines,
-                            &mut out_metadata,
-                            &mut cur_len,
-                            &mut emitted_any,
-                            width,
+                            &mut line_state,
+                            &mut wrap_context,
                         );
 
                         // Place the whitespace itself, width-aware
                         let grapheme = ch.to_string();
                         let space_width = UnicodeWidthStr::width(grapheme.as_str());
                         if space_width > 0 {
-                            if cur_len + space_width <= width {
+                            if line_state.cur_len + space_width <= wrap_context.width {
                                 let kind_for_space = if span_kind.is_link() {
                                     span_kind.clone()
                                 } else {
                                     SpanKind::Text
                                 };
                                 ScrollCalculator::append_run(
-                                    &mut cur_spans,
-                                    &mut cur_kinds,
+                                    &mut line_state.cur_spans,
+                                    &mut line_state.cur_kinds,
                                     s.style,
                                     kind_for_space,
                                     grapheme.as_str(),
                                 );
-                                cur_len += space_width;
+                                line_state.cur_len += space_width;
                             } else {
-                                ScrollCalculator::push_emitted_line(
-                                    &mut cur_spans,
-                                    &mut cur_kinds,
-                                    &mut out_lines,
-                                    &mut out_metadata,
-                                );
-                                emitted_any = true;
-                                cur_len = 0;
+                                line_state.emit_line(&mut wrap_context);
                             }
                         }
 
@@ -243,29 +273,18 @@ impl ScrollCalculator {
                         word,
                         s.style,
                         &span_kind,
-                        &mut cur_spans,
-                        &mut cur_kinds,
-                        &mut out_lines,
-                        &mut out_metadata,
-                        &mut cur_len,
-                        &mut emitted_any,
-                        width,
+                        &mut line_state,
+                        &mut wrap_context,
                     );
                 }
             }
 
-            if !cur_spans.is_empty() {
-                ScrollCalculator::push_emitted_line(
-                    &mut cur_spans,
-                    &mut cur_kinds,
-                    &mut out_lines,
-                    &mut out_metadata,
-                );
-                emitted_any = true;
+            if !line_state.cur_spans.is_empty() {
+                line_state.emit_line(&mut wrap_context);
             }
-            if !emitted_any {
-                out_lines.push(Line::from(""));
-                out_metadata.push(Vec::new());
+            if !line_state.emitted_any {
+                wrap_context.out_lines.push(Line::from(""));
+                wrap_context.out_metadata.push(Vec::new());
             }
         }
 
@@ -342,41 +361,29 @@ impl ScrollCalculator {
 
     /// Build display lines with selection highlighting and terminal width for table balancing
     #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(clippy::too_many_arguments)]
     pub fn build_display_lines_with_theme_and_selection_and_flags_and_width(
         messages: &VecDeque<Message>,
         theme: &Theme,
-        selected_index: Option<usize>,
-        highlight: ratatui::style::Style,
-        markdown_enabled: bool,
-        syntax_enabled: bool,
-        terminal_width: Option<usize>,
-        user_display_name: Option<String>,
+        input: SelectionLayoutInput,
     ) -> Vec<Line<'static>> {
-        Self::build_layout_with_theme_and_selection_and_flags_and_width(
-            messages,
-            theme,
+        Self::build_layout_with_theme_and_selection_and_flags_and_width(messages, theme, input)
+            .lines
+    }
+
+    pub fn build_layout_with_theme_and_selection_and_flags_and_width(
+        messages: &VecDeque<Message>,
+        theme: &Theme,
+        input: SelectionLayoutInput,
+    ) -> crate::ui::layout::Layout {
+        let SelectionLayoutInput {
             selected_index,
             highlight,
             markdown_enabled,
             syntax_enabled,
             terminal_width,
             user_display_name,
-        )
-        .lines
-    }
+        } = input;
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_layout_with_theme_and_selection_and_flags_and_width(
-        messages: &VecDeque<Message>,
-        theme: &Theme,
-        selected_index: Option<usize>,
-        highlight: ratatui::style::Style,
-        markdown_enabled: bool,
-        syntax_enabled: bool,
-        terminal_width: Option<usize>,
-        user_display_name: Option<String>,
-    ) -> crate::ui::layout::Layout {
         let cfg = crate::ui::layout::LayoutConfig {
             width: terminal_width,
             markdown_enabled,
@@ -1215,12 +1222,14 @@ mod tests {
             ScrollCalculator::build_display_lines_with_theme_and_selection_and_flags_and_width(
                 &messages,
                 &theme,
-                Some(0),
-                highlight,
-                true,
-                true,
-                None,
-                None,
+                SelectionLayoutInput {
+                    selected_index: Some(0),
+                    highlight,
+                    markdown_enabled: true,
+                    syntax_enabled: true,
+                    terminal_width: None,
+                    user_display_name: None,
+                },
             );
 
         assert_eq!(normal.len(), highlighted.len());
@@ -1238,24 +1247,28 @@ mod tests {
             ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
                 &messages,
                 &theme,
-                None,
-                highlight,
-                true,
-                true,
-                Some(80),
-                None,
+                SelectionLayoutInput {
+                    selected_index: None,
+                    highlight,
+                    markdown_enabled: true,
+                    syntax_enabled: true,
+                    terminal_width: Some(80),
+                    user_display_name: None,
+                },
             );
 
         let highlighted_layout =
             ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
                 &messages,
                 &theme,
-                Some(1),
-                highlight,
-                true,
-                true,
-                Some(80),
-                None,
+                SelectionLayoutInput {
+                    selected_index: Some(1),
+                    highlight,
+                    markdown_enabled: true,
+                    syntax_enabled: true,
+                    terminal_width: Some(80),
+                    user_display_name: None,
+                },
             );
 
         let span = highlighted_layout

@@ -76,12 +76,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let layout = crate::utils::scroll::ScrollCalculator::build_layout_with_theme_and_selection_and_flags_and_width(
             &app.ui.messages,
             &app.ui.theme,
-            app.ui.selected_edit_message_index(),
-            highlight,
-            app.ui.markdown_enabled,
-            app.ui.syntax_enabled,
-            Some(chunks[0].width as usize),
-            Some(app.ui.user_display_name.clone()),
+            crate::utils::scroll::SelectionLayoutInput {
+                selected_index: app.ui.selected_edit_message_index(),
+                highlight,
+                markdown_enabled: app.ui.markdown_enabled,
+                syntax_enabled: app.ui.syntax_enabled,
+                terminal_width: Some(chunks[0].width as usize),
+                user_display_name: Some(app.ui.user_display_name.clone()),
+            },
         );
         (layout.lines, layout.span_metadata, None)
     } else if app.ui.in_block_select_mode() {

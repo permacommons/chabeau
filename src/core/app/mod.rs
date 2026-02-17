@@ -181,16 +181,16 @@ pub async fn new_with_auth(
         theme,
         startup_requires_provider,
         mut startup_errors,
-    } = session::prepare_with_auth(
-        init_config.model,
-        init_config.log_file,
-        init_config.provider,
-        init_config.env_only,
-        &effective_config,
-        init_config.pre_resolved_session,
-        init_config.character,
-        &mut character_service,
-    )
+    } = session::prepare_with_auth(session::PrepareWithAuthInput {
+        model: init_config.model,
+        log_file: init_config.log_file,
+        provider: init_config.provider,
+        env_only: init_config.env_only,
+        config: &effective_config,
+        pre_resolved_session: init_config.pre_resolved_session,
+        character: init_config.character,
+        character_service: &mut character_service,
+    })
     .await?;
 
     // Initialize PersonaManager and apply CLI persona if provided

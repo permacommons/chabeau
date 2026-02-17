@@ -12,7 +12,7 @@ pub mod modes;
 mod setup;
 
 #[allow(unused_imports)]
-pub use event_loop::{run_chat, UiEvent};
+pub use event_loop::{run_chat, RunChatOptions, UiEvent};
 pub use keybindings::KeyLoopAction;
 
 use std::sync::Arc;

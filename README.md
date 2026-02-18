@@ -514,7 +514,9 @@ Chabeau uses a modular design with focused components:
   - `ui.rs` – Interactive prompts and input helpers for auth flows
 - `builtins/` – Build-time assets embedded into the binary
   - `help.md` – In-app keyboard shortcut and command reference
+  - `mcp-preamble.md` – System prompt preamble explaining MCP tool usage to the model
   - `models.toml` – Supported provider definitions
+  - `oauth-callback.html` – OAuth callback landing page template
   - `presets.toml` – Built-in system instruction presets
   - `themes.toml` – Built-in UI themes
 - `character/` – Character card support (v2 format)
@@ -530,6 +532,7 @@ Chabeau uses a modular design with focused components:
   - `mod.rs` – CLI argument parsing and command dispatching
   - `model_list.rs` – Model listing functionality
   - `provider_list.rs` – Provider listing functionality
+  - `say.rs` – TUI-less `say` command for streaming single-turn chat output
   - `settings/` – Trait-based `set`/`unset` handler registry
   - `theme_list.rs` – Theme listing functionality
 - `commands/` – Chat command processing and registry-driven dispatch
@@ -542,7 +545,10 @@ Chabeau uses a modular design with focused components:
   - `app/` – Application state and controllers
     - `actions/` – Internal action definitions grouped by domain plus dispatcher routing
       - `input/` – Input subdomains for compose, command, inspect, and status actions
+      - `file_prompt.rs` – File prompt handlers for conversation dump and code block save-to-file flows
       - `mcp_gate.rs` – MCP initialization gating and deferred-send handling
+      - `mcp_prompt.rs` – MCP prompt handler for collecting and validating sequential prompt arguments
+      - `picker.rs` – Picker action handlers (navigation, selection, escape)
       - `sampling.rs` – MCP sampling request queueing and permission flow
       - `stream_errors.rs` – Stream error handling and MCP unsupported fallback flow
       - `stream_lifecycle.rs` – Stream creation, chunk/app-message appends, and finalization
@@ -550,6 +556,7 @@ Chabeau uses a modular design with focused components:
       - `tool_calls.rs` – Tool permission and tool-result completion handling
     - `app.rs` – Main `App` struct and event loop integration
     - `conversation.rs` – Conversation controller for chat flow, retries, and streaming helpers
+    - `inspect.rs` – Inspect panel state (title, content, scroll, mode, decode flag)
     - `mod.rs` – App struct and module exports
     - `picker/` – Generic picker that powers all TUI selection dialogs
     - `pickers.rs` – Picker constructors and helpers for each picker type
@@ -558,9 +565,9 @@ Chabeau uses a modular design with focused components:
     - `streaming.rs` – Stream request construction, tool-flow orchestration, and MCP integration helpers
     - `ui_helpers.rs` – UI state transition helpers
     - `ui_state.rs` – UI state management and text input helpers
-    - `builtin_presets.rs` – Built-in preset loader
   - `builtin_mcp.rs` – Built-in MCP prompt/tool context injection helpers
   - `builtin_oauth.rs` – Built-in OAuth callback assets and helpers
+  - `builtin_presets.rs` – Built-in preset loader
   - `builtin_providers.rs` – Built-in provider configuration (loads from `builtins/models.toml`)
   - `chat_stream.rs` – Shared streaming service that feeds responses to the app, UI, and loggers
   - `config/` – Configuration data, defaults, caching, and persistence
@@ -575,6 +582,11 @@ Chabeau uses a modular design with focused components:
   - `mcp_sampling.rs` – MCP sampling request conversion and summarization helpers
   - `message.rs` – Message data structures
   - `oauth.rs` – Shared MCP OAuth discovery, browser flow, callback handling, and token refresh helpers
+  - `persona.rs` – Persona management and variable substitution
+  - `preset.rs` – System instruction preset management
+  - `providers.rs` – Provider selection and shared provider utilities
+  - `shared_selection.rs` – Shared current-selection helpers
+  - `text_wrapping.rs` – Text wrapping utilities
 - `mcp/` – Model Context Protocol client integration
   - `client/` – MCP client orchestration, transport plumbing, protocol parsing, and operations
     - `mod.rs` – Public MCP client manager API, state, and shared context types
@@ -582,7 +594,6 @@ Chabeau uses a modular design with focused components:
     - `protocol.rs` – MCP response parsing and protocol-version helpers
     - `transport_http.rs` – Streamable HTTP session lifecycle, request exchange interface, and event listener helpers
     - `transport_stdio.rs` – Stdio transport client lifecycle, request dispatch, and server I/O readers
-    - `tests.rs` – MCP client manager integration-style unit tests
   - `events.rs` – MCP server request envelopes
   - `transport/` – MCP transport implementations and shared interfaces
     - `mod.rs` – Shared transport traits, enums, and list-fetch helpers
@@ -591,22 +602,32 @@ Chabeau uses a modular design with focused components:
   - `mod.rs` – MCP module exports and tool name constants
   - `permissions.rs` – Per-tool permission decision store
   - `registry.rs` – Enabled MCP server registry
-  - `persona.rs` – Persona management and variable substitution
-  - `preset.rs` – System instruction preset management
-  - `providers.rs` – Provider selection and shared provider utilities
-  - `shared_selection.rs` – Shared current-selection helpers
-  - `text_wrapping.rs` – Text wrapping utilities
 - `ui/` – Terminal interface rendering
   - `appearance.rs` – Theme and style definitions
+  - `builtin_themes.rs` – Built-in theme spec definitions and deserialization
   - `chat_loop/` – Mode-aware chat loop orchestrating UI flows, keybindings, and command routing
     - `event_loop.rs` – Async terminal loop orchestration, event polling, and stream dispatch
     - `executors/` – Background task executors for model loading and MCP operations
+      - `mcp_init.rs` – Async MCP server initialization spawner
+      - `mcp_tools.rs` – Async MCP tool call executor with sampling support and timeout handling
+      - `model_loader.rs` – Async model list fetcher that dispatches picker loaded/failed actions
     - `keybindings/` – Mode-aware keybinding registry and handlers
+      - `handlers.rs` – Keybinding handler implementations organized by mode and category
+      - `registry.rs` – Keybinding registry system with handler trait and result types
     - `lifecycle.rs` – Terminal setup/teardown helpers and resource guards
     - `modes.rs` – Mode-aware key handlers and text interaction utilities
+    - `setup.rs` – App state bootstrapping, provider/model setup, and startup picker flows
   - `help.rs` – Help text rendering
   - `layout.rs` – Shared width-aware layout engine for Markdown and plain text
-  - `markdown/` – Modular markdown pipeline (`parser.rs`, `render.rs`, `lists.rs`, `code.rs`, `metadata.rs`, `table.rs`) plus wrapping helpers and span-metadata tests
+  - `markdown/` – Modular markdown pipeline (parser, renderer, lists, code, metadata, table) plus wrapping helpers
+    - `code.rs` – Fenced code block parsing and syntax-highlighted rendering
+    - `lists.rs` – List parsing and rendering
+    - `metadata.rs` – Span metadata for inline styles and links
+    - `parser.rs` – Markdown token parser
+    - `render.rs` – Markdown-to-terminal renderer with theme and syntax support
+    - `table.rs` – Table parsing and rendering
+    - `tests/` – Markdown rendering test suites (wrapping, lists, tables, syntax spans)
+  - `markdown_wrap.rs` – Unicode-aware span wrapping shared between markdown rendering and range computation
   - `mod.rs` – UI module declarations
   - `osc.rs` / `osc_backend.rs` / `osc_state.rs` – OSC hyperlink and cursor-color support
   - `picker.rs` – Picker controls and rendering

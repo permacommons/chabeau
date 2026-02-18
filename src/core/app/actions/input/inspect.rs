@@ -1,3 +1,21 @@
+//! Tool-inspection action reducer for request/result introspection views.
+//!
+//! # Ownership boundary
+//! This module owns inspect-mode transitions, snapshot construction for tool
+//! request/result history, and clipboard copy helpers for inspect content.
+//! It delegates raw inspect rendering to UI renderer code and tool pipeline
+//! persistence to session state.
+//!
+//! # Main structures and invariants
+//! `ToolInspectSnapshot` materializes a stable merged view of completed and
+//! pending calls for index-based navigation. Inspect view toggles are gated so
+//! pending calls expose request-only data.
+//!
+//! # Call flow entrypoints
+//! Called from input action reducers when inspect keybindings are triggered.
+//! State changes are applied directly on `App`; no asynchronous command is
+//! emitted from this module.
+
 use super::{App, AppActionContext, AppCommand, InspectAction};
 use crate::core::app::actions::input::status::set_status_message;
 use crate::core::app::picker::build_inspect_text;

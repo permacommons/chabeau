@@ -120,6 +120,56 @@ Supporting modules:
 `AppActionDispatcher` and reducers live in `src/core/app/actions/` and translate
 UI intents into state mutation plus deferred `AppCommand`s.
 
+
+## Core app state machine
+The `App` runtime coordinates a reducer-style state machine where UI/input
+intents are converted into `AppAction`s, reduced into in-memory mutations, and
+optionally emitted as deferred `AppCommand`s.
+
+Key modules and responsibilities:
+
+- `src/core/app/ui_state.rs` — owns render-facing UI state (`UiState`), mode and
+  focus transitions (`UiMode`, `UiFocus`), stream activity flags, and wrapped
+  input cursor/layout coherence.
+- `src/core/app/conversation.rs` — owns transcript/session mutation logic through
+  `ConversationController` (message append/finalize, retry/refine lifecycle,
+  status updates, stream token setup).
+- `src/core/app/picker/mod.rs` — owns picker session data for model/provider/
+  theme/character/persona/preset flows and inspect metadata backing.
+- `src/core/app/actions/mod.rs` — root action and command contracts, plus
+  top-level reducer fan-out (`apply_action`, `apply_actions`).
+- `src/core/app/actions/streaming.rs` — stream-side reducer entrypoint for
+  stream chunk handling, MCP callbacks, tool permission flow, and command
+  emission for async MCP/tool/sampling work.
+- `src/core/app/actions/picker.rs` — reducer for picker navigation/filter/apply
+  flows and provider→model transition command dispatch.
+- `src/core/app/actions/input/inspect.rs` — reducer for tool inspect overlay
+  open/toggle/step/copy/decode transitions.
+
+### One streaming turn: input to rendered mutation
+1. In the event loop (`src/ui/chat_loop/event_loop.rs`), an Enter key submit is
+   mapped by keybinding/input handlers to
+   `InputAction::Command(ProcessCommand)` through `AppActionDispatcher`.
+2. `apply_action` in `src/core/app/actions/mod.rs` routes the action to
+   `actions::input::handle_input_action`, which calls into the command reducer.
+3. The command reducer parses commands/messages. For message input, it converts
+   to `StreamingAction::SubmitMessage`, and `actions::streaming` delegates submit
+   handling to `stream_lifecycle`, which uses `ConversationController`
+   (`src/core/app/conversation.rs`) to:
+   - start stream state (`UiState::begin_streaming`),
+   - push the user message,
+   - append an assistant placeholder,
+   - build API history,
+   - return `AppCommand::SpawnStream`.
+4. The executor runs the stream command and dispatches chunk callbacks as
+   `StreamingAction::AppendResponseChunk` (plus tool/MCP actions as needed).
+5. Each chunk is reduced back through `actions::streaming`, which appends text
+   via `ConversationController::append_to_response`, updating transcript content,
+   scroll position, and `UiState` render fields.
+6. On completion/error, reducer paths finalize state (`finalize_response`,
+   `UiState::end_streaming`), add system/app messages when needed, and the next
+   render pass reads updated `UiState`/messages to paint the terminal.
+
 ## Tool inspection and decode workflow
 Tool inspection UI is managed by `InspectController`
 (`src/core/app/inspect.rs`) and input handlers in

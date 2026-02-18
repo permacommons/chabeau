@@ -1,3 +1,21 @@
+//! Picker action reducer for navigation, filtering, and selection apply flows.
+//!
+//! # Ownership boundary
+//! This module owns how picker-related [`super::PickerAction`] intents mutate
+//! picker/inspect state and when picker transitions trigger follow-up commands.
+//! It delegates concrete picker data storage to `core::app::picker` and status
+//! messaging helpers to `input` reducers.
+//!
+//! # Main structures and invariants
+//! Movement and typing reducers are no-ops while inspect mode is active.
+//! Selection apply paths keep startup-transition flags consistent when switching
+//! provider/model in guided startup.
+//!
+//! # Call flow entrypoints
+//! Called from [`super::apply_action`] for `AppAction::Picker`; may return
+//! [`super::AppCommand::LoadModelPicker`] when provider selection requires an
+//! async model-list fetch.
+
 use super::{input, App, AppActionContext, AppCommand, PickerAction};
 use crate::core::app::picker::PickerMode;
 use crate::core::config::data::Config;

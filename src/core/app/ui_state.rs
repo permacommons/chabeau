@@ -1,3 +1,29 @@
+//! UI state reducer and mode machine for the chat TUI.
+//!
+//! # Ownership boundary
+//! This module owns mutable presentation state for the active terminal session:
+//! transcript buffers, input text/cursor, focus, scrolling offsets, status line
+//! metadata, and mode-specific prompt payloads.
+//! It delegates business orchestration to higher-level reducers in
+//! `core::app::actions` and domain logic in `conversation`, which call into this
+//! module to apply concrete state transitions.
+//!
+//! # Main structures and invariants
+//! - [`UiState`] is the canonical state container for rendering.
+//! - [`UiMode`] tracks mutually exclusive interaction modes; only one mode is
+//!   active at a time.
+//! - [`UiFocus`] tracks which pane receives keyboard input.
+//! - Streaming flags (`is_streaming`, `activity_indicator`) are synchronized by
+//!   [`UiState::begin_streaming`] and [`UiState::end_streaming`].
+//! - Input and textarea representations are kept in sync through
+//!   `sync_input_from_textarea` and setter helpers.
+//!
+//! # Call flow entrypoints
+//! Event-loop handlers dispatch actions that eventually invoke transition methods
+//! here (for example, mode/focus changes and stream lifecycle updates). These
+//! transitions drive the next render pass directly; command emission is handled
+//! by `actions` reducers rather than this module.
+
 use crate::core::config::data::Config;
 use crate::core::message::{AppMessageKind, Message, TranscriptRole};
 use crate::core::text_wrapping::{TextWrapper, WrapConfig, WrappedCursorLayout};
@@ -36,6 +62,7 @@ pub enum FilePromptKind {
     SaveCodeBlock,
 }
 
+/// Payload for file-path prompts used by save and dump flows.
 #[derive(Debug, Clone)]
 pub struct FilePrompt {
     pub kind: FilePromptKind,
@@ -43,6 +70,7 @@ pub struct FilePrompt {
 }
 
 /// Tool permission prompt metadata.
+/// Active MCP tool permission request shown in a modal prompt.
 #[derive(Debug, Clone)]
 pub struct ToolPrompt {
     pub server_id: String,
@@ -54,6 +82,7 @@ pub struct ToolPrompt {
     pub batch_index: usize,
 }
 
+/// Serializable MCP tool permission request captured from stream actions.
 #[derive(Debug, Clone)]
 pub struct ToolPromptRequest {
     pub server_id: String,
@@ -65,6 +94,7 @@ pub struct ToolPromptRequest {
     pub batch_index: usize,
 }
 
+/// Descriptor for one MCP prompt argument collected interactively.
 #[derive(Debug, Clone)]
 pub struct McpPromptArgument {
     pub name: String,
@@ -73,6 +103,7 @@ pub struct McpPromptArgument {
     pub required: bool,
 }
 
+/// Interactive MCP prompt argument collection session.
 #[derive(Debug, Clone)]
 pub struct McpPromptInput {
     pub server_id: String,
@@ -147,6 +178,7 @@ struct InputLayoutCache {
     layout: Arc<WrappedCursorLayout>,
 }
 
+/// Root UI state consumed by renderers and mutated by action reducers.
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub messages: VecDeque<Message>,
@@ -182,6 +214,7 @@ pub struct UiState {
     input_revision: u64,
 }
 
+/// Vertical movement direction for wrapped-input cursor navigation.
 #[derive(Debug, Clone, Copy)]
 pub enum VerticalCursorDirection {
     Up,
@@ -189,6 +222,7 @@ pub enum VerticalCursorDirection {
 }
 
 impl UiState {
+    /// Returns whether the current mode accepts text input.
     pub fn is_input_active(&self) -> bool {
         matches!(
             self.mode,
@@ -200,14 +234,17 @@ impl UiState {
         )
     }
 
+    /// Moves focus to the transcript pane.
     pub fn focus_transcript(&mut self) {
         self.focus = UiFocus::Transcript;
     }
 
+    /// Moves focus to the input pane.
     pub fn focus_input(&mut self) {
         self.focus = UiFocus::Input;
     }
 
+    /// Toggles focus between transcript and input panes.
     pub fn toggle_focus(&mut self) {
         self.focus = match self.focus {
             UiFocus::Transcript => UiFocus::Input,
@@ -215,6 +252,7 @@ impl UiState {
         };
     }
 
+    /// Returns whether the input pane is currently focused.
     pub fn is_input_focused(&self) -> bool {
         self.focus == UiFocus::Input
     }
@@ -392,6 +430,7 @@ impl UiState {
         self.first_message_index_with_role(TranscriptRole::Assistant)
     }
 
+    /// Enters edit-select mode for the requested transcript role, if available.
     pub fn enter_edit_select_mode(&mut self, target: EditSelectTarget) {
         self.clear_assistant_editing();
         let start_index = match target {
@@ -408,18 +447,21 @@ impl UiState {
         }
     }
 
+    /// Leaves edit-select mode and returns to typing mode.
     pub fn exit_edit_select_mode(&mut self) {
         if self.in_edit_select_mode() {
             self.set_mode(UiMode::Typing);
         }
     }
 
+    /// Starts in-place editing for a specific transcript message index.
     pub fn start_in_place_edit(&mut self, index: usize) {
         self.focus_input();
         self.clear_assistant_editing();
         self.set_mode(UiMode::InPlaceEdit { index });
     }
 
+    /// Cancels in-place editing and restores typing mode.
     pub fn cancel_in_place_edit(&mut self) {
         if self.in_place_edit_index().is_some() {
             self.set_mode(UiMode::Typing);
@@ -427,11 +469,13 @@ impl UiState {
         }
     }
 
+    /// Enters code-block selection mode for save/export flows.
     pub fn enter_block_select_mode(&mut self, index: usize) {
         self.focus_transcript();
         self.set_mode(UiMode::BlockSelect { block_index: index });
     }
 
+    /// Leaves block-selection mode and restores typing mode.
     pub fn exit_block_select_mode(&mut self) {
         if self.in_block_select_mode() {
             self.set_mode(UiMode::Typing);
@@ -455,6 +499,7 @@ impl UiState {
         }
     }
 
+    /// Toggles compose mode and recomputes wrapped-input layout when possible.
     pub fn toggle_compose_mode(&mut self) {
         self.compose_mode = !self.compose_mode;
 
@@ -464,11 +509,13 @@ impl UiState {
         }
     }
 
+    /// Starts a named UI activity indicator pulse.
     pub fn begin_activity(&mut self, kind: ActivityKind) {
         self.activity_indicator = Some(kind);
         self.pulse_start = Instant::now();
     }
 
+    /// Ends a named UI activity indicator if it matches the active one.
     pub fn end_activity(&mut self, kind: ActivityKind) {
         if self.activity_indicator == Some(kind) {
             self.activity_indicator = None;
@@ -483,6 +530,7 @@ impl UiState {
         self.activity_indicator
     }
 
+    /// Marks the start of assistant streaming and updates related UI flags.
     pub fn begin_streaming(&mut self) {
         self.is_streaming = true;
         self.stream_interrupted = false;
@@ -490,6 +538,7 @@ impl UiState {
         self.focus_transcript();
     }
 
+    /// Marks the end of assistant streaming and clears streaming activity state.
     pub fn end_streaming(&mut self) {
         self.is_streaming = false;
         if matches!(self.activity_indicator, Some(ActivityKind::ChatStream)) {

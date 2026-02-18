@@ -548,7 +548,12 @@ pub async fn handle_external_editor_shortcut(
     }
 
     if let Some(message) = outcome.message {
-        dispatcher.dispatch_streaming_many([StreamingAction::SubmitMessage { message }], ctx);
+        dispatcher.dispatch_input_many(
+            [InputAction::Command(CommandAction::ProcessCommand {
+                input: message,
+            })],
+            ctx,
+        );
     }
 
     Ok(Some(KeyLoopAction::Continue))

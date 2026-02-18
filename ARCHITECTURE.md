@@ -1,155 +1,170 @@
-# Chabeau Architecture (8b47a71)
+# Chabeau Architecture (reference: d3ebd0c)
+
+> This document is aligned to commit `d3ebd0c` on the main codebase. If you're
+> reading a newer checkout, prefer this file as a map and then verify details in
+> the referenced modules.
 
 ## System overview
-Chabeau is a terminal-first chat client that wraps OpenAI-compatible APIs behind a rich TUI. The
-crate is organized as a collection of focused modules that sit on top of Tokio for async orchestration,
-Reqwest for HTTP, Ratatui for rendering, and rust-mcp-schema for Model Context Protocol (MCP) payloads
-and schema types.【F:Cargo.toml†L1-L55】
+Chabeau is a terminal-first chat client that wraps OpenAI-compatible APIs behind a
+Ratatui interface. The runtime combines:
+
+- Tokio for async orchestration.
+- Reqwest for provider and MCP HTTP traffic.
+- Ratatui + Crossterm for terminal UI/event handling.
+- `rust-mcp-schema` types for MCP request/response modeling.
+
+Primary crate roots:
+
+- `src/main.rs` – process entrypoint.
+- `src/cli/mod.rs` – argument parsing and command dispatch.
+- `src/ui/` – interactive chat loop and rendering.
+- `src/core/` – app state, streaming orchestration, config, auth.
+- `src/mcp/` – MCP client manager, transport adapters, registry/permissions.
 
 ## Runtime entry points and CLI flow
-Execution begins in `src/main.rs`, which delegates to the CLI module and exits with a non-zero status
-on failure so that shell scripting remains predictable.【F:src/main.rs†L1-L12】 The CLI builds a Tokio
-runtime, parses arguments with Clap, and routes subcommands such as `auth`, `deauth`, `set`, `say`,
-and MCP token management without touching the UI stack.【F:src/cli/mod.rs†L201-L415】【F:src/cli/mod.rs†L726-L781】
-Interactive CLI prompts and auth token entry share a lightweight raw-mode line editor in
-`utils::line_editor`, so keyboard editing behavior stays consistent across provider/MCP setup flows
-without pulling in the full TUI input stack.
-Global flags like `--debug-mcp` (trace logging) and `--disable-mcp` (session-wide MCP disable) are
-wired into the same entry path, ensuring they apply consistently to both TUI and one-shot `say`
-commands.【F:src/cli/mod.rs†L167-L739】【F:src/cli/say.rs†L267-L333】
+Execution starts in `src/main.rs`, then calls into `cli::run()`.
+
+In `src/cli/mod.rs`, clap-parsed subcommands route to non-UI flows (`auth`,
+`deauth`, `set`, `say`, MCP token ops) or into the interactive chat path. Global
+flags such as `--debug-mcp` and `--disable-mcp` are resolved here and threaded
+forward so behavior is consistent in both one-shot and interactive execution.
+
+Shared prompt/input behavior for CLI setup flows lives in
+`src/utils/line_editor.rs`.
 
 ## Chat session bootstrap
-When a chat session is requested the UI bootstrapper resolves configuration and credentials. It loads the
-user's config, consults the keyring-aware `AuthManager`, determines whether a provider picker must be shown,
-and prepares a fully initialized `App` when credentials are available. The bootstrapper also honors
-`--env` flows, surfaces provider resolution failures, and triggers model pickers when the selected provider
-lacks a default model.【F:src/ui/chat_loop/setup.rs†L19-L185】
+Interactive chat setup is handled by `src/ui/chat_loop/setup.rs`.
+`bootstrap_app(...)` loads configuration, resolves auth through `AuthManager`,
+builds `App`, and chooses whether to launch provider/model pickers based on the
+current config state.
 
 ## Core application state
-The heart of the runtime is the `App` struct, which packages the current session, UI state, pickers, shared
-character service, persona manager, preset manager, configuration snapshot, plus the MCP client manager,
-MCP permission store, and inspection controller for tool-call introspection.【F:src/core/app/mod.rs†L53-L208】
-Session metadata is tracked in `SessionContext`, including the active provider, HTTP client, logging sink,
-streaming bookkeeping, tool-call queues, tool payload history, and MCP enablement flags so downstream
-components can act without re-querying configuration.【F:src/core/app/session.rs†L23-L148】
+The central runtime object is `App` (`src/core/app/mod.rs`), with session details
+kept in `SessionContext` (`src/core/app/session.rs`).
+
+Notable state domains:
+
+- Conversation/history and UI mode/input focus.
+- Picker state (model/theme/provider/character/persona/preset/MCP prompt).
+- Streaming lifecycle and pending tool calls.
+- MCP manager, server enablement, and per-tool approval memory.
+- Tool inspection overlay state (`src/core/app/inspect.rs`).
 
 ## MCP configuration and authentication
-MCP servers are configured in `config.toml` using `McpServerConfig`, which supports HTTP base URLs, stdio
-commands, optional custom HTTP request headers, allowed tool lists, protocol overrides, payload retention
-policies, and per-server YOLO settings for auto-approval of tool calls.【F:src/core/config/data.rs†L70-L118】 Tokens for HTTP servers are stored in
-the system keyring by `McpTokenStore`, mirroring provider auth behavior while keeping secrets out of
-config files.【F:src/core/mcp_auth.rs†L1-L63】
+MCP server configuration is defined in `src/core/config/data.rs`
+(`McpServerConfig`). It includes transport mode, URLs/commands, env/args,
+optional headers, tool allow-lists, and payload retention policy.
+
+HTTP auth tokens are stored via `McpTokenStore` in `src/core/mcp_auth.rs`.
 
 ## MCP client subsystem
-The MCP client layer lives in `src/mcp/`, where `McpClientManager` owns per-server state, cached listings,
-and the active transport implementation.【F:src/mcp/client.rs†L1-L168】 Streamable HTTP and stdio transports
-are supported; stdio launches child processes and streams JSON-RPC frames over stdin/stdout, while HTTP uses
-SSE/streamable responses.【F:src/mcp/client.rs†L18-L209】 A lightweight registry filters enabled servers for
-tool discovery, and a permission store tracks per-tool approval decisions for the current session.【F:src/mcp/registry.rs†L1-L31】【F:src/mcp/permissions.rs†L1-L74】
-The large `mcp::client` test suite is split into `src/mcp/client/tests.rs` to keep runtime code and tests
-separate while still testing private module behavior through `use super::*`.
+The MCP client implementation is now organized under `src/mcp/client/`:
+
+- `src/mcp/client/mod.rs` – `McpClientManager`, per-server runtime state, and
+  connect/refresh orchestration.
+- `src/mcp/client/operations.rs` – protocol-level operations such as
+  `execute_tool_call`, `execute_resource_read`, `execute_prompt`, and helpers for
+  client result/error responses.
+- `src/mcp/client/protocol.rs` – request/response parsing/normalization helpers.
+- `src/mcp/client/transport_http.rs` and `src/mcp/client/transport_stdio.rs` –
+  transport-specific client behavior.
+- `src/mcp/client/tests.rs` – focused manager/transport tests.
+
+Transport primitives are shared through `src/mcp/transport/`:
+
+- `streamable_http.rs`
+- `stdio.rs`
+- `mod.rs`
+
+Server filtering and permission memory live in:
+
+- `src/mcp/registry.rs`
+- `src/mcp/permissions.rs`
 
 ## Tool-calling and MCP execution pipeline
-When building a stream request, Chabeau injects MCP tool schemas, a built-in MCP preamble, and optional
-resource/template listings so that the model can call tools and request MCP resources. It also adds a tool
-payload retention note; when payloads are summarized, tool summaries include call IDs that can be used with
-`chabeau_instant_recall` to pull full outputs back into context.【F:src/core/app/streaming.rs†L9-L214】 Tool calls are queued, permission
-prompts are surfaced in the input area, and the execution path supports MCP tools, MCP resource reads,
-and MCP sampling (`sampling/createMessage`) requests with separate permission prompts or YOLO auto-approval.
-Tool results are summarized into the transcript while raw payload retention is governed by per-server policy
-(window/all/turn).【F:src/core/app/actions/streaming.rs†L980-L1611】
+MCP tool/resource context is injected when building requests in
+`src/core/app/streaming.rs`.
+
+Runtime tool execution and follow-up flow are dispatched from
+`src/core/app/actions/streaming.rs`, with focused logic split across:
+
+- `src/core/app/actions/mcp_gate.rs`
+- `src/core/app/actions/tool_calls.rs`
+- `src/core/app/actions/sampling.rs`
+- `src/core/app/actions/stream_lifecycle.rs`
+- `src/core/app/actions/stream_errors.rs`
+
+These reducers coordinate permission prompts, MCP calls, sampling handshakes, and
+transcript summary updates.
 
 ## MCP slash commands and prompt invocation
-Slash commands in `commands/mod.rs` provide `/mcp` listings, per-server enable/disable toggles, `/yolo`
-for MCP auto-approval, and MCP prompt invocation (using `/server-id:prompt-id`) with interactive argument
-collection when required.【F:src/commands/mod.rs†L136-L735】 The event loop triggers background refreshes
-for MCP listings as commands are issued, keeping cached tools/resources/prompts up to date without blocking
-input.【F:src/ui/chat_loop/event_loop.rs†L123-L212】
+Slash command routing is defined in `src/commands/mod.rs` with MCP handlers
+under `src/commands/handlers/mcp.rs` and prompt parsing in
+`src/commands/mcp_prompt_parser.rs`.
+
+The chat loop schedules MCP refresh/call work via executor helpers in
+`src/ui/chat_loop/executors/` (`mcp_init.rs`, `mcp_tools.rs`).
 
 ## UI loop and action system
-The Ratatui event loop wraps the shared `App` inside an `AppHandle` so tasks can borrow it through an async
-mutex. Terminal setup, input polling, and resize handling feed `UiEvent`s into the dispatcher, which resolves
-mode-aware keymaps and emits high-level `AppAction`s. Actions are grouped by concern—streaming, input
-manipulation, picker interaction, and file prompts—and reducers can return `AppCommand`s that request new
-background work such as spawning a stream or running an MCP tool call.【F:src/ui/chat_loop/mod.rs†L1-L42】【F:src/ui/chat_loop/event_loop.rs†L1-L344】【F:src/core/app/actions/mod.rs†L1-L250】
-`AppActionDispatcher` includes typed batch helpers (`dispatch_input_many`, `dispatch_streaming_many`,
-`dispatch_picker_many`) so same-domain dispatch paths avoid unnecessary wrapping, while `dispatch_many`
-remains the generic entrypoint for intentionally mixed-domain batches.
+The interactive event loop is centered in `src/ui/chat_loop/event_loop.rs` and
+re-exported through `src/ui/chat_loop/mod.rs` as `run_chat(...)`.
 
-## Streaming action handler layout
-Streaming reducers under `src/core/app/actions/` are intentionally split by concern. `streaming.rs`
-should stay focused on `StreamingAction` dispatch, while implementation logic lives in
-`mcp_gate.rs`, `stream_lifecycle.rs`, `stream_errors.rs`, `tool_calls.rs`, and `sampling.rs`.
-This keeps stream setup/finalization, MCP gating, error recovery, tool execution flow, and sampling
-flow changes localized to the owning module.
+Supporting modules:
+
+- `src/ui/chat_loop/keybindings/` – mode-aware key routing.
+- `src/ui/chat_loop/modes.rs` – mode definitions.
+- `src/ui/chat_loop/lifecycle.rs` – terminal setup/restore and cursor styling.
+- `src/ui/chat_loop/executors/` – background task spawners for model loading,
+  MCP init, tool/prompt execution, and sampling callbacks.
+
+`AppActionDispatcher` and reducers live in `src/core/app/actions/` and translate
+UI intents into state mutation plus deferred `AppCommand`s.
 
 ## Tool inspection and decode workflow
-Tool calls and results can be inspected via a full-screen overlay managed by `InspectController`, which
-tracks the current tool index, view (request vs result), and a decoded flag for nested JSON display.
-Input actions allow users to toggle decoded views and navigate between tool records, while the renderer
-adds dedicated inspect chrome and keyboard hints for the overlay.【F:src/core/app/inspect.rs†L1-L155】【F:src/core/app/actions/input/mod.rs†L1-L95】【F:src/core/app/actions/input/inspect.rs†L1-L285】【F:src/ui/renderer.rs†L477-L560】
-
-## Tool result summaries and error labeling
-Tool call outcomes are summarized into readable transcript entries that include per-server labels and
-argument summaries. Failed tool calls are categorized into “tool error” vs “tool call failure” to make
-API issues easier to diagnose and are reflected in both summary strings and status labels.【F:src/core/app/session.rs†L84-L140】【F:src/core/app/actions/streaming.rs†L1445-L1635】
-
-## UI rendering and performance safeguards
-Rendering is handled by `ui::renderer`, which composes the chat transcript, pickers, tool prompts, and
-inspection overlays using Ratatui layout primitives.【F:src/ui/renderer.rs†L17-L560】 The event loop adapts
-its polling interval and inserts idle sleeps when no input or animation is occurring, reducing idle CPU
-usage without impacting responsiveness during active sessions.【F:src/ui/chat_loop/event_loop.rs†L1054-L1312】
+Tool inspection UI is managed by `InspectController`
+(`src/core/app/inspect.rs`) and input handlers in
+`src/core/app/actions/input/inspect.rs`. Rendering for inspection overlays lives
+in `src/ui/renderer.rs`.
 
 ## Characters, personas, and presets
-Character cards are cached and resolved by `CharacterService`, which invalidates stale entries when cache keys
-change, supports direct path loads, and falls back to metadata scans when necessary. It also cooperates with
-session bootstrapping to honor per-provider defaults.【F:src/character/service.rs†L49-L189】 Personas and
-presets are managed by dedicated managers loaded during app construction so that the UI can swap identities
-or prompt templates without reloading config from disk.【F:src/core/app/mod.rs†L81-L148】【F:src/core/persona.rs†L1-L200】【F:src/core/preset.rs†L1-L200】
+Character loading/caching is implemented in `src/character/service.rs` and
+related modules under `src/character/`.
 
-## Commands and input routing
-Slash commands share a central registry that distinguishes between messages and control commands. Handlers can
-return `CommandResult` variants instructing the UI to continue, pass the text to the model, toggle UI features,
-trigger message refinement, or open pickers for themes, providers, models, characters, personas, presets, or
-MCP servers/prompts. File and logging commands reuse shared controllers so that interactive flows stay
-consistent across keyboard shortcuts and slash commands.【F:src/commands/mod.rs†L4-L735】
+Persona and preset management live in:
+
+- `src/core/persona.rs`
+- `src/core/preset.rs`
+
+These are initialized into `App` so users can swap behavior templates without
+reloading base config.
 
 ## Streaming pipeline
-Outgoing requests are encapsulated in `StreamParams` and executed by `ChatStreamService`. Each stream runs in
-a Tokio task that posts SSE frames into an unbounded channel, normalizes malformed input, reports API errors
-with helpful Markdown summaries, and honors cancellation tokens so that user interrupts stop work promptly.【F:src/core/chat_stream.rs†L9-L349】
+Provider streaming transport is implemented in `src/core/chat_stream.rs`.
+`ChatStreamService` converts provider events into internal stream messages,
+normalizes malformed chunks, and propagates cancellation/error signaling back to
+the UI loop.
 
-## Release automation
-Release distribution is split across dedicated GitHub workflows under `.github/workflows/`.
-`publish.yml` selects the newest semver tag reachable from `main`, then runs stable
-publication in parallel: crates.io publication plus versioned GitHub Release binaries
-for Linux/macOS/Windows. The stable release job also generates `SHA256SUMS` and signs it
-with keyless Sigstore using GitHub Actions OIDC before uploading release assets.
-Stable GitHub Release descriptions are generated from the matching version section in
-`CHANGELOG.md` (falling back to a short default note when missing).
-`nightly.yml` builds Linux/macOS/Windows release binaries on a nightly schedule (or manual
-dispatch), smoke-tests each artifact with `--version`/`--help`, signs nightly `SHA256SUMS`
-with keyless Sigstore using GitHub Actions OIDC, then updates the moving `nightly`
-pre-release tag with checksummed archives and signature material.
+## UI rendering and performance safeguards
+The primary renderer is `src/ui/renderer.rs`.
 
-## Configuration orchestrator and test isolation
-All configuration reads and writes go through `ConfigOrchestrator`, which caches the on-disk state and
-serializes mutations so that concurrent access is safe.【F:src/core/config/orchestrator.rs†L13-L80】 The
-static `CONFIG_ORCHESTRATOR` points at the real config path; in `#[cfg(test)]` builds a second static,
-`TEST_ORCHESTRATOR`, can be swapped in to redirect all `Config::load()`, `Config::mutate()`, and
-`Config::save()` calls to an isolated temporary directory.【F:src/core/config/orchestrator.rs†L82-L146】
+`src/ui/chat_loop/event_loop.rs` dynamically adjusts polling/sleep behavior based
+on activity (typing, animation, idle) to reduce idle CPU usage while preserving
+interactive responsiveness.
 
-When `TEST_ORCHESTRATOR` is `None` (the default for most unit tests), the test-mode `Config::mutate()`
-applies the mutator to a throwaway `Config::default()` and discards the result without writing to disk.
-`Config::load()` does fall through to the real config in this case, but only for reads.
+## Configuration orchestration and test isolation
+Config reads/writes are serialized through `ConfigOrchestrator`
+(`src/core/config/orchestrator.rs`).
 
-Tests that need round-trip persistence (save then re-load) use `with_test_config_env()`, which creates a
-`TempDir`, sets `XDG_CONFIG_HOME` to it, calls `Config::set_test_config_path()` to activate the test
-orchestrator, and restores everything on drop.【F:src/utils/test_utils.rs†L28-L106】 This guarantees that
-`cargo test` never writes to the user's real `config.toml`.
+Test helpers in `src/utils/test_utils.rs` can redirect config persistence to a
+temporary XDG config root so test runs do not mutate user config.
 
 ## Test layout conventions
-Larger module test suites live in sibling files so runtime paths stay focused while tests still access
-private module behavior through `use super::*`. Current examples include `src/commands/tests.rs`,
-`src/cli/tests.rs`, and `src/ui/chat_loop/event_loop_tests.rs`, each with focused helper modules to keep
-failure scope localized and reduce churn in runtime files.
+Larger test suites are split into sibling files to keep runtime modules focused
+while still exercising private behavior via `use super::*`.
+
+Examples:
+
+- `src/commands/tests.rs`
+- `src/cli/tests.rs`
+- `src/ui/chat_loop/event_loop_tests.rs`
+- `src/mcp/client/tests.rs`

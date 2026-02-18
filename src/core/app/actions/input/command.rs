@@ -45,7 +45,8 @@ fn handle_process_command(
             None
         }
         CommandResult::ProcessAsMessage(message) => {
-            streaming::spawn_stream_for_message(app, message, ctx)
+            let action = StreamingAction::SubmitMessage { message };
+            streaming::handle_streaming_action(app, action, ctx)
         }
         CommandResult::OpenModelPicker => match app.prepare_model_picker_request() {
             Ok(request) => Some(AppCommand::LoadModelPicker(request)),

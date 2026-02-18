@@ -105,14 +105,6 @@ pub(super) fn handle_streaming_action(
     }
 }
 
-pub(super) fn spawn_stream_for_message(
-    app: &mut App,
-    message: String,
-    ctx: AppActionContext,
-) -> Option<AppCommand> {
-    stream_lifecycle::spawn_stream_for_message(app, message, ctx)
-}
-
 fn handle_mcp_prompt_completed(
     app: &mut App,
     request: McpPromptRequest,

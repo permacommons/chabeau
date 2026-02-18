@@ -1,3 +1,29 @@
+//! MCP client orchestration for connection lifecycle, capability caching, and
+//! request execution.
+//!
+//! Lifecycle overview:
+//! - **Initialization:** [`McpClientManager::connect_server`] validates config,
+//!   acquires auth where needed, initializes the selected transport, and stores
+//!   server details plus negotiated protocol version.
+//! - **Capability detection:** support checks (tools/resources/prompts) prefer
+//!   negotiated `initialize` capabilities and default to permissive behavior
+//!   until capabilities are known.
+//! - **Cache behavior:** metadata lists are cached per server in
+//!   [`McpServerState`] and refreshed via `refresh_*` helpers; partial refreshes
+//!   update only the successful cache slots.
+//! - **Reset/clear semantics:** [`McpServerState::clear_runtime_state`] drops
+//!   transport clients, session/auth headers, and cached lists so reconnects
+//!   start from a clean protocol state.
+//!
+//! Extension notes for contributors adding new MCP operations:
+//! - Add request/response parsing in `client/protocol.rs`.
+//! - Route the operation through `client/operations.rs` so both stdio and
+//!   streamable HTTP remain behaviorally aligned.
+//! - Wire any cache updates in [`McpClientManager`] and preserve invariants:
+//!   `connected` reflects handshake success, `session_id` mirrors server-issued
+//!   values, and `last_error` describes the latest recoverable transport/protocol
+//!   failure without invalidating unrelated caches.
+
 use crate::core::config::data::{Config, McpServerConfig};
 use crate::core::mcp_auth::McpTokenStore;
 use crate::core::oauth::refresh_oauth_grant_if_needed;
@@ -28,14 +54,31 @@ mod transport_stdio;
 use transport_http::StreamableHttpContext;
 use transport_stdio::StdioClient;
 
+/// Upper bound for merged `tools/list` pagination results kept in cache.
 const MCP_MAX_TOOL_LIST: usize = 100;
+
+/// Number of servers initialized concurrently during startup.
 const MCP_STARTUP_CONCURRENCY_LIMIT: usize = 3;
+
+/// Content type used for JSON POSTs over streamable HTTP.
 const MCP_JSON_CONTENT_TYPE: &str = "application/json";
+
+/// Accept header for endpoints that may return either JSON or SSE.
 const MCP_JSON_AND_SSE_ACCEPT: &str = "application/json, text/event-stream";
+
+/// MCP protocol negotiation header used by streamable HTTP requests.
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
+
+/// TCP connect timeout used for MCP HTTP clients.
 const MCP_HTTP_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+
+/// End-to-end timeout for MCP HTTP requests.
 const MCP_HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 60;
+
+/// Idle keep-alive timeout for pooled MCP HTTP connections.
 const MCP_HTTP_POOL_IDLE_TIMEOUT_SECONDS: u64 = 90;
+
+/// Per-host idle connection pool size for MCP HTTP clients.
 const MCP_HTTP_POOL_MAX_IDLE_PER_HOST: usize = 8;
 
 fn build_mcp_http_client() -> Result<reqwest::Client, String> {
@@ -90,9 +133,18 @@ fn apply_streamable_http_protocol_version_header(
     }
 }
 
+/// Base timeout for stdio request/response round-trips.
 const STDIO_REQUEST_TIMEOUT_SECONDS: u64 = 60;
+
+/// Timeout multiplier while server-initiated requests are inflight.
 const STDIO_SAMPLING_TIMEOUT_MULTIPLIER: u64 = 5;
 
+/// Mutable runtime state for one configured MCP server.
+///
+/// The state combines static config, connection/session data, negotiated
+/// capabilities, and metadata caches. Caches are invalidated by
+/// [`McpServerState::clear_runtime_state`] and repopulated after successful
+/// refresh operations.
 #[derive(Clone)]
 pub struct McpServerState {
     pub config: McpServerConfig,
@@ -113,6 +165,7 @@ pub struct McpServerState {
 }
 
 impl McpServerState {
+    /// Creates a disconnected state with empty capability and metadata caches.
     pub fn new(config: McpServerConfig) -> Self {
         Self {
             config,
@@ -133,6 +186,7 @@ impl McpServerState {
         }
     }
 
+    /// Returns the server-specific allow-list configured for tool filtering.
     pub fn allowed_tools(&self) -> Option<&[String]> {
         self.config.allowed_tools.as_deref()
     }
@@ -161,6 +215,10 @@ impl McpServerState {
             .unwrap_or(true)
     }
 
+    /// Clears all runtime-only fields while preserving persisted configuration.
+    ///
+    /// This is used before reconnecting to force a fresh initialize handshake,
+    /// invalidate stale metadata, and drop any cached auth/session headers.
     pub fn clear_runtime_state(&mut self) {
         self.connected = false;
         self.last_error = None;
@@ -179,7 +237,20 @@ impl McpServerState {
     }
 }
 
+/// Registry/orchestrator that owns all configured MCP server states.
 #[derive(Default, Clone)]
+///
+/// Use this type to:
+/// - connect all enabled servers,
+/// - refresh capability-dependent metadata caches,
+/// - dispatch operations over stdio or streamable HTTP,
+/// - keep per-server lifecycle state consistent across reconnects.
+///
+/// Transport selection follows each server config:
+/// - **stdio** is preferred when running a local MCP binary or script where
+///   process env and direct stdin/stdout IPC are available.
+/// - **streamable-http** is preferred for remote hosted MCP endpoints where
+///   bearer tokens and custom headers must be attached to HTTP requests.
 pub struct McpClientManager {
     servers: HashMap<String, McpServerState>,
     server_request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,

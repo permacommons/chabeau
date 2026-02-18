@@ -1,8 +1,16 @@
+//! Streamable HTTP transport utilities.
+//!
+//! These helpers parse either JSON responses or SSE `data:` frames and expose a
+//! common `ListFetch` shape used by metadata caching code.
+
 use futures_util::StreamExt;
 use rust_mcp_schema::schema_utils::ServerMessage;
 
 use super::{list_fetch_from_response, ListFetch};
 
+/// Maps an HTTP transport list response into normalized list semantics.
+///
+/// Method-not-found is treated as capability absence, not a hard failure.
 pub fn fetch_list<T>(
     response: Result<ServerMessage, String>,
     parse: impl FnOnce(ServerMessage) -> Result<T, String>,
@@ -10,6 +18,7 @@ pub fn fetch_list<T>(
     list_fetch_from_response(response, parse)
 }
 
+/// Incremental SSE line buffer resilient to chunked network boundaries.
 #[derive(Default)]
 pub struct SseLineBuffer {
     buffer: Vec<u8>,
@@ -64,6 +73,7 @@ impl SseLineBuffer {
     }
 }
 
+/// Returns true when a response content type is `text/event-stream`.
 pub fn is_event_stream_content_type(content_type: &str) -> bool {
     content_type
         .split(';')
@@ -72,10 +82,15 @@ pub fn is_event_stream_content_type(content_type: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("text/event-stream"))
 }
 
+/// Extracts the JSON payload from an SSE `data:` line.
 pub fn sse_data_payload(line: &str) -> Option<&str> {
     line.strip_prefix("data:").map(str::trim)
 }
 
+/// Reads SSE frames until a terminal MCP response/error message is received.
+///
+/// Server-initiated requests and notifications are surfaced through the
+/// callback before the terminal message is returned.
 pub async fn next_sse_server_message(
     response: reqwest::Response,
     mut on_message: impl FnMut(&ServerMessage),

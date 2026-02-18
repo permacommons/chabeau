@@ -1,3 +1,18 @@
+//! Stdio transport client for MCP servers started as local child processes.
+//!
+//! Transport expectations:
+//! - The configured command must exist and support newline-delimited JSON-RPC
+//!   messages on stdin/stdout.
+//! - Optional env overrides are applied only to the child process.
+//! - Server-initiated requests are forwarded through `McpServerRequest` so the
+//!   app can answer sampling/tool callbacks while regular requests are pending.
+//!
+//! Failure semantics:
+//! - Spawn/setup failures return immediate `Err(String)` values.
+//! - Request send/wait paths enforce lock, write, and response timeouts.
+//! - Response channel closure or malformed stdout messages are treated as
+//!   per-request failures without panicking the runtime.
+
 use super::{
     protocol, require_stdio_command, stdio_args, stdio_env, STDIO_REQUEST_TIMEOUT_SECONDS,
     STDIO_SAMPLING_TIMEOUT_MULTIPLIER,
@@ -17,6 +32,10 @@ use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
+/// Stateful stdio transport client with pending-request correlation.
+///
+/// This client tracks inflight server-initiated work so request timeouts can be
+/// extended while the application is processing callbacks such as sampling.
 pub(crate) struct StdioClient {
     stdin: Mutex<ChildStdin>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
@@ -29,6 +48,7 @@ pub(crate) struct StdioClient {
 }
 
 impl StdioClient {
+    /// Starts the configured MCP server process and wires async readers.
     pub(crate) async fn connect(
         server_id: String,
         config: &McpServerConfig,
@@ -93,6 +113,7 @@ impl StdioClient {
         Ok(client)
     }
 
+    /// Runs initialize/initialized handshake and caches server details.
     pub(crate) async fn initialize(
         &self,
         details: InitializeRequestParams,

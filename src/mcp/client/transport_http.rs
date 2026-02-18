@@ -1,3 +1,20 @@
+//! Streamable HTTP transport helpers used by MCP client operations.
+//!
+//! Transport expectations:
+//! - Requests are sent as JSON `POST` payloads.
+//! - The client advertises `Accept: application/json, text/event-stream` because
+//!   servers may answer with one-shot JSON or SSE frames.
+//! - Protocol negotiation is carried by `MCP-Protocol-Version` after initialize.
+//! - Auth/session headers are applied in this order: configured custom headers,
+//!   then `Authorization`, then `mcp-session-id` if available.
+//!
+//! Failure semantics:
+//! - Missing base URL or client wiring returns a typed `Err(String)`.
+//! - Non-2xx status codes surface as `HTTP error: <status>`.
+//! - Invalid/missing SSE terminal messages are treated as transport failures.
+//! - Listener failures (connect/read/parse) terminate quietly; reconnect logic
+//!   is owned by the manager lifecycle.
+
 use super::{
     apply_streamable_http_client_post_headers, apply_streamable_http_protocol_version_header,
     client_details_for, protocol, require_http_base_url, McpServerRequestContext,
@@ -29,6 +46,10 @@ fn apply_mcp_http_headers(
     request
 }
 
+/// Context contract required by streamable HTTP operation helpers.
+///
+/// Implementations provide access to auth/session state that is mutated as
+/// requests complete (for example when a server rotates `mcp-session-id`).
 pub(crate) trait StreamableHttpContext {
     fn config(&self) -> &McpServerConfig;
     fn auth_header(&self) -> Option<&String>;
@@ -44,6 +65,10 @@ pub(crate) trait StreamableHttpContext {
     }
 }
 
+/// Immutable configuration for the background SSE listener.
+///
+/// Use this for server-to-client request streams where the server can initiate
+/// sampling/tool requests outside direct response handling.
 pub(crate) struct StreamableHttpListenerConfig {
     pub server_id: String,
     pub base_url: Option<String>,
@@ -53,6 +78,10 @@ pub(crate) struct StreamableHttpListenerConfig {
     pub protocol_version: Option<String>,
 }
 
+/// Ensures initialize/initialized handshake has completed for HTTP sessions.
+///
+/// If a session id already exists this is a no-op; otherwise it runs initialize
+/// and stores negotiated protocol/session details in the provided context.
 pub(crate) async fn ensure_session_context<C: StreamableHttpContext>(
     context: &mut C,
 ) -> Result<(), String> {
@@ -98,6 +127,10 @@ pub(crate) async fn send_server_result_message(
     send_client_message_with_context(context, message).await
 }
 
+/// Spawns a detached SSE listener for server-initiated MCP requests.
+///
+/// This is best-effort by design: any transport or decode error exits the task
+/// without mutating foreground request state.
 pub(crate) fn spawn_streamable_http_listener(
     client: reqwest::Client,
     request_tx: mpsc::UnboundedSender<McpServerRequest>,

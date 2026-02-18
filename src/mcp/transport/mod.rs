@@ -1,3 +1,8 @@
+//! Shared MCP transport abstractions.
+//!
+//! Implementations normalize protocol differences across stdio and streamable
+//! HTTP so higher-level code can preserve common state invariants.
+
 use crate::core::config::data::McpServerConfig;
 use async_trait::async_trait;
 use rust_mcp_schema::schema_utils::{RequestFromClient, ServerMessage};
@@ -9,14 +14,20 @@ use rust_mcp_schema::{
 pub mod stdio;
 pub mod streamable_http;
 
+/// JSON-RPC code used by servers to indicate unsupported list methods.
 pub const MCP_METHOD_NOT_FOUND: i64 = -32601;
 
+/// Supported MCP transport backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// - [`McpTransportKind::Stdio`] for locally spawned processes.
+/// - [`McpTransportKind::StreamableHttp`] for remote servers over HTTP/SSE.
 pub enum McpTransportKind {
     StreamableHttp,
     Stdio,
 }
 
+/// Normalized outcome for metadata list calls across transports.
 pub enum ListFetch<T> {
     Ok(T, Option<String>),
     MethodNotFound(Option<String>),
@@ -24,6 +35,7 @@ pub enum ListFetch<T> {
 }
 
 #[async_trait]
+/// Transport contract required by MCP metadata refresh and operation flows.
 pub trait McpTransport {
     async fn initialize(
         &mut self,
@@ -41,6 +53,8 @@ pub trait McpTransport {
     async fn list_prompts(&mut self) -> ListFetch<ListPromptsResult>;
 }
 
+/// Converts a transport response into a list-fetch status while preserving
+/// "method not found" as a soft capability signal.
 pub fn list_fetch_from_response<T>(
     response: Result<ServerMessage, String>,
     parse: impl FnOnce(ServerMessage) -> Result<T, String>,
@@ -55,6 +69,7 @@ pub fn list_fetch_from_response<T>(
     }
 }
 
+/// Returns true when a server reports the JSON-RPC method-not-found code.
 pub fn is_method_not_found(message: &ServerMessage) -> bool {
     matches!(
         message,
@@ -63,6 +78,7 @@ pub fn is_method_not_found(message: &ServerMessage) -> bool {
 }
 
 impl McpTransportKind {
+    /// Resolves transport type from config, defaulting to streamable HTTP.
     pub fn from_config(config: &McpServerConfig) -> Result<Self, String> {
         let transport = config
             .transport

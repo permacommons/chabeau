@@ -1,3 +1,23 @@
+//! Picker domain state and reducers for selectable configuration surfaces.
+//!
+//! # Ownership boundary
+//! This module owns picker-session state (`PickerSession`, filtered items,
+//! selection, inspect metadata) and picker transition bookkeeping used by the
+//! app shell. It delegates rendering to `ui::picker` and delegates event routing
+//! to `core::app::actions::picker`.
+//!
+//! # Main structures and invariants
+//! - [`PickerController`] stores at most one active picker session.
+//! - [`PickerData`] carries mode-specific backing data and preserves the
+//!   unfiltered item list for search.
+//! - Session sort/filter/title fields are updated together via helper reducers.
+//!
+//! # Call flow entrypoints
+//! Picker actions from the event loop call methods on [`PickerController`]
+//! through `App` adapters. Selection application may emit follow-up
+//! [`crate::core::app::actions::AppCommand`] values (for example model loading)
+//! through the action layer.
+
 use super::{session::SessionContext, ui_state::UiState};
 use crate::api::models::sort_models;
 use crate::api::ModelsResponse;

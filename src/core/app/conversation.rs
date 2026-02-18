@@ -1,3 +1,23 @@
+//! Conversation-state reducer for transcript and stream session updates.
+//!
+//! # Ownership boundary
+//! This module owns mutation of transcript-oriented state by coordinating
+//! [`SessionContext`] and [`UiState`]. It delegates provider transport,
+//! background task spawning, and command routing to higher-level app actions.
+//!
+//! # Main structures and invariants
+//! [`ConversationController`] is a short-lived façade used by `App` to apply one
+//! logical conversation mutation at a time.
+//! Invariants maintained here include trailing-assistant-placeholder behavior,
+//! retry/refine bookkeeping, and synchronization between `current_response` and
+//! assistant transcript entries.
+//!
+//! # Call flow entrypoints
+//! Action reducers call into this controller when handling input submit, stream
+//! chunk append, retry/refine, cancellation, and finalization. The controller
+//! mutates in-memory state and returns API message lists or stream tokens needed
+//! by reducers that later dispatch [`super::actions::AppCommand`] values.
+
 use super::{session::PendingToolCall, session::SessionContext, ui_state::UiState};
 use crate::character::card::CharacterCard;
 use crate::core::message::{AppMessageKind, Message, TranscriptRole};
@@ -6,6 +26,7 @@ use serde_json::Value;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+/// Coordinator that mutates transcript/session state for one app tick.
 pub struct ConversationController<'a> {
     session: &'a mut SessionContext,
     ui: &'a mut UiState,
@@ -14,6 +35,7 @@ pub struct ConversationController<'a> {
 }
 
 impl<'a> ConversationController<'a> {
+    /// Creates a reducer view over app session and UI state.
     pub fn new(
         session: &'a mut SessionContext,
         ui: &'a mut UiState,

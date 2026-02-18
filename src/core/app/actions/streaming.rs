@@ -1,3 +1,21 @@
+//! Streaming and MCP action reducer for in-flight assistant turns.
+//!
+//! # Ownership boundary
+//! This module owns routing of [`super::StreamingAction`] variants into focused
+//! stream/tool/sampling reducers and validates stream-id freshness before
+//! mutating state. It delegates protocol details to helper submodules and MCP
+//! execution to commands returned to the app runtime.
+//!
+//! # Main structures and invariants
+//! The reducer ensures stale stream chunks are ignored, stream lifecycle events
+//! are sequenced, and tool-call pipelines are normalized before command
+//! dispatch.
+//!
+//! # Call flow entrypoints
+//! Called from [`super::apply_action`] for `AppAction::Streaming`. It mutates
+//! `App` state and may emit [`super::AppCommand`] values such as `SpawnStream`,
+//! `RunMcpTool`, `RunMcpPrompt`, and `RunMcpSampling`.
+
 use std::collections::VecDeque;
 use std::time::Instant;
 

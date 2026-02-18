@@ -1,3 +1,24 @@
+//! Central action types and reducers for the core app state machine.
+//!
+//! # Ownership boundary
+//! This module owns action enums, dispatch envelopes, and top-level reducer
+//! fan-out (`apply_action` / `apply_actions`). It delegates feature-specific
+//! mutations to sibling reducers (`input`, `picker`, `streaming`, prompt
+//! handlers), which mutate `App` and optionally return [`AppCommand`] side
+//! effects.
+//!
+//! # Main structures and invariants
+//! - [`AppAction`] is the root intent type consumed by the event loop.
+//! - [`AppActionEnvelope`] couples an action with terminal dimensions so reducers
+//!   can compute scroll/layout-aware transitions.
+//! - Reducers return at most one [`AppCommand`] per action, preserving ordering
+//!   when `apply_actions` processes a batch.
+//!
+//! # Call flow entrypoints
+//! The chat event loop dispatches actions through [`AppActionDispatcher`] and
+//! drains them into [`apply_actions`]. Returned commands are executed by async
+//! executors, which later dispatch new actions back into this reducer layer.
+
 mod file_prompt;
 mod input;
 mod mcp_prompt;
@@ -18,6 +39,7 @@ use crate::core::chat_stream::ToolCallDelta;
 use crate::core::message::AppMessageKind;
 use crate::mcp::events::McpServerRequest;
 
+/// Root action union consumed by the app reducer loop.
 pub enum AppAction {
     Streaming(StreamingAction),
     Input(InputAction),
@@ -25,6 +47,7 @@ pub enum AppAction {
     Prompt(PromptAction),
 }
 
+/// Actions that drive stream lifecycle, tool calls, and MCP callbacks.
 pub enum StreamingAction {
     AppendResponseChunk {
         content: String,
@@ -74,6 +97,7 @@ pub enum StreamingAction {
     RetryLastMessage,
 }
 
+/// Actions emitted while a picker overlay is active.
 pub enum PickerAction {
     PickerEscape,
     PickerMoveUp,
@@ -104,11 +128,13 @@ pub enum PickerAction {
     },
 }
 
+/// Actions for modal prompt flows (file and MCP argument prompts).
 pub enum PromptAction {
     File(FilePromptAction),
     Mcp(McpPromptAction),
 }
 
+/// Completion actions for file-path prompt workflows.
 pub enum FilePromptAction {
     CompleteDump {
         filename: String,
@@ -121,6 +147,7 @@ pub enum FilePromptAction {
     },
 }
 
+/// Actions emitted by the MCP prompt-argument modal.
 pub enum McpPromptAction {
     CompleteArg { value: String },
 }
@@ -161,12 +188,14 @@ pub struct AppActionContext {
     pub term_height: u16,
 }
 
+/// Action payload coupled with terminal-size context for reducers.
 pub struct AppActionEnvelope {
     pub action: AppAction,
     pub context: AppActionContext,
 }
 
 #[derive(Clone)]
+/// Thread-safe dispatcher used by UI/executor tasks to enqueue actions.
 pub struct AppActionDispatcher {
     tx: mpsc::UnboundedSender<AppActionEnvelope>,
 }
@@ -229,6 +258,7 @@ impl AppActionDispatcher {
     }
 }
 
+/// Deferred side effects returned by reducers for async execution.
 pub enum AppCommand {
     SpawnStream(StreamParams),
     LoadModelPicker(ModelPickerRequest),
@@ -245,6 +275,7 @@ pub enum AppCommand {
     },
 }
 
+/// Applies a batch of action envelopes and collects emitted commands.
 pub fn apply_actions(
     app: &mut App,
     envelopes: impl IntoIterator<Item = AppActionEnvelope>,
@@ -258,6 +289,7 @@ pub fn apply_actions(
     commands
 }
 
+/// Applies a single action envelope to the app state machine.
 pub fn apply_action(app: &mut App, action: AppAction, ctx: AppActionContext) -> Option<AppCommand> {
     match action {
         AppAction::Streaming(action) => streaming::handle_streaming_action(app, action, ctx),

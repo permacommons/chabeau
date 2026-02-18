@@ -1,3 +1,17 @@
+//! API payload types for chat and model endpoints.
+//!
+//! This module defines serializable request/response structs used across
+//! provider integrations and streaming assembly in [`crate::core::chat_stream`].
+//!
+//! Key responsibilities include:
+//! - chat request envelopes and streamed delta decoding.
+//! - tool call schema types shared with command/tool execution flows.
+//! - model metadata representations used by provider/model selection UIs.
+//!
+//! Ownership boundary: this layer is transport-format focused; connection logic
+//! belongs to provider/client code in [`crate::core`] while presentation lives
+//! in [`crate::ui`].
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

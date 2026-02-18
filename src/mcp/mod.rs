@@ -1,3 +1,19 @@
+//! Model Context Protocol (MCP) integration surfaces.
+//!
+//! This module encapsulates client-side MCP connectivity, server registry
+//! coordination, event ingestion, and policy checks for tool access.
+//!
+//! Key submodules include:
+//! - [`client`]: MCP client orchestration and request execution.
+//! - [`transport`]: transport/session wiring for MCP traffic.
+//! - [`registry`]: available server/tool metadata management.
+//! - [`events`] and [`permissions`]: runtime event propagation and permission
+//!   decisions consumed by chat flows.
+//!
+//! Ownership boundary: MCP protocol concerns live here; higher-level flow
+//! control remains in [`crate::core::chat_stream`] and interaction stays in
+//! [`crate::ui::chat_loop`].
+
 pub mod client;
 pub mod events;
 pub mod permissions;

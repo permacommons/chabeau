@@ -1,3 +1,21 @@
+//! Core runtime services and domain state for Chabeau.
+//!
+//! This module owns configuration, provider and preset resolution, persona
+//! behavior, credential surfaces, and stream lifecycle management.
+//!
+//! Key submodules include:
+//! - [`app`]: startup/shutdown orchestration consumed by the binary entrypoint.
+//! - [`chat_stream`]: streaming chat execution and incremental response flow,
+//!   coordinated with [`crate::ui::chat_loop`] and [`crate::commands`].
+//! - [`config`], [`providers`], and [`preset`]: model/provider settings and
+//!   runtime defaults.
+//! - [`mcp_auth`] and [`mcp_sampling`]: MCP-specific auth and sampling bridges.
+//! - [`text_wrapping`] and [`message`]: shared message/text shaping utilities
+//!   used by both core flows and UI rendering.
+//!
+//! Ownership boundary: this layer contains application logic and state
+//! transitions, while [`crate::ui`] handles presentation and interaction.
+
 pub mod app;
 pub mod builtin_mcp;
 pub mod builtin_oauth;

@@ -297,7 +297,7 @@ chabeau set default-character openai gpt-4 hypatia
 chabeau unset default-character openai gpt-4
 ```
 
-To use a separate cards directory, set the `CHABEAU_CARDS_DIR` environment variable before launching Chabeau.
+To use a separate configuration directory (including cards), set the `CHABEAU_CONFIG_DIR` environment variable before launching Chabeau.
 
 Example cards live in [examples/hypatia.json](examples/hypatia.json) and [examples/darwin.json](examples/darwin.json).
 

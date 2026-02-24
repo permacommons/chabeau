@@ -5,7 +5,7 @@ use super::data::{
 };
 use super::orchestrator::ConfigOrchestrator;
 use crate::core::persona::PersonaManager;
-use directories::ProjectDirs;
+use crate::utils::test_utils::TestEnvVarGuard;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -789,10 +789,13 @@ fn test_path_display() {
 
 #[test]
 fn test_path_display_with_config_dir() {
-    let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
-        .expect("Failed to determine config directory");
-    let config_dir = proj_dirs.config_dir();
-    let display = path_display(config_dir);
+    let mut env_guard = TestEnvVarGuard::new();
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let config_dir = temp_dir.path().join("chabeau");
+    env_guard.set_var("CHABEAU_CONFIG_DIR", &config_dir);
+
+    let config_dir = Config::get_config_base_dir();
+    let display = path_display(&config_dir);
 
     assert!(!display.is_empty());
     assert!(display.contains("chabeau"));

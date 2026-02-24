@@ -1,17 +1,10 @@
 use super::*;
 use crate::core::config::data::{CustomProvider, CustomTheme};
-use crate::utils::test_utils::{with_test_config_env, TestEnvVarGuard};
+use crate::utils::test_utils::with_test_config_env;
 use std::fs;
-use tempfile::TempDir;
 
 mod test_helpers {
     use super::*;
-
-    pub(super) fn env_guard(var: &str, value: &str) -> TestEnvVarGuard {
-        let mut guard = TestEnvVarGuard::new();
-        guard.set_var(var, value);
-        guard
-    }
 
     pub(super) fn parse_args(argv: &[&str]) -> Args {
         Args::try_parse_from(argv)
@@ -55,9 +48,7 @@ mod test_helpers {
     }
 }
 
-use test_helpers::{
-    assert_optional_flag_value, assert_provider_add_command, env_guard, parse_args,
-};
+use test_helpers::{assert_optional_flag_value, assert_provider_add_command, parse_args};
 
 #[test]
 fn test_character_flag_parsing() {
@@ -464,9 +455,8 @@ fn test_cli_set_default_model_with_mixed_case_provider() {
 
 #[test]
 fn test_cli_set_default_character_with_cached_service() {
-    with_test_config_env(|_| {
-        let temp_dir = TempDir::new().unwrap();
-        let cards_dir = temp_dir.path().join("cards");
+    with_test_config_env(|config_root| {
+        let cards_dir = config_root.join("chabeau").join("cards");
         fs::create_dir_all(&cards_dir).unwrap();
 
         let card_json = serde_json::json!({
@@ -484,8 +474,6 @@ fn test_cli_set_default_character_with_cached_service() {
 
         fs::write(cards_dir.join("alice.json"), card_json.to_string()).unwrap();
 
-        let env_guard = env_guard("CHABEAU_CARDS_DIR", cards_dir.to_str().unwrap());
-
         let args = Args::try_parse_from([
             "chabeau",
             "set",
@@ -500,8 +488,6 @@ fn test_cli_set_default_character_with_cached_service() {
             .unwrap()
             .block_on(handle_args(args))
             .expect("CLI command should succeed");
-
-        drop(env_guard);
 
         let config = Config::load().expect("config should load");
         assert_eq!(

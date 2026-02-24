@@ -7,6 +7,8 @@ use crate::core::message::Message;
 #[cfg(test)]
 use crate::ui::theme::Theme;
 #[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::env;
@@ -26,8 +28,14 @@ static TEST_CONFIG_ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(
 static TEST_ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[cfg(test)]
+thread_local! {
+    static ENV_GUARD_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
 pub struct TestConfigEnv {
     _lock: MutexGuard<'static, ()>,
+    _env_guard: TestEnvVarGuard,
     temp_dir: TempDir,
 }
 
@@ -38,12 +46,16 @@ impl TestConfigEnv {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let temp_dir = TempDir::new().expect("failed to create temp dir for config");
+        let mut env_guard = TestEnvVarGuard::new();
+        let config_base_dir = temp_dir.path().join("chabeau");
+        env_guard.set_var("CHABEAU_CONFIG_DIR", &config_base_dir);
         let guard = Self {
             _lock: lock,
+            _env_guard: env_guard,
             temp_dir,
         };
 
-        Config::set_test_config_path(guard.config_path());
+        Config::set_test_config_path(config_base_dir.join("config.toml"));
 
         guard
     }
@@ -83,16 +95,26 @@ where
 
 #[cfg(test)]
 pub struct TestEnvVarGuard {
-    _lock: MutexGuard<'static, ()>,
+    _lock: Option<MutexGuard<'static, ()>>,
     previous_vars: Vec<(OsString, Option<OsString>)>,
 }
 
 #[cfg(test)]
 impl TestEnvVarGuard {
     pub fn new() -> Self {
-        let lock = TEST_ENV_GUARD
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let lock = ENV_GUARD_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+            if current == 0 {
+                Some(
+                    TEST_ENV_GUARD
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()),
+                )
+            } else {
+                None
+            }
+        });
         Self {
             _lock: lock,
             previous_vars: Vec::new(),
@@ -141,6 +163,12 @@ impl Drop for TestEnvVarGuard {
                 env::remove_var(&key);
             }
         }
+
+        drop(self._lock.take());
+        ENV_GUARD_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current.saturating_sub(1));
+        });
     }
 }
 

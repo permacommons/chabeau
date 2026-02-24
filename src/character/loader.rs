@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::character::{png_text, CharacterCard};
+use crate::core::config::data::Config;
 use base64::Engine;
 
 /// Errors that can occur when loading character cards.
@@ -53,16 +54,9 @@ impl fmt::Display for CardLoadError {
 impl std::error::Error for CardLoadError {}
 
 /// Get the cards directory path
-/// Returns the path to the cards directory in the config directory
-/// unless `CHABEAU_CARDS_DIR` is set to override it.
+/// Returns the path to the cards directory in the config directory.
 pub fn get_cards_dir() -> PathBuf {
-    if let Some(override_dir) = std::env::var_os("CHABEAU_CARDS_DIR") {
-        return PathBuf::from(override_dir);
-    }
-
-    let proj_dirs = directories::ProjectDirs::from("org", "permacommons", "chabeau")
-        .expect("Failed to determine config directory");
-    proj_dirs.config_dir().join("cards")
+    Config::get_config_base_dir().join("cards")
 }
 
 /// List all available character cards in the cards directory
@@ -243,7 +237,7 @@ mod tests {
         fn new() -> Self {
             let temp_dir = TempDir::new().expect("failed to create temp cards dir");
             let mut env_guard = TestEnvVarGuard::new();
-            env_guard.set_var("CHABEAU_CARDS_DIR", temp_dir.path().as_os_str());
+            env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
             Self {
                 _env_guard: env_guard,
@@ -251,8 +245,8 @@ mod tests {
             }
         }
 
-        fn path(&self) -> &std::path::Path {
-            self.temp_dir.path()
+        fn path(&self) -> PathBuf {
+            self.temp_dir.path().join("cards")
         }
     }
 
@@ -805,7 +799,7 @@ mod tests {
     #[test]
     fn test_get_cards_dir() {
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.remove_var("CHABEAU_CARDS_DIR");
+        env_guard.remove_var("CHABEAU_CONFIG_DIR");
 
         let cards_dir = get_cards_dir();
         assert!(cards_dir.to_string_lossy().contains("chabeau"));
@@ -817,10 +811,10 @@ mod tests {
         let mut env_guard = TestEnvVarGuard::new();
         let temp_dir = tempfile::tempdir().unwrap();
 
-        env_guard.set_var("CHABEAU_CARDS_DIR", temp_dir.path().as_os_str());
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
         let cards_dir = get_cards_dir();
-        assert_eq!(cards_dir, temp_dir.path());
+        assert_eq!(cards_dir, temp_dir.path().join("cards"));
     }
 
     #[test]
@@ -838,7 +832,9 @@ mod tests {
     #[test]
     fn test_list_available_cards_with_test_cards() {
         let env = CardsDirTestEnv::new();
-        let card_path = env.path().join("sample_card.json");
+        let cards_dir = env.path();
+        fs::create_dir_all(&cards_dir).expect("failed to create cards dir");
+        let card_path = cards_dir.join("sample_card.json");
 
         let card_json = serde_json::json!({
             "spec": "chara_card_v2",

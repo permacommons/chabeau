@@ -39,6 +39,14 @@ pub(super) fn handle_picker_action(
             handle_picker_movement(app, PickerMovement::Down);
             None
         }
+        PickerAction::PickerMovePageUp { page_lines } => {
+            handle_picker_movement(app, PickerMovement::PageUp { page_lines });
+            None
+        }
+        PickerAction::PickerMovePageDown { page_lines } => {
+            handle_picker_movement(app, PickerMovement::PageDown { page_lines });
+            None
+        }
         PickerAction::PickerMoveToStart => {
             handle_picker_movement(app, PickerMovement::Start);
             None
@@ -101,6 +109,8 @@ pub(super) fn handle_picker_action(
 enum PickerMovement {
     Up,
     Down,
+    PageUp { page_lines: usize },
+    PageDown { page_lines: usize },
     Start,
     End,
 }
@@ -116,6 +126,8 @@ fn handle_picker_movement(app: &mut App, movement: PickerMovement) {
             match movement {
                 PickerMovement::Up => state.move_up(),
                 PickerMovement::Down => state.move_down(),
+                PickerMovement::PageUp { page_lines } => state.move_page_up(page_lines),
+                PickerMovement::PageDown { page_lines } => state.move_page_down(page_lines),
                 PickerMovement::Start => state.move_to_start(),
                 PickerMovement::End => state.move_to_end(),
             }

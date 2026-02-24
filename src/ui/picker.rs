@@ -58,6 +58,19 @@ impl PickerState {
         }
     }
 
+    pub fn move_page_up(&mut self, page_lines: usize) {
+        if !self.items.is_empty() {
+            self.selected = self.selected.saturating_sub(page_lines);
+        }
+    }
+
+    pub fn move_page_down(&mut self, page_lines: usize) {
+        if !self.items.is_empty() {
+            let max_index = self.items.len() - 1;
+            self.selected = self.selected.saturating_add(page_lines).min(max_index);
+        }
+    }
+
     pub fn move_to_start(&mut self) {
         if !self.items.is_empty() {
             self.selected = 0;
@@ -86,5 +99,50 @@ impl PickerState {
         item.inspect_metadata
             .as_deref()
             .or(item.metadata.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PickerItem, PickerState, SortMode};
+
+    fn test_items(count: usize) -> Vec<PickerItem> {
+        (0..count)
+            .map(|idx| PickerItem {
+                id: format!("{idx}"),
+                label: format!("Item {idx}"),
+                metadata: None,
+                inspect_metadata: None,
+                sort_key: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_page_up_saturates_at_start() {
+        let mut state = PickerState {
+            title: "Pick".to_string(),
+            items: test_items(30),
+            selected: 4,
+            sort_mode: SortMode::Name,
+        };
+
+        state.move_page_up(10);
+
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn move_page_down_saturates_at_end() {
+        let mut state = PickerState {
+            title: "Pick".to_string(),
+            items: test_items(30),
+            selected: 24,
+            sort_mode: SortMode::Name,
+        };
+
+        state.move_page_down(10);
+
+        assert_eq!(state.selected, 29);
     }
 }

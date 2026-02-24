@@ -102,6 +102,12 @@ pub enum PickerAction {
     PickerEscape,
     PickerMoveUp,
     PickerMoveDown,
+    PickerMovePageUp {
+        page_lines: usize,
+    },
+    PickerMovePageDown {
+        page_lines: usize,
+    },
     PickerMoveToStart,
     PickerMoveToEnd,
     PickerCycleSortMode,

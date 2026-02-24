@@ -469,15 +469,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         if decoded { "Raw" } else { "Decode" },
                         toggle
                     ),
-                    "↑/↓=Scroll • PgUp/PgDn=Faster • Home/End=Jump".to_string(),
+                    "↑/↓=Scroll • PgUp/PgDn=Page • Home/End=Jump".to_string(),
                 )
             }
             _ if in_picker => (
-                "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Faster".to_string(),
+                "Esc=Back to picker • ↑/↓=Scroll • PgUp/PgDn=Page".to_string(),
                 "Home/End=Jump".to_string(),
             ),
             _ => (
-                "Esc=Close • ↑/↓=Scroll • PgUp/PgDn=Faster".to_string(),
+                "Esc=Close • ↑/↓=Scroll • PgUp/PgDn=Page".to_string(),
                 "Home/End=Jump".to_string(),
             ),
         };
@@ -852,12 +852,12 @@ fn generate_picker_help_text(app: &App) -> String {
     let inspect_help = " • Ctrl+O=Inspect";
     let first_line = if search_filter.is_empty() {
         format!(
-            "↑/↓=Navigate • F6=Sort • Type=Filter{}{}",
+            "↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter{}{}",
             inspect_help, del_help
         )
     } else {
         format!(
-            "↑/↓=Navigate • Backspace=Clear • F6=Sort{}{}",
+            "↑/↓=Navigate • PgUp/PgDn=Page • Backspace=Clear • F6=Sort{}{}",
             inspect_help, del_help
         )
     };
@@ -1186,7 +1186,8 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
+        assert!(help_text
+            .contains("↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -1205,7 +1206,9 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"));
+        assert!(help_text.contains(
+            "↑/↓=Navigate • PgUp/PgDn=Page • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"
+        ));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Type=Filter"));
     }
@@ -1227,7 +1230,7 @@ mod tests {
 
         assert!(help_text.contains("Del=Remove default"));
         assert!(help_text.contains(
-            "↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
+            "↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
         ));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
@@ -1249,7 +1252,7 @@ mod tests {
 
         assert!(help_text.contains("Del=Remove default"));
         assert!(help_text.contains(
-            "↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
+            "↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter • Ctrl+O=Inspect • Del=Remove default"
         ));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
     }
@@ -1268,7 +1271,8 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
+        assert!(help_text
+            .contains("↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -1317,7 +1321,8 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
+        assert!(help_text
+            .contains("↑/↓=Navigate • PgUp/PgDn=Page • F6=Sort • Type=Filter • Ctrl+O=Inspect"));
         assert!(help_text.contains("Enter=This session • Alt+Enter=As default"));
         assert!(!help_text.contains("Del=Remove default"));
     }
@@ -1336,7 +1341,9 @@ mod tests {
 
         let help_text = generate_picker_help_text(&app);
 
-        assert!(help_text.contains("↑/↓=Navigate • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"));
+        assert!(help_text.contains(
+            "↑/↓=Navigate • PgUp/PgDn=Page • Backspace=Clear • F6=Sort • Ctrl+O=Inspect"
+        ));
         assert!(!help_text.contains("Type=Filter"));
     }
 

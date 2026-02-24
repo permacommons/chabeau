@@ -92,7 +92,7 @@ mod integration_tests {
     fn test_import_set_default_start_session_workflow() {
         // This test simulates: import card → set as default → start session → verify auto-loaded
 
-        let (_temp_dir, cards_dir) = create_temp_cards_dir();
+        let (temp_dir, cards_dir) = create_temp_cards_dir();
 
         // Step 1: Import a card
         let character = create_test_character("DefaultChar", "Hello by default!");
@@ -116,7 +116,7 @@ mod integration_tests {
 
         // Step 3: Start session without CLI flag (should load default)
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", &cards_dir);
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
         let mut service = crate::character::CharacterService::new();
         let result = load_character_for_session(None, "openai", "gpt-4", &config, &mut service);
 
@@ -514,7 +514,7 @@ mod integration_tests {
 
         let result = {
             let mut env_guard = TestEnvVarGuard::new();
-            env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+            env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
             // Import without force should fail and keep existing file intact
             let result = import_card(&temp_card_path, false);

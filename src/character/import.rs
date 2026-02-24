@@ -40,9 +40,9 @@ impl std::error::Error for ImportError {}
 
 /// Import a character card file into the configured cards directory.
 ///
-/// The cards directory defaults to the config location returned by [`get_cards_dir`] and may
-/// be overridden by setting the `CHABEAU_CARDS_DIR` environment variable. Tests rely on that
-/// override so they can exercise the real import workflow without touching the user's files.
+/// The cards directory defaults to the config location returned by [`get_cards_dir`]. Tests
+/// override the config base directory so they can exercise the real import workflow without
+/// touching the user's files.
 /// The actual import work happens in `import_card_into`, which keeps filesystem details in
 /// one place while leaving this public API focused on its high-level behavior.
 ///
@@ -114,7 +114,9 @@ mod tests {
         F: FnOnce() -> T,
     {
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+        if let Some(base_dir) = cards_dir.parent() {
+            env_guard.set_var("CHABEAU_CONFIG_DIR", base_dir.as_os_str());
+        }
         let result = f();
         drop(env_guard);
         result

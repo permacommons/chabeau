@@ -1,5 +1,6 @@
 use crate::core::config::data::{path_display, Config};
 use directories::ProjectDirs;
+use std::env;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fs;
@@ -110,13 +111,15 @@ impl Config {
     }
 
     pub(crate) fn get_config_path() -> PathBuf {
-        let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
-            .expect("Failed to determine config directory");
-        proj_dirs.config_dir().join("config.toml")
+        Self::get_config_base_dir().join("config.toml")
     }
 
-    #[cfg(test)]
-    pub(crate) fn test_config_path() -> PathBuf {
-        Self::get_config_path()
+    pub(crate) fn get_config_base_dir() -> PathBuf {
+        if let Some(override_dir) = env::var_os("CHABEAU_CONFIG_DIR") {
+            return PathBuf::from(override_dir);
+        }
+        let proj_dirs = ProjectDirs::from("org", "permacommons", "chabeau")
+            .expect("Failed to determine config directory");
+        proj_dirs.config_dir().to_path_buf()
     }
 }

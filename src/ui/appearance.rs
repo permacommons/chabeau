@@ -32,7 +32,7 @@ fn detect_via_os_hint() -> Option<Appearance> {
         }
         // If the key is missing, defaults returns a non-zero exit code.
         // Treat that as Light (system default when no Dark value present).
-        return Some(Appearance::Light);
+        Some(Appearance::Light)
     }
 
     #[cfg(target_os = "windows")]

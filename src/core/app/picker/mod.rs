@@ -1486,7 +1486,7 @@ mod tests {
         });
 
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
         let cards = service
             .list_metadata()
@@ -1536,7 +1536,7 @@ mod tests {
         assert!(app.session.active_character.is_none());
 
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
         let cards = service
             .list_metadata()
@@ -1610,7 +1610,7 @@ mod tests {
         });
 
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", cards_dir.as_os_str());
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
         let cards = service
             .list_metadata()

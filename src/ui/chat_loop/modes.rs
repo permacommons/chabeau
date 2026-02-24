@@ -439,6 +439,10 @@ pub async fn handle_block_select_mode_event(
     .await
 }
 
+fn picker_page_lines(term_height: u16) -> usize {
+    term_height.saturating_sub(8).max(1) as usize
+}
+
 pub async fn handle_picker_key_event(
     app: &AppHandle,
     dispatcher: &AppActionDispatcher,
@@ -451,7 +455,7 @@ pub async fn handle_picker_key_event(
     let inspect_active = app.read(|app| app.inspect_state().is_some()).await;
 
     if inspect_active {
-        let page_lines = term_height.saturating_sub(8).max(1) as i32;
+        let page_lines = picker_page_lines(term_height) as i32;
         match key.code {
             event::KeyCode::Esc => actions.push(PickerAction::PickerEscape),
             event::KeyCode::Up => actions.push(PickerAction::PickerInspectScroll { lines: -1 }),
@@ -476,6 +480,12 @@ pub async fn handle_picker_key_event(
                 actions.push(PickerAction::PickerApplySelection { persistent: true });
             }
             event::KeyCode::Char('j') => actions.push(PickerAction::PickerMoveDown),
+            event::KeyCode::PageUp => actions.push(PickerAction::PickerMovePageUp {
+                page_lines: picker_page_lines(term_height),
+            }),
+            event::KeyCode::PageDown => actions.push(PickerAction::PickerMovePageDown {
+                page_lines: picker_page_lines(term_height),
+            }),
             event::KeyCode::Home => actions.push(PickerAction::PickerMoveToStart),
             event::KeyCode::End => actions.push(PickerAction::PickerMoveToEnd),
             event::KeyCode::F(6) => actions.push(PickerAction::PickerCycleSortMode),

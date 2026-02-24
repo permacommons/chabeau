@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        return run_with_stdin("pbcopy", &[], text);
+        run_with_stdin("pbcopy", &[], text)
     }
     #[cfg(target_os = "windows")]
     {

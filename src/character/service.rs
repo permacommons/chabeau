@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn resolves_updates_after_file_change() {
-        let (_dir, cards_dir) = create_temp_cards_dir();
+        let (temp_dir, cards_dir) = create_temp_cards_dir();
         let card = create_test_character("Alice", "Hello there!");
         fs::write(
             cards_dir.join("alice.json"),
@@ -337,7 +337,7 @@ mod tests {
         )
         .unwrap();
         let mut env_guard = TestEnvVarGuard::new();
-        env_guard.set_var("CHABEAU_CARDS_DIR", &cards_dir);
+        env_guard.set_var("CHABEAU_CONFIG_DIR", temp_dir.path().as_os_str());
 
         let mut service = CharacterService::new();
 

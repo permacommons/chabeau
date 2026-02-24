@@ -206,7 +206,8 @@ Config reads/writes are serialized through `ConfigOrchestrator`
 (`src/core/config/orchestrator.rs`).
 
 Test helpers in `src/utils/test_utils.rs` can redirect config persistence to a
-temporary XDG config root so test runs do not mutate user config.
+temporary config base directory via `CHABEAU_CONFIG_DIR` so test runs do not
+mutate user config.
 
 ## Test layout conventions
 Larger test suites are split into sibling files to keep runtime modules focused

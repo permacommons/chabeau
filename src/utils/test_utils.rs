@@ -13,7 +13,7 @@ use std::env;
 #[cfg(test)]
 use std::ffi::{OsStr, OsString};
 #[cfg(test)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex, MutexGuard};
 #[cfg(test)]
@@ -29,7 +29,6 @@ static TEST_ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 pub struct TestConfigEnv {
     _lock: MutexGuard<'static, ()>,
     temp_dir: TempDir,
-    previous_vars: Vec<(String, Option<OsString>)>,
 }
 
 #[cfg(test)]
@@ -37,40 +36,24 @@ impl TestConfigEnv {
     pub fn new() -> Self {
         let lock = TEST_CONFIG_ENV_GUARD
             .lock()
-            .expect("config env mutex poisoned");
+            .unwrap_or_else(|poison| poison.into_inner());
         let temp_dir = TempDir::new().expect("failed to create temp dir for config");
-        let mut guard = Self {
+        let guard = Self {
             _lock: lock,
             temp_dir,
-            previous_vars: Vec::new(),
         };
 
-        guard.capture_and_set("XDG_CONFIG_HOME");
-
-        #[cfg(target_os = "windows")]
-        {
-            guard.capture_and_set("APPDATA");
-            guard.capture_and_set("LOCALAPPDATA");
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            guard.capture_and_set("HOME");
-        }
-
-        Config::set_test_config_path(Config::test_config_path());
+        Config::set_test_config_path(guard.config_path());
 
         guard
     }
 
-    fn capture_and_set(&mut self, key: &str) {
-        let previous = env::var_os(key);
-        self.previous_vars.push((key.to_string(), previous));
-        env::set_var(key, self.temp_dir.path());
-    }
-
     pub fn config_root(&self) -> &Path {
         self.temp_dir.path()
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.temp_dir.path().join("chabeau").join("config.toml")
     }
 }
 
@@ -78,13 +61,6 @@ impl TestConfigEnv {
 impl Drop for TestConfigEnv {
     fn drop(&mut self) {
         Config::clear_test_config_override();
-        for (key, value) in self.previous_vars.drain(..).rev() {
-            if let Some(val) = value {
-                env::set_var(&key, val);
-            } else {
-                env::remove_var(&key);
-            }
-        }
     }
 }
 

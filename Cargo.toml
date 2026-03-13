@@ -15,6 +15,7 @@ authors = ["Permacommons <info@permacommons.org>"]
 [features]
 default = []
 bench = []
+native-tls = ["reqwest/native-tls"]
 
 [dependencies]
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process"] }

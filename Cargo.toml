@@ -43,6 +43,7 @@ crc32fast = "1.4"
 rust-mcp-schema = { version = "0.9.4", features = ["schema_utils", "2025_11_25"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+getrandom = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

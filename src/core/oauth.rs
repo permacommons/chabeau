@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::io::Read;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -276,9 +275,9 @@ fn open_in_browser_impl(url: &str) -> Result<(), Box<dyn Error>> {
     Err(format!("no browser launcher configured for URL: {url}").into())
 }
 
-pub fn random_urlsafe(bytes_len: usize) -> String {
-    let bytes = best_effort_random_bytes(bytes_len);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+pub fn random_urlsafe(bytes_len: usize) -> Result<String, Box<dyn Error>> {
+    random_urlsafe_with(bytes_len, fill_random_bytes)
+        .map_err(|error| format!("failed to generate cryptographic random bytes: {error}").into())
 }
 
 pub fn pkce_s256_challenge(verifier: &str) -> String {
@@ -286,61 +285,17 @@ pub fn pkce_s256_challenge(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
-fn best_effort_random_bytes(len: usize) -> Vec<u8> {
-    let mut out = vec![0_u8; len];
-
-    #[cfg(unix)]
-    {
-        if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-            if file.read_exact(&mut out).is_ok() {
-                return out;
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if windows_fill_random(&mut out) {
-            return out;
-        }
-    }
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let mut x = nanos ^ ((std::process::id() as u64) << 32) ^ (len as u64);
-    for byte in &mut out {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        *byte = (x & 0xFF) as u8;
-    }
-    out
+fn random_urlsafe_with<E, F>(bytes_len: usize, fill_random: F) -> Result<String, E>
+where
+    F: FnOnce(&mut [u8]) -> Result<(), E>,
+{
+    let mut bytes = vec![0_u8; bytes_len];
+    fill_random(&mut bytes)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
-#[cfg(target_os = "windows")]
-fn windows_fill_random(buffer: &mut [u8]) -> bool {
-    #[link(name = "bcrypt")]
-    unsafe extern "system" {
-        fn BCryptGenRandom(
-            h_algorithm: usize,
-            pb_buffer: *mut u8,
-            cb_buffer: u32,
-            dw_flags: u32,
-        ) -> i32;
-    }
-
-    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
-    let status = unsafe {
-        BCryptGenRandom(
-            0,
-            buffer.as_mut_ptr(),
-            buffer.len() as u32,
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        )
-    };
-    status == 0
+fn fill_random_bytes(buffer: &mut [u8]) -> Result<(), getrandom::Error> {
+    getrandom::fill(buffer)
 }
 
 fn sha256_digest(input: &[u8]) -> [u8; 32] {
@@ -624,11 +579,20 @@ mod tests {
 
     #[test]
     fn test_random_urlsafe_is_urlsafe() {
-        let token = random_urlsafe(32);
+        let token = random_urlsafe(32).expect("random token generation should work");
         assert!(token
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
         assert!(!token.contains('='));
+    }
+
+    #[test]
+    fn test_random_urlsafe_propagates_rng_errors() {
+        let token = random_urlsafe_with::<&'static str, _>(32, |_| Err("rng unavailable"));
+        assert_eq!(
+            token.expect_err("error should propagate"),
+            "rng unavailable"
+        );
     }
 
     #[test]

@@ -1564,8 +1564,8 @@ async fn add_oauth_grant_for_server(
             }
         });
 
-        let state = random_urlsafe(24);
-        let code_verifier = random_urlsafe(64);
+        let state = random_urlsafe(24)?;
+        let code_verifier = random_urlsafe(64)?;
         let code_challenge = pkce_s256_challenge(&code_verifier);
         let authorization_url = build_authorization_url(AuthorizationUrlParams {
             authorization_endpoint,

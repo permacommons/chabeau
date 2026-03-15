@@ -32,7 +32,8 @@ use crate::core::mcp_auth::{McpOAuthGrant, McpTokenStore};
 use crate::core::oauth::{
     apply_oauth_token_response, build_authorization_url, current_unix_epoch_s, exchange_oauth_code,
     open_in_browser, pkce_s256_challenge, probe_oauth_support, random_urlsafe,
-    register_oauth_client, wait_for_oauth_callback, AuthorizationUrlParams, OAuthMetadata,
+    register_oauth_client, validate_oauth_endpoint_url, wait_for_oauth_callback,
+    AuthorizationUrlParams, OAuthMetadata,
 };
 use crate::core::persona::PersonaManager;
 use crate::ui::chat_loop::run_chat;
@@ -1510,10 +1511,20 @@ async fn add_oauth_grant_for_server(
     };
 
     if let Some(authorization_endpoint) = metadata.authorization_endpoint.as_deref() {
+        validate_oauth_endpoint_url("authorization_endpoint", authorization_endpoint)?;
         let token_endpoint = metadata
             .token_endpoint
             .as_deref()
             .ok_or("OAuth metadata is missing token_endpoint.")?;
+        validate_oauth_endpoint_url("token_endpoint", token_endpoint)?;
+
+        let mut revocation_endpoint = metadata.revocation_endpoint.clone();
+        sanitize_optional_oauth_endpoint(
+            "revocation_endpoint",
+            &mut revocation_endpoint,
+            "Skipping token revocation metadata for this grant.",
+        );
+
         let mut client_id = if advanced {
             let client_id_input = prompt_optional("OAuth client id (optional): ")?;
             if client_id_input.is_empty() {
@@ -1528,12 +1539,19 @@ async fn add_oauth_grant_for_server(
             None
         };
 
+        let mut registration_endpoint = metadata.registration_endpoint.clone();
+        sanitize_optional_oauth_endpoint(
+            "registration_endpoint",
+            &mut registration_endpoint,
+            "Ignoring registration endpoint and continuing without automatic client registration.",
+        );
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
 
         if client_id.is_none() {
-            if let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() {
+            if let Some(registration_endpoint) = registration_endpoint.as_deref() {
                 match register_oauth_client(registration_endpoint, &redirect_uri).await {
                     Ok(registered_id) => {
                         println!("Registered OAuth client automatically.");
@@ -1610,7 +1628,7 @@ async fn add_oauth_grant_for_server(
             redirect_uri: Some(redirect_uri),
             authorization_endpoint: metadata.authorization_endpoint.clone(),
             token_endpoint: metadata.token_endpoint.clone(),
-            revocation_endpoint: metadata.revocation_endpoint.clone(),
+            revocation_endpoint,
             issuer: metadata.issuer.clone(),
         };
         let grant = apply_oauth_token_response(&grant_seed, token, now_epoch_s);
@@ -1634,24 +1652,28 @@ async fn remove_oauth_grant_for_server(server: &McpServerConfig) -> Result<(), B
     };
 
     if let Some(revocation_endpoint) = grant.revocation_endpoint.as_deref() {
-        let client = reqwest::Client::new();
-        match client
-            .post(revocation_endpoint)
-            .form(&[("token", grant.access_token.as_str())])
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                println!("OAuth token revoked at server endpoint.");
-            }
-            Ok(response) => {
-                eprintln!(
-                    "⚠️ OAuth revocation returned HTTP {}. Removing local grant anyway.",
-                    response.status()
-                );
-            }
-            Err(err) => {
-                eprintln!("⚠️ OAuth revocation failed ({err}). Removing local grant anyway.");
+        if let Err(err) = validate_oauth_endpoint_url("revocation_endpoint", revocation_endpoint) {
+            eprintln!("⚠️ {err} Removing local grant only.");
+        } else {
+            let client = reqwest::Client::new();
+            match client
+                .post(revocation_endpoint)
+                .form(&[("token", grant.access_token.as_str())])
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    println!("OAuth token revoked at server endpoint.");
+                }
+                Ok(response) => {
+                    eprintln!(
+                        "⚠️ OAuth revocation returned HTTP {}. Removing local grant anyway.",
+                        response.status()
+                    );
+                }
+                Err(err) => {
+                    eprintln!("⚠️ OAuth revocation failed ({err}). Removing local grant anyway.");
+                }
             }
         }
     } else {
@@ -1928,6 +1950,19 @@ fn format_key_value_pairs(pairs: &std::collections::HashMap<String, String>) -> 
         .collect();
     formatted.sort();
     formatted.join(",")
+}
+
+fn sanitize_optional_oauth_endpoint(
+    endpoint_name: &str,
+    endpoint: &mut Option<String>,
+    invalid_endpoint_message: &str,
+) {
+    if let Some(endpoint_value) = endpoint.as_deref() {
+        if let Err(err) = validate_oauth_endpoint_url(endpoint_name, endpoint_value) {
+            eprintln!("⚠️ {err} {invalid_endpoint_message}");
+            *endpoint = None;
+        }
+    }
 }
 
 fn resolve_mcp_server<'a>(

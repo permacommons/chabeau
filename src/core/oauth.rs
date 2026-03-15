@@ -100,6 +100,58 @@ pub fn apply_oauth_token_response(
     }
 }
 
+fn is_local_oauth_host(host: &str) -> bool {
+    let normalized = host.trim_matches(['[', ']']);
+    if normalized.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    normalized
+        .parse::<std::net::IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false)
+}
+
+pub fn validate_oauth_endpoint_url(endpoint_name: &str, url: &str) -> Result<(), Box<dyn Error>> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|err| format!("Invalid {endpoint_name} URL '{url}': {err}"))?;
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" => {
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| format!("Invalid {endpoint_name} URL '{url}': missing host"))?;
+            if is_local_oauth_host(host) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Invalid {endpoint_name} URL '{url}': HTTP is only allowed for loopback hosts (localhost, 127.0.0.0/8, [::1])."
+                )
+                .into())
+            }
+        }
+        scheme => Err(format!(
+            "Invalid {endpoint_name} URL '{url}': unsupported scheme '{scheme}'."
+        )
+        .into()),
+    }
+}
+
+pub fn validate_oauth_metadata_endpoints(metadata: &OAuthMetadata) -> Result<(), Box<dyn Error>> {
+    if let Some(authorization_endpoint) = metadata.authorization_endpoint.as_deref() {
+        validate_oauth_endpoint_url("authorization_endpoint", authorization_endpoint)?;
+    }
+    if let Some(token_endpoint) = metadata.token_endpoint.as_deref() {
+        validate_oauth_endpoint_url("token_endpoint", token_endpoint)?;
+    }
+    if let Some(revocation_endpoint) = metadata.revocation_endpoint.as_deref() {
+        validate_oauth_endpoint_url("revocation_endpoint", revocation_endpoint)?;
+    }
+    if let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() {
+        validate_oauth_endpoint_url("registration_endpoint", registration_endpoint)?;
+    }
+    Ok(())
+}
+
 async fn refresh_oauth_access_token(
     token_endpoint: &str,
     refresh_token: &str,
@@ -156,6 +208,7 @@ pub async fn refresh_oauth_grant_if_needed(
         .token_endpoint
         .as_deref()
         .ok_or("OAuth grant is missing token endpoint; re-auth required.")?;
+    validate_oauth_endpoint_url("token_endpoint", token_endpoint)?;
 
     let token =
         refresh_oauth_access_token(token_endpoint, &refresh_token, grant.client_id.as_deref())
@@ -718,5 +771,98 @@ mod tests {
         assert_eq!(token.access_token, "new-token");
         assert_eq!(token.refresh_token.as_deref(), Some("new-refresh"));
         assert_eq!(token.expires_in, Some(120));
+    }
+
+    #[test]
+    fn test_validate_oauth_endpoint_url_accepts_https() {
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "https://auth.example.com/authorize"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn test_validate_oauth_endpoint_url_rejects_non_https_non_loopback_http() {
+        let err = validate_oauth_endpoint_url("token_endpoint", "http://auth.example.com/token")
+            .expect_err("non-loopback HTTP endpoint should be rejected");
+        assert!(err
+            .to_string()
+            .contains("token_endpoint URL 'http://auth.example.com/token'"));
+    }
+
+    #[test]
+    fn test_validate_oauth_endpoint_url_accepts_loopback_http_hosts() {
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "http://127.0.0.1:8080/authorize"
+        )
+        .is_ok());
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "http://127.1.2.3:8080/authorize"
+        )
+        .is_ok());
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "http://localhost:8080/authorize"
+        )
+        .is_ok());
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "http://[::1]:8080/authorize"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn test_validate_oauth_endpoint_url_rejects_malformed_url() {
+        let err = validate_oauth_endpoint_url("token_endpoint", "not a url")
+            .expect_err("malformed URL should be rejected");
+        assert!(err
+            .to_string()
+            .contains("Invalid token_endpoint URL 'not a url'"));
+    }
+
+    #[test]
+    fn test_validate_oauth_endpoint_url_accepts_case_insensitive_localhost() {
+        assert!(validate_oauth_endpoint_url(
+            "authorization_endpoint",
+            "http://LOCALHOST:8080/authorize"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn test_validate_oauth_metadata_endpoints_accepts_loopback_http_optional_endpoints() {
+        let metadata = OAuthMetadata {
+            authorization_endpoint: Some("https://auth.example.com/authorize".to_string()),
+            token_endpoint: Some("https://auth.example.com/token".to_string()),
+            revocation_endpoint: Some("http://127.0.0.1:8080/revoke".to_string()),
+            issuer: None,
+            registration_endpoint: Some("http://localhost:7777/register".to_string()),
+            scopes_supported: None,
+            authorization_servers: None,
+        };
+
+        validate_oauth_metadata_endpoints(&metadata)
+            .expect("loopback HTTP optional endpoints should be accepted");
+    }
+
+    #[test]
+    fn test_validate_oauth_metadata_endpoints_reports_offending_endpoint() {
+        let metadata = OAuthMetadata {
+            authorization_endpoint: Some("https://auth.example.com/authorize".to_string()),
+            token_endpoint: Some("https://auth.example.com/token".to_string()),
+            revocation_endpoint: Some("ftp://auth.example.com/revoke".to_string()),
+            issuer: None,
+            registration_endpoint: Some("https://auth.example.com/register".to_string()),
+            scopes_supported: None,
+            authorization_servers: None,
+        };
+
+        let err = validate_oauth_metadata_endpoints(&metadata)
+            .expect_err("unsupported revocation endpoint scheme should fail");
+        assert!(err.to_string().contains("revocation_endpoint URL"));
     }
 }

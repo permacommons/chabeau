@@ -258,6 +258,48 @@ fn test_parse_key_value_pairs_accepts_headers() {
 }
 
 #[test]
+fn test_sanitize_optional_oauth_endpoint_drops_invalid_registration_endpoint() {
+    let mut registration_endpoint = Some("http://auth.example.com/register".to_string());
+
+    sanitize_optional_oauth_endpoint(
+        "registration_endpoint",
+        &mut registration_endpoint,
+        "Ignoring registration endpoint and continuing without automatic client registration.",
+    );
+
+    assert!(registration_endpoint.is_none());
+}
+
+#[test]
+fn test_sanitize_optional_oauth_endpoint_keeps_loopback_http_registration_endpoint() {
+    let mut registration_endpoint = Some("http://127.0.0.1:8080/register".to_string());
+
+    sanitize_optional_oauth_endpoint(
+        "registration_endpoint",
+        &mut registration_endpoint,
+        "Ignoring registration endpoint and continuing without automatic client registration.",
+    );
+
+    assert_eq!(
+        registration_endpoint.as_deref(),
+        Some("http://127.0.0.1:8080/register")
+    );
+}
+
+#[test]
+fn test_sanitize_optional_oauth_endpoint_keeps_absent_endpoint() {
+    let mut revocation_endpoint = None;
+
+    sanitize_optional_oauth_endpoint(
+        "revocation_endpoint",
+        &mut revocation_endpoint,
+        "Skipping token revocation metadata for this grant.",
+    );
+
+    assert!(revocation_endpoint.is_none());
+}
+
+#[test]
 fn test_parse_key_value_pairs_rejects_invalid_entry() {
     let err = parse_key_value_pairs("A", "header entry", "Header name")
         .expect_err("invalid pair should fail");

@@ -32,7 +32,11 @@ use crate::core::mcp_sampling::{serialize_sampling_params, summarize_sampling_re
 use crate::core::message::{AppMessageKind, Message, TranscriptRole};
 use crate::mcp::permissions::ToolPermissionDecision;
 use crate::mcp::{MCP_INSTANT_RECALL_TOOL, MCP_SESSION_MEMORY_SERVER_ID};
+use jsonschema::error::{
+    TypeKind, ValidationError as JsonSchemaValidationError, ValidationErrorKind,
+};
 use rust_mcp_schema::{ContentBlock, PromptMessage, Role, RpcError};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use tracing::debug;
 
@@ -244,6 +248,7 @@ fn prepare_tool_flow(
                 tool_call_id: Some(tool_call_id.clone()),
                 raw_arguments: Some(raw_arguments.clone()),
                 error: "Missing tool name.".to_string(),
+                failure_kind: Some(ToolFailureKind::ToolCallFailure),
             });
             continue;
         }
@@ -259,6 +264,7 @@ fn prepare_tool_flow(
                                 tool_call_id: Some(tool_call_id.clone()),
                                 raw_arguments: Some(raw_arguments.clone()),
                                 error: format!("MCP server is disabled: {server_id}."),
+                                failure_kind: Some(ToolFailureKind::ToolCallFailure),
                             });
                             continue;
                         }
@@ -271,6 +277,7 @@ fn prepare_tool_flow(
                                 error: format!(
                                     "MCP server does not support resources: {server_id}."
                                 ),
+                                failure_kind: Some(ToolFailureKind::ToolCallFailure),
                             });
                             continue;
                         }
@@ -282,6 +289,7 @@ fn prepare_tool_flow(
                                 tool_call_id: Some(tool_call_id.clone()),
                                 raw_arguments: Some(raw_arguments.clone()),
                                 error: format!("Unknown MCP server id: {server_id}."),
+                                failure_kind: Some(ToolFailureKind::ToolCallFailure),
                             });
                             continue;
                         }
@@ -303,6 +311,7 @@ fn prepare_tool_flow(
                         tool_call_id: Some(tool_call_id.clone()),
                         raw_arguments: Some(raw_arguments.clone()),
                         error: err,
+                        failure_kind: Some(ToolFailureKind::ToolCallFailure),
                     });
                     continue;
                 }
@@ -319,6 +328,7 @@ fn prepare_tool_flow(
                                 tool_call_id: Some(tool_call_id.clone()),
                                 raw_arguments: Some(raw_arguments.clone()),
                                 error: format!("MCP server is disabled: {server_id}."),
+                                failure_kind: Some(ToolFailureKind::ToolCallFailure),
                             });
                             continue;
                         }
@@ -329,6 +339,7 @@ fn prepare_tool_flow(
                                 tool_call_id: Some(tool_call_id.clone()),
                                 raw_arguments: Some(raw_arguments.clone()),
                                 error: format!("Unknown MCP server id: {server_id}."),
+                                failure_kind: Some(ToolFailureKind::ToolCallFailure),
                             });
                             continue;
                         }
@@ -349,6 +360,7 @@ fn prepare_tool_flow(
                         tool_call_id: Some(tool_call_id.clone()),
                         raw_arguments: Some(raw_arguments.clone()),
                         error: err,
+                        failure_kind: Some(ToolFailureKind::ToolCallFailure),
                     });
                     continue;
                 }
@@ -372,6 +384,7 @@ fn prepare_tool_flow(
                         tool_call_id: Some(tool_call_id.clone()),
                         raw_arguments: Some(raw_arguments.clone()),
                         error: err,
+                        failure_kind: Some(ToolFailureKind::ToolCallFailure),
                     });
                     continue;
                 }
@@ -386,12 +399,45 @@ fn prepare_tool_flow(
                         tool_call_id: Some(tool_call_id.clone()),
                         raw_arguments: Some(raw_arguments.clone()),
                         error: err,
+                        failure_kind: Some(ToolFailureKind::ToolCallFailure),
                     });
                     continue;
                 }
             };
 
-            match parse_tool_arguments(&raw_arguments) {
+            let parsed_arguments = match parse_tool_arguments_value(&raw_arguments) {
+                Ok(arguments) => arguments,
+                Err(err) => {
+                    pending_errors.push(tool_calls::PendingToolError {
+                        tool_name: tool_name.clone(),
+                        server_id: Some(server_id),
+                        tool_call_id: Some(tool_call_id.clone()),
+                        raw_arguments: Some(raw_arguments.clone()),
+                        error: format!("Invalid tool arguments: {err}"),
+                        failure_kind: Some(ToolFailureKind::ToolCallFailure),
+                    });
+                    continue;
+                }
+            };
+
+            let validation_value = parsed_arguments
+                .clone()
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            if let Err(payload) =
+                validate_mcp_tool_arguments(app, &server_id, &tool_name, &validation_value)
+            {
+                pending_errors.push(tool_calls::PendingToolError {
+                    tool_name: tool_name.clone(),
+                    server_id: Some(server_id),
+                    tool_call_id: Some(tool_call_id.clone()),
+                    raw_arguments: Some(raw_arguments.clone()),
+                    error: payload,
+                    failure_kind: Some(ToolFailureKind::ToolError),
+                });
+                continue;
+            }
+
+            match value_to_argument_map(parsed_arguments) {
                 Ok(arguments) => {
                     pending_queue.push_back(ToolCallRequest {
                         server_id,
@@ -405,10 +451,11 @@ fn prepare_tool_flow(
                 Err(err) => {
                     pending_errors.push(tool_calls::PendingToolError {
                         tool_name: tool_name.clone(),
-                        server_id: None,
+                        server_id: Some(server_id),
                         tool_call_id: Some(tool_call_id.clone()),
                         raw_arguments: Some(raw_arguments.clone()),
                         error: format!("Invalid tool arguments: {err}"),
+                        failure_kind: Some(ToolFailureKind::ToolError),
                     });
                     continue;
                 }
@@ -431,7 +478,7 @@ fn prepare_tool_flow(
             error.tool_call_id.clone(),
             error.raw_arguments.clone(),
         );
-        meta.failure_kind = Some(ToolFailureKind::ToolCallFailure);
+        meta.failure_kind = error.failure_kind;
         record_tool_result(
             app,
             &error.tool_name,
@@ -706,16 +753,418 @@ fn resolve_tool_server(app: &App, tool_name: &str) -> Result<(String, String), S
     }
 }
 
-fn parse_tool_arguments(raw: &str) -> Result<Option<Map<String, Value>>, String> {
+fn find_mcp_tool<'a>(
+    app: &'a App,
+    server_id: &str,
+    tool_name: &str,
+) -> Option<&'a rust_mcp_schema::Tool> {
+    let server = app.mcp.server(server_id)?;
+    let list = server.cached_tools.as_ref()?;
+    let allowed_tools = server.allowed_tools();
+    list.tools.iter().find(|tool| {
+        tool.name.eq_ignore_ascii_case(tool_name)
+            && allowed_tools.is_none_or(|allowed| {
+                allowed
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&tool.name))
+            })
+    })
+}
+
+fn find_mcp_tool_validator<'a>(
+    app: &'a App,
+    server_id: &str,
+    tool_name: &str,
+) -> Option<&'a crate::mcp::client::CachedToolSchemaValidator> {
+    app.mcp.server(server_id)?.tool_validator(tool_name)
+}
+
+fn parse_tool_arguments_value(raw: &str) -> Result<Option<Value>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
 
-    let value: Value = serde_json::from_str(trimmed).map_err(|err| err.to_string())?;
+    serde_json::from_str(trimmed)
+        .map(Some)
+        .map_err(|err| err.to_string())
+}
+
+fn parse_tool_arguments(raw: &str) -> Result<Option<Map<String, Value>>, String> {
+    parse_tool_arguments_value(raw).and_then(value_to_argument_map)
+}
+
+fn value_to_argument_map(value: Option<Value>) -> Result<Option<Map<String, Value>>, String> {
     match value {
-        Value::Object(map) => Ok(Some(map)),
-        _ => Err("Tool arguments must be a JSON object.".to_string()),
+        None => Ok(None),
+        Some(Value::Object(map)) => Ok(Some(map)),
+        Some(_) => Err("Tool arguments must be a JSON object.".to_string()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ToolValidationErrorPayload {
+    #[serde(rename = "isError")]
+    is_error: bool,
+    error: ToolValidationErrorDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolValidationErrorDetail {
+    kind: &'static str,
+    tool: String,
+    server_id: String,
+    message: &'static str,
+    violations: Vec<ToolValidationViolation>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolValidationViolation {
+    path: String,
+    expected: String,
+    actual: String,
+    issue: String,
+    hint: String,
+}
+
+fn validate_mcp_tool_arguments(
+    app: &App,
+    server_id: &str,
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<(), String> {
+    let Some(tool) = find_mcp_tool(app, server_id, tool_name) else {
+        return Ok(());
+    };
+    let Some(validation_state) = find_mcp_tool_validator(app, server_id, &tool.name) else {
+        return Ok(());
+    };
+    let Some(validator) = validation_state.validator.as_ref() else {
+        return Ok(());
+    };
+
+    let violations: Vec<_> = validator
+        .iter_errors(arguments)
+        .flat_map(validation_error_to_violations)
+        .collect();
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    let payload = serde_json::to_string(&ToolValidationErrorPayload {
+        is_error: true,
+        error: ToolValidationErrorDetail {
+            kind: "invalid_arguments",
+            tool: tool.name.clone(),
+            server_id: server_id.to_string(),
+            message: "Tool arguments did not match the expected schema.",
+            violations,
+        },
+    })
+    .map_err(|err| err.to_string())?;
+    Err(payload)
+}
+
+fn validation_error_to_violations(
+    error: JsonSchemaValidationError<'_>,
+) -> Vec<ToolValidationViolation> {
+    let instance = error.instance();
+    let kind = error.kind();
+    let base_path = format_instance_path(error.instance_path());
+    let actual_type = json_type_name(instance).to_string();
+    let issue = error.to_string();
+
+    match kind {
+        ValidationErrorKind::Required { property } => {
+            let name = property.as_str().unwrap_or("value");
+            vec![build_violation(
+                &join_json_path(&base_path, name),
+                "present",
+                "missing",
+                issue,
+                format!("Include `{name}` in the tool arguments object."),
+            )]
+        }
+        ValidationErrorKind::AdditionalProperties { unexpected }
+        | ValidationErrorKind::UnevaluatedProperties { unexpected } => unexpected
+            .iter()
+            .map(|name| {
+                let actual = instance
+                    .as_object()
+                    .and_then(|object: &Map<String, Value>| object.get(name))
+                    .map(json_type_name)
+                    .unwrap_or("missing");
+                build_violation(
+                    &join_json_path(&base_path, name),
+                    "no additional properties",
+                    actual,
+                    format!("Unexpected argument `{name}`."),
+                    format!("Remove `{name}` or add it to the tool schema."),
+                )
+            })
+            .collect(),
+        ValidationErrorKind::Type { kind } => {
+            let expected = type_kind_label(kind);
+            vec![build_violation(
+                &base_path,
+                &expected,
+                &actual_type,
+                type_mismatch_issue(instance, &expected),
+                type_mismatch_hint(&base_path, instance, &expected),
+            )]
+        }
+        _ => vec![build_violation(
+            &base_path,
+            &expected_label_for_error(kind),
+            &actual_label_for_error(instance, &actual_type, kind),
+            issue,
+            hint_for_error(&base_path, instance, kind),
+        )],
+    }
+}
+
+fn expected_label_for_error(kind: &ValidationErrorKind) -> String {
+    match kind {
+        ValidationErrorKind::AdditionalItems { .. }
+        | ValidationErrorKind::UnevaluatedItems { .. } => "no additional items".to_string(),
+        ValidationErrorKind::AnyOf { .. } => "anyOf".to_string(),
+        ValidationErrorKind::Constant { expected_value } => json_value_label(expected_value),
+        ValidationErrorKind::Contains => "contains".to_string(),
+        ValidationErrorKind::Enum { .. } => "enum".to_string(),
+        ValidationErrorKind::ExclusiveMaximum { limit } => format!("exclusiveMaximum {limit}"),
+        ValidationErrorKind::ExclusiveMinimum { limit } => format!("exclusiveMinimum {limit}"),
+        ValidationErrorKind::FalseSchema => "true".to_string(),
+        ValidationErrorKind::Format { format } => format!("format {format}"),
+        ValidationErrorKind::MaxItems { limit } => format!("maxItems {limit}"),
+        ValidationErrorKind::Maximum { limit } => format!("maximum {limit}"),
+        ValidationErrorKind::MaxLength { limit } => format!("maxLength {limit}"),
+        ValidationErrorKind::MaxProperties { limit } => format!("maxProperties {limit}"),
+        ValidationErrorKind::MinItems { limit } => format!("minItems {limit}"),
+        ValidationErrorKind::Minimum { limit } => format!("minimum {limit}"),
+        ValidationErrorKind::MinLength { limit } => format!("minLength {limit}"),
+        ValidationErrorKind::MinProperties { limit } => format!("minProperties {limit}"),
+        ValidationErrorKind::MultipleOf { multiple_of } => format!("multipleOf {multiple_of}"),
+        ValidationErrorKind::Not { .. } => "not".to_string(),
+        ValidationErrorKind::OneOfMultipleValid { .. }
+        | ValidationErrorKind::OneOfNotValid { .. } => "oneOf".to_string(),
+        ValidationErrorKind::Pattern { pattern } => format!("pattern /{pattern}/"),
+        ValidationErrorKind::PropertyNames { .. } => "propertyNames".to_string(),
+        ValidationErrorKind::UniqueItems => "uniqueItems".to_string(),
+        ValidationErrorKind::Type { kind } => type_kind_label(kind),
+        ValidationErrorKind::Custom { .. } => "custom".to_string(),
+        ValidationErrorKind::BacktrackLimitExceeded { .. }
+        | ValidationErrorKind::ContentEncoding { .. }
+        | ValidationErrorKind::ContentMediaType { .. }
+        | ValidationErrorKind::FromUtf8 { .. }
+        | ValidationErrorKind::Referencing(_) => "schema".to_string(),
+        ValidationErrorKind::Required { .. }
+        | ValidationErrorKind::AdditionalProperties { .. }
+        | ValidationErrorKind::UnevaluatedProperties { .. } => unreachable!(),
+    }
+}
+
+fn actual_label_for_error(
+    instance: &Value,
+    actual_type: &str,
+    kind: &ValidationErrorKind,
+) -> String {
+    match kind {
+        ValidationErrorKind::MaxLength { .. } | ValidationErrorKind::MinLength { .. } => instance
+            .as_str()
+            .map(|text| format!("length {}", text.chars().count()))
+            .unwrap_or_else(|| actual_type.to_string()),
+        ValidationErrorKind::MaxItems { .. } | ValidationErrorKind::MinItems { .. } => instance
+            .as_array()
+            .map(|items| format!("{} items", items.len()))
+            .unwrap_or_else(|| actual_type.to_string()),
+        ValidationErrorKind::MaxProperties { .. } | ValidationErrorKind::MinProperties { .. } => {
+            instance
+                .as_object()
+                .map(|object| format!("{} properties", object.len()))
+                .unwrap_or_else(|| actual_type.to_string())
+        }
+        ValidationErrorKind::UniqueItems => "duplicate items".to_string(),
+        _ => actual_type.to_string(),
+    }
+}
+
+fn hint_for_error(path: &str, value: &Value, kind: &ValidationErrorKind) -> String {
+    match kind {
+        ValidationErrorKind::AdditionalItems { .. }
+        | ValidationErrorKind::UnevaluatedItems { .. } => {
+            "Remove the extra item or update the tool schema.".to_string()
+        }
+        ValidationErrorKind::AnyOf { .. } => {
+            "Update the value to match one of the schema alternatives.".to_string()
+        }
+        ValidationErrorKind::Constant { .. } => {
+            "Use the exact value required by the tool schema.".to_string()
+        }
+        ValidationErrorKind::Contains => {
+            "Include at least one item that matches the schema in `contains`.".to_string()
+        }
+        ValidationErrorKind::Enum { .. } => {
+            "Choose one of the enum values declared in the tool schema.".to_string()
+        }
+        ValidationErrorKind::ExclusiveMaximum { .. } | ValidationErrorKind::Maximum { .. } => {
+            "Reduce the value to satisfy the maximum.".to_string()
+        }
+        ValidationErrorKind::ExclusiveMinimum { .. } | ValidationErrorKind::Minimum { .. } => {
+            "Increase the value to satisfy the minimum.".to_string()
+        }
+        ValidationErrorKind::Format { format } => {
+            format!("Provide a value that satisfies the `{format}` format.")
+        }
+        ValidationErrorKind::MaxItems { .. } => "Remove items from the array.".to_string(),
+        ValidationErrorKind::MaxLength { .. } => "Shorten the string value.".to_string(),
+        ValidationErrorKind::MaxProperties { .. } => {
+            "Remove properties from the object.".to_string()
+        }
+        ValidationErrorKind::MinItems { .. } => "Add more items to the array.".to_string(),
+        ValidationErrorKind::MinLength { .. } => "Provide a longer string value.".to_string(),
+        ValidationErrorKind::MinProperties { .. } => {
+            "Add more properties to the object.".to_string()
+        }
+        ValidationErrorKind::MultipleOf { .. } => {
+            "Adjust the value to match the required step size.".to_string()
+        }
+        ValidationErrorKind::OneOfMultipleValid { .. }
+        | ValidationErrorKind::OneOfNotValid { .. } => {
+            "Update the value to satisfy exactly one schema alternative.".to_string()
+        }
+        ValidationErrorKind::Pattern { .. } => {
+            "Update the value to satisfy the pattern declared in the tool schema.".to_string()
+        }
+        ValidationErrorKind::PropertyNames { .. } => {
+            "Rename the object keys to satisfy the schema.".to_string()
+        }
+        ValidationErrorKind::Type { kind } => {
+            let expected = type_kind_label(kind);
+            type_mismatch_hint(path, value, &expected)
+        }
+        ValidationErrorKind::UniqueItems => "Remove duplicate items from the array.".to_string(),
+        _ => "Update the value to satisfy the tool schema.".to_string(),
+    }
+}
+
+fn format_instance_path(path: &impl std::fmt::Display) -> String {
+    let text = path.to_string();
+    if text.is_empty() {
+        "/".to_string()
+    } else {
+        text
+    }
+}
+
+fn type_kind_label(kind: &TypeKind) -> String {
+    match kind {
+        TypeKind::Single(kind) => kind.to_string(),
+        TypeKind::Multiple(kinds) => kinds
+            .iter()
+            .map(|kind| kind.to_string())
+            .collect::<Vec<_>>()
+            .join(" | "),
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn json_value_label(value: &Value) -> String {
+    match value {
+        Value::String(text) => format!("const {text:?}"),
+        _ => format!("const {}", value),
+    }
+}
+
+fn type_mismatch_issue(value: &Value, expected_types: &str) -> String {
+    if expected_types
+        .split('|')
+        .map(str::trim)
+        .any(|kind| kind == "object")
+        && is_serialized_json_object(value)
+    {
+        "Expected a JSON object, but received a serialized JSON string.".to_string()
+    } else {
+        format!(
+            "Expected {}, but received {}.",
+            expected_types,
+            json_type_name(value)
+        )
+    }
+}
+
+fn type_mismatch_hint(path: &str, value: &Value, expected_types: &str) -> String {
+    let field_name = path.rsplit('/').find(|segment| !segment.is_empty());
+    if expected_types
+        .split('|')
+        .map(str::trim)
+        .any(|kind| kind == "object")
+        && is_serialized_json_object(value)
+    {
+        return field_name.map_or_else(
+            || "Send tool arguments as a JSON object, not as a quoted JSON string.".to_string(),
+            |field| format!("Pass `{field}` as an object, not as a quoted JSON string."),
+        );
+    }
+
+    field_name.map_or_else(
+        || {
+            format!(
+                "Send tool arguments using the expected JSON types: {}.",
+                expected_types
+            )
+        },
+        |field| {
+            format!(
+                "Update `{field}` to use the expected JSON type: {}.",
+                expected_types
+            )
+        },
+    )
+}
+
+fn is_serialized_json_object(value: &Value) -> bool {
+    let Some(text) = value.as_str() else {
+        return false;
+    };
+    matches!(serde_json::from_str::<Value>(text), Ok(Value::Object(_)))
+}
+
+fn build_violation(
+    path: &str,
+    expected: &str,
+    actual: &str,
+    issue: String,
+    hint: String,
+) -> ToolValidationViolation {
+    ToolValidationViolation {
+        path: if path.is_empty() {
+            "/".to_string()
+        } else {
+            path.to_string()
+        },
+        expected: expected.to_string(),
+        actual: actual.to_string(),
+        issue,
+        hint,
+    }
+}
+
+fn join_json_path(base: &str, segment: &str) -> String {
+    if base.is_empty() || base == "/" {
+        format!("/{segment}")
+    } else {
+        format!("{base}/{segment}")
     }
 }
 
@@ -1235,5 +1684,252 @@ fn prepare_refine_stream(
         )))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::data::McpServerConfig;
+    use crate::utils::test_utils::create_test_app;
+    use rust_mcp_schema::{ListToolsResult, Tool, ToolInputSchema};
+    use std::collections::HashMap;
+
+    fn default_ctx() -> AppActionContext {
+        AppActionContext {
+            term_width: 80,
+            term_height: 24,
+        }
+    }
+
+    fn add_test_tool(
+        app: &mut App,
+        server_id: &str,
+        tool_name: &str,
+        input_schema: ToolInputSchema,
+    ) {
+        app.config.mcp_servers.push(McpServerConfig {
+            id: server_id.to_string(),
+            display_name: "Alpha MCP".to_string(),
+            base_url: Some("https://mcp.example.com".to_string()),
+            command: None,
+            args: None,
+            env: None,
+            headers: None,
+            transport: Some("streamable-http".to_string()),
+            allowed_tools: None,
+            protocol_version: None,
+            enabled: Some(true),
+            tool_payloads: None,
+            tool_payload_window: None,
+            yolo: None,
+        });
+        app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+        let tool = Tool {
+            annotations: None,
+            description: Some("Test tool".to_string()),
+            execution: None,
+            icons: Vec::new(),
+            input_schema,
+            meta: None,
+            name: tool_name.to_string(),
+            output_schema: None,
+            title: None,
+        };
+
+        if let Some(server) = app.mcp.server_mut(server_id) {
+            server.set_cached_tools(ListToolsResult {
+                meta: None,
+                next_cursor: None,
+                tools: vec![tool],
+            });
+        } else {
+            panic!("missing MCP server state");
+        }
+    }
+
+    #[test]
+    fn prepare_tool_flow_returns_structured_schema_validation_error() {
+        let mut app = create_test_app();
+
+        let mut nested_object = Map::new();
+        nested_object.insert("type".to_string(), Value::String("object".to_string()));
+
+        let mut properties = HashMap::new();
+        properties.insert("filters".to_string(), nested_object);
+        let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
+        add_test_tool(&mut app, "alpha", "search", input_schema);
+
+        let command = prepare_tool_flow(
+            &mut app,
+            vec![(
+                0,
+                PendingToolCall {
+                    id: Some("call-1".to_string()),
+                    name: Some("search".to_string()),
+                    arguments: r#"{"filters":"{\"tag\":\"compost\"}"}"#.to_string(),
+                },
+            )],
+            default_ctx(),
+        );
+
+        assert!(command.is_none());
+        assert!(app.session.tool_pipeline.pending_tool_queue.is_empty());
+
+        let record = app
+            .session
+            .tool_pipeline
+            .tool_result_history
+            .last()
+            .expect("tool error record");
+        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolError));
+
+        let payload: Value = serde_json::from_str(&record.content).expect("validation payload");
+        assert_eq!(payload["isError"], Value::Bool(true));
+        assert_eq!(payload["error"]["kind"], "invalid_arguments");
+        assert_eq!(payload["error"]["violations"][0]["path"], "/filters");
+        assert_eq!(payload["error"]["violations"][0]["expected"], "object");
+        assert_eq!(payload["error"]["violations"][0]["actual"], "string");
+        assert!(payload["error"]["violations"][0]["hint"]
+            .as_str()
+            .expect("hint")
+            .contains("quoted JSON string"));
+    }
+
+    #[test]
+    fn prepare_tool_flow_flags_missing_required_arguments_before_dispatch() {
+        let mut app = create_test_app();
+
+        let mut query_schema = Map::new();
+        query_schema.insert("type".to_string(), Value::String("string".to_string()));
+
+        let mut properties = HashMap::new();
+        properties.insert("query".to_string(), query_schema);
+        let input_schema = ToolInputSchema::new(vec!["query".to_string()], Some(properties), None);
+        add_test_tool(&mut app, "alpha", "search", input_schema);
+
+        let command = prepare_tool_flow(
+            &mut app,
+            vec![(
+                0,
+                PendingToolCall {
+                    id: Some("call-1".to_string()),
+                    name: Some("search".to_string()),
+                    arguments: String::new(),
+                },
+            )],
+            default_ctx(),
+        );
+
+        assert!(command.is_none());
+        assert!(app.session.tool_pipeline.pending_tool_queue.is_empty());
+
+        let record = app
+            .session
+            .tool_pipeline
+            .tool_result_history
+            .last()
+            .expect("tool error record");
+        assert_eq!(record.failure_kind, Some(ToolFailureKind::ToolError));
+
+        let payload: Value = serde_json::from_str(&record.content).expect("validation payload");
+        assert_eq!(payload["error"]["violations"][0]["path"], "/query");
+        assert_eq!(payload["error"]["violations"][0]["expected"], "present");
+        assert_eq!(payload["error"]["violations"][0]["actual"], "missing");
+    }
+
+    #[test]
+    fn prepare_tool_flow_rejects_any_of_union_mismatches() {
+        let mut app = create_test_app();
+
+        let mut nullable_object = Map::new();
+        nullable_object.insert(
+            "anyOf".to_string(),
+            Value::Array(vec![
+                Value::Object(Map::from_iter([(
+                    "type".to_string(),
+                    Value::String("object".to_string()),
+                )])),
+                Value::Object(Map::from_iter([(
+                    "type".to_string(),
+                    Value::String("null".to_string()),
+                )])),
+            ]),
+        );
+
+        let mut properties = HashMap::new();
+        properties.insert("filters".to_string(), nullable_object);
+        let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
+        add_test_tool(&mut app, "alpha", "search", input_schema);
+
+        let command = prepare_tool_flow(
+            &mut app,
+            vec![(
+                0,
+                PendingToolCall {
+                    id: Some("call-1".to_string()),
+                    name: Some("search".to_string()),
+                    arguments: r#"{"filters":7}"#.to_string(),
+                },
+            )],
+            default_ctx(),
+        );
+
+        assert!(command.is_none());
+        assert!(app.session.tool_pipeline.pending_tool_queue.is_empty());
+
+        let record = app
+            .session
+            .tool_pipeline
+            .tool_result_history
+            .last()
+            .expect("tool error record");
+        let payload: Value = serde_json::from_str(&record.content).expect("validation payload");
+        assert_eq!(payload["error"]["violations"][0]["path"], "/filters");
+        assert_eq!(payload["error"]["violations"][0]["expected"], "anyOf");
+    }
+
+    #[test]
+    fn prepare_tool_flow_accepts_any_of_union_matches() {
+        let mut app = create_test_app();
+
+        let mut nullable_object = Map::new();
+        nullable_object.insert(
+            "anyOf".to_string(),
+            Value::Array(vec![
+                Value::Object(Map::from_iter([(
+                    "type".to_string(),
+                    Value::String("object".to_string()),
+                )])),
+                Value::Object(Map::from_iter([(
+                    "type".to_string(),
+                    Value::String("null".to_string()),
+                )])),
+            ]),
+        );
+
+        let mut properties = HashMap::new();
+        properties.insert("filters".to_string(), nullable_object);
+        let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
+        add_test_tool(&mut app, "alpha", "search", input_schema);
+
+        let command = prepare_tool_flow(
+            &mut app,
+            vec![(
+                0,
+                PendingToolCall {
+                    id: Some("call-1".to_string()),
+                    name: Some("search".to_string()),
+                    arguments: r#"{"filters":null}"#.to_string(),
+                },
+            )],
+            default_ctx(),
+        );
+
+        assert!(command.is_none());
+        assert!(app.session.tool_pipeline.pending_tool_queue.is_empty());
+        assert!(app.session.tool_pipeline.active_tool_request.is_some());
+        assert!(app.ui.tool_prompt().is_some());
     }
 }

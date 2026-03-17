@@ -60,8 +60,9 @@ HTTP auth tokens are stored via `McpTokenStore` in `src/core/mcp_auth.rs`.
 ## MCP client subsystem
 The MCP client implementation is now organized under `src/mcp/client/`:
 
-- `src/mcp/client/mod.rs` – `McpClientManager`, per-server runtime state, and
-  connect/refresh orchestration.
+- `src/mcp/client/mod.rs` – `McpClientManager`, per-server runtime state,
+  connect/refresh orchestration, and cached compiled JSON Schema validators for
+  MCP tool input schemas.
 - `src/mcp/client/operations.rs` – protocol-level operations such as
   `execute_tool_call`, `execute_resource_read`, `execute_prompt`, and helpers for
   client result/error responses.
@@ -139,8 +140,9 @@ Key modules and responsibilities:
 - `src/core/app/actions/mod.rs` — root action and command contracts, plus
   top-level reducer fan-out (`apply_action`, `apply_actions`).
 - `src/core/app/actions/streaming.rs` — stream-side reducer entrypoint for
-  stream chunk handling, MCP callbacks, tool permission flow, and command
-  emission for async MCP/tool/sampling work.
+  stream chunk handling, MCP callbacks, tool permission flow, client-side MCP
+  tool argument validation against cached `input_schema` via precompiled
+  validators, and command emission for async MCP/tool/sampling work.
 - `src/core/app/actions/picker.rs` — reducer for picker navigation/filter/apply
   flows and provider→model transition command dispatch.
 - `src/core/app/actions/input/inspect.rs` — reducer for tool inspect overlay

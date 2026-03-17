@@ -8,7 +8,8 @@ use crate::utils::test_utils::{
 };
 use rust_mcp_schema::{
     Implementation, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PromptArgument, ServerCapabilities,
+    ListResourcesResult, ListToolsResult, PromptArgument, ServerCapabilities, Tool,
+    ToolInputSchema,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -757,6 +758,67 @@ fn mcp_command_includes_allowed_tools() {
 }
 
 #[test]
+fn mcp_command_reports_disabled_client_side_tool_validation() {
+    let mut app = create_test_app();
+    app.config.mcp_servers.push(McpServerConfig {
+        id: "alpha".to_string(),
+        display_name: "Alpha".to_string(),
+        base_url: Some("https://mcp.example.com".to_string()),
+        command: None,
+        args: None,
+        env: None,
+        headers: None,
+        transport: Some("streamable-http".to_string()),
+        allowed_tools: None,
+        protocol_version: None,
+        enabled: Some(true),
+        tool_payloads: None,
+        tool_payload_window: None,
+        yolo: None,
+    });
+    app.mcp = crate::mcp::client::McpClientManager::from_config(&app.config);
+
+    let input_schema = ToolInputSchema::new(Vec::new(), None, None);
+    let tool = Tool {
+        annotations: None,
+        description: Some("Search".to_string()),
+        execution: None,
+        icons: Vec::new(),
+        input_schema,
+        meta: None,
+        name: "search".to_string(),
+        output_schema: None,
+        title: None,
+    };
+
+    if let Some(server) = app.mcp.server_mut("alpha") {
+        server.set_cached_tools(ListToolsResult {
+            meta: None,
+            next_cursor: None,
+            tools: vec![tool],
+        });
+        server.cached_tool_validators.insert(
+            "search".to_string(),
+            crate::mcp::client::CachedToolSchemaValidator {
+                validator: None,
+                compile_error: Some("unsupported root schema".to_string()),
+            },
+        );
+    } else {
+        panic!("missing MCP server state");
+    }
+
+    let token_store = crate::core::mcp_auth::McpTokenStore::new_with_keyring(false);
+    let output = crate::commands::build_mcp_server_output(
+        app.mcp.server("alpha").expect("missing MCP server"),
+        false,
+        &token_store,
+    );
+    assert!(output.contains("**Client-side tool validation:** partially disabled."));
+    assert!(output.contains("search: schema compilation failed (unsupported root schema)"));
+}
+
+#[test]
 fn yolo_command_shows_and_persists() {
     with_test_config_env(|config_root| {
         let config_path = config_root.join("chabeau").join("config.toml");
@@ -929,7 +991,7 @@ fn mcp_command_toggle_off_clears_runtime_state() {
     if let Some(server) = app.mcp.server_mut("alpha") {
         server.connected = true;
         server.last_error = Some("boom".to_string());
-        server.cached_tools = Some(ListToolsResult {
+        server.set_cached_tools(ListToolsResult {
             meta: None,
             next_cursor: None,
             tools: Vec::new(),
@@ -978,6 +1040,7 @@ fn mcp_command_toggle_off_clears_runtime_state() {
     assert!(!server.connected);
     assert!(server.last_error.is_none());
     assert!(server.cached_tools.is_none());
+    assert!(server.cached_tool_validators.is_empty());
     assert!(server.cached_resources.is_none());
     assert!(server.cached_resource_templates.is_none());
     assert!(server.cached_prompts.is_none());

@@ -514,6 +514,24 @@ pub(crate) fn build_mcp_server_output(
     }
 
     output.push('\n');
+    if server.cached_tools.is_none() {
+        output.push_str("**Client-side tool validation:** unknown (no cached tool listing).\n");
+    } else {
+        let disabled = server.disabled_tool_validation_entries();
+        if disabled.is_empty() {
+            output.push_str("**Client-side tool validation:** enabled for cached tools.\n");
+        } else {
+            output.push_str("**Client-side tool validation:** partially disabled.\n");
+            for (tool_name, error) in disabled {
+                output.push_str(&format!(
+                    "- {}: schema compilation failed ({})\n",
+                    tool_name, error
+                ));
+            }
+        }
+    }
+
+    output.push('\n');
     if let Some(list) = &server.cached_resources {
         if list.resources.is_empty() {
             output.push_str(match (resources_cap, cap_reported) {

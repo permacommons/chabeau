@@ -424,7 +424,7 @@ fn build_stream_params_includes_mcp_tools() {
     };
 
     if let Some(server) = app.mcp.server_mut("alpha") {
-        server.cached_tools = Some(list);
+        server.set_cached_tools(list);
     } else {
         panic!("missing MCP server state");
     }

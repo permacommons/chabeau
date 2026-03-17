@@ -2,7 +2,7 @@
 name = "chabeau"
 version = "0.7.4-dev"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.83"
 description = "A full-screen terminal chat interface that connects to various AI APIs for real-time conversations"
 license = "CC0-1.0"
 repository = "https://github.com/permacommons/chabeau"
@@ -44,6 +44,7 @@ rust-mcp-schema = { version = "0.9.4", features = ["schema_utils", "2025_11_25"]
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 getrandom = "0.4"
+jsonschema = { version = "0.45.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

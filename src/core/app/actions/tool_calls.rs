@@ -37,6 +37,7 @@ pub(super) struct PendingToolError {
     pub(super) tool_call_id: Option<String>,
     pub(super) raw_arguments: Option<String>,
     pub(super) error: String,
+    pub(super) failure_kind: Option<ToolFailureKind>,
 }
 
 pub(super) fn handle_tool_permission_decision(

@@ -31,6 +31,7 @@ use crate::mcp::events::McpServerRequest;
 pub use crate::mcp::transport::McpTransportKind;
 use crate::mcp::transport::{self, ListFetch};
 use futures_util::{stream, StreamExt};
+use jsonschema::Validator as JsonSchemaValidator;
 pub use operations::{
     execute_prompt, execute_resource_list, execute_resource_read, execute_resource_template_list,
     execute_tool_call, send_client_error, send_client_result,
@@ -41,6 +42,7 @@ use rust_mcp_schema::{
     ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, RpcError, ServerCapabilities,
 };
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -146,11 +148,34 @@ const STDIO_SAMPLING_TIMEOUT_MULTIPLIER: u64 = 5;
 /// [`McpServerState::clear_runtime_state`] and repopulated after successful
 /// refresh operations.
 #[derive(Clone)]
+pub struct CachedToolSchemaValidator {
+    pub validator: Option<Arc<JsonSchemaValidator>>,
+    pub compile_error: Option<String>,
+}
+
+impl CachedToolSchemaValidator {
+    fn enabled(validator: JsonSchemaValidator) -> Self {
+        Self {
+            validator: Some(Arc::new(validator)),
+            compile_error: None,
+        }
+    }
+
+    fn disabled(error: String) -> Self {
+        Self {
+            validator: None,
+            compile_error: Some(error),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct McpServerState {
     pub config: McpServerConfig,
     pub connected: bool,
     pub last_error: Option<String>,
     pub cached_tools: Option<ListToolsResult>,
+    pub cached_tool_validators: HashMap<String, CachedToolSchemaValidator>,
     pub cached_resources: Option<ListResourcesResult>,
     pub cached_resource_templates: Option<ListResourceTemplatesResult>,
     pub cached_prompts: Option<ListPromptsResult>,
@@ -172,6 +197,7 @@ impl McpServerState {
             connected: false,
             last_error: None,
             cached_tools: None,
+            cached_tool_validators: HashMap::new(),
             cached_resources: None,
             cached_resource_templates: None,
             cached_prompts: None,
@@ -189,6 +215,33 @@ impl McpServerState {
     /// Returns the server-specific allow-list configured for tool filtering.
     pub fn allowed_tools(&self) -> Option<&[String]> {
         self.config.allowed_tools.as_deref()
+    }
+
+    pub fn set_cached_tools(&mut self, list: ListToolsResult) {
+        self.cached_tool_validators = compile_tool_schema_validators(&list);
+        self.cached_tools = Some(list);
+    }
+
+    pub fn tool_validator(&self, tool_name: &str) -> Option<&CachedToolSchemaValidator> {
+        self.cached_tool_validators
+            .get(&tool_name.to_ascii_lowercase())
+    }
+
+    pub fn disabled_tool_validation_entries(&self) -> Vec<(&str, &str)> {
+        let Some(list) = self.cached_tools.as_ref() else {
+            return Vec::new();
+        };
+
+        list.tools
+            .iter()
+            .filter_map(|tool| {
+                let state = self.tool_validator(&tool.name)?;
+                state
+                    .compile_error
+                    .as_deref()
+                    .map(|error| (tool.name.as_str(), error))
+            })
+            .collect()
     }
 
     fn server_capabilities(&self) -> Option<&ServerCapabilities> {
@@ -223,6 +276,7 @@ impl McpServerState {
         self.connected = false;
         self.last_error = None;
         self.cached_tools = None;
+        self.cached_tool_validators.clear();
         self.cached_resources = None;
         self.cached_resource_templates = None;
         self.cached_prompts = None;
@@ -463,7 +517,7 @@ impl McpClientManager {
         if let Some(target) = self.server_mut(id) {
             for result in operation_results {
                 if let Some(cached_tools) = result.cached_tools {
-                    target.cached_tools = Some(cached_tools);
+                    target.set_cached_tools(cached_tools);
                 }
                 if let Some(cached_prompts) = result.cached_prompts {
                     target.cached_prompts = Some(cached_prompts);
@@ -713,7 +767,7 @@ impl McpClientManager {
             |server| server.supports_tools(),
             "Tools",
             empty_list_tools,
-            |server, list| server.cached_tools = Some(list),
+            |server, list| server.set_cached_tools(list),
             fetch,
         )
         .await;
@@ -1268,6 +1322,31 @@ fn empty_list_tools() -> ListToolsResult {
         next_cursor: None,
         tools: Vec::new(),
     }
+}
+
+fn compile_tool_schema_validators(
+    list: &ListToolsResult,
+) -> HashMap<String, CachedToolSchemaValidator> {
+    list.tools
+        .iter()
+        .map(|tool| {
+            let state = match serde_json::to_value(&tool.input_schema) {
+                Ok(schema) => match build_tool_schema_validator(&schema) {
+                    Ok(validator) => CachedToolSchemaValidator::enabled(validator),
+                    Err(err) => CachedToolSchemaValidator::disabled(err),
+                },
+                Err(err) => CachedToolSchemaValidator::disabled(err.to_string()),
+            };
+            (tool.name.to_ascii_lowercase(), state)
+        })
+        .collect()
+}
+
+pub fn build_tool_schema_validator(schema: &Value) -> Result<JsonSchemaValidator, String> {
+    jsonschema::options()
+        .should_validate_formats(true)
+        .build(schema)
+        .map_err(|err| err.to_string())
 }
 
 fn empty_list_resources() -> ListResourcesResult {

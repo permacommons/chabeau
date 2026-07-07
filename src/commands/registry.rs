@@ -54,6 +54,21 @@ impl<'a> CommandInvocation<'a> {
     }
 
     #[cfg(test)]
+    pub fn new_for_test(
+        command: &'static Command,
+        input: &'a str,
+        args: &'a str,
+        tokens: Vec<&'a str>,
+    ) -> Self {
+        Self {
+            command,
+            input,
+            args,
+            tokens,
+        }
+    }
+
+    #[cfg(test)]
     /// Returns an iterator over whitespace-delimited argument tokens.
     pub fn args_iter(&'a self) -> impl Iterator<Item = &'a str> + 'a {
         self.tokens.iter().copied()
@@ -427,5 +442,39 @@ const COMMANDS: &[Command] = &[
         }],
         extra_help: &[],
         handler: super::refine::handle_refine,
+    },
+    Command {
+        name: "save",
+        usages: &[CommandUsage {
+            syntax: "/save [name]",
+            description:
+                "Save the current conversation as a session (optionally with a custom name).",
+        }],
+        extra_help: &[],
+        handler: super::handlers::session::handle_save,
+    },
+    Command {
+        name: "load",
+        usages: &[
+            CommandUsage {
+                syntax: "/load",
+                description: "Browse and load a saved session (opens a picker).",
+            },
+            CommandUsage {
+                syntax: "/load <session-id>",
+                description: "Load a saved session by its ID.",
+            },
+        ],
+        extra_help: &[],
+        handler: super::handlers::session::handle_load,
+    },
+    Command {
+        name: "sessions",
+        usages: &[CommandUsage {
+            syntax: "/sessions",
+            description: "List saved sessions and browse to load one.",
+        }],
+        extra_help: &[],
+        handler: super::handlers::session::handle_sessions,
     },
 ];

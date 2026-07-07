@@ -403,7 +403,7 @@ fn theme_command_opens_picker() {
     let mut app = create_test_app();
     let res = process_input(&mut app, "/theme");
     assert!(matches!(res, CommandResult::OpenThemePicker));
-    assert!(app.picker_session().is_none());
+    assert!(app.active_picker().is_none());
 }
 
 #[test]
@@ -1298,4 +1298,697 @@ fn validate_prompt_args_rejects_unknown_keys() {
     let err = super::mcp_prompt_parser::validate_prompt_args(&args, &prompt_args).unwrap_err();
     assert!(err.contains("Unknown prompt argument"));
     assert!(err.contains("topic"));
+}
+
+mod session_tests {
+    use super::*;
+    use crate::core::config::data::{Config, CustomProvider};
+    use crate::core::message::Message;
+    use crate::core::session_store::save_session;
+    use crate::utils::test_utils::{
+        create_test_app, create_test_message, with_test_config_env, TestEnvVarGuard,
+    };
+
+    struct TestAuthTokenGuard;
+
+    impl TestAuthTokenGuard {
+        fn new() -> Self {
+            crate::auth::clear_test_tokens();
+            Self
+        }
+    }
+
+    impl Drop for TestAuthTokenGuard {
+        fn drop(&mut self) {
+            crate::auth::clear_test_tokens();
+        }
+    }
+
+    fn with_session_dir<F, R>(f: F) -> R
+    where
+        F: FnOnce(&std::path::Path) -> R,
+    {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut guard = TestEnvVarGuard::new();
+        guard.set_var("CHABEAU_DATA_DIR", temp_dir.path());
+        let _auth_guard = TestAuthTokenGuard::new();
+        f(temp_dir.path())
+    }
+
+    fn save_session_fixture(
+        session_id: &str,
+        name: &str,
+        provider: &str,
+        model: &str,
+        base_url: &str,
+    ) {
+        save_session(
+            session_id,
+            name,
+            provider,
+            model,
+            base_url,
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+            &crate::core::app::session::McpInitState::default(),
+            "",
+            "",
+            false,
+            false,
+        )
+        .expect("save session fixture");
+    }
+
+    fn save_openai_session(session_id: &str, name: &str) {
+        crate::auth::set_test_token("openai", "test-openai-key");
+        save_session_fixture(
+            session_id,
+            name,
+            "openai",
+            "test-model",
+            "https://api.openai.com/v1",
+        );
+    }
+
+    fn assert_loaded_context(
+        app: &crate::core::app::App,
+        api_key: &str,
+        provider: &str,
+        provider_display: &str,
+        base_url: &str,
+        model: &str,
+    ) {
+        assert_eq!(app.session.api_key, api_key);
+        assert_eq!(app.session.provider_name, provider);
+        assert_eq!(app.session.provider_display_name, provider_display);
+        assert_eq!(app.session.base_url, base_url);
+        assert_eq!(app.session.model, model);
+    }
+
+    fn assert_status_contains(app: &crate::core::app::App, expected: &str) {
+        assert!(app.ui.status.as_deref().unwrap_or("").contains(expected));
+    }
+
+    fn configure_custom_provider(id: &str, display_name: &str, base_url: &str) {
+        Config::mutate(|config| {
+            config.add_custom_provider(CustomProvider::new(
+                id.to_string(),
+                display_name.to_string(),
+                base_url.to_string(),
+                None,
+            ));
+            Ok(())
+        })
+        .expect("configure custom provider");
+    }
+
+    fn save_test_session(session_id: &str, name: &str) {
+        save_openai_session(session_id, name);
+    }
+
+    fn save_settings_session() {
+        save_session(
+            "sess-settings",
+            "Settings Test",
+            "openai",
+            "mod",
+            "https://api.openai.com/v1",
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+            &crate::core::app::session::McpInitState::default(),
+            "custom refine instructions",
+            "custom refine prefix",
+            true,
+            false,
+        )
+        .expect("save settings session");
+    }
+
+    #[test]
+    fn save_command_without_name_uses_first_user_message() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            app.session.session_id = "sess-001".to_string();
+            app.ui.messages.push_back(create_test_message(
+                "user",
+                "This is a very long message that should be truncated because it exceeds fifty characters easily",
+            ));
+
+            let result = process_input(&mut app, "/save");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let status = app.ui.status.as_deref().unwrap_or("");
+            assert!(status.contains("This is a very long message"));
+            assert!(status.contains("sess-001"));
+        });
+    }
+
+    #[test]
+    fn save_command_with_explicit_name() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            app.session.session_id = "sess-002".to_string();
+            app.ui
+                .messages
+                .push_back(create_test_message("user", "Hello"));
+
+            let result = process_input(&mut app, "/save MySession");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let status = app.ui.status.as_deref().unwrap_or("");
+            assert!(status.contains("MySession"));
+            assert!(status.contains("sess-002"));
+        });
+    }
+
+    #[test]
+    fn save_command_rejects_too_many_args() {
+        let mut app = create_test_app();
+        let result = process_input(&mut app, "/save arg1 arg2");
+        assert!(matches!(result, CommandResult::Continue));
+        assert!(app
+            .ui
+            .status
+            .as_deref()
+            .unwrap_or("")
+            .contains("Usage: /save"));
+    }
+
+    #[test]
+    fn save_command_sets_confirmation_status() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            app.session.session_id = "sess-003".to_string();
+            app.ui
+                .messages
+                .push_back(create_test_message("user", "Test"));
+
+            let result = process_input(&mut app, "/save ConfirmTest");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let status = app.ui.status.as_deref().unwrap_or("");
+            assert!(status.contains("Session saved:"));
+            assert!(status.contains("ConfirmTest"));
+            assert!(status.contains("sess-003"));
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_restores_messages() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            app.session.session_id = "sess-load-msgs".to_string();
+            app.session.provider_name = "openai".to_string();
+            app.session.api_key = "message-openai-key".to_string();
+            app.session.base_url = "https://api.openai.com/v1".to_string();
+            app.ui
+                .messages
+                .push_back(create_test_message("user", "Before save"));
+            app.ui
+                .messages
+                .push_back(create_test_message("assistant", "Response"));
+
+            process_input(&mut app, "/save LoadMsgsTest");
+            crate::auth::set_test_token("openai", "message-openai-key");
+
+            let mut app2 = create_test_app();
+            app2.session.session_id = "new-session".to_string();
+
+            let result = super::handlers::session::do_load_session(&mut app2, "sess-load-msgs");
+            assert!(result.is_ok());
+            assert_eq!(app2.ui.messages.len(), 2);
+            assert_eq!(app2.ui.messages[0].content, "Before save");
+            assert_eq!(app2.ui.messages[1].content, "Response");
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_restores_session_context() {
+        with_session_dir(|_| {
+            save_test_session("sess-ctx", "Context Test");
+
+            let mut app = create_test_app();
+            let result = super::handlers::session::do_load_session(&mut app, "sess-ctx");
+            assert!(result.is_ok());
+            assert_eq!(app.session.session_id, "sess-ctx");
+            assert_loaded_context(
+                &app,
+                "test-openai-key",
+                "openai",
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "test-model",
+            );
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_resolves_provider_credentials() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                crate::auth::set_test_token("openai", "loaded-openai-key");
+
+                save_session_fixture(
+                    "sess-auth",
+                    "Auth Test",
+                    "openai",
+                    "gpt-4o",
+                    "https://api.openai.com/v1",
+                );
+
+                let mut app = create_test_app();
+                app.session.api_key = "stale-provider-key".to_string();
+                app.session.provider_display_name = "Stale Provider".to_string();
+
+                let result = super::handlers::session::do_load_session(&mut app, "sess-auth");
+
+                assert!(result.is_ok());
+                assert_loaded_context(
+                    &app,
+                    "loaded-openai-key",
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "gpt-4o",
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_preserves_snapshot_base_url_for_configured_provider() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                configure_custom_provider(
+                    "snapshot-provider",
+                    "Snapshot Provider",
+                    "https://current.example/v1",
+                );
+                crate::auth::set_test_token("snapshot-provider", "snapshot-provider-key");
+
+                save_session_fixture(
+                    "sess-snapshot-base",
+                    "Snapshot Base Test",
+                    "snapshot-provider",
+                    "custom-model",
+                    "https://saved.example/v1",
+                );
+
+                let mut app = create_test_app();
+                let result =
+                    super::handlers::session::do_load_session(&mut app, "sess-snapshot-base");
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "snapshot-provider-key",
+                    "snapshot-provider",
+                    "Snapshot Provider",
+                    "https://saved.example/v1",
+                    "custom-model",
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_resolves_env_openai_compatible_credentials() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                let mut env_guard = TestEnvVarGuard::new();
+                env_guard.set_var("OPENAI_API_KEY", "env-openai-compatible-key");
+                env_guard.remove_var("OPENAI_BASE_URL");
+
+                save_session_fixture(
+                    "sess-env-compatible",
+                    "Env Compatible Test",
+                    "openai-compatible",
+                    "custom-model",
+                    "https://compatible.example/v1",
+                );
+
+                let mut app = create_test_app();
+                app.session.api_key = "stale-provider-key".to_string();
+                app.session.base_url = "https://stale.example/v1".to_string();
+                app.session.provider_display_name = "Stale Provider".to_string();
+
+                let result =
+                    super::handlers::session::do_load_session(&mut app, "sess-env-compatible");
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "env-openai-compatible-key",
+                    "openai-compatible",
+                    "OpenAI-compatible",
+                    "https://compatible.example/v1",
+                    "custom-model",
+                );
+                assert_status_contains(&app, "using OPENAI_API_KEY fallback");
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_resolves_env_openai_credentials() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                let mut env_guard = TestEnvVarGuard::new();
+                env_guard.set_var("OPENAI_API_KEY", "env-openai-key");
+                env_guard.remove_var("OPENAI_BASE_URL");
+
+                save_session_fixture(
+                    "sess-env-openai",
+                    "Env OpenAI Test",
+                    "openai",
+                    "gpt-4o",
+                    "https://api.openai.com/v1",
+                );
+
+                let mut app = create_test_app();
+                app.session.api_key = "stale-provider-key".to_string();
+                app.session.base_url = "https://stale.example/v1".to_string();
+                app.session.provider_display_name = "Stale Provider".to_string();
+
+                let result = super::handlers::session::do_load_session(&mut app, "sess-env-openai");
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "env-openai-key",
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "gpt-4o",
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_warns_when_using_current_credentials_fallback() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                save_session_fixture(
+                    "sess-current-fallback",
+                    "Current Fallback Test",
+                    "runtime-provider",
+                    "runtime-model",
+                    "https://saved-runtime.example/v1",
+                );
+
+                let mut app = create_test_app();
+                app.session.provider_name = "runtime-provider".to_string();
+                app.session.provider_display_name = "Runtime Provider".to_string();
+                app.session.api_key = "runtime-key".to_string();
+                app.session.base_url = "https://current-runtime.example/v1".to_string();
+
+                let result =
+                    super::handlers::session::do_load_session(&mut app, "sess-current-fallback");
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "runtime-key",
+                    "runtime-provider",
+                    "Runtime Provider",
+                    "https://saved-runtime.example/v1",
+                    "runtime-model",
+                );
+                assert_status_contains(&app, "using current credentials");
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_falls_back_to_current_provider_when_saved_provider_unavailable() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                save_session_fixture(
+                    "sess-different-provider-fallback",
+                    "Different Provider Fallback Test",
+                    "missing-provider",
+                    "saved-model",
+                    "https://saved-missing.example/v1",
+                );
+
+                let mut app = create_test_app();
+                app.session.provider_name = "current-provider".to_string();
+                app.session.provider_display_name = "Current Provider".to_string();
+                app.session.api_key = "current-key".to_string();
+                app.session.base_url = "https://current.example/v1".to_string();
+                app.session.model = "current-model".to_string();
+
+                let result = super::handlers::session::do_load_session(
+                    &mut app,
+                    "sess-different-provider-fallback",
+                );
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "current-key",
+                    "current-provider",
+                    "Current Provider",
+                    "https://current.example/v1",
+                    "current-model",
+                );
+                assert_status_contains(
+                    &app,
+                    "provider 'missing-provider' unavailable; using current provider 'current-provider'",
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_rejects_wrong_env_provider_fallback() {
+        with_test_config_env(|_| {
+            with_session_dir(|_| {
+                let mut env_guard = TestEnvVarGuard::new();
+                env_guard.set_var("OPENAI_API_KEY", "env-openai-key");
+                env_guard.remove_var("OPENAI_BASE_URL");
+                crate::auth::set_test_recoverable_keyring_error("anthropic");
+
+                save_session_fixture(
+                    "sess-wrong-env-fallback",
+                    "Wrong Env Fallback Test",
+                    "anthropic",
+                    "claude-sonnet-4-20250514",
+                    "https://api.anthropic.com",
+                );
+
+                let mut app = create_test_app();
+                app.session.provider_name = "current-provider".to_string();
+                app.session.provider_display_name = "Current Provider".to_string();
+                app.session.api_key = "current-key".to_string();
+                app.session.base_url = "https://current.example/v1".to_string();
+                app.session.model = "current-model".to_string();
+
+                let result =
+                    super::handlers::session::do_load_session(&mut app, "sess-wrong-env-fallback");
+
+                assert!(result.is_ok(), "load failed: {result:?}");
+                assert_loaded_context(
+                    &app,
+                    "current-key",
+                    "current-provider",
+                    "Current Provider",
+                    "https://current.example/v1",
+                    "current-model",
+                );
+                assert_status_contains(
+                    &app,
+                    "provider 'anthropic' unavailable; using current provider 'current-provider'",
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn load_command_by_id_restores_ui_settings() {
+        with_session_dir(|_| {
+            save_settings_session();
+
+            let mut app = create_test_app();
+            app.ui.markdown_enabled = false;
+            app.ui.syntax_enabled = true;
+            crate::auth::set_test_token("openai", "test-openai-key");
+
+            let result = super::handlers::session::do_load_session(&mut app, "sess-settings");
+            assert!(result.is_ok());
+            assert!(app.ui.markdown_enabled);
+            assert!(!app.ui.syntax_enabled);
+            assert_eq!(
+                app.session.refine_instructions,
+                "custom refine instructions"
+            );
+            assert_eq!(app.session.refine_prefix, "custom refine prefix");
+        });
+    }
+
+    #[test]
+    fn load_command_no_sessions_shows_message() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            let result = process_input(&mut app, "/load");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            assert!(app
+                .ui
+                .status
+                .as_deref()
+                .unwrap_or("")
+                .contains("No saved sessions"));
+        });
+    }
+
+    #[test]
+    fn load_command_invalid_id_shows_error() {
+        let mut app = create_test_app();
+        let result = process_input(&mut app, "/load nonexistent-session-id");
+        assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+        let status = app.ui.status.as_deref().unwrap_or("");
+        assert!(status.contains("Load error:"));
+    }
+
+    #[test]
+    fn load_command_rejects_too_many_args() {
+        let mut app = create_test_app();
+        let result = process_input(&mut app, "/load id1 id2");
+        assert!(matches!(result, CommandResult::Continue));
+        assert!(app
+            .ui
+            .status
+            .as_deref()
+            .unwrap_or("")
+            .contains("Usage: /load"));
+    }
+
+    #[test]
+    fn sessions_command_no_sessions_shows_message() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            let result = process_input(&mut app, "/sessions");
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            assert!(app
+                .ui
+                .status
+                .as_deref()
+                .unwrap_or("")
+                .contains("No saved sessions"));
+        });
+    }
+
+    #[test]
+    fn sessions_command_with_sessions_opens_picker() {
+        with_session_dir(|_| {
+            save_test_session("sess-picker", "Picker Test");
+
+            let mut app = create_test_app();
+            let result = process_input(&mut app, "/sessions");
+            assert!(matches!(result, CommandResult::Continue));
+            assert!(app.active_picker().is_some());
+        });
+    }
+
+    #[test]
+    fn generate_session_name_truncates_long_messages() {
+        use crate::commands::handlers::session::handle_save;
+        use crate::commands::registry::CommandInvocation;
+        use std::collections::VecDeque;
+
+        let long_content = "a".repeat(100);
+        let mut messages = VecDeque::new();
+        messages.push_back(Message::new(TranscriptRole::User, long_content));
+
+        let mut app = create_test_app();
+        app.session.session_id = "sess-trunc".to_string();
+        app.ui.messages = messages;
+
+        let save_cmd = super::registry::find_command("save").expect("save command exists");
+        let invocation = CommandInvocation::new_for_test(save_cmd, "save", "", vec![]);
+
+        with_session_dir(|_| {
+            let result = handle_save(&mut app, invocation);
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let status = app.ui.status.as_deref().unwrap_or("");
+            // 47 'a's + "..." = 50 chars
+            assert!(status.contains("aaa"));
+        });
+    }
+
+    #[test]
+    fn generate_session_name_fallback_no_user_messages() {
+        use crate::commands::handlers::session::handle_save;
+        use crate::commands::registry::CommandInvocation;
+        use std::collections::VecDeque;
+
+        let mut messages = VecDeque::new();
+        messages.push_back(create_test_message("assistant", "Only assistant"));
+
+        let mut app = create_test_app();
+        app.session.session_id = "sess-fallback".to_string();
+        app.ui.messages = messages;
+
+        let save_cmd = super::registry::find_command("save").expect("save command exists");
+        let invocation = CommandInvocation::new_for_test(save_cmd, "save", "", vec![]);
+
+        with_session_dir(|_| {
+            let result = handle_save(&mut app, invocation);
+            assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
+            let status = app.ui.status.as_deref().unwrap_or("");
+            assert!(status.contains("Untitled session"));
+        });
+    }
+
+    #[test]
+    fn full_save_load_cycle_integration() {
+        with_session_dir(|_| {
+            let mut app = create_test_app();
+            app.session.session_id = "sess-integration".to_string();
+            app.session.provider_name = "openai".to_string();
+            app.session.api_key = "integration-openai-key".to_string();
+            app.session.model = "gpt-4".to_string();
+            app.session.base_url = "https://api.openai.com/v1".to_string();
+            app.ui.markdown_enabled = true;
+            app.ui.syntax_enabled = false;
+
+            app.ui
+                .messages
+                .push_back(create_test_message("user", "What is Rust?"));
+            app.ui.messages.push_back(create_test_message(
+                "assistant",
+                "Rust is a systems programming language.",
+            ));
+
+            process_input(&mut app, "/save IntegrationTest");
+            crate::auth::set_test_token("openai", "integration-openai-key");
+
+            let mut app2 = create_test_app();
+            app2.session.session_id = "fresh-session".to_string();
+            app2.ui.markdown_enabled = false;
+            app2.ui.syntax_enabled = true;
+
+            let result = super::handlers::session::do_load_session(&mut app2, "sess-integration");
+            assert!(result.is_ok());
+
+            assert_eq!(app2.session.session_id, "sess-integration");
+            assert_eq!(app2.session.provider_name, "openai");
+            assert_eq!(app2.session.model, "gpt-4");
+            assert_eq!(app2.session.base_url, "https://api.openai.com/v1");
+            assert!(app2.ui.markdown_enabled);
+            assert!(!app2.ui.syntax_enabled);
+            assert_eq!(app2.ui.messages.len(), 2);
+            assert_eq!(app2.ui.messages[0].content, "What is Rust?");
+            assert_eq!(
+                app2.ui.messages[1].content,
+                "Rust is a systems programming language."
+            );
+        });
+    }
 }

@@ -371,7 +371,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         // Set cursor based on wrapped text and linear cursor position
         // Suppress cursor when picker is open (like Ctrl+B/Ctrl+P modes)
-        if app.ui.is_input_active() && app.ui.is_input_focused() && app.picker_session().is_none() {
+        if app.ui.is_input_active() && app.ui.is_input_focused() && app.active_picker().is_none() {
             let (line, col) = TextWrapper::calculate_cursor_position_in_wrapped_text(
                 app.ui.get_input_text(),
                 app.ui.get_input_cursor_position(),
@@ -446,7 +446,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let inspect_state = app.inspect_state();
         let inspect_mode = inspect_state.map(|state| state.mode);
         let decoded = inspect_state.map(|state| state.decoded).unwrap_or(false);
-        let in_picker = app.picker_session().is_some();
+        let in_picker = app.active_picker().is_some();
         let (line1, line2): (String, String) = match inspect_mode {
             Some(InspectMode::ToolCalls { view, kind, .. }) => {
                 let toggle_label = match (kind, view) {
@@ -592,7 +592,7 @@ fn input_title_base(app: &App, input_width: u16) -> Cow<'_, str> {
         }
     } else if app.ui.in_block_select_mode() {
         Cow::Borrowed("Select code block (↑/↓ • c=Copy • s=Save • Esc=Cancel)")
-    } else if app.picker_session().is_some() {
+    } else if app.active_picker().is_some() {
         // Show specific prompt for picker mode with global shortcuts
         match app.current_picker_mode() {
             Some(crate::core::app::PickerMode::Model) => {
@@ -612,6 +612,9 @@ fn input_title_base(app: &App, input_width: u16) -> Cow<'_, str> {
             }
             Some(crate::core::app::PickerMode::Preset) => {
                 Cow::Borrowed("Select a preset (Esc=cancel • Ctrl+C=quit)")
+            }
+            Some(crate::core::app::PickerMode::SavedSession) => {
+                Cow::Borrowed("Select a session (Esc=cancel • Ctrl+C=quit)")
             }
             _ => Cow::Borrowed("Make a selection (Esc=cancel • Ctrl+C=quit)"),
         }
@@ -846,6 +849,10 @@ fn generate_picker_help_text(app: &App) -> String {
             .preset_picker_state()
             .map(|state| state.search_filter.as_str())
             .unwrap_or(""),
+        Some(crate::core::app::PickerMode::SavedSession) => app
+            .saved_session_picker_state()
+            .map(|state| state.search_filter.as_str())
+            .unwrap_or(""),
         _ => "",
     };
 
@@ -990,7 +997,7 @@ fn apply_code_block_highlight(
 mod tests {
     use super::*;
     use crate::core::app::picker::{
-        CharacterPickerState, ModelPickerState, PickerData, PickerSession, ProviderPickerState,
+        ActivePicker, CharacterPickerState, ModelPickerState, PickerData, ProviderPickerState,
         ThemePickerState,
     };
     use crate::core::app::{apply_actions, AppAction, AppActionContext, AppActionEnvelope};
@@ -1010,7 +1017,7 @@ mod tests {
         has_dates: bool,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker.picker_session = Some(PickerSession {
+        app.picker.active_picker = Some(ActivePicker {
             state: picker_state,
             data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: search_filter.to_string(),
@@ -1028,7 +1035,7 @@ mod tests {
         selected: usize,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker.picker_session = Some(PickerSession {
+        app.picker.active_picker = Some(ActivePicker {
             state: picker_state,
             data: PickerData::Theme(Box::new(ThemePickerState {
                 search_filter: search_filter.to_string(),
@@ -1046,7 +1053,7 @@ mod tests {
         selected: usize,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker.picker_session = Some(PickerSession {
+        app.picker.active_picker = Some(ActivePicker {
             state: picker_state,
             data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: search_filter.to_string(),
@@ -1063,7 +1070,7 @@ mod tests {
         selected: usize,
     ) {
         let picker_state = PickerState::new("Test".to_string(), items.clone(), selected);
-        app.picker.picker_session = Some(PickerSession {
+        app.picker.active_picker = Some(ActivePicker {
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: search_filter.to_string(),

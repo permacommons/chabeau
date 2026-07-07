@@ -130,7 +130,7 @@ mod tests {
             ctx,
         );
 
-        assert!(app.picker_session().is_some());
+        assert!(app.active_picker().is_some());
     }
 
     #[test]

@@ -42,7 +42,7 @@ impl<'a> ThemeController<'a> {
         })
         .map_err(|e| e.to_string())?;
 
-        if let Some(session) = self.picker.session_mut() {
+        if let Some(session) = self.picker.active_mut() {
             if let Some(state) = session.theme_state_mut() {
                 state.before_theme = None;
                 state.before_theme_id = None;
@@ -58,7 +58,7 @@ impl<'a> ThemeController<'a> {
         self.apply_theme(theme);
         self.ui.current_theme_id = Some(id.to_string());
 
-        if let Some(session) = self.picker.session_mut() {
+        if let Some(session) = self.picker.active_mut() {
             if let Some(state) = session.theme_state_mut() {
                 state.before_theme = None;
                 state.before_theme_id = None;
@@ -79,11 +79,11 @@ impl<'a> ThemeController<'a> {
     pub fn revert_theme_preview(&mut self) {
         let previous_theme = self
             .picker
-            .session()
+            .active()
             .and_then(|session| session.theme_state())
             .and_then(|state| state.before_theme.clone());
 
-        if let Some(session) = self.picker.session_mut() {
+        if let Some(session) = self.picker.active_mut() {
             if let Some(state) = session.theme_state_mut() {
                 state.before_theme = None;
                 state.before_theme_id = None;
@@ -121,7 +121,7 @@ impl<'a> ProviderController<'a> {
         self.session.model = model_id.to_string();
         self.session.mcp_tools_unsupported = false;
         self.session.mcp_tools_enabled = false;
-        if let Some(session) = self.picker.session_mut() {
+        if let Some(session) = self.picker.active_mut() {
             if let Some(state) = session.model_state_mut() {
                 state.before_model = None;
             }
@@ -150,7 +150,7 @@ impl<'a> ProviderController<'a> {
             self.picker.in_provider_model_transition = false;
             self.picker.provider_model_transition_state = None;
 
-            if let Some(session) = self.picker.session_mut() {
+            if let Some(session) = self.picker.active_mut() {
                 if let Some(state) = session.provider_state_mut() {
                     state.before_provider = None;
                 }
@@ -197,7 +197,7 @@ impl<'a> ProviderController<'a> {
                         true
                     };
 
-                if let Some(session) = self.picker.session_mut() {
+                if let Some(session) = self.picker.active_mut() {
                     if let Some(state) = session.provider_state_mut() {
                         state.before_provider = None;
                     }
@@ -249,7 +249,7 @@ impl<'a> ProviderController<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::picker::{PickerData, PickerSession, ProviderPickerState};
+    use crate::core::app::picker::{ActivePicker, PickerData, ProviderPickerState};
     use crate::ui::picker::{PickerItem, PickerState};
     use crate::utils::test_utils::create_test_app;
 
@@ -317,7 +317,7 @@ mod tests {
             sort_key: None,
         }];
 
-        app.picker.picker_session = Some(PickerSession {
+        app.picker.active_picker = Some(ActivePicker {
             state: PickerState::new("Pick Provider", items.clone(), 0),
             data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: String::new(),
@@ -340,7 +340,7 @@ mod tests {
 
         let provider_state = app
             .picker
-            .session()
+            .active()
             .and_then(|session| session.provider_state())
             .expect("provider picker state should exist");
         assert!(provider_state.before_provider.is_none());

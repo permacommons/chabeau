@@ -36,7 +36,14 @@ Shared prompt/input behavior for CLI setup flows lives in
 Interactive chat setup is handled by `src/ui/chat_loop/setup.rs`.
 `bootstrap_app(...)` loads configuration, resolves auth through `AuthManager`,
 builds `App`, and chooses whether to launch provider/model pickers based on the
-current config state.
+current config state. If `--session <id>` is provided, setup restores the saved
+session after the app is built.
+
+Saved-session restore uses the snapshot for transcript-facing context
+(provider, model, base URL, tools, character/persona/preset, and UI settings)
+but resolves credentials at load time. If the saved provider cannot be restored,
+the session still loads and continues with the current startup provider while
+showing a status warning.
 
 ## Core application state
 The central runtime object is `App` (`src/core/app/mod.rs`), with session details
@@ -45,10 +52,11 @@ kept in `SessionContext` (`src/core/app/session.rs`).
 Notable state domains:
 
 - Conversation/history and UI mode/input focus.
-- Picker state (model/theme/provider/character/persona/preset/MCP prompt).
+- Picker state (model/theme/provider/character/persona/preset/saved session).
 - Streaming lifecycle and pending tool calls.
 - MCP manager, server enablement, and per-tool approval memory.
 - Tool inspection overlay state (`src/core/app/inspect.rs`).
+- Saved chat session snapshots in `src/core/session_store.rs`.
 
 ## MCP configuration and authentication
 MCP server configuration is defined in `src/core/config/data.rs`
@@ -103,6 +111,10 @@ Slash command routing is defined in `src/commands/mod.rs` with MCP handlers
 under `src/commands/handlers/mcp.rs` and prompt parsing in
 `src/commands/mcp_prompt_parser.rs`.
 
+Session commands live in `src/commands/handlers/session.rs`: `/save` writes the
+current `App` state through `session_store`, while `/load` and `/sessions` open
+the saved-session picker or restore by ID.
+
 The chat loop schedules MCP refresh/call work via executor helpers in
 `src/ui/chat_loop/executors/` (`mcp_init.rs`, `mcp_tools.rs`).
 
@@ -135,8 +147,9 @@ Key modules and responsibilities:
 - `src/core/app/conversation.rs` — owns transcript/session mutation logic through
   `ConversationController` (message append/finalize, retry/refine lifecycle,
   status updates, stream token setup).
-- `src/core/app/picker/mod.rs` — owns picker session data for model/provider/
-  theme/character/persona/preset flows and inspect metadata backing.
+- `src/core/app/picker/mod.rs` — owns `ActivePicker` data for model/provider/
+  theme/character/persona/preset/saved-session flows and inspect metadata
+  backing.
 - `src/core/app/actions/mod.rs` — root action and command contracts, plus
   top-level reducer fan-out (`apply_action`, `apply_actions`).
 - `src/core/app/actions/streaming.rs` — stream-side reducer entrypoint for

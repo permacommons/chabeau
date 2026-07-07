@@ -676,6 +676,40 @@ fn get_cached_entry(provider_name: &str) -> Option<KeyringCacheEntry> {
 static TOKEN_CACHE: LazyLock<Mutex<HashMap<String, KeyringCacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[cfg(test)]
+pub(crate) fn set_test_token(provider_name: &str, token: &str) {
+    let mut cache = TOKEN_CACHE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    cache.insert(
+        provider_name.to_string(),
+        KeyringCacheEntry::Present(token.to_string()),
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn clear_test_tokens() {
+    let mut cache = TOKEN_CACHE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    cache.clear();
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_recoverable_keyring_error(provider_name: &str) {
+    let backend_error = std::io::Error::other("mock backend unavailable");
+    let keyring_error = keyring::Error::NoStorageAccess(Box::new(backend_error));
+    let mut cache = TOKEN_CACHE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    cache.insert(
+        provider_name.to_string(),
+        KeyringCacheEntry::Error(SharedKeyringAccessError::new(KeyringAccessError::from(
+            keyring_error,
+        ))),
+    );
+}
+
 impl ProviderAuthSource for AuthManager {
     fn uses_keyring(&self) -> bool {
         self.use_keyring

@@ -2,6 +2,7 @@ pub(super) mod config;
 pub(super) mod core;
 pub(super) mod io;
 pub(super) mod mcp;
+pub(crate) mod session;
 
 use crate::commands::CommandResult;
 use crate::core::app::App;

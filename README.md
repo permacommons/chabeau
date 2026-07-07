@@ -13,6 +13,7 @@ Chabeau is a full-screen terminal chat interface that connects to various AI API
   - [Authenticate](#authenticate)
   - [Launch](#launch)
 - [Working with Providers and Models](#working-with-providers-and-models)
+- [Session Management](#session-management)
 - [Configuration](#configuration)
 - [MCP Servers](#mcp-servers)
 - [Character Cards](#character-cards)
@@ -61,6 +62,7 @@ The MCP server shown in the videos above is "[MCP Research Friend](https://githu
 - On-demand refinements of the last assistant response with `/refine <prompt>`
 - Slash command registry with inline help for faster command discovery
 - Conversation logging with pause/resume; quick `/dump` of contents to a file
+- Saved chat sessions with `/save`, `/load`, `/sessions`, and startup restore
 - Syntax highlighting for fenced code blocks (Python, Bash, JavaScript, and more)
 - Inline block selection (Ctrl+B) to copy or save fenced code blocks
 - User message selection (Ctrl+P) to revisit and copy prior prompts
@@ -141,6 +143,7 @@ chabeau                              # Start chat with defaults (pickers on dema
 chabeau --provider openai            # Use specific provider
 chabeau --model gpt-5                # Use specific model
 chabeau --log conversation.log       # Enable logging immediately on startup
+chabeau --session <session-id>       # Restore a saved chat session
 ```
 
 Discover available options:
@@ -193,6 +196,17 @@ When stdout is redirected to a file or piped into another program, Chabeau autom
 If you have multiple providers configured but no default set, Chabeau will prompt you to specify a provider with the `-p` flag. The `-p` and other global flags can be placed before or after the prompt.
 
 Environment variable values can make their way into shell histories or other places they shouldn't, so using the keyring is generally advisable.
+
+## Session Management
+
+Use `/save [name]` to persist the current conversation. Use `/load` or
+`/sessions` to browse saved sessions in a picker, or `/load <session-id>` to
+restore one directly.
+
+Saved sessions are JSON files under Chabeau's data directory, such as
+`~/.local/share/chabeau/sessions/` on Linux. They include transcript and session
+context, but not API keys. Start from a saved session with
+`chabeau --session <session-id>`.
 
 ## Configuration
 
@@ -536,7 +550,7 @@ Chabeau uses a modular design with focused components:
   - `settings/` – Trait-based `set`/`unset` handler registry
   - `theme_list.rs` – Theme listing functionality
 - `commands/` – Chat command processing and registry-driven dispatch
-  - `handlers/` – Domain-specific command handlers (`core`, `config`, `io`, `mcp`)
+  - `handlers/` – Domain-specific command handlers (`core`, `config`, `io`, `mcp`, `session`)
   - `mcp_prompt_parser.rs` – `/server-id:prompt-id` parser and helpers
   - `mod.rs` – Command dispatcher and command result plumbing
   - `refine.rs` – Message refinement logic
@@ -585,6 +599,7 @@ Chabeau uses a modular design with focused components:
   - `persona.rs` – Persona management and variable substitution
   - `preset.rs` – System instruction preset management
   - `providers.rs` – Provider selection and shared provider utilities
+  - `session_store.rs` – Saved chat session JSON persistence
   - `shared_selection.rs` – Shared current-selection helpers
   - `text_wrapping.rs` – Text wrapping utilities
 - `mcp/` – Model Context Protocol client integration

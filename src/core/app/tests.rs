@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::{ChatMessage, ChatToolCall, ChatToolCallFunction};
 use crate::core::app::picker::{
-    ModelPickerState, PickerData, PickerSession, ProviderPickerState, ThemePickerState,
+    ActivePicker, ModelPickerState, PickerData, ProviderPickerState, ThemePickerState,
 };
 use crate::core::app::session::{
     PendingToolCall, StreamContinuation, ToolCallRequest, ToolPayloadHistoryEntry,
@@ -65,7 +65,7 @@ fn model_picker_title_uses_az_when_no_dates() {
     ];
     let mut picker_state = PickerState::new("Pick Model", items.clone(), 0);
     picker_state.sort_mode = crate::ui::picker::SortMode::Name;
-    app.picker.picker_session = Some(PickerSession {
+    app.picker.active_picker = Some(ActivePicker {
         state: picker_state,
         data: PickerData::Model(Box::new(ModelPickerState {
             search_filter: String::new(),
@@ -309,7 +309,7 @@ fn start_new_stream_preserves_tool_history_and_clears_transient_state() {
 fn default_sort_mode_helper_behaviour() {
     let mut app = create_test_app();
     // Theme picker prefers alphabetical → Name
-    app.picker.picker_session = Some(PickerSession {
+    app.picker.active_picker = Some(ActivePicker {
         state: PickerState::new("Pick Theme", vec![], 0),
         data: PickerData::Theme(Box::new(ThemePickerState {
             search_filter: String::new(),
@@ -319,11 +319,11 @@ fn default_sort_mode_helper_behaviour() {
         })),
     });
     assert!(matches!(
-        app.picker_session().unwrap().default_sort_mode(),
+        app.active_picker().unwrap().default_sort_mode(),
         crate::ui::picker::SortMode::Name
     ));
     // Provider picker prefers alphabetical → Name
-    app.picker.picker_session = Some(PickerSession {
+    app.picker.active_picker = Some(ActivePicker {
         state: PickerState::new("Pick Provider", vec![], 0),
         data: PickerData::Provider(Box::new(ProviderPickerState {
             search_filter: String::new(),
@@ -332,11 +332,11 @@ fn default_sort_mode_helper_behaviour() {
         })),
     });
     assert!(matches!(
-        app.picker_session().unwrap().default_sort_mode(),
+        app.active_picker().unwrap().default_sort_mode(),
         crate::ui::picker::SortMode::Name
     ));
     // Model picker with dates → Date
-    app.picker.picker_session = Some(PickerSession {
+    app.picker.active_picker = Some(ActivePicker {
         state: PickerState::new("Pick Model", vec![], 0),
         data: PickerData::Model(Box::new(ModelPickerState {
             search_filter: String::new(),
@@ -346,19 +346,19 @@ fn default_sort_mode_helper_behaviour() {
         })),
     });
     assert!(matches!(
-        app.picker_session().unwrap().default_sort_mode(),
+        app.active_picker().unwrap().default_sort_mode(),
         crate::ui::picker::SortMode::Date
     ));
     // Model picker without dates → Name
-    if let Some(PickerSession {
+    if let Some(ActivePicker {
         data: PickerData::Model(state),
         ..
-    }) = app.picker_session_mut()
+    }) = app.active_picker_mut()
     {
         state.has_dates = false;
     }
     assert!(matches!(
-        app.picker_session().unwrap().default_sort_mode(),
+        app.active_picker().unwrap().default_sort_mode(),
         crate::ui::picker::SortMode::Name
     ));
 }
@@ -1830,7 +1830,7 @@ fn test_turn_off_character_mode_from_picker() {
     app.session.set_character(character);
     assert!(app.session.active_character.is_some());
 
-    app.picker.picker_session = Some(picker::PickerSession {
+    app.picker.active_picker = Some(picker::ActivePicker {
         state: PickerState::new(
             "Pick Character",
             vec![PickerItem {

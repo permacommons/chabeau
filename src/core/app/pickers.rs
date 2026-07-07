@@ -1,5 +1,5 @@
 use super::picker::{
-    self, CharacterPickerState, ModelPickerState, PersonaPickerState, PickerMode, PickerSession,
+    self, ActivePicker, CharacterPickerState, ModelPickerState, PersonaPickerState, PickerMode,
     PresetPickerState, ProviderPickerState, ThemePickerState,
 };
 use super::ui_state::ActivityKind;
@@ -19,13 +19,13 @@ pub struct ModelPickerRequest {
 }
 
 impl App {
-    pub fn picker_session(&self) -> Option<&PickerSession> {
-        self.picker.session()
+    pub fn active_picker(&self) -> Option<&ActivePicker> {
+        self.picker.active()
     }
 
     #[cfg(test)]
-    pub fn picker_session_mut(&mut self) -> Option<&mut PickerSession> {
-        self.picker.session_mut()
+    pub fn active_picker_mut(&mut self) -> Option<&mut ActivePicker> {
+        self.picker.active_mut()
     }
 
     pub fn current_picker_mode(&self) -> Option<PickerMode> {
@@ -41,35 +41,33 @@ impl App {
     }
 
     pub fn theme_picker_state(&self) -> Option<&ThemePickerState> {
-        self.picker.session().and_then(PickerSession::theme_state)
+        self.picker.active().and_then(ActivePicker::theme_state)
     }
 
     pub fn theme_picker_state_mut(&mut self) -> Option<&mut ThemePickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::theme_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::theme_state_mut)
     }
 
     pub fn model_picker_state(&self) -> Option<&ModelPickerState> {
-        self.picker.session().and_then(PickerSession::model_state)
+        self.picker.active().and_then(ActivePicker::model_state)
     }
 
     pub fn model_picker_state_mut(&mut self) -> Option<&mut ModelPickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::model_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::model_state_mut)
     }
 
     pub fn provider_picker_state(&self) -> Option<&ProviderPickerState> {
-        self.picker
-            .session()
-            .and_then(PickerSession::provider_state)
+        self.picker.active().and_then(ActivePicker::provider_state)
     }
 
     pub fn provider_picker_state_mut(&mut self) -> Option<&mut ProviderPickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::provider_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::provider_state_mut)
     }
 
     pub fn close_picker(&mut self) {
@@ -241,7 +239,7 @@ impl App {
     pub fn apply_selected_character(&mut self, set_as_default: bool) {
         let character_name = self
             .picker
-            .session()
+            .active()
             .and_then(|picker| picker.state.selected_id())
             .map(|s| s.to_string());
 
@@ -317,7 +315,7 @@ impl App {
     pub fn apply_selected_persona(&mut self, set_as_default: bool) {
         let persona_id = self
             .picker
-            .session()
+            .active()
             .and_then(|picker| picker.state.selected_id())
             .map(|s| s.to_string());
 
@@ -400,7 +398,7 @@ impl App {
     pub fn apply_selected_preset(&mut self, set_as_default: bool) {
         let preset_id = self
             .picker
-            .session()
+            .active()
             .and_then(|picker| picker.state.selected_id())
             .map(|s| s.to_string());
 
@@ -458,39 +456,60 @@ impl App {
 
     /// Get character picker state accessor
     pub fn character_picker_state(&self) -> Option<&CharacterPickerState> {
-        self.picker
-            .session()
-            .and_then(PickerSession::character_state)
+        self.picker.active().and_then(ActivePicker::character_state)
     }
 
     /// Get mutable character picker state accessor
     pub fn character_picker_state_mut(&mut self) -> Option<&mut CharacterPickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::character_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::character_state_mut)
     }
 
     /// Get persona picker state accessor
     pub fn persona_picker_state(&self) -> Option<&PersonaPickerState> {
-        self.picker.session().and_then(PickerSession::persona_state)
+        self.picker.active().and_then(ActivePicker::persona_state)
     }
 
     /// Get mutable persona picker state accessor
     pub fn persona_picker_state_mut(&mut self) -> Option<&mut PersonaPickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::persona_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::persona_state_mut)
     }
 
     /// Get preset picker state accessor
     pub fn preset_picker_state(&self) -> Option<&PresetPickerState> {
-        self.picker.session().and_then(PickerSession::preset_state)
+        self.picker.active().and_then(ActivePicker::preset_state)
     }
 
     /// Get mutable preset picker state accessor
     pub fn preset_picker_state_mut(&mut self) -> Option<&mut PresetPickerState> {
         self.picker
-            .session_mut()
-            .and_then(PickerSession::preset_state_mut)
+            .active_mut()
+            .and_then(ActivePicker::preset_state_mut)
+    }
+
+    /// Get saved-session picker state accessor
+    pub fn saved_session_picker_state(
+        &self,
+    ) -> Option<&crate::core::app::picker::SavedSessionPickerState> {
+        self.picker
+            .active()
+            .and_then(ActivePicker::saved_session_state)
+    }
+
+    /// Get mutable saved-session picker state accessor
+    pub fn saved_session_picker_state_mut(
+        &mut self,
+    ) -> Option<&mut crate::core::app::picker::SavedSessionPickerState> {
+        self.picker
+            .active_mut()
+            .and_then(ActivePicker::saved_session_state_mut)
+    }
+
+    /// Filter saved sessions based on search term and update picker
+    pub fn filter_saved_sessions(&mut self) {
+        self.picker.filter_saved_sessions();
     }
 }

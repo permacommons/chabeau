@@ -79,6 +79,7 @@ impl App {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         let ui = UiState::new_basic(theme, markdown_enabled, syntax_enabled, None);

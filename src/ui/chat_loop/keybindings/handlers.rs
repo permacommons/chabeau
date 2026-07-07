@@ -1034,7 +1034,7 @@ impl KeyHandler for PickerHandler {
         _last_input_layout_update: Option<Instant>,
     ) -> KeyResult {
         // Check if there's a picker session before handling the key
-        let had_picker_before = app.read(|app| app.picker_session().is_some()).await;
+        let had_picker_before = app.read(|app| app.active_picker().is_some()).await;
 
         handle_picker_key_event(app, dispatcher, key, term_width, term_height).await;
 

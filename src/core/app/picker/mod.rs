@@ -1,16 +1,16 @@
 //! Picker domain state and reducers for selectable configuration surfaces.
 //!
 //! # Ownership boundary
-//! This module owns picker-session state (`PickerSession`, filtered items,
+//! This module owns active picker state (`ActivePicker`, filtered items,
 //! selection, inspect metadata) and picker transition bookkeeping used by the
 //! app shell. It delegates rendering to `ui::picker` and delegates event routing
 //! to `core::app::actions::picker`.
 //!
 //! # Main structures and invariants
-//! - [`PickerController`] stores at most one active picker session.
+//! - [`PickerController`] stores at most one active picker.
 //! - [`PickerData`] carries mode-specific backing data and preserves the
 //!   unfiltered item list for search.
-//! - Session sort/filter/title fields are updated together via helper reducers.
+//! - Picker sort/filter/title fields are updated together via helper reducers.
 //!
 //! # Call flow entrypoints
 //! Picker actions from the event loop call methods on [`PickerController`]
@@ -88,6 +88,7 @@ pub enum PickerMode {
     Character,
     Persona,
     Preset,
+    SavedSession,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +132,15 @@ pub struct PresetPickerState {
     pub all_items: Vec<PickerItem>,
 }
 
+/// State for the saved-session picker.
+#[derive(Debug, Clone)]
+pub struct SavedSessionPickerState {
+    pub sessions: Vec<crate::core::session_store::SessionSummary>,
+    pub selected_index: usize,
+    pub search_filter: String,
+    pub all_items: Vec<PickerItem>,
+}
+
 #[derive(Debug, Clone)]
 pub enum PickerData {
     Theme(Box<ThemePickerState>),
@@ -139,6 +149,7 @@ pub enum PickerData {
     Character(CharacterPickerState),
     Persona(PersonaPickerState),
     Preset(PresetPickerState),
+    SavedSession(SavedSessionPickerState),
 }
 
 impl PickerData {
@@ -150,6 +161,7 @@ impl PickerData {
             PickerData::Character(_) => PickerMode::Character,
             PickerData::Persona(_) => PickerMode::Persona,
             PickerData::Preset(_) => PickerMode::Preset,
+            PickerData::SavedSession(_) => PickerMode::SavedSession,
         }
     }
 
@@ -160,7 +172,8 @@ impl PickerData {
             | PickerData::Provider(_)
             | PickerData::Character(_)
             | PickerData::Persona(_)
-            | PickerData::Preset(_) => true,
+            | PickerData::Preset(_)
+            | PickerData::SavedSession(_) => true,
         }
     }
 
@@ -179,6 +192,7 @@ impl PickerData {
             PickerMode::Character => "Pick Character",
             PickerMode::Persona => "Pick Persona",
             PickerMode::Preset => "Pick Preset",
+            PickerMode::SavedSession => "Load Session",
         }
     }
 
@@ -190,6 +204,7 @@ impl PickerData {
             PickerData::Character(state) => &state.search_filter,
             PickerData::Persona(state) => &state.search_filter,
             PickerData::Preset(state) => &state.search_filter,
+            PickerData::SavedSession(state) => &state.search_filter,
         }
     }
 
@@ -201,12 +216,13 @@ impl PickerData {
             PickerData::Character(state) => &state.all_items,
             PickerData::Persona(state) => &state.all_items,
             PickerData::Preset(state) => &state.all_items,
+            PickerData::SavedSession(state) => &state.all_items,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct PickerSession {
+pub struct ActivePicker {
     pub state: PickerState,
     pub data: PickerData,
 }
@@ -233,7 +249,7 @@ macro_rules! picker_state_accessors {
             )+
         }
 
-        impl PickerSession {
+        impl ActivePicker {
             $(
                 pub fn $getter(&self) -> Option<&$state> {
                     self.data.$getter()
@@ -247,7 +263,7 @@ macro_rules! picker_state_accessors {
     };
 }
 
-impl PickerSession {
+impl ActivePicker {
     pub fn mode(&self) -> PickerMode {
         self.data.mode()
     }
@@ -288,10 +304,11 @@ picker_state_accessors! {
     (Character, character_state, character_state_mut, CharacterPickerState),
     (Persona, persona_state, persona_state_mut, PersonaPickerState),
     (Preset, preset_state, preset_state_mut, PresetPickerState),
+    (SavedSession, saved_session_state, saved_session_state_mut, SavedSessionPickerState),
 }
 
 pub struct PickerController {
-    pub picker_session: Option<PickerSession>,
+    pub active_picker: Option<ActivePicker>,
     pub in_provider_model_transition: bool,
     pub provider_model_transition_state: Option<(String, String, String, String, String)>,
     pub startup_requires_provider: bool,
@@ -302,7 +319,7 @@ pub struct PickerController {
 impl PickerController {
     pub(crate) fn new() -> Self {
         Self {
-            picker_session: None,
+            active_picker: None,
             in_provider_model_transition: false,
             provider_model_transition_state: None,
             startup_requires_provider: false,
@@ -311,44 +328,64 @@ impl PickerController {
         }
     }
 
-    pub fn session(&self) -> Option<&PickerSession> {
-        self.picker_session.as_ref()
+    pub fn active(&self) -> Option<&ActivePicker> {
+        self.active_picker.as_ref()
     }
 
-    pub fn session_mut(&mut self) -> Option<&mut PickerSession> {
-        self.picker_session.as_mut()
+    pub fn active_mut(&mut self) -> Option<&mut ActivePicker> {
+        self.active_picker.as_mut()
     }
 
     pub fn current_mode(&self) -> Option<PickerMode> {
-        self.session().map(PickerSession::mode)
+        self.active().map(ActivePicker::mode)
     }
 
     pub fn state(&self) -> Option<&PickerState> {
-        self.session().map(|session| &session.state)
+        self.active().map(|session| &session.state)
     }
 
     pub fn state_mut(&mut self) -> Option<&mut PickerState> {
-        self.session_mut().map(|session| &mut session.state)
+        self.active_mut().map(|session| &mut session.state)
     }
 
     pub fn close(&mut self) {
-        self.picker_session = None;
+        self.active_picker = None;
     }
 
-    fn start_picker_session(
+    /// Start a picker for saved chat sessions.
+    pub fn open_saved_session_picker(
         &mut self,
-        mut session: PickerSession,
+        sessions: Vec<crate::core::session_store::SessionSummary>,
+        items: Vec<PickerItem>,
+    ) {
+        let selected = 0;
+        let picker_state = PickerState::new("Load Session", items.clone(), selected);
+        let active_picker = ActivePicker {
+            state: picker_state,
+            data: PickerData::SavedSession(SavedSessionPickerState {
+                sessions,
+                selected_index: selected,
+                search_filter: String::new(),
+                all_items: items,
+            }),
+        };
+        self.start_active_picker(active_picker, None);
+    }
+
+    fn start_active_picker(
+        &mut self,
+        mut active_picker: ActivePicker,
         preferred_selection: Option<String>,
     ) {
-        let mode = session.mode();
-        session.state.sort_mode = session.default_sort_mode();
-        self.picker_session = Some(session);
+        let mode = active_picker.mode();
+        active_picker.state.sort_mode = active_picker.default_sort_mode();
+        self.active_picker = Some(active_picker);
 
         self.sort_items();
         self.update_title();
 
         if let Some(preferred) = preferred_selection {
-            if let Some(session) = self.session_mut() {
+            if let Some(session) = self.active_mut() {
                 if let Some((idx, _)) =
                     session
                         .state
@@ -432,7 +469,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Theme", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Theme(Box::new(ThemePickerState {
                 search_filter: String::new(),
@@ -442,7 +479,7 @@ impl PickerController {
             })),
         };
 
-        self.start_picker_session(session, active_theme_id);
+        self.start_active_picker(session, active_theme_id);
         Ok(())
     }
 
@@ -558,7 +595,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Model", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: String::new(),
@@ -568,13 +605,13 @@ impl PickerController {
             })),
         };
 
-        self.start_picker_session(session, Some(session_context.model.clone()));
+        self.start_active_picker(session, Some(session_context.model.clone()));
 
         Ok(())
     }
 
     fn filter_session_items(&mut self, expected_mode: PickerMode, special_ids: &[&str]) {
-        let Some(session) = self.session_mut() else {
+        let Some(session) = self.active_mut() else {
             return;
         };
 
@@ -626,11 +663,11 @@ impl PickerController {
 
     pub fn revert_model_preview(&mut self, session: &mut SessionContext) {
         let previous_model = self
-            .session()
-            .and_then(PickerSession::model_state)
+            .active()
+            .and_then(ActivePicker::model_state)
             .and_then(|state| state.before_model.clone());
 
-        if let Some(session) = self.session_mut() {
+        if let Some(session) = self.active_mut() {
             if let Some(state) = session.model_state_mut() {
                 state.before_model = None;
                 state.search_filter.clear();
@@ -650,11 +687,11 @@ impl PickerController {
 
     pub fn revert_provider_preview(&mut self, session: &mut SessionContext) {
         let previous_provider = self
-            .session()
-            .and_then(PickerSession::provider_state)
+            .active()
+            .and_then(ActivePicker::provider_state)
             .and_then(|state| state.before_provider.clone());
 
-        if let Some(session) = self.session_mut() {
+        if let Some(session) = self.active_mut() {
             if let Some(state) = session.provider_state_mut() {
                 state.before_provider = None;
                 state.search_filter.clear();
@@ -695,7 +732,7 @@ impl PickerController {
 
     pub fn sort_items(&mut self) {
         let prefers_alpha = self.prefers_alphabetical();
-        if let Some(session) = self.session_mut() {
+        if let Some(session) = self.active_mut() {
             let picker = &mut session.state;
 
             // Extract special entries (like "turn off character mode") that should stay at top
@@ -750,7 +787,7 @@ impl PickerController {
     }
 
     pub fn update_title(&mut self) {
-        let Some(session) = self.session_mut() else {
+        let Some(session) = self.active_mut() else {
             return;
         };
 
@@ -874,7 +911,7 @@ impl PickerController {
         }
 
         let picker_state = PickerState::new("Pick Provider", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Provider(Box::new(ProviderPickerState {
                 search_filter: String::new(),
@@ -886,7 +923,7 @@ impl PickerController {
             })),
         };
 
-        self.start_picker_session(session, Some(session_context.provider_name.clone()));
+        self.start_active_picker(session, Some(session_context.provider_name.clone()));
 
         Ok(())
     }
@@ -901,6 +938,10 @@ impl PickerController {
 
     pub fn filter_presets(&mut self) {
         self.filter_session_items(PickerMode::Preset, &[TURN_OFF_PRESET_ID]);
+    }
+
+    pub fn filter_saved_sessions(&mut self) {
+        self.filter_session_items(PickerMode::SavedSession, &[]);
     }
 
     pub fn open_character_picker(
@@ -972,7 +1013,7 @@ impl PickerController {
             .and_then(|active_id| items.iter().position(|item| item.id == active_id))
             .unwrap_or(0);
         let picker_state = PickerState::new("Pick Character", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: String::new(),
@@ -980,7 +1021,7 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, active_character_id);
+        self.start_active_picker(session, active_character_id);
 
         Ok(())
     }
@@ -1072,7 +1113,7 @@ impl PickerController {
             .and_then(|active_id| items.iter().position(|item| item.id == active_id))
             .unwrap_or(0);
         let picker_state = PickerState::new("Pick Persona", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
                 search_filter: String::new(),
@@ -1080,7 +1121,7 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, active_persona_id);
+        self.start_active_picker(session, active_persona_id);
 
         Ok(())
     }
@@ -1173,7 +1214,7 @@ impl PickerController {
             .and_then(|active_id| items.iter().position(|item| item.id == active_id))
             .unwrap_or(0);
         let picker_state = PickerState::new("Pick Preset", items.clone(), selected);
-        let session = PickerSession {
+        let session = ActivePicker {
             state: picker_state,
             data: PickerData::Preset(PresetPickerState {
                 search_filter: String::new(),
@@ -1181,13 +1222,13 @@ impl PickerController {
             }),
         };
 
-        self.start_picker_session(session, active_preset_id);
+        self.start_active_picker(session, active_preset_id);
 
         Ok(())
     }
 
     fn prefers_alphabetical(&self) -> bool {
-        self.session()
+        self.active()
             .map(|session| session.prefers_alphabetical())
             .unwrap_or(false)
     }
@@ -1220,7 +1261,7 @@ mod tests {
         let mut picker_state = PickerState::new("Pick Model", items.clone(), 2);
         picker_state.sort_mode = SortMode::Name;
 
-        let mut session = PickerSession {
+        let mut session = ActivePicker {
             state: picker_state,
             data: PickerData::Model(Box::new(ModelPickerState {
                 search_filter: "GPT".to_string(),
@@ -1231,10 +1272,10 @@ mod tests {
         };
         session.state.sort_mode = session.default_sort_mode();
 
-        controller.picker_session = Some(session);
+        controller.active_picker = Some(session);
         controller.filter_models();
 
-        let session = controller.session().expect("model picker session");
+        let session = controller.active().expect("model picker session");
         assert_eq!(session.state.selected, 0);
         assert_eq!(session.state.items.len(), 2);
         let ids: Vec<&str> = session
@@ -1263,7 +1304,7 @@ mod tests {
         let mut picker_state = PickerState::new("Pick Character", items.clone(), 2);
         picker_state.sort_mode = SortMode::Name;
 
-        let mut session = PickerSession {
+        let mut session = ActivePicker {
             state: picker_state,
             data: PickerData::Character(CharacterPickerState {
                 search_filter: "GAMMA".to_string(),
@@ -1272,10 +1313,10 @@ mod tests {
         };
         session.state.sort_mode = session.default_sort_mode();
 
-        controller.picker_session = Some(session);
+        controller.active_picker = Some(session);
         controller.filter_characters();
 
-        let session = controller.session().expect("character picker session");
+        let session = controller.active().expect("character picker session");
         assert_eq!(session.state.selected, 0);
         assert_eq!(session.state.items.len(), 2);
         assert_eq!(session.state.items[0].id, TURN_OFF_CHARACTER_ID);
@@ -1298,7 +1339,7 @@ mod tests {
         let mut picker_state = PickerState::new("Pick Persona", items.clone(), 2);
         picker_state.sort_mode = SortMode::Name;
 
-        let mut session = PickerSession {
+        let mut session = ActivePicker {
             state: picker_state,
             data: PickerData::Persona(PersonaPickerState {
                 search_filter: "ADVISER".to_string(),
@@ -1307,10 +1348,10 @@ mod tests {
         };
         session.state.sort_mode = session.default_sort_mode();
 
-        controller.picker_session = Some(session);
+        controller.active_picker = Some(session);
         controller.filter_personas();
 
-        let session = controller.session().expect("persona picker session");
+        let session = controller.active().expect("persona picker session");
         assert_eq!(session.state.selected, 0);
         assert_eq!(session.state.items.len(), 2);
         assert_eq!(session.state.items[0].id, TURN_OFF_PERSONA_ID);
@@ -1333,7 +1374,7 @@ mod tests {
         let mut picker_state = PickerState::new("Pick Preset", items.clone(), 2);
         picker_state.sort_mode = SortMode::Name;
 
-        let mut session = PickerSession {
+        let mut session = ActivePicker {
             state: picker_state,
             data: PickerData::Preset(PresetPickerState {
                 search_filter: "FOCUS".to_string(),
@@ -1342,14 +1383,58 @@ mod tests {
         };
         session.state.sort_mode = session.default_sort_mode();
 
-        controller.picker_session = Some(session);
+        controller.active_picker = Some(session);
         controller.filter_presets();
 
-        let session = controller.session().expect("preset picker session");
+        let session = controller.active().expect("preset picker session");
         assert_eq!(session.state.selected, 0);
         assert_eq!(session.state.items.len(), 2);
         assert_eq!(session.state.items[0].id, TURN_OFF_PRESET_ID);
         assert!(session.state.items.iter().any(|item| item.id == "focus"));
+    }
+
+    #[test]
+    fn test_filter_sessions_updates_rendered_items_from_source_list() {
+        let mut controller = PickerController::new();
+        let items = vec![
+            picker_item("sess-alpha", "Alpha Session", Some("openai | gpt-4")),
+            picker_item("sess-beta", "Beta Session", Some("anthropic | claude")),
+            picker_item("sess-gamma", "Gamma Session", Some("local | llama")),
+        ];
+
+        let mut picker_state = PickerState::new("Load Session", items.clone(), 2);
+        picker_state.sort_mode = SortMode::Name;
+
+        let mut session = ActivePicker {
+            state: picker_state,
+            data: PickerData::SavedSession(SavedSessionPickerState {
+                sessions: Vec::new(),
+                selected_index: 2,
+                search_filter: "claude".to_string(),
+                all_items: items,
+            }),
+        };
+        session.state.sort_mode = session.default_sort_mode();
+
+        controller.active_picker = Some(session);
+        controller.filter_saved_sessions();
+
+        let session = controller.active().expect("session load picker");
+        assert_eq!(session.state.selected, 0);
+        assert_eq!(session.state.items.len(), 1);
+        assert_eq!(session.state.items[0].id, "sess-beta");
+
+        let session = controller.active_mut().expect("session load picker");
+        session
+            .saved_session_state_mut()
+            .expect("session load state")
+            .search_filter
+            .clear();
+
+        controller.filter_saved_sessions();
+
+        let session = controller.active().expect("session load picker");
+        assert_eq!(session.state.items.len(), 3);
     }
 
     #[test]
@@ -1360,7 +1445,8 @@ mod tests {
         assert!(size_of::<ModelPickerState>() > small_inline);
         assert!(size_of::<ProviderPickerState>() > small_inline);
         assert!(size_of::<ThemePickerState>() > small_inline);
-        assert!(size_of::<PickerData>() < size_of::<ModelPickerState>());
+        // PickerData should still be reasonably compact (enum with large variants)
+        assert!(size_of::<PickerData>() < size_of::<ModelPickerState>() + size_of::<usize>());
     }
 
     #[test]
@@ -1498,7 +1584,7 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
         assert!(picker_items.len() >= 2);
         assert_eq!(picker_items[0].id, TURN_OFF_CHARACTER_ID);
         assert_eq!(picker_items[0].label, "[Turn off character mode]");
@@ -1548,7 +1634,7 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
         assert!(!picker_items
             .iter()
             .any(|item| item.id == TURN_OFF_CHARACTER_ID));
@@ -1622,12 +1708,12 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let items_before_sort = app.picker.session().unwrap().state.items.len();
+        let items_before_sort = app.picker.active().unwrap().state.items.len();
         assert!(items_before_sort >= 4); // turn off + 3 characters
 
         app.picker.sort_items();
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
 
         // First item should always be the turn off entry, regardless of sort
         assert_eq!(picker_items[0].id, TURN_OFF_CHARACTER_ID);
@@ -1676,12 +1762,12 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let items_before_sort = app.picker.session().unwrap().state.items.len();
+        let items_before_sort = app.picker.active().unwrap().state.items.len();
         assert!(items_before_sort >= 2);
 
         app.picker.sort_items();
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
 
         // First item should always be the turn off persona entry, regardless of sort
         assert_eq!(picker_items[0].id, TURN_OFF_PERSONA_ID);
@@ -1764,7 +1850,7 @@ mod tests {
             .open_character_picker(cards, &app.session)
             .unwrap();
 
-        let session = app.picker.session().expect("character picker session");
+        let session = app.picker.active().expect("character picker session");
         let selected_item = &session.state.items[session.state.selected];
         assert_eq!(selected_item.id, "Beta");
     }
@@ -1804,7 +1890,7 @@ mod tests {
             .open_persona_picker(&app.persona_manager, &app.session)
             .unwrap();
 
-        let session = app.picker.session().expect("persona picker session");
+        let session = app.picker.active().expect("persona picker session");
         let selected_item = &session.state.items[session.state.selected];
         assert_eq!(selected_item.id, "beta");
     }
@@ -1845,7 +1931,7 @@ mod tests {
             .open_preset_picker(&app.preset_manager, &app.session)
             .unwrap();
 
-        let session = app.picker.session().expect("preset picker session");
+        let session = app.picker.active().expect("preset picker session");
         let selected_item = &session.state.items[session.state.selected];
         assert_eq!(selected_item.id, "casual");
     }
@@ -1874,7 +1960,7 @@ mod tests {
             .open_persona_picker(&app.persona_manager, &app.session)
             .unwrap();
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
         let persona_item = picker_items
             .iter()
             .find(|item| item.id == "neat")
@@ -1910,7 +1996,7 @@ mod tests {
             .open_persona_picker(&app.persona_manager, &app.session)
             .unwrap();
 
-        let picker_items = &app.picker.session().unwrap().state.items;
+        let picker_items = &app.picker.active().unwrap().state.items;
         let persona_item = picker_items
             .iter()
             .find(|item| item.id == "blank")

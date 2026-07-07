@@ -63,6 +63,7 @@ pub struct RunChatOptions {
     pub preset: Option<String>,
     pub disable_mcp: bool,
     pub character_service: CharacterService,
+    pub session: Option<String>,
 }
 
 #[derive(Debug)]
@@ -187,12 +188,7 @@ async fn route_keyboard_event(
 ) -> Result<KeyboardEventOutcome, Box<dyn Error>> {
     let context = app
         .read(|app| {
-            let picker_open = app.model_picker_state().is_some()
-                || app.theme_picker_state().is_some()
-                || app.provider_picker_state().is_some()
-                || app.character_picker_state().is_some()
-                || app.persona_picker_state().is_some()
-                || app.preset_picker_state().is_some();
+            let picker_open = app.active_picker().is_some();
             KeyContext::from_ui_mode(&app.ui.mode, picker_open)
         })
         .await;
@@ -772,6 +768,7 @@ pub async fn run_chat(options: RunChatOptions) -> Result<(), Box<dyn Error>> {
     };
 
     event_reader_handle.abort();
+
     restore_terminal(&terminal).await?;
 
     let (should_print, last_term_size) = app

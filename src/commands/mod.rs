@@ -7,6 +7,7 @@ mod registry;
 
 pub use handlers::io::dump_conversation_with_overwrite;
 pub(crate) use handlers::mcp::build_mcp_server_output;
+pub use handlers::session::do_load_session;
 pub use registry::{all_commands, matching_commands, CommandInvocation};
 
 use crate::core::app::App;

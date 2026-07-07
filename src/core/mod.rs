@@ -33,5 +33,6 @@ pub mod persona;
 pub mod persona_integration_tests;
 pub mod preset;
 pub mod providers;
+pub mod session_store;
 mod shared_selection;
 pub mod text_wrapping;

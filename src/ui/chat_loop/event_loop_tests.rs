@@ -6,6 +6,7 @@ use crate::core::app::actions::{
 use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
 use crate::core::message::{self, Message, TranscriptRole};
+use crate::ui::picker::PickerItem;
 use crate::ui::theme::Theme;
 use crate::utils::test_utils::create_test_app;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -124,6 +125,52 @@ async fn tab_toggles_focus_without_slash_prefix() {
 
     assert!(outcome.request_redraw);
     assert!(app.read(|app| app.ui.is_transcript_focused()).await);
+}
+
+#[tokio::test]
+async fn session_picker_character_keys_do_not_fall_through_to_input() {
+    let app = new_app_handle();
+    app.update(|app| {
+        app.ui.set_input_text(String::new());
+        app.ui.focus_input();
+        app.picker.open_saved_session_picker(
+            Vec::new(),
+            vec![PickerItem {
+                id: "sess-alpha".to_string(),
+                label: "Alpha Session".to_string(),
+                metadata: Some("openai | gpt-4".to_string()),
+                inspect_metadata: None,
+                sort_key: None,
+            }],
+        );
+    })
+    .await;
+
+    let dispatcher = new_dispatcher();
+    let mode_registry = ModeAwareRegistry::new();
+    let mut last_update = Instant::now();
+
+    let _outcome = route_keyboard_event(
+        &app,
+        &mode_registry,
+        &dispatcher,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        Size::new(TERM_WIDTH, TERM_HEIGHT),
+        &mut last_update,
+    )
+    .await
+    .expect("session picker key routing should succeed");
+
+    let (input, picker_open) = app
+        .read(|app| {
+            (
+                app.ui.get_input_text().to_string(),
+                app.active_picker().is_some(),
+            )
+        })
+        .await;
+    assert_eq!(input, "");
+    assert!(picker_open);
 }
 
 #[tokio::test]

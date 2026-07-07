@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -76,7 +76,7 @@ pub struct ChatToolCallDelta {
     pub function: Option<ChatToolCallFunctionDelta>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -84,7 +84,7 @@ pub struct ChatToolCall {
     pub function: ChatToolCallFunction,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatToolCallFunction {
     pub name: String,
     pub arguments: String,

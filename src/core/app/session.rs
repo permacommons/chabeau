@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use reqwest::Client;
 use rust_mcp_schema::CreateMessageRequest;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{ChatMessage, ChatToolCall};
@@ -31,6 +32,15 @@ use crate::ui::theme::Theme;
 use crate::utils::color::quantize_theme_for_current_terminal;
 use crate::utils::logging::LoggingState;
 use crate::utils::url::construct_api_url;
+
+/// Generate a new session ID using a hex-encoded random value.
+fn generate_session_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).unwrap_or_else(|_| {
+        bytes.copy_from_slice(b"0000000000000000");
+    });
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
 
 pub struct SessionContext {
     pub client: Client,
@@ -59,6 +69,8 @@ pub struct SessionContext {
     pub active_assistant_message_index: Option<usize>,
     pub mcp_tools_enabled: bool,
     pub mcp_tools_unsupported: bool,
+    /// UUID for the current conversation session. Used for save/load operations.
+    pub session_id: String,
 }
 
 #[derive(Default, Clone)]
@@ -81,7 +93,7 @@ pub struct StreamContinuation {
     pub api_messages_base: Vec<ChatMessage>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct McpInitState {
     pub in_progress: bool,
     pub complete: bool,
@@ -95,7 +107,7 @@ pub struct PendingToolCall {
     pub arguments: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolResultStatus {
     Success,
     Error,
@@ -288,6 +300,7 @@ impl SessionContext {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         }
     }
 }
@@ -606,6 +619,7 @@ pub(crate) async fn prepare_with_auth(
         active_assistant_message_index: None,
         mcp_tools_enabled: false,
         mcp_tools_unsupported: false,
+        session_id: generate_session_id(),
     };
 
     Ok(SessionBootstrap {
@@ -652,6 +666,7 @@ pub(crate) async fn prepare_uninitialized(
         active_assistant_message_index: None,
         mcp_tools_enabled: false,
         mcp_tools_unsupported: false,
+        session_id: generate_session_id(),
     };
 
     Ok(UninitializedSessionBootstrap {
@@ -941,6 +956,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         let card = CharacterCard {
@@ -1018,6 +1034,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         session.clear_character();
@@ -1074,6 +1091,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         // Should show greeting when character is active and greeting not shown
@@ -1133,6 +1151,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         // Should not show empty/whitespace greeting
@@ -1346,6 +1365,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         assert!(session.get_character().is_none());
@@ -1383,6 +1403,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         // Initially no greeting
@@ -1458,6 +1479,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         let card = CharacterCard {
@@ -1525,6 +1547,7 @@ mod tests {
             active_assistant_message_index: None,
             mcp_tools_enabled: false,
             mcp_tools_unsupported: false,
+            session_id: String::new(),
         };
 
         let card1 = CharacterCard {

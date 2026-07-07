@@ -179,6 +179,10 @@ pub struct Args {
     /// Disable MCP even if configured
     #[arg(short = 'd', long = "disable-mcp", action = clap::ArgAction::SetTrue)]
     pub disable_mcp: bool,
+
+    /// Session ID to load on startup
+    #[arg(short = 's', long, value_name = "SESSION")]
+    pub session: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -629,6 +633,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_service: service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
+                                session: args.session.clone(),
                             })
                             .await
                         }
@@ -646,6 +651,7 @@ async fn handle_args(args: Args) -> Result<(), Box<dyn Error>> {
                                 character_service: service_for_run
                                     .take()
                                     .expect("character service available for run_chat"),
+                                session: args.session.clone(),
                             })
                             .await
                         }

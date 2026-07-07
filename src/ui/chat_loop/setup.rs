@@ -32,6 +32,7 @@ pub async fn bootstrap_app(
         preset,
         disable_mcp,
         character_service,
+        session,
     } = options;
     let config = Config::load()?;
     let auth_manager = AuthManager::new()?;
@@ -105,7 +106,7 @@ pub async fn bootstrap_app(
 
     let mut character_service = Some(character_service);
 
-    let app = if open_provider_picker {
+    let mut app = if open_provider_picker {
         let service = character_service
             .take()
             .expect("character service should be available");
@@ -182,6 +183,14 @@ pub async fn bootstrap_app(
 
         app
     };
+
+    // Load session if specified via --session CLI flag
+    if let Some(ref session_id) = session {
+        if let Err(e) = crate::commands::do_load_session(&mut app, session_id) {
+            eprintln!("Error: Failed to load session '{}': {}", session_id, e);
+            std::process::exit(1);
+        }
+    }
 
     let app = Arc::new(Mutex::new(app));
 

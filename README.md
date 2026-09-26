@@ -681,7 +681,11 @@ cargo clippy --all-targets --all-features
 ```
 
 ### CI and Release Workflows
-- `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests.
+- `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests, plus:
+  - `lint`: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and a compile check of the Criterion benches, using the Rust version pinned in `LINT_RUST_TOOLCHAIN` so new lints in later releases cannot break unrelated PRs.
+  - `msrv`: builds with the `rust-version` declared in `Cargo.toml`.
+  - `audit`: `cargo audit`, failing on RustSec vulnerabilities in dependencies.
+- `.github/workflows/clippy-latest.yml` runs the same fmt and clippy checks weekly on the latest stable Rust. When they fail, it opens (or comments on) a tracking issue listing the new lints; fix them and bump `LINT_RUST_TOOLCHAIN` in the same PR. The issue closes automatically on the next passing run.
 - `.github/workflows/publish.yml` selects the newest semver tag reachable from `main`, then publishes the matching crates.io release and GitHub Release binaries with SHA-256 checksums, a keyless Sigstore-signed checksum manifest, and a GitHub Release description extracted from the matching `CHANGELOG.md` version section.
 - `.github/workflows/nightly.yml` builds Linux/macOS/Windows release binaries on a schedule and updates the moving `Nightly` pre-release with checksummed artifacts and a keyless Sigstore-signed checksum manifest.
 

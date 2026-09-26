@@ -319,7 +319,7 @@ async fn route_keyboard_event(
             app.ui.focus_input();
             app.ui
                 .apply_textarea_edit_and_recompute(term_size.width, |ta| {
-                    ta.input(tui_textarea::Input::from(key));
+                    ta.input(ratatui_textarea::Input::from(key));
                 });
         })
         .await;

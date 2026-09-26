@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use ratatui::{
-    backend::{Backend, ClearType, CrosstermBackend, WindowSize},
+    backend::{Backend, ClearType, CrosstermBackend, IntoCrossterm, WindowSize},
     buffer::Cell,
     crossterm::{
         cursor::MoveTo,
@@ -106,6 +106,8 @@ impl<W> Backend for OscBackend<W>
 where
     W: Write,
 {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -122,7 +124,7 @@ where
             .difference(&events.spans)
             .cloned()
             .collect();
-        stale_spans.sort_by(|a, b| (a.end.1, a.end.0).cmp(&(b.end.1, b.end.0)));
+        stale_spans.sort_by_key(|a| (a.end.1, a.end.0));
         for span in &stale_spans {
             *stale_closure_counts.entry(span.end).or_insert(0) += 1;
         }
@@ -200,7 +202,7 @@ where
             }
         }
 
-        changed_cells.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
+        changed_cells.sort_by_key(|a| (a.1, a.0));
 
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;
@@ -248,7 +250,10 @@ where
             if cell.fg != fg || cell.bg != bg {
                 queue!(
                     self.inner,
-                    SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                    SetColors(Colors::new(
+                        cell.fg.into_crossterm(),
+                        cell.bg.into_crossterm()
+                    ))
                 )?;
                 fg = cell.fg;
                 bg = cell.bg;

@@ -498,10 +498,8 @@ pub async fn handle_picker_key_event(
             event::KeyCode::Char('o') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                 actions.push(PickerAction::PickerInspectSelection);
             }
-            event::KeyCode::Char(c) => {
-                if !key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                    actions.push(PickerAction::PickerTypeChar { ch: c });
-                }
+            event::KeyCode::Char(c) if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                actions.push(PickerAction::PickerTypeChar { ch: c });
             }
             _ => {}
         }

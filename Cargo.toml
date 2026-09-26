@@ -2,7 +2,7 @@
 name = "chabeau"
 version = "0.7.4-dev"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.88"
 description = "A full-screen terminal chat interface that connects to various AI APIs for real-time conversations"
 license = "CC0-1.0"
 repository = "https://github.com/permacommons/chabeau"
@@ -24,7 +24,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.9.5"
 directories = "6.0"
-ratatui = "0.29"
+ratatui = "0.30"
 pulldown-cmark = "0.13"
 clap = { version = "4.0", features = ["derive"] }
 futures-util = "0.3"
@@ -32,7 +32,7 @@ tokio-util = "0.7.15"
 keyring = { version = "3.0", features = ["sync-secret-service", "windows-native", "apple-native"] }
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.20"
-tui-textarea = "0.7"
+ratatui-textarea = "0.9"
 syntect = "5"
 async-trait = "0.1"
 unicode-width = "0.2.0"

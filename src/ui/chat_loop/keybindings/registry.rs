@@ -201,6 +201,10 @@ impl ModeAwareRegistry {
 
     /// Check if a key should be handled as text input (bypass registry)
     pub fn should_handle_as_text_input(&self, key: &KeyEvent, context: &KeyContext) -> bool {
+        // The textarea treats Shift+Tab as a tab insertion; keep it out of text input.
+        if key.code == KeyCode::BackTab {
+            return false;
+        }
         match context {
             KeyContext::Typing => {
                 // In typing mode, only character keys are text input
@@ -276,7 +280,7 @@ impl ModeAwareRegistry {
                 }
             }
             KeyContext::FilePrompt => {
-                // In file prompt mode, let tui-textarea handle most keys
+                // In file prompt mode, let the textarea handle most keys
                 match key.code {
                     KeyCode::Esc => false,
                     KeyCode::Enter => false,
@@ -416,5 +420,24 @@ impl ModeAwareBuilder {
 impl Default for ModeAwareBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn back_tab_is_never_text_input() {
+        let registry = ModeAwareRegistry::new();
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        for context in [
+            KeyContext::Typing,
+            KeyContext::InPlaceEdit,
+            KeyContext::FilePrompt,
+            KeyContext::McpPromptInput,
+        ] {
+            assert!(!registry.should_handle_as_text_input(&key, &context));
+        }
     }
 }

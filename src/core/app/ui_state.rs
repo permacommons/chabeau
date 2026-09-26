@@ -31,10 +31,10 @@ use crate::ui::span::SpanKind;
 use crate::ui::theme::Theme;
 use ratatui::prelude::Size;
 use ratatui::text::Line;
+use ratatui_textarea::{CursorMove, DataCursor, TextArea};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
-use tui_textarea::{CursorMove, TextArea};
 
 /// Background activity being performed in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -617,7 +617,8 @@ impl UiState {
     }
 
     pub fn get_textarea_cursor(&self) -> (usize, usize) {
-        self.textarea.cursor()
+        let DataCursor(row, col) = self.textarea.cursor();
+        (row, col)
     }
 
     pub fn get_textarea_line_count(&self) -> usize {
@@ -657,7 +658,7 @@ impl UiState {
                 .map(|l| l.chars().count() as u16)
                 .unwrap_or(0);
             self.textarea
-                .move_cursor(tui_textarea::CursorMove::Jump(last_row, last_col));
+                .move_cursor(ratatui_textarea::CursorMove::Jump(last_row, last_col));
         }
         self.configure_textarea();
         self.bump_input_revision();
@@ -724,7 +725,7 @@ impl UiState {
     pub fn sync_input_from_textarea(&mut self) {
         let lines = self.textarea.lines();
         let new_input = lines.join("\n");
-        let (row, col) = self.textarea.cursor();
+        let DataCursor(row, col) = self.textarea.cursor();
         let mut pos = 0usize;
         for (i, line) in lines.iter().enumerate() {
             if i < row {

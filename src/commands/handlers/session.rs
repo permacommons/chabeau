@@ -330,17 +330,6 @@ pub fn do_load_session(app: &mut App, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::provider_ids_match;
-
-    #[test]
-    fn provider_ids_match_rejects_different_resolved_provider() {
-        assert!(provider_ids_match("openai", "OpenAI"));
-        assert!(!provider_ids_match("anthropic", "openai"));
-    }
-}
-
 fn show_session_picker(app: &mut App, sessions: Vec<SessionSummary>) {
     let items: Vec<PickerItem> = sessions
         .iter()
@@ -367,4 +356,15 @@ fn show_session_picker(app: &mut App, sessions: Vec<SessionSummary>) {
         .collect();
 
     app.picker.open_saved_session_picker(sessions, items);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_ids_match;
+
+    #[test]
+    fn provider_ids_match_rejects_different_resolved_provider() {
+        assert!(provider_ids_match("openai", "OpenAI"));
+        assert!(!provider_ids_match("anthropic", "openai"));
+    }
 }

@@ -7,6 +7,9 @@ name: Rust build and test
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so new clippy/rustfmt releases cannot break unrelated PRs.
+  # clippy-latest.yml opens an issue when a newer stable needs a bump.
+  LINT_RUST_TOOLCHAIN: "1.98"
 
 jobs:
   ci:
@@ -36,6 +39,88 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-lint-${{ env.LINT_RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-lint-${{ env.LINT_RUST_TOOLCHAIN }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.LINT_RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check benches compile
+        run: cargo check --benches --features bench
+
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-msrv-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install declared rust-version toolchain
+        run: |
+          msrv=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+          rustup toolchain install "$msrv" --profile minimal
+
+      - name: Check with declared rust-version
+        run: cargo +"$MSRV" check --all-targets --locked
+
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies for known vulnerabilities
+        run: cargo audit
 
   reproducible-builds:
     runs-on: ubuntu-latest

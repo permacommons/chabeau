@@ -38,7 +38,7 @@ async-trait = "0.1"
 unicode-width = "0.2.0"
 unicode-segmentation = "1.11"
 memchr = "2.7"
-base64 = "0.22"
+base64 = "0.23"
 crc32fast = "1.4"
 rust-mcp-schema = { version = "2.0.0", default-features = false, features = ["schema_utils", "2025_11_25"] }
 tracing = "0.1"

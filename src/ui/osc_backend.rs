@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use ratatui::{
-    backend::{Backend, ClearType, CrosstermBackend, WindowSize},
+    backend::{Backend, ClearType, CrosstermBackend, IntoCrossterm, WindowSize},
     buffer::Cell,
     crossterm::{
         cursor::MoveTo,
@@ -106,6 +106,8 @@ impl<W> Backend for OscBackend<W>
 where
     W: Write,
 {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -248,7 +250,10 @@ where
             if cell.fg != fg || cell.bg != bg {
                 queue!(
                     self.inner,
-                    SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                    SetColors(Colors::new(
+                        cell.fg.into_crossterm(),
+                        cell.bg.into_crossterm()
+                    ))
                 )?;
                 fg = cell.fg;
                 bg = cell.bg;

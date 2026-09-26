@@ -15,6 +15,7 @@ use crate::ui::picker::{PickerItem, PickerState};
 use crate::utils::test_utils::{
     create_test_app, create_test_message, create_test_message_with_role,
 };
+use ratatui_textarea::{CursorMove, Input, Key};
 use rust_mcp_schema::{
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, Resource, ResourceTemplate,
     Tool, ToolInputSchema,
@@ -22,7 +23,6 @@ use rust_mcp_schema::{
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
-use tui_textarea::{CursorMove, Input, Key};
 
 #[test]
 fn theme_picker_highlights_active_theme_over_default() {

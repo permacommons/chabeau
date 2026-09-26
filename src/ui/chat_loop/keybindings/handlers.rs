@@ -23,11 +23,11 @@ use crate::ui::chat_loop::modes::{
 };
 use crate::ui::chat_loop::{AppHandle, KeyLoopAction};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::debug;
-use tui_textarea::{CursorMove, Input as TAInput, Key as TAKey};
 
 // ============================================================================
 // Utility Functions

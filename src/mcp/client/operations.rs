@@ -131,7 +131,8 @@ pub async fn execute_prompt(
 ) -> Result<GetPromptResult, String> {
     let params = GetPromptRequestParams {
         name: request.prompt_name.clone(),
-        arguments: (!request.arguments.is_empty()).then_some(request.arguments.clone()),
+        arguments: (!request.arguments.is_empty())
+            .then(|| request.arguments.clone().into_iter().collect()),
         meta: None,
     };
     execute_transport_request(

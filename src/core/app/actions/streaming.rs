@@ -1694,7 +1694,7 @@ mod tests {
     use crate::core::config::data::McpServerConfig;
     use crate::utils::test_utils::create_test_app;
     use rust_mcp_schema::{ListToolsResult, Tool, ToolInputSchema};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn default_ctx() -> AppActionContext {
         AppActionContext {
@@ -1757,7 +1757,7 @@ mod tests {
         let mut nested_object = Map::new();
         nested_object.insert("type".to_string(), Value::String("object".to_string()));
 
-        let mut properties = HashMap::new();
+        let mut properties = BTreeMap::new();
         properties.insert("filters".to_string(), nested_object);
         let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
         add_test_tool(&mut app, "alpha", "search", input_schema);
@@ -1805,7 +1805,7 @@ mod tests {
         let mut query_schema = Map::new();
         query_schema.insert("type".to_string(), Value::String("string".to_string()));
 
-        let mut properties = HashMap::new();
+        let mut properties = BTreeMap::new();
         properties.insert("query".to_string(), query_schema);
         let input_schema = ToolInputSchema::new(vec!["query".to_string()], Some(properties), None);
         add_test_tool(&mut app, "alpha", "search", input_schema);
@@ -1859,7 +1859,7 @@ mod tests {
             ]),
         );
 
-        let mut properties = HashMap::new();
+        let mut properties = BTreeMap::new();
         properties.insert("filters".to_string(), nullable_object);
         let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
         add_test_tool(&mut app, "alpha", "search", input_schema);
@@ -1910,7 +1910,7 @@ mod tests {
             ]),
         );
 
-        let mut properties = HashMap::new();
+        let mut properties = BTreeMap::new();
         properties.insert("filters".to_string(), nullable_object);
         let input_schema = ToolInputSchema::new(Vec::new(), Some(properties), None);
         add_test_tool(&mut app, "alpha", "search", input_schema);

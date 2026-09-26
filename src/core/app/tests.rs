@@ -21,7 +21,7 @@ use rust_mcp_schema::{
     Tool, ToolInputSchema,
 };
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -389,7 +389,7 @@ fn build_stream_params_includes_mcp_tools() {
 
     let mut prop_map = Map::new();
     prop_map.insert("type".to_string(), Value::String("string".to_string()));
-    let mut properties = HashMap::new();
+    let mut properties = BTreeMap::new();
     properties.insert("query".to_string(), prop_map);
     let input_schema = ToolInputSchema::new(vec!["query".to_string()], Some(properties), None);
 

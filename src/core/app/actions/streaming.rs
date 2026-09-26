@@ -953,6 +953,7 @@ fn expected_label_for_error(kind: &ValidationErrorKind) -> String {
         ValidationErrorKind::Type { kind } => type_kind_label(kind),
         ValidationErrorKind::Custom { .. } => "custom".to_string(),
         ValidationErrorKind::BacktrackLimitExceeded { .. }
+        | ValidationErrorKind::RegexEngineFailure { .. }
         | ValidationErrorKind::ContentEncoding { .. }
         | ValidationErrorKind::ContentMediaType { .. }
         | ValidationErrorKind::FromUtf8 { .. }

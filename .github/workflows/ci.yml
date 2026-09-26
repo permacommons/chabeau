@@ -108,6 +108,37 @@ jobs:
       - name: Check with declared rust-version
         run: cargo +"$MSRV" check --all-targets --locked
 
+  windows-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-windows-gnu-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-windows-gnu-
+
+      - name: Install MinGW cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Add Windows target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      # Compiles cfg(windows) code (e.g. winreg) that the Linux jobs skip.
+      - name: Check Windows target
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --locked --all-targets --target x86_64-pc-windows-gnu
+
   audit:
     runs-on: ubuntu-latest
 

@@ -684,6 +684,7 @@ cargo clippy --all-targets --all-features
 - `.github/workflows/ci.yml` runs build, test, and reproducibility checks on pushes and pull requests, plus:
   - `lint`: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and a compile check of the Criterion benches, using the Rust version pinned in `LINT_RUST_TOOLCHAIN` so new lints in later releases cannot break unrelated PRs.
   - `msrv`: builds with the `rust-version` declared in `Cargo.toml`.
+  - `windows-check`: cross-compiles a `cargo check` for `x86_64-pc-windows-gnu` with warnings denied, so Windows-only code and dependencies are verified on every PR.
   - `audit`: `cargo audit`, failing on RustSec vulnerabilities in dependencies.
 - `.github/workflows/clippy-latest.yml` runs the same fmt and clippy checks weekly on the latest stable Rust. When they fail, it opens (or comments on) a tracking issue listing the new lints; fix them and bump `LINT_RUST_TOOLCHAIN` in the same PR. The issue closes automatically on the next passing run.
 - `.github/dependabot.yml` opens weekly grouped pull requests for Cargo dependencies (minor and patch updates together, major updates individually) and GitHub Actions.

@@ -61,7 +61,7 @@ pub(super) fn flush_code_block_buffer(
                 false
             };
 
-            let lang = language_hint.and_then(|s| if s.is_empty() { None } else { Some(s) });
+            let lang = language_hint.filter(|&s| !s.is_empty());
             let code_block_kind = SpanKind::code_block(lang, block_index);
 
             let mut line_metadata = Vec::with_capacity(line.spans.len());

@@ -506,39 +506,32 @@ impl<'a> ConversationController<'a> {
                 }
             }
         } else {
-            let mut target_index = None;
+            let index = self
+                .ui
+                .messages
+                .iter()
+                .rposition(|msg| msg.is_assistant() && !msg.content.is_empty())?;
 
-            for (i, msg) in self.ui.messages.iter().enumerate().rev() {
-                if msg.is_assistant() && !msg.content.is_empty() {
-                    target_index = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(index) = target_index {
-                if !self.session.has_received_assistant_message {
-                    if let Some(greeting) = self.character_greeting_text() {
-                        if let Some(msg) = self.ui.messages.get_mut(index) {
-                            if msg.is_assistant() {
-                                msg.content = greeting;
-                                self.ui.current_response.clear();
-                                self.session.retrying_message_index = None;
-                                return None;
-                            }
+            if !self.session.has_received_assistant_message {
+                if let Some(greeting) = self.character_greeting_text() {
+                    if let Some(msg) = self.ui.messages.get_mut(index) {
+                        if msg.is_assistant() {
+                            msg.content = greeting;
+                            self.ui.current_response.clear();
+                            self.session.retrying_message_index = None;
+                            return None;
                         }
                     }
                 }
+            }
 
-                self.session.retrying_message_index = Some(index);
-                self.session.active_assistant_message_index = Some(index);
-                self.session.tool_pipeline.prune_for_assistant_index(index);
+            self.session.retrying_message_index = Some(index);
+            self.session.active_assistant_message_index = Some(index);
+            self.session.tool_pipeline.prune_for_assistant_index(index);
 
-                if let Some(msg) = self.ui.messages.get_mut(index) {
-                    msg.content.clear();
-                    self.ui.current_response.clear();
-                }
-            } else {
-                return None;
+            if let Some(msg) = self.ui.messages.get_mut(index) {
+                msg.content.clear();
+                self.ui.current_response.clear();
             }
         }
 

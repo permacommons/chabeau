@@ -124,7 +124,7 @@ where
             .difference(&events.spans)
             .cloned()
             .collect();
-        stale_spans.sort_by(|a, b| (a.end.1, a.end.0).cmp(&(b.end.1, b.end.0)));
+        stale_spans.sort_by_key(|a| (a.end.1, a.end.0));
         for span in &stale_spans {
             *stale_closure_counts.entry(span.end).or_insert(0) += 1;
         }
@@ -202,7 +202,7 @@ where
             }
         }
 
-        changed_cells.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
+        changed_cells.sort_by_key(|a| (a.1, a.0));
 
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;

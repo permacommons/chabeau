@@ -510,7 +510,7 @@ pub fn list_sessions() -> Result<Vec<SessionSummary>, SessionError> {
         });
     }
 
-    summaries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    summaries.sort_by_key(|s| std::cmp::Reverse(s.modified_at));
     Ok(summaries)
 }
 

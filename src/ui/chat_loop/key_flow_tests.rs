@@ -5,10 +5,12 @@
 use super::*;
 use crate::core::app::actions::{AppActionEnvelope, AppCommand};
 use crate::core::app::picker::PickerMode;
+use crate::core::app::ui_state::EditSelectTarget;
 use crate::core::app::App;
-use crate::core::message::TranscriptRole;
+use crate::core::message::{Message, TranscriptRole};
 use crate::ui::osc_backend::OscBackend;
-use crate::ui::theme::Theme;
+use crate::ui::picker::PickerItem;
+use crate::utils::test_utils::create_test_app;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -51,14 +53,14 @@ impl KeyFlow {
     }
 
     fn with_default_app() -> Self {
-        Self::new(App::new_test_app(Theme::dark_default(), true, true))
+        Self::new(create_test_app())
     }
 
-    async fn press(&mut self, code: KeyCode) {
-        self.press_with(code, KeyModifiers::NONE).await;
+    async fn press(&mut self, code: KeyCode) -> KeyboardEventOutcome {
+        self.press_with(code, KeyModifiers::NONE).await
     }
 
-    async fn press_with(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+    async fn press_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyboardEventOutcome {
         let outcome = route_keyboard_event(
             &self.app,
             &self.registry,
@@ -71,6 +73,7 @@ impl KeyFlow {
         .expect("key routing should succeed");
         self.exit_requested |= outcome.exit_requested;
         self.settle().await;
+        outcome
     }
 
     async fn type_text(&mut self, text: &str) {
@@ -353,4 +356,159 @@ async fn delete_on_default_theme_clears_default_and_refreshes_picker() {
     );
     assert!(!labels.contains(&default_label));
     assert!(flow.render().await.contains("Removed default"));
+}
+
+#[tokio::test]
+async fn tab_autocompletes_slash_commands() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.type_text("/he").await;
+
+    let outcome = flow.press(KeyCode::Tab).await;
+
+    assert!(outcome.request_redraw);
+    assert_eq!(flow.input().await, "/help ");
+    assert!(flow.read(|app| app.ui.is_input_focused()).await);
+}
+
+#[tokio::test]
+async fn tab_toggles_focus_without_slash_prefix() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| app.ui.focus_transcript()).await;
+
+    let outcome = flow.press(KeyCode::Tab).await;
+    assert!(outcome.request_redraw);
+    assert!(flow.read(|app| app.ui.is_input_focused()).await);
+
+    let outcome = flow.press(KeyCode::Tab).await;
+    assert!(outcome.request_redraw);
+    assert!(flow.read(|app| app.ui.is_transcript_focused()).await);
+}
+
+#[tokio::test]
+async fn session_picker_character_keys_do_not_fall_through_to_input() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| {
+        app.picker.open_saved_session_picker(
+            Vec::new(),
+            vec![PickerItem {
+                id: "sess-alpha".to_string(),
+                label: "Alpha Session".to_string(),
+                metadata: Some("openai | gpt-4".to_string()),
+                inspect_metadata: None,
+                sort_key: None,
+            }],
+        );
+    })
+    .await;
+
+    flow.press(KeyCode::Char('a')).await;
+
+    assert_eq!(flow.input().await, "");
+    assert!(flow.read(|app| app.active_picker().is_some()).await);
+}
+
+#[tokio::test]
+async fn tab_does_not_switch_focus_in_edit_select_mode() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| {
+        app.ui.messages.push_back(Message {
+            role: TranscriptRole::User,
+            content: "hello".into(),
+        });
+        app.ui.enter_edit_select_mode(EditSelectTarget::User);
+    })
+    .await;
+
+    let outcome = flow.press(KeyCode::Tab).await;
+
+    assert!(!outcome.request_redraw);
+    let (focus_is_transcript, in_edit_select) = flow
+        .read(|app| (app.ui.is_transcript_focused(), app.ui.in_edit_select_mode()))
+        .await;
+    assert!(focus_is_transcript);
+    assert!(in_edit_select);
+}
+
+#[tokio::test]
+async fn tab_does_not_switch_focus_in_assistant_edit_select_mode() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| {
+        app.ui.messages.push_back(Message {
+            role: TranscriptRole::Assistant,
+            content: "response".into(),
+        });
+        app.ui.enter_edit_select_mode(EditSelectTarget::Assistant);
+    })
+    .await;
+
+    let outcome = flow.press(KeyCode::Tab).await;
+
+    assert!(!outcome.request_redraw);
+    let (focus_is_transcript, in_edit_select, target_is_assistant) = flow
+        .read(|app| {
+            (
+                app.ui.is_transcript_focused(),
+                app.ui.in_edit_select_mode(),
+                app.ui.edit_select_target() == Some(EditSelectTarget::Assistant),
+            )
+        })
+        .await;
+    assert!(focus_is_transcript);
+    assert!(in_edit_select);
+    assert!(target_is_assistant);
+}
+
+#[tokio::test]
+async fn tab_does_not_switch_focus_in_block_select_mode() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| app.ui.enter_block_select_mode(0)).await;
+
+    let outcome = flow.press(KeyCode::Tab).await;
+
+    assert!(!outcome.request_redraw);
+    let (focus_is_transcript, in_block_select) = flow
+        .read(|app| {
+            (
+                app.ui.is_transcript_focused(),
+                app.ui.in_block_select_mode(),
+            )
+        })
+        .await;
+    assert!(focus_is_transcript);
+    assert!(in_block_select);
+}
+
+#[tokio::test]
+async fn arrow_key_in_file_prompt_keeps_transcript_focus() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| {
+        app.ui.start_file_prompt_dump("dump.txt".into());
+        app.ui.focus_transcript();
+    })
+    .await;
+
+    flow.press(KeyCode::Up).await;
+
+    assert!(flow.read(|app| app.ui.is_transcript_focused()).await);
+    assert_eq!(
+        flow.input().await,
+        "dump.txt",
+        "arrow does not edit the prompt"
+    );
+}
+
+#[tokio::test]
+async fn typing_in_file_prompt_refocuses_input() {
+    let mut flow = KeyFlow::with_default_app();
+    flow.update(|app| {
+        app.ui.start_file_prompt_dump("dump".into());
+        app.ui.focus_transcript();
+    })
+    .await;
+
+    let outcome = flow.press(KeyCode::Char('z')).await;
+
+    assert!(outcome.request_redraw);
+    assert_eq!(flow.input().await, "dumpz");
+    assert!(flow.read(|app| app.ui.is_input_focused()).await);
 }

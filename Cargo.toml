@@ -62,4 +62,9 @@ name = "render_cache"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "syntax_highlight"
+harness = false
+required-features = ["bench"]
+
 #[ Enable the optional `bench` feature when running Criterion benches. ]

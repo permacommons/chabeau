@@ -1,6 +1,11 @@
 # Benchmarks (Criterion 0.7)
 
-This repository ships a `render_cache` bench to validate the cached prewrapped rendering path. Use this scaffold to add your own when validating performance-sensitive changes.
+This repository ships two benches:
+
+- `render_cache` validates the cached prewrapped rendering path.
+- `syntax_highlight` measures loading syntect's bundled syntaxes and highlighting code blocks, including a long block that approximates re-highlighting a large fence while a response streams.
+
+Run one with `cargo bench --features bench --bench syntax_highlight`. Use this scaffold to add your own when validating performance-sensitive changes.
 
 ## Steps
 

@@ -47,7 +47,7 @@ getrandom = "0.4"
 jsonschema = { version = "0.57.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
+winreg = "0.56"
 
 [build-dependencies]
 # vergen-git2 1.0.x expects vergen-lib 0.1.x; pin vergen to keep versions aligned.

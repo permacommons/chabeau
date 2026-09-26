@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -175,7 +175,7 @@ pub fn path_display<P: AsRef<Path>>(path: P) -> String {
     #[cfg(unix)]
     {
         if let Some(home) = std::env::var_os("HOME") {
-            let home_path = PathBuf::from(home);
+            let home_path = std::path::PathBuf::from(home);
             if let Ok(relative) = path.strip_prefix(&home_path) {
                 return format!("~/{}", relative.display());
             }

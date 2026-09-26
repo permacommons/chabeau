@@ -207,9 +207,7 @@ mod tests {
             meta: None,
         };
         let request = base_request(vec![message]);
-        let err = build_sampling_messages(&request)
-            .err()
-            .expect("should reject image");
+        let err = build_sampling_messages(&request).expect_err("should reject image");
         assert!(err.contains("text-only"));
     }
 

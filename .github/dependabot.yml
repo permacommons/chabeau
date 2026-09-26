@@ -6,6 +6,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      vergen:
+        patterns: ["vergen", "vergen-*"]
       cargo-minor-patch:
         update-types: [minor, patch]
 

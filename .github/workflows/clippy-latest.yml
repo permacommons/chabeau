@@ -1,0 +1,102 @@
+---
+name: Lint on latest stable Rust
+
+'on':
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: never
+  ISSUE_TITLE: New clippy/rustfmt findings on latest stable Rust
+
+jobs:
+  lint-latest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install latest stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Run rustfmt and clippy
+        id: lint
+        run: |
+          rustc --version | tee rustc-version.txt
+          status=0
+          cargo fmt --all -- --check > fmt.log 2>&1 || status=1
+          cargo clippy --all-targets -- -D warnings > clippy.log 2>&1 \
+            || status=1
+          cat fmt.log clippy.log
+          exit "$status"
+
+      - name: Open or update tracking issue
+        if: failure() && steps.lint.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          pinned=$(grep -m1 'LINT_RUST_TOOLCHAIN:' .github/workflows/ci.yml \
+            | cut -d'"' -f2)
+          lints=$(grep -oE 'index\.html#[a-z0-9_]+' clippy.log \
+            | sed "s/.*#/- \`clippy::/; s/\$/\`/" | sort -u)
+          fmt_files=$(grep -oE '^Diff in [^:]+' fmt.log \
+            | sed "s|^Diff in ${PWD}/|- \`|; s/\$/\`/" | sort -u)
+          {
+            echo "The scheduled lint run on the latest stable toolchain failed."
+            echo
+            echo "- Toolchain: \`$(cat rustc-version.txt)\`"
+            echo "- Pinned in \`ci.yml\` (\`LINT_RUST_TOOLCHAIN\`): \`$pinned\`"
+            echo "- Run: $RUN_URL"
+            if [ -n "$lints" ]; then
+              echo
+              echo "### Clippy lints"
+              echo "$lints"
+            fi
+            if [ -n "$fmt_files" ]; then
+              echo
+              echo "### rustfmt differences"
+              echo "$fmt_files"
+            fi
+            echo
+            echo "Fix the findings, then bump \`LINT_RUST_TOOLCHAIN\` in" \
+              "\`.github/workflows/ci.yml\` to the new version in the same PR." \
+              "This issue closes automatically on the next passing run."
+          } > issue.md
+
+          existing=$(gh issue list --state open --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file issue.md
+          fi
+
+      - name: Close tracking issue when passing
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --state open --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --comment "Passing on \`$(cat rustc-version.txt)\`."
+          fi

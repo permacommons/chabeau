@@ -7,6 +7,9 @@ name: Rust build and test
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so new clippy/rustfmt releases cannot break unrelated PRs.
+  # clippy-latest.yml opens an issue when a newer stable needs a bump.
+  LINT_RUST_TOOLCHAIN: "1.98"
 
 jobs:
   ci:
@@ -50,17 +53,20 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-lint-${{ env.LINT_RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-lint-
+            ${{ runner.os }}-lint-${{ env.LINT_RUST_TOOLCHAIN }}-
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - name: Install rustfmt and clippy
-        run: rustup component add rustfmt clippy
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.LINT_RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo fmt --all -- --check

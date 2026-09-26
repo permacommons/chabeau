@@ -339,7 +339,7 @@ name = "chabeau"
 version = "0.7.4-dev"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "crc32fast",

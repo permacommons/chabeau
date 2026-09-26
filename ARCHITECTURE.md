@@ -240,5 +240,6 @@ the event loop does: keys go through `route_keyboard_event` with the full
 registry from `build_mode_aware_registry`, queued actions are applied until the
 queue is empty, and frames render to a ratatui `TestBackend`. Commands that
 would start background work (streams, model loads, MCP calls) are recorded
-rather than run, so these tests stay offline. Prefer this harness for
-behavior that spans routing, reducers and rendering.
+rather than run, so these tests stay offline. Keyboard behavior tests belong
+here; `event_loop_tests.rs` covers paste, stream processing and reducer-level
+behavior that does not route keys.

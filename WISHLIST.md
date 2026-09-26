@@ -25,13 +25,6 @@ Items are removed when completed.
 
 ## Code quality
 
-### High priority
-
-- Tests — [OPEN]
-  - Add integration-style tests for event handling if feasible (simulate key events) — [OPEN]
-  - Consider adding integration tests for the complete Del key workflow in picker dialogs — [OPEN]
-  - Consider testing UI state changes after Del key operations (picker refresh) — [OPEN]
-
 ### Low priority
 
 - Centralize help text — [OPEN]

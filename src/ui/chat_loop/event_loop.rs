@@ -791,3 +791,7 @@ pub async fn run_chat(options: RunChatOptions) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 #[path = "event_loop_tests.rs"]
 mod event_loop_tests;
+
+#[cfg(test)]
+#[path = "key_flow_tests.rs"]
+mod key_flow_tests;

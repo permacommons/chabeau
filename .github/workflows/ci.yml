@@ -102,6 +102,20 @@ jobs:
       - name: Check with declared rust-version
         run: cargo +"$MSRV" check --all-targets --locked
 
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies for known vulnerabilities
+        run: cargo audit
+
   reproducible-builds:
     runs-on: ubuntu-latest
 

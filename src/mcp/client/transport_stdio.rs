@@ -25,10 +25,11 @@ use rust_mcp_schema::schema_utils::{
 };
 use rust_mcp_schema::{InitializeRequestParams, InitializeResult, RequestId, RpcError};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
@@ -37,7 +38,7 @@ use tracing::debug;
 /// This client tracks inflight server-initiated work so request timeouts can be
 /// extended while the application is processing callbacks such as sampling.
 pub(crate) struct StdioClient {
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<Pin<Box<dyn AsyncWrite + Send>>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
     next_request_id: AtomicI64,
     server_details: RwLock<Option<rust_mcp_schema::InitializeResult>>,
@@ -45,6 +46,8 @@ pub(crate) struct StdioClient {
     request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
     activity_notify: Arc<Notify>,
     inflight_server_requests: Arc<AtomicI64>,
+    stdin_lock_timeout: tokio::time::Duration,
+    stdin_write_timeout: tokio::time::Duration,
 }
 
 impl StdioClient {
@@ -84,7 +87,7 @@ impl StdioClient {
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let client = Arc::new(Self {
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(Box::pin(stdin)),
             pending: pending.clone(),
             next_request_id: AtomicI64::new(0),
             server_details: RwLock::new(None),
@@ -92,6 +95,8 @@ impl StdioClient {
             request_tx,
             activity_notify: Arc::new(Notify::new()),
             inflight_server_requests: Arc::new(AtomicI64::new(0)),
+            stdin_lock_timeout: tokio::time::Duration::from_secs(10),
+            stdin_write_timeout: tokio::time::Duration::from_secs(10),
         });
 
         Self::spawn_stdout_reader(
@@ -146,7 +151,10 @@ impl StdioClient {
             pending.insert(request_id.clone(), tx);
         }
 
-        self.send_client_message(&message).await?;
+        if let Err(error) = self.send_client_message(&message).await {
+            self.pending.lock().await.remove(&request_id);
+            return Err(error);
+        }
 
         let wait_timeout = self.timeout_for_wait();
         match tokio::time::timeout(wait_timeout, rx).await {
@@ -226,23 +234,25 @@ impl StdioClient {
     }
 
     async fn send_client_message(&self, message: &ClientMessage) -> Result<(), String> {
-        let lock_timeout = tokio::time::Duration::from_secs(10);
-        let write_timeout = tokio::time::Duration::from_secs(10);
         let payload = serde_json::to_string(message).map_err(|err| err.to_string())?;
-        let mut stdin = match tokio::time::timeout(lock_timeout, self.stdin.lock()).await {
+        let mut stdin = match tokio::time::timeout(self.stdin_lock_timeout, self.stdin.lock()).await
+        {
             Ok(stdin) => stdin,
             Err(_) => return Err("Timed out waiting for MCP stdio stdin lock.".to_string()),
         };
 
-        tokio::time::timeout(write_timeout, stdin.write_all(payload.as_bytes()))
-            .await
-            .map_err(|_| "Timed out writing MCP stdio client message.".to_string())?
-            .map_err(|err| err.to_string())?;
-        tokio::time::timeout(write_timeout, stdin.write_all(b"\n"))
+        tokio::time::timeout(
+            self.stdin_write_timeout,
+            stdin.write_all(payload.as_bytes()),
+        )
+        .await
+        .map_err(|_| "Timed out writing MCP stdio client message.".to_string())?
+        .map_err(|err| err.to_string())?;
+        tokio::time::timeout(self.stdin_write_timeout, stdin.write_all(b"\n"))
             .await
             .map_err(|_| "Timed out writing MCP stdio newline.".to_string())?
             .map_err(|err| err.to_string())?;
-        tokio::time::timeout(write_timeout, stdin.flush())
+        tokio::time::timeout(self.stdin_write_timeout, stdin.flush())
             .await
             .map_err(|_| "Timed out flushing MCP stdio client message.".to_string())?
             .map_err(|err| err.to_string())?;
@@ -404,6 +414,64 @@ pub(crate) async fn send_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::task::{Context, Poll};
+
+    enum Failure {
+        Write,
+        Flush,
+    }
+
+    struct FailingWriter(Failure);
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            match self.0 {
+                Failure::Write => Poll::Ready(Err(io::Error::other("controlled write failure"))),
+                Failure::Flush => Poll::Ready(Ok(buffer.len())),
+            }
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            match self.0 {
+                Failure::Write => Poll::Ready(Ok(())),
+                Failure::Flush => Poll::Ready(Err(io::Error::other("controlled flush failure"))),
+            }
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn test_client(writer: impl AsyncWrite + Send + 'static) -> StdioClient {
+        StdioClient {
+            stdin: Mutex::new(Box::pin(writer)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_request_id: AtomicI64::new(0),
+            server_details: RwLock::new(None),
+            server_id: "test-server".to_string(),
+            request_tx: None,
+            activity_notify: Arc::new(Notify::new()),
+            inflight_server_requests: Arc::new(AtomicI64::new(0)),
+            stdin_lock_timeout: tokio::time::Duration::from_millis(10),
+            stdin_write_timeout: tokio::time::Duration::from_millis(10),
+        }
+    }
+
+    async fn assert_send_failure_cleans_pending(client: &StdioClient, expected: &str) {
+        let error = client
+            .send_request(RequestFromClient::PingRequest(None))
+            .await
+            .expect_err("request should fail");
+
+        assert_eq!(error, expected);
+        assert!(client.pending.lock().await.is_empty());
+    }
 
     #[tokio::test]
     async fn stdio_requires_connected_client() {
@@ -411,5 +479,28 @@ mod tests {
             .await
             .expect_err("expected missing client error");
         assert_eq!(err, "MCP client not connected.");
+    }
+
+    #[tokio::test]
+    async fn write_failure_removes_pending_request() {
+        let client = test_client(FailingWriter(Failure::Write));
+
+        assert_send_failure_cleans_pending(&client, "controlled write failure").await;
+    }
+
+    #[tokio::test]
+    async fn flush_failure_removes_pending_request() {
+        let client = test_client(FailingWriter(Failure::Flush));
+
+        assert_send_failure_cleans_pending(&client, "controlled flush failure").await;
+    }
+
+    #[tokio::test]
+    async fn stdin_lock_timeout_removes_pending_request() {
+        let client = test_client(tokio::io::sink());
+        let _stdin = client.stdin.lock().await;
+
+        assert_send_failure_cleans_pending(&client, "Timed out waiting for MCP stdio stdin lock.")
+            .await;
     }
 }

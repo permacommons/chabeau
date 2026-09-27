@@ -149,7 +149,10 @@ Key modules and responsibilities:
   status updates, stream token setup).
 - `src/core/app/picker/mod.rs` — owns `ActivePicker` data for model/provider/
   theme/character/persona/preset/saved-session flows and inspect metadata
-  backing.
+  backing, plus the shared open/filter/sort/title helpers. Mode-specific
+  `PickerController` methods live in sibling files: `model_provider.rs`
+  (model/provider pickers and preview revert), `theme.rs`, and `roleplay.rs`
+  (character/persona/preset pickers).
 - `src/core/app/actions/mod.rs` — root action and command contracts, plus
   top-level reducer fan-out (`apply_action`, `apply_actions`).
 - `src/core/app/actions/streaming.rs` — stream-side reducer entrypoint for
@@ -232,6 +235,7 @@ Examples:
 
 - `src/commands/tests.rs`
 - `src/cli/tests.rs`
+- `src/core/app/picker/tests.rs`
 - `src/ui/chat_loop/event_loop_tests.rs`
 - `src/mcp/client/tests.rs`
 

@@ -25,7 +25,6 @@ use rust_mcp_schema::schema_utils::{
 };
 use rust_mcp_schema::{InitializeRequestParams, InitializeResult, RequestId, RpcError};
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -33,21 +32,58 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing::debug;
 
+const STDIN_LOCK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
+const STDIN_WRITE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
+
+type PendingRequests = Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>;
+
+struct PendingRequestGuard {
+    pending: PendingRequests,
+    request_id: Option<RequestId>,
+}
+
+impl PendingRequestGuard {
+    fn new(pending: PendingRequests, request_id: RequestId) -> Self {
+        Self {
+            pending,
+            request_id: Some(request_id),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.request_id = None;
+    }
+}
+
+impl Drop for PendingRequestGuard {
+    fn drop(&mut self) {
+        let Some(request_id) = self.request_id.take() else {
+            return;
+        };
+        if let Ok(mut pending) = self.pending.try_lock() {
+            pending.remove(&request_id);
+        } else {
+            let pending = self.pending.clone();
+            tokio::spawn(async move {
+                pending.lock().await.remove(&request_id);
+            });
+        }
+    }
+}
+
 /// Stateful stdio transport client with pending-request correlation.
 ///
 /// This client tracks inflight server-initiated work so request timeouts can be
 /// extended while the application is processing callbacks such as sampling.
 pub(crate) struct StdioClient {
-    stdin: Mutex<Pin<Box<dyn AsyncWrite + Send>>>,
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>>,
+    stdin: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
+    pending: PendingRequests,
     next_request_id: AtomicI64,
     server_details: RwLock<Option<rust_mcp_schema::InitializeResult>>,
     server_id: String,
     request_tx: Option<mpsc::UnboundedSender<McpServerRequest>>,
     activity_notify: Arc<Notify>,
     inflight_server_requests: Arc<AtomicI64>,
-    stdin_lock_timeout: tokio::time::Duration,
-    stdin_write_timeout: tokio::time::Duration,
 }
 
 impl StdioClient {
@@ -87,7 +123,7 @@ impl StdioClient {
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<ServerMessage>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let client = Arc::new(Self {
-            stdin: Mutex::new(Box::pin(stdin)),
+            stdin: Mutex::new(Box::new(stdin)),
             pending: pending.clone(),
             next_request_id: AtomicI64::new(0),
             server_details: RwLock::new(None),
@@ -95,8 +131,6 @@ impl StdioClient {
             request_tx,
             activity_notify: Arc::new(Notify::new()),
             inflight_server_requests: Arc::new(AtomicI64::new(0)),
-            stdin_lock_timeout: tokio::time::Duration::from_secs(10),
-            stdin_write_timeout: tokio::time::Duration::from_secs(10),
         });
 
         Self::spawn_stdout_reader(
@@ -150,23 +184,18 @@ impl StdioClient {
             let mut pending = self.pending.lock().await;
             pending.insert(request_id.clone(), tx);
         }
+        let mut pending_guard = PendingRequestGuard::new(self.pending.clone(), request_id.clone());
 
-        if let Err(error) = self.send_client_message(&message).await {
-            self.pending.lock().await.remove(&request_id);
-            return Err(error);
-        }
+        self.send_client_message(&message).await?;
 
         let wait_timeout = self.timeout_for_wait();
         match tokio::time::timeout(wait_timeout, rx).await {
-            Ok(Ok(message)) => Ok(message),
-            Ok(Err(_)) => {
-                self.pending.lock().await.remove(&request_id);
-                Err("MCP stdio response channel closed.".to_string())
+            Ok(Ok(message)) => {
+                pending_guard.disarm();
+                Ok(message)
             }
-            Err(_) => {
-                self.pending.lock().await.remove(&request_id);
-                Err("Timed out waiting for MCP stdio response.".to_string())
-            }
+            Ok(Err(_)) => Err("MCP stdio response channel closed.".to_string()),
+            Err(_) => Err("Timed out waiting for MCP stdio response.".to_string()),
         }
     }
 
@@ -235,24 +264,20 @@ impl StdioClient {
 
     async fn send_client_message(&self, message: &ClientMessage) -> Result<(), String> {
         let payload = serde_json::to_string(message).map_err(|err| err.to_string())?;
-        let mut stdin = match tokio::time::timeout(self.stdin_lock_timeout, self.stdin.lock()).await
-        {
+        let mut stdin = match tokio::time::timeout(STDIN_LOCK_TIMEOUT, self.stdin.lock()).await {
             Ok(stdin) => stdin,
             Err(_) => return Err("Timed out waiting for MCP stdio stdin lock.".to_string()),
         };
 
-        tokio::time::timeout(
-            self.stdin_write_timeout,
-            stdin.write_all(payload.as_bytes()),
-        )
-        .await
-        .map_err(|_| "Timed out writing MCP stdio client message.".to_string())?
-        .map_err(|err| err.to_string())?;
-        tokio::time::timeout(self.stdin_write_timeout, stdin.write_all(b"\n"))
+        tokio::time::timeout(STDIN_WRITE_TIMEOUT, stdin.write_all(payload.as_bytes()))
+            .await
+            .map_err(|_| "Timed out writing MCP stdio client message.".to_string())?
+            .map_err(|err| err.to_string())?;
+        tokio::time::timeout(STDIN_WRITE_TIMEOUT, stdin.write_all(b"\n"))
             .await
             .map_err(|_| "Timed out writing MCP stdio newline.".to_string())?
             .map_err(|err| err.to_string())?;
-        tokio::time::timeout(self.stdin_write_timeout, stdin.flush())
+        tokio::time::timeout(STDIN_WRITE_TIMEOUT, stdin.flush())
             .await
             .map_err(|_| "Timed out flushing MCP stdio client message.".to_string())?
             .map_err(|err| err.to_string())?;
@@ -415,6 +440,7 @@ pub(crate) async fn send_error(
 mod tests {
     use super::*;
     use std::io;
+    use std::pin::Pin;
     use std::task::{Context, Poll};
 
     enum Failure {
@@ -423,6 +449,8 @@ mod tests {
     }
 
     struct FailingWriter(Failure);
+
+    struct StalledWriter;
 
     impl AsyncWrite for FailingWriter {
         fn poll_write(
@@ -448,9 +476,27 @@ mod tests {
         }
     }
 
-    fn test_client(writer: impl AsyncWrite + Send + 'static) -> StdioClient {
+    impl AsyncWrite for StalledWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn test_client(writer: impl AsyncWrite + Send + Unpin + 'static) -> StdioClient {
         StdioClient {
-            stdin: Mutex::new(Box::pin(writer)),
+            stdin: Mutex::new(Box::new(writer)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_request_id: AtomicI64::new(0),
             server_details: RwLock::new(None),
@@ -458,8 +504,6 @@ mod tests {
             request_tx: None,
             activity_notify: Arc::new(Notify::new()),
             inflight_server_requests: Arc::new(AtomicI64::new(0)),
-            stdin_lock_timeout: tokio::time::Duration::from_millis(10),
-            stdin_write_timeout: tokio::time::Duration::from_millis(10),
         }
     }
 
@@ -495,12 +539,74 @@ mod tests {
         assert_send_failure_cleans_pending(&client, "controlled flush failure").await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn stdin_lock_timeout_removes_pending_request() {
         let client = test_client(tokio::io::sink());
         let _stdin = client.stdin.lock().await;
 
         assert_send_failure_cleans_pending(&client, "Timed out waiting for MCP stdio stdin lock.")
             .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_write_timeout_removes_pending_request() {
+        let client = test_client(StalledWriter);
+
+        assert_send_failure_cleans_pending(&client, "Timed out writing MCP stdio client message.")
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_request_removes_pending_request() {
+        let client = test_client(tokio::io::sink());
+
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_millis(1),
+            client.send_request(RequestFromClient::PingRequest(None)),
+        )
+        .await;
+
+        assert!(result.is_err());
+        tokio::task::yield_now().await;
+        assert!(client.pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn successful_response_disarms_pending_guard() {
+        let client = test_client(tokio::io::sink());
+        let unrelated_id = RequestId::Integer(99);
+        let (unrelated_tx, _unrelated_rx) = oneshot::channel();
+        client
+            .pending
+            .lock()
+            .await
+            .insert(unrelated_id.clone(), unrelated_tx);
+
+        let pending = client.pending.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(tx) = pending.lock().await.remove(&RequestId::Integer(0)) {
+                    let response = serde_json::from_value(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "result": {}
+                    }))
+                    .expect("response should deserialize");
+                    tx.send(response).expect("request should receive response");
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let response = client
+            .send_request(RequestFromClient::PingRequest(None))
+            .await
+            .expect("request should receive response");
+
+        assert!(matches!(response, ServerMessage::Response(_)));
+        let pending = client.pending.lock().await;
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains_key(&unrelated_id));
     }
 }

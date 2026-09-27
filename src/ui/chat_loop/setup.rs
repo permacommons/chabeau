@@ -187,7 +187,7 @@ pub async fn bootstrap_app(
     // Load session if specified via --session CLI flag
     if let Some(ref session_id) = session {
         if let Err(e) = crate::commands::do_load_session(&mut app, session_id) {
-            eprintln!("Error: Failed to load session '{}': {}", session_id, e);
+            eprintln!("{}", startup_session_load_error(session_id, &e));
             std::process::exit(1);
         }
     }
@@ -195,6 +195,10 @@ pub async fn bootstrap_app(
     let app = Arc::new(Mutex::new(app));
 
     Ok(AppHandle::new(app))
+}
+
+fn startup_session_load_error(session_id: &str, error: &str) -> String {
+    format!("Error: Failed to load session '{session_id}': {error}")
 }
 
 fn populate_token_providers(
@@ -226,4 +230,21 @@ fn populate_token_providers(
     };
 
     *token_providers = Some(providers);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_session_load_error;
+
+    #[test]
+    fn startup_session_error_identifies_invalid_ids_without_io_wording() {
+        let error = startup_session_load_error(
+            "../outside",
+            "Invalid session ID '../outside': use only ASCII letters, numbers, hyphens, and underscores",
+        );
+
+        assert!(error.contains("Failed to load session '../outside'"));
+        assert!(error.contains("Invalid session ID '../outside'"));
+        assert!(!error.contains("read session file"));
+    }
 }

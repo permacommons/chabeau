@@ -1850,10 +1850,11 @@ mod session_tests {
     #[test]
     fn load_command_invalid_id_shows_error() {
         let mut app = create_test_app();
-        let result = process_input(&mut app, "/load nonexistent-session-id");
+        let result = process_input(&mut app, "/load ../outside");
         assert!(matches!(result, CommandResult::ContinueWithTranscriptFocus));
         let status = app.ui.status.as_deref().unwrap_or("");
-        assert!(status.contains("Load error:"));
+        assert!(status.contains("Load error: Invalid session ID '../outside'"));
+        assert!(!status.contains("read session file"));
     }
 
     #[test]

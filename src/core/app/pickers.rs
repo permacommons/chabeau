@@ -14,7 +14,7 @@ pub struct ModelPickerRequest {
     pub client: Client,
     pub base_url: String,
     pub api_key: String,
-    pub provider_name: String,
+    pub auth_mode: String,
     pub default_model_for_provider: Option<String>,
 }
 
@@ -101,12 +101,12 @@ impl App {
             client,
             base_url,
             api_key,
-            provider_name,
+            auth_mode,
             default_model_for_provider,
         } = request;
 
         let models_response =
-            crate::api::models::fetch_models(&client, &base_url, &api_key, &provider_name).await?;
+            crate::api::models::fetch_models(&client, &base_url, &api_key, &auth_mode).await?;
 
         self.complete_model_picker_request(default_model_for_provider, models_response)
     }
@@ -123,7 +123,7 @@ impl App {
             client: self.session.client.clone(),
             base_url: self.session.base_url.clone(),
             api_key: self.session.api_key.clone(),
-            provider_name: self.session.provider_name.clone(),
+            auth_mode: cfg.provider_auth_mode(&self.session.provider_name),
             default_model_for_provider,
         })
     }

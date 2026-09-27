@@ -261,6 +261,29 @@ You can also edit the following in `config.toml`, but you don't strictly need to
 - **Custom providers** — can be configured via `chabeau provider` subcommands
 - **MCP servers** — can be configured via `chabeau mcp` subcommands
 
+### Provider protocol modes
+
+Each provider selects an API adapter independently from its authentication
+`mode`. Built-in providers declare this explicitly: OpenAI, OpenRouter, Poe,
+Venice, Groq, Mistral, and Cerebras use `openai-chat-completions`, while
+Anthropic uses its native `anthropic-messages` endpoint and event format.
+
+Custom providers remain backward compatible: an omitted `adapter` defaults to
+`openai-chat-completions`. Advanced configurations can select a native adapter:
+
+```toml
+[[custom_providers]]
+id = "private-anthropic"
+display_name = "Private Anthropic Gateway"
+base_url = "https://gateway.example/v1"
+mode = "anthropic"                 # authentication headers
+adapter = "anthropic-messages"     # request and stream protocol
+```
+
+Authentication mode and protocol adapter are separate so an OpenAI-compatible
+gateway can retain the default adapter even when it requires custom credential
+handling. Unknown adapter values are rejected when configuration is loaded.
+
 Copy [examples/config.toml.sample](examples/config.toml.sample) to your config directory for a starting point.
 
 Both the CLI and TUI run mutations through the same configuration orchestrator. Chabeau caches the parsed file based on its last-modified timestamp, skipping redundant reloads when nothing has changed, and persists updates atomically so a failed write never clobbers your existing `config.toml`.
@@ -522,6 +545,8 @@ Chabeau uses a modular design with focused components:
 - `main.rs` – Entry point
 - `api/` – API data structures and model-related helpers
   - `mod.rs` – API data structures
+  - `neutral.rs` – provider-neutral requests, content parts, usage, errors, and events
+  - `adapters.rs` – OpenAI-compatible and native Anthropic wire adapters
   - `models.rs` – Model fetching and sorting functionality
 - `auth/` – Authentication and provider management
   - `mod.rs` – Authentication manager implementation

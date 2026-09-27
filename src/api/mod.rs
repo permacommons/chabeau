@@ -119,4 +119,6 @@ pub struct ModelsResponse {
     pub data: Vec<ModelInfo>,
 }
 
+pub mod adapters;
 pub mod models;
+pub mod neutral;

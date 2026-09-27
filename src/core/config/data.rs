@@ -8,6 +8,7 @@
 //! Configuration helpers also provide ergonomic display strings for paths
 //! and resolve defaults when user settings are absent.
 
+use crate::api::adapters::AdapterKind;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -27,6 +28,9 @@ pub struct CustomProvider {
     pub display_name: String,
     pub base_url: String,
     pub mode: Option<String>,
+    /// Wire protocol. Existing configurations default to OpenAI Chat Completions.
+    #[serde(default)]
+    pub adapter: AdapterKind,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -186,6 +190,16 @@ pub fn path_display<P: AsRef<Path>>(path: P) -> String {
 }
 
 impl Config {
+    pub fn provider_auth_mode(&self, provider_id: &str) -> String {
+        self.get_custom_provider(provider_id)
+            .and_then(|provider| provider.mode.clone())
+            .or_else(|| {
+                crate::core::builtin_providers::find_builtin_provider(provider_id)
+                    .map(|provider| provider.auth_mode().to_string())
+            })
+            .unwrap_or_else(|| "openai".to_string())
+    }
+
     pub fn add_custom_provider(&mut self, provider: CustomProvider) {
         self.custom_providers.push(provider);
     }
@@ -273,6 +287,7 @@ impl CustomProvider {
             display_name,
             base_url,
             mode,
+            adapter: AdapterKind::default(),
         }
     }
 }

@@ -426,6 +426,7 @@ fn process_stream_updates(
                     stream_id: msg_stream_id,
                 });
             }
+            StreamMessage::Usage(_) => {}
             StreamMessage::App { kind, content } => {
                 followup_actions.push(StreamingAction::StreamAppMessage {
                     kind,

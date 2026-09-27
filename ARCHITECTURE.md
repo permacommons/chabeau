@@ -212,9 +212,26 @@ reloading base config.
 
 ## Streaming pipeline
 Provider streaming transport is implemented in `src/core/chat_stream.rs`.
-`ChatStreamService` converts provider events into internal stream messages,
-normalizes malformed chunks, and propagates cancellation/error signaling back to
-the UI loop.
+`ChatStreamService` only frames transport data and consumes normalized events;
+it does not select endpoints or decode provider response shapes. It normalizes
+malformed chunks and propagates cancellation/error signaling back to the UI
+loop.
+
+The adapter boundary lives under `src/api/`. `neutral.rs` owns the request
+model (including multipart text, tool calls, and tool results) and the event
+model (text/tool/reasoning/status deltas, usage, warnings, completion, and
+provider failures). `adapters.rs` owns endpoint selection, request encoding,
+and provider event decoding. The OpenAI Chat Completions adapter preserves
+compatibility with OpenAI-style gateways, while the Anthropic Messages adapter
+uses Anthropic's native request and event shapes. Provider configuration passes
+an explicit adapter into each stream, avoiding provider-name conditionals in
+the streaming service.
+
+Adapters must emit `Completed` when provider-native completion metadata arrives;
+the transport also closes a stream cleanly at EOF, so protocols do not need an
+OpenAI-style `[DONE]` sentinel. Provider-specific events that do not mutate the
+conversation remain typed status, reasoning, warning, or usage events until the
+consumer decides how to expose them.
 
 ## UI rendering and performance safeguards
 The primary renderer is `src/ui/renderer.rs`.

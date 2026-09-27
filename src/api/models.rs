@@ -5,15 +5,14 @@ pub async fn fetch_models(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
-    provider_name: &str,
+    auth_mode: &str,
 ) -> Result<ModelsResponse, Box<dyn std::error::Error>> {
     let models_url = construct_api_url(base_url, "models");
     let request = client
         .get(models_url)
         .header("Content-Type", "application/json");
 
-    // Handle provider-specific authentication headers
-    let request = crate::utils::auth::add_auth_headers(request, provider_name, api_key);
+    let request = crate::utils::auth::add_auth_headers(request, auth_mode, api_key);
 
     let response = request.send().await?;
 

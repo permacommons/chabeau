@@ -3,6 +3,7 @@
 //! This module handles loading and managing built-in provider configurations
 //! from the builtins/models.toml file at build time.
 
+use crate::api::adapters::AdapterKind;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
@@ -12,6 +13,7 @@ pub struct BuiltinProvider {
     pub display_name: String,
     pub base_url: String,
     pub mode: Option<String>,
+    pub adapter: AdapterKind,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

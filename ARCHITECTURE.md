@@ -236,6 +236,7 @@ Examples:
 - `src/commands/tests.rs`
 - `src/cli/tests.rs`
 - `src/core/app/picker/tests.rs`
+- `src/core/app/conversation_tests.rs`
 - `src/ui/chat_loop/event_loop_tests.rs`
 - `src/mcp/client/tests.rs`
 

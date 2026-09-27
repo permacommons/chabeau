@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 /// Errors that can occur during session save/load operations.
 #[derive(Debug)]
 pub enum SessionError {
+    /// The supplied session ID is not a safe filename component.
+    InvalidId { id: String },
     /// Failed to read the session directory.
     ReadDir {
         path: PathBuf,
@@ -58,6 +60,10 @@ pub enum SessionError {
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SessionError::InvalidId { id } => write!(
+                f,
+                "Invalid session ID '{id}': use only ASCII letters, numbers, hyphens, and underscores"
+            ),
             SessionError::ReadDir { path, source } => {
                 write!(
                     f,
@@ -113,6 +119,7 @@ impl std::fmt::Display for SessionError {
 impl std::error::Error for SessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            SessionError::InvalidId { .. } => None,
             SessionError::ReadDir { source, .. }
             | SessionError::ReadFile { source, .. }
             | SessionError::Write { source, .. }
@@ -367,7 +374,27 @@ fn session_dir() -> Result<PathBuf, SessionError> {
 
 /// Returns the full path for a session file given its ID.
 fn session_path(id: &str) -> Result<PathBuf, SessionError> {
+    validate_session_id(id)?;
     Ok(session_dir()?.join(format!("{}.json", id)))
+}
+
+/// Validates that a session ID is exactly one portable, normal filename component.
+fn validate_session_id(id: &str) -> Result<(), SessionError> {
+    let has_valid_chars = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    let is_single_normal_component = {
+        let mut components = Path::new(id).components();
+        matches!(components.next(), Some(std::path::Component::Normal(component)) if component == id)
+            && components.next().is_none()
+    };
+
+    if has_valid_chars && is_single_normal_component {
+        Ok(())
+    } else {
+        Err(SessionError::InvalidId { id: id.to_string() })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +704,89 @@ mod tests {
         assert_eq!(snapshot.refine_prefix, "refine prefix");
         assert!(snapshot.markdown_enabled);
         assert!(snapshot.syntax_enabled);
+    }
+
+    #[test]
+    fn session_ids_accept_portable_filename_characters() {
+        for id in ["a", "Session_01", "0123456789abcdef", "saved-session_2"] {
+            assert!(validate_session_id(id).is_ok(), "expected valid ID: {id}");
+        }
+    }
+
+    #[test]
+    fn session_ids_reject_paths_and_non_portable_characters() {
+        for id in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "../../outside",
+            "/tmp/outside",
+            r"C:\outside",
+            "nested/session",
+            r"nested\session",
+            "session.json",
+            "session name",
+        ] {
+            assert!(
+                matches!(validate_session_id(id), Err(SessionError::InvalidId { .. })),
+                "expected invalid ID: {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_load_and_delete_leave_outside_file_untouched() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let session_dir = root.path().join("sessions");
+        fs::create_dir(&session_dir).expect("create session dir");
+        let outside = root.path().join("outside.json");
+        fs::write(&outside, "outside fixture").expect("write fixture");
+
+        with_data_dir(&session_dir, || {
+            for id in ["../outside", "../../outside", "/tmp/outside", r"C:\outside"] {
+                assert!(matches!(
+                    load_session(id),
+                    Err(SessionError::InvalidId { .. })
+                ));
+                assert!(matches!(
+                    delete_session(id),
+                    Err(SessionError::InvalidId { .. })
+                ));
+                assert_eq!(
+                    fs::read_to_string(&outside).expect("read fixture"),
+                    "outside fixture"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn rejected_save_does_not_construct_a_session_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = with_data_dir(dir.path(), || {
+            save_session(
+                "../outside",
+                "Invalid",
+                "provider",
+                "model",
+                "https://example.com/v1",
+                None,
+                None,
+                None,
+                &[],
+                &[],
+                &[],
+                &McpInitState::default(),
+                "",
+                "",
+                false,
+                false,
+            )
+        });
+
+        assert!(matches!(result, Err(SessionError::InvalidId { .. })));
+        assert!(!dir.path().join("../outside.json").exists());
     }
 
     #[test]

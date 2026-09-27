@@ -13,7 +13,9 @@ use futures_util::StreamExt;
 use memchr::memchr;
 use tokio::sync::mpsc;
 
-use crate::api::{ChatMessage, ChatRequest, ChatResponse, ChatToolDefinition};
+use crate::api::adapters::AdapterKind;
+use crate::api::neutral::{ContentPart, Message, Request, Role, StreamEvent, Tool, Usage};
+use crate::api::{ChatMessage, ChatRequest, ChatToolDefinition};
 use crate::core::message::AppMessageKind;
 use crate::utils::url::construct_api_url;
 
@@ -29,6 +31,9 @@ pub enum StreamMessage {
 
     /// A tool call delta received from the streaming API response.
     ToolCallDelta(ToolCallDelta),
+
+    /// Token accounting reported by the provider.
+    Usage(Usage),
 
     /// An error occurred during streaming (e.g., API error, network failure).
     Error(String),
@@ -132,70 +137,78 @@ fn extract_data_payload(line: &str) -> Option<&str> {
     line.strip_prefix("data:").map(str::trim_start)
 }
 
-fn handle_data_payload(
-    payload: &str,
+fn route_normalized_event(
+    event: StreamEvent,
     tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
     stream_id: u64,
 ) -> bool {
-    if payload == "[DONE]" {
-        let _ = tx.send((StreamMessage::End, stream_id));
-        return true;
-    }
-
-    match serde_json::from_str::<ChatResponse>(payload) {
-        Ok(response) => {
-            if let Some(choice) = response.choices.first() {
-                if let Some(content) = &choice.delta.content {
-                    let _ = tx.send((StreamMessage::Chunk(content.clone()), stream_id));
-                }
-
-                if let Some(tool_calls) = &choice.delta.tool_calls {
-                    for tool_call in tool_calls {
-                        let function = tool_call.function.as_ref();
-                        let _ = tx.send((
-                            StreamMessage::ToolCallDelta(ToolCallDelta {
-                                index: tool_call.index.unwrap_or(0),
-                                id: tool_call.id.clone(),
-                                name: function.and_then(|f| f.name.clone()),
-                                arguments: function.and_then(|f| f.arguments.clone()),
-                            }),
-                            stream_id,
-                        ));
-                    }
-                }
+    let message = match event {
+        StreamEvent::TextDelta(text) => Some(StreamMessage::Chunk(text)),
+        StreamEvent::ToolCallDelta(delta) => Some(StreamMessage::ToolCallDelta(ToolCallDelta {
+            index: delta.index,
+            id: delta.id,
+            name: delta.name,
+            arguments: delta.arguments,
+        })),
+        StreamEvent::Usage(usage) => Some(StreamMessage::Usage(usage)),
+        StreamEvent::Warning(content) => Some(StreamMessage::App {
+            kind: AppMessageKind::Warning,
+            content,
+        }),
+        StreamEvent::Failed(error) => {
+            let mut details = serde_json::Map::new();
+            details.insert("message".into(), serde_json::Value::String(error.message));
+            if let Some(code) = error.code {
+                details.insert("code".into(), serde_json::Value::String(code));
             }
-            false
-        }
-        Err(_) => {
-            if payload.trim().is_empty() {
-                return false;
+            if let Some(kind) = error.kind {
+                details.insert("type".into(), serde_json::Value::String(kind));
             }
-
-            let formatted_error = format_api_error(payload);
-            let _ = tx.send((StreamMessage::Error(formatted_error), stream_id));
+            let body = serde_json::json!({"error":details});
+            let _ = tx.send((
+                StreamMessage::Error(format_api_error(&body.to_string())),
+                stream_id,
+            ));
             let _ = tx.send((StreamMessage::End, stream_id));
-            true
+            return true;
         }
+        StreamEvent::Completed { .. } => Some(StreamMessage::End),
+        StreamEvent::ReasoningDelta(_) | StreamEvent::Status { .. } => None,
+    };
+    if let Some(message) = message {
+        let done = matches!(message, StreamMessage::End);
+        let _ = tx.send((message, stream_id));
+        done
+    } else {
+        false
     }
 }
 
 fn process_sse_line(
     line: &str,
+    adapter: AdapterKind,
     tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
     stream_id: u64,
 ) -> bool {
     extract_data_payload(line)
-        .map(|payload| handle_data_payload(payload, tx, stream_id))
+        .map(|payload| {
+            adapter
+                .adapter()
+                .decode_event(payload)
+                .into_iter()
+                .any(|event| route_normalized_event(event, tx, stream_id))
+        })
         .unwrap_or(false)
 }
 
 fn route_sse_frame(
     frame: SseFrame,
+    adapter: AdapterKind,
     tx: &mpsc::UnboundedSender<(StreamMessage, u64)>,
     stream_id: u64,
 ) -> bool {
     match frame {
-        SseFrame::Data(line) => process_sse_line(&line, tx, stream_id),
+        SseFrame::Data(line) => process_sse_line(&line, adapter, tx, stream_id),
         SseFrame::AppMessage { kind, content } => {
             if !content.trim().is_empty() {
                 let _ = tx.send((StreamMessage::App { kind, content }, stream_id));
@@ -401,6 +414,9 @@ pub struct StreamParams {
     /// Provider identifier (used for provider-specific auth headers).
     pub provider_name: String,
 
+    /// Wire protocol adapter selected by provider configuration.
+    pub adapter: AdapterKind,
+
     /// Model identifier for the chat completion request.
     pub model: String,
 
@@ -487,6 +503,7 @@ impl ChatStreamService {
     ///     base_url: "https://api.openai.com/v1".to_string(),
     ///     api_key: "your-api-key".to_string(),
     ///     provider_name: "openai".to_string(),
+    ///     adapter: chabeau::api::adapters::AdapterKind::OpenaiChatCompletions,
     ///     model: "gpt-4".to_string(),
     ///     api_messages: vec![
     ///         ChatMessage {
@@ -509,6 +526,7 @@ impl ChatStreamService {
     ///     match message {
     ///         StreamMessage::Chunk(content) => println!("{}", content),
     ///         StreamMessage::ToolCallDelta(_delta) => {}
+    ///         StreamMessage::Usage(_usage) => {}
     ///         StreamMessage::End => break,
     ///         StreamMessage::Error(err) => eprintln!("Error: {}", err),
     ///         StreamMessage::App { kind, content } => {
@@ -526,6 +544,7 @@ impl ChatStreamService {
                 base_url,
                 api_key,
                 provider_name,
+                adapter,
                 model,
                 api_messages,
                 tools,
@@ -533,11 +552,55 @@ impl ChatStreamService {
                 stream_id,
             } = params;
 
-            let request = ChatRequest {
+            let request = Request {
                 model,
-                messages: api_messages,
-                stream: true,
-                tools,
+                messages: api_messages
+                    .into_iter()
+                    .map(|message| {
+                        let role = match message.role.as_str() {
+                            "system" => Role::System,
+                            "assistant" => Role::Assistant,
+                            "tool" => Role::Tool,
+                            _ => Role::User,
+                        };
+                        let mut content = vec![ContentPart::Text {
+                            text: message.content,
+                        }];
+                        if let Some(tool_calls) = message.tool_calls {
+                            content.extend(tool_calls.into_iter().map(|call| {
+                                ContentPart::ToolCall {
+                                    id: call.id,
+                                    name: call.function.name,
+                                    arguments: call.function.arguments,
+                                }
+                            }));
+                        }
+                        if let Some(tool_call_id) = message.tool_call_id {
+                            content = vec![ContentPart::ToolResult {
+                                tool_call_id,
+                                content: match content.remove(0) {
+                                    ContentPart::Text { text } => text,
+                                    _ => String::new(),
+                                },
+                                is_error: false,
+                            }];
+                        }
+                        Message {
+                            role,
+                            content,
+                            name: message.name,
+                        }
+                    })
+                    .collect(),
+                tools: tools
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|tool| Tool {
+                        name: tool.function.name,
+                        description: tool.function.description,
+                        input_schema: tool.function.parameters,
+                    })
+                    .collect(),
                 max_tokens: None,
                 temperature: None,
                 stop: None,
@@ -545,7 +608,7 @@ impl ChatStreamService {
 
             tokio::select! {
                 _ = async {
-                    let chat_url = construct_api_url(&base_url, "chat/completions");
+                    let chat_url = construct_api_url(&base_url, adapter.adapter().endpoint());
                     let http_request = client
                         .post(chat_url)
                         .header("Content-Type", "application/json");
@@ -557,7 +620,7 @@ impl ChatStreamService {
                     );
 
                     match http_request
-                        .json(&request)
+                        .json(&adapter.adapter().encode_request(&request))
                         .send()
                         .await
                     {
@@ -584,7 +647,7 @@ impl ChatStreamService {
 
                                 if let Ok(chunk_bytes) = chunk {
                                     for frame in framer.push(&chunk_bytes) {
-                                        if route_sse_frame(frame, &tx_clone, stream_id) {
+                                        if route_sse_frame(frame, adapter, &tx_clone, stream_id) {
                                             return;
                                         }
                                     }
@@ -592,7 +655,7 @@ impl ChatStreamService {
                             }
 
                             for frame in framer.finish() {
-                                if route_sse_frame(frame, &tx_clone, stream_id) {
+                                if route_sse_frame(frame, adapter, &tx_clone, stream_id) {
                                     return;
                                 }
                             }
@@ -704,7 +767,12 @@ mod tests {
         for (index, (chunk_line, expected_chunk, done_line)) in variants.iter().enumerate() {
             let stream_id = (index + 1) as u64;
 
-            assert!(!process_sse_line(chunk_line, &service.tx, stream_id));
+            assert!(!process_sse_line(
+                chunk_line,
+                AdapterKind::OpenaiChatCompletions,
+                &service.tx,
+                stream_id
+            ));
             let (message, received_id) = rx.try_recv().expect("expected chunk message");
             assert_eq!(received_id, stream_id);
             match message {
@@ -712,7 +780,12 @@ mod tests {
                 other => panic!("expected chunk message, got {:?}", other),
             }
 
-            assert!(process_sse_line(done_line, &service.tx, stream_id));
+            assert!(process_sse_line(
+                done_line,
+                AdapterKind::OpenaiChatCompletions,
+                &service.tx,
+                stream_id
+            ));
             let (message, received_id) = rx.try_recv().expect("expected end message");
             assert_eq!(received_id, stream_id);
             assert!(matches!(message, StreamMessage::End));
@@ -727,7 +800,12 @@ mod tests {
         let error_line = r#"data: {"error":{"message":"internal server error"}}"#;
         let stream_id = 99;
 
-        assert!(process_sse_line(error_line, &service.tx, stream_id));
+        assert!(process_sse_line(
+            error_line,
+            AdapterKind::OpenaiChatCompletions,
+            &service.tx,
+            stream_id
+        ));
 
         let (message, received_id) = rx.try_recv().expect("expected error message");
         assert_eq!(received_id, stream_id);

@@ -1,0 +1,5 @@
+{"type":"message_start","message":{"usage":{"input_tokens":8,"output_tokens":0}}}
+{"type":"ping"}
+{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"checking"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello"}}
+{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}

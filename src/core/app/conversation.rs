@@ -608,6 +608,7 @@ impl<'a> ConversationController<'a> {
             api_key: self.session.api_key.clone(),
             base_url: self.session.base_url.clone(),
             provider_name: self.session.provider_name.clone(),
+            adapter: crate::api::adapters::AdapterKind::OpenaiChatCompletions,
             tools: None,
             cancel_token,
             stream_id,

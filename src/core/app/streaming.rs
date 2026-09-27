@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use super::App;
+use crate::api::adapters::AdapterKind;
 use crate::api::{ChatMessage, ChatToolDefinition, ChatToolFunction};
 use crate::core::chat_stream::StreamParams;
 use serde_json::json;
@@ -87,6 +88,17 @@ impl App {
             base_url: self.session.base_url.clone(),
             api_key: self.session.api_key.clone(),
             provider_name: self.session.provider_name.clone(),
+            adapter: self
+                .config
+                .get_custom_provider(&self.session.provider_name)
+                .map(|p| p.adapter)
+                .or_else(|| {
+                    crate::core::builtin_providers::find_builtin_provider(
+                        &self.session.provider_name,
+                    )
+                    .map(|p| p.adapter)
+                })
+                .unwrap_or(AdapterKind::OpenaiChatCompletions),
             model: self.session.model.clone(),
             api_messages,
             tools,

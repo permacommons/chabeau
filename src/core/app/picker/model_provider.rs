@@ -269,6 +269,7 @@ impl PickerController {
                             display_name: display_name.clone(),
                             base_url: base_url.clone(),
                             mode: None,
+                            adapter: crate::api::adapters::AdapterKind::OpenaiChatCompletions,
                         });
                 let (metadata, inspect_metadata) =
                     provider_metadata_custom(&provider_details, is_default);

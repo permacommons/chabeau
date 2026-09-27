@@ -242,6 +242,23 @@ fn test_custom_provider_auth_modes() {
 }
 
 #[test]
+fn custom_provider_without_adapter_uses_compatibility_default() {
+    let provider: CustomProvider = toml::from_str(
+        r#"
+id = "legacy"
+display_name = "Legacy Gateway"
+base_url = "https://example.test/v1"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        provider.adapter,
+        crate::api::adapters::AdapterKind::OpenaiChatCompletions
+    );
+}
+
+#[test]
 fn test_custom_theme_save_load() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let config_path = temp_dir.path().join("test_theme.toml");

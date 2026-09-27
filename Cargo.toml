@@ -70,3 +70,8 @@ harness = false
 required-features = ["bench"]
 
 #[ Enable the optional `bench` feature when running Criterion benches. ]
+
+[[bench]]
+name = "api_adapters"
+harness = false
+required-features = ["bench"]

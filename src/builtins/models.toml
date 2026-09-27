@@ -5,39 +5,47 @@
 id = "openai"
 display_name = "OpenAI"
 base_url = "https://api.openai.com/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "openrouter"
 display_name = "OpenRouter"
 base_url = "https://openrouter.ai/api/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "poe"
 display_name = "Poe"
 base_url = "https://api.poe.com/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "anthropic"
 display_name = "Anthropic"
 base_url = "https://api.anthropic.com/v1"
 mode = "anthropic"
+adapter = "anthropic-messages"
 
 [[providers]]
 id = "venice"
 display_name = "Venice AI"
 base_url = "https://api.venice.ai/api/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "groq"
 display_name = "Groq"
 base_url = "https://api.groq.com/openai/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "mistral"
 display_name = "Mistral"
 base_url = "https://api.mistral.ai/v1"
+adapter = "openai-chat-completions"
 
 [[providers]]
 id = "cerebras"
 display_name = "Cerebras"
 base_url = "https://api.cerebras.ai/v1"
+adapter = "openai-chat-completions"

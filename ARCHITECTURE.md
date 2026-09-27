@@ -29,8 +29,12 @@ In `src/cli/mod.rs`, clap-parsed subcommands route to non-UI flows (`auth`,
 flags such as `--debug-mcp` and `--disable-mcp` are resolved here and threaded
 forward so behavior is consistent in both one-shot and interactive execution.
 
-Shared prompt/input behavior for CLI setup flows lives in
-`src/utils/line_editor.rs`.
+The `provider` and `mcp` subcommand trees are implemented in
+`src/cli/provider.rs` and `src/cli/mcp.rs` (including MCP OAuth grant flows);
+`mod.rs` dispatches to their `handle_provider_command` and
+`handle_mcp_command` entry points. Shared prompt/input behavior for CLI setup
+flows lives in `src/utils/line_editor.rs`, with small required/optional/yes-no
+prompt helpers in `src/cli/prompts.rs`.
 
 ## Chat session bootstrap
 Interactive chat setup is handled by `src/ui/chat_loop/setup.rs`.

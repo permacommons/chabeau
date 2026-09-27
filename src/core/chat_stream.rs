@@ -70,7 +70,7 @@ pub async fn request_chat_completion(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
-    provider_name: &str,
+    auth_mode: &str,
     request: ChatRequest,
 ) -> Result<ChatCompletionResult, String> {
     let chat_url = construct_api_url(base_url, "chat/completions");
@@ -78,7 +78,7 @@ pub async fn request_chat_completion(
         .post(chat_url)
         .header("Content-Type", "application/json");
 
-    let http_request = crate::utils::auth::add_auth_headers(http_request, provider_name, api_key);
+    let http_request = crate::utils::auth::add_auth_headers(http_request, auth_mode, api_key);
 
     let response = http_request
         .json(&request)
@@ -156,6 +156,14 @@ fn route_normalized_event(
             content,
         }),
         StreamEvent::Failed(error) => {
+            if error.kind.as_deref() == Some("decode_error") {
+                let _ = tx.send((
+                    StreamMessage::Error(format_api_error(&error.message)),
+                    stream_id,
+                ));
+                let _ = tx.send((StreamMessage::End, stream_id));
+                return true;
+            }
             let mut details = serde_json::Map::new();
             details.insert("message".into(), serde_json::Value::String(error.message));
             if let Some(code) = error.code {
@@ -411,8 +419,11 @@ pub struct StreamParams {
     /// API key for authentication.
     pub api_key: String,
 
-    /// Provider identifier (used for provider-specific auth headers).
+    /// Provider identifier associated with the request.
     pub provider_name: String,
+
+    /// Resolved authentication header mode.
+    pub auth_mode: String,
 
     /// Wire protocol adapter selected by provider configuration.
     pub adapter: AdapterKind,
@@ -503,6 +514,7 @@ impl ChatStreamService {
     ///     base_url: "https://api.openai.com/v1".to_string(),
     ///     api_key: "your-api-key".to_string(),
     ///     provider_name: "openai".to_string(),
+    ///     auth_mode: "openai".to_string(),
     ///     adapter: chabeau::api::adapters::AdapterKind::OpenaiChatCompletions,
     ///     model: "gpt-4".to_string(),
     ///     api_messages: vec![
@@ -543,7 +555,8 @@ impl ChatStreamService {
                 client,
                 base_url,
                 api_key,
-                provider_name,
+                provider_name: _,
+                auth_mode,
                 adapter,
                 model,
                 api_messages,
@@ -615,7 +628,7 @@ impl ChatStreamService {
 
                     let http_request = crate::utils::auth::add_auth_headers(
                         http_request,
-                        &provider_name,
+                        &auth_mode,
                         &api_key,
                     );
 

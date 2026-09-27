@@ -190,6 +190,16 @@ pub fn path_display<P: AsRef<Path>>(path: P) -> String {
 }
 
 impl Config {
+    pub fn provider_auth_mode(&self, provider_id: &str) -> String {
+        self.get_custom_provider(provider_id)
+            .and_then(|provider| provider.mode.clone())
+            .or_else(|| {
+                crate::core::builtin_providers::find_builtin_provider(provider_id)
+                    .map(|provider| provider.auth_mode().to_string())
+            })
+            .unwrap_or_else(|| "openai".to_string())
+    }
+
     pub fn add_custom_provider(&mut self, provider: CustomProvider) {
         self.custom_providers.push(provider);
     }

@@ -7,11 +7,11 @@ pub fn spawn_model_picker_loader(dispatcher: AppActionDispatcher, request: Model
             client,
             base_url,
             api_key,
-            provider_name,
+            auth_mode,
             default_model_for_provider,
         } = request;
 
-        let fetch_result = fetch_models(&client, &base_url, &api_key, &provider_name)
+        let fetch_result = fetch_models(&client, &base_url, &api_key, &auth_mode)
             .await
             .map_err(|e| e.to_string());
 

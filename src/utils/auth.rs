@@ -3,8 +3,6 @@
 //! This module provides utilities for adding provider-specific authentication
 //! headers to HTTP requests.
 
-use crate::core::builtin_providers::find_builtin_provider;
-
 /// Add provider-specific authentication headers to an HTTP request
 ///
 /// This function handles the different authentication schemes used by various providers:
@@ -13,23 +11,20 @@ use crate::core::builtin_providers::find_builtin_provider;
 ///
 /// # Arguments
 /// * `request` - The reqwest RequestBuilder to add headers to
-/// * `provider_name` - The name of the provider (used to determine auth mode)
+/// * `auth_mode` - The resolved authentication mode for the provider
 /// * `api_key` - The API key to use for authentication
 ///
 /// # Returns
 /// The RequestBuilder with appropriate authentication headers added
 pub fn add_auth_headers(
     request: reqwest::RequestBuilder,
-    provider_name: &str,
+    auth_mode: &str,
     api_key: &str,
 ) -> reqwest::RequestBuilder {
-    // Check if this is Anthropic (the only provider with special auth)
-    if let Some(builtin_provider) = find_builtin_provider(provider_name) {
-        if builtin_provider.is_anthropic_mode() {
-            return request
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01");
-        }
+    if auth_mode.eq_ignore_ascii_case("anthropic") {
+        return request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01");
     }
 
     // Default to OpenAI-style authentication for all other providers
@@ -100,5 +95,26 @@ mod tests {
         );
         assert!(headers.get("x-api-key").is_none());
         assert!(headers.get("anthropic-version").is_none());
+    }
+
+    #[test]
+    fn test_custom_anthropic_mode_auth_headers() {
+        let mut config = crate::core::config::data::Config::default();
+        config.add_custom_provider(crate::core::config::data::CustomProvider::new(
+            "custom-anthropic".into(),
+            "Custom Anthropic".into(),
+            "https://example.com/v1".into(),
+            Some("anthropic".into()),
+        ));
+        let request = reqwest::Client::new().get("https://example.com");
+        let auth_mode = config.provider_auth_mode("custom-anthropic");
+        let final_request = add_auth_headers(request, &auth_mode, "custom-key")
+            .build()
+            .unwrap();
+        let headers = final_request.headers();
+
+        assert_eq!(headers.get("x-api-key").unwrap(), "custom-key");
+        assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+        assert!(headers.get("Authorization").is_none());
     }
 }

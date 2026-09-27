@@ -89,9 +89,26 @@ impl ProviderAdapter for OpenAiAdapter {
                 value
             })
             .collect();
-        json!({"model":request.model,"messages":messages,"stream":true,"stream_options":{"include_usage":true},"tools":request.tools.iter().map(|t| json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"max_tokens":request.max_tokens,"temperature":request.temperature,"stop":request.stop})
+        let mut body = json!({"model":request.model,"messages":messages,"stream":true});
+        if !request.tools.is_empty() {
+            body["tools"] = json!(request.tools.iter().map(|t| json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>());
+        }
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = json!(temperature);
+        }
+        if let Some(stop) = &request.stop {
+            body["stop"] = json!(stop);
+        }
+        body
     }
     fn decode_event(&self, payload: &str) -> Vec<StreamEvent> {
+        let payload = payload.trim();
+        if payload.is_empty() {
+            return Vec::new();
+        }
         if payload == "[DONE]" {
             return vec![StreamEvent::Completed {
                 finish_reason: None,
@@ -99,7 +116,7 @@ impl ProviderAdapter for OpenAiAdapter {
         }
         let Ok(v) = serde_json::from_str::<Value>(payload) else {
             return vec![StreamEvent::Failed(ProviderError {
-                message: "Invalid JSON stream event".into(),
+                message: payload.into(),
                 code: None,
                 kind: Some("decode_error".into()),
                 retryable: false,
@@ -149,8 +166,9 @@ impl ProviderAdapter for OpenAiAdapter {
                 }));
             }
             if let Some(r) = choice.get("finish_reason").and_then(Value::as_str) {
-                out.push(StreamEvent::Completed {
-                    finish_reason: Some(reason(r)),
+                out.push(StreamEvent::Status {
+                    status: "finish_reason".into(),
+                    message: Some(r.into()),
                 });
             }
         }
@@ -166,10 +184,11 @@ impl ProviderAdapter for AnthropicAdapter {
         let mut system = Vec::new();
         let mut messages = Vec::new();
         for m in &request.messages {
-            let content: Vec<Value> = m.content.iter().map(|part| match part {
-                ContentPart::Text { text } => json!({"type":"text","text":text}),
-                ContentPart::ToolCall { id, name, arguments } => json!({"type":"tool_use","id":id,"name":name,"input":serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({"raw":arguments}))}),
-                ContentPart::ToolResult { tool_call_id, content, is_error } => json!({"type":"tool_result","tool_use_id":tool_call_id,"content":content,"is_error":is_error}),
+            let content: Vec<Value> = m.content.iter().filter_map(|part| match part {
+                ContentPart::Text { text } if text.is_empty() => None,
+                ContentPart::Text { text } => Some(json!({"type":"text","text":text})),
+                ContentPart::ToolCall { id, name, arguments } => Some(json!({"type":"tool_use","id":id,"name":name,"input":serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({"raw":arguments}))})),
+                ContentPart::ToolResult { tool_call_id, content, is_error } => Some(json!({"type":"tool_result","tool_use_id":tool_call_id,"content":content,"is_error":is_error})),
             }).collect();
             if matches!(m.role, Role::System) {
                 system.push(
@@ -188,30 +207,36 @@ impl ProviderAdapter for AnthropicAdapter {
         json!({"model":request.model,"messages":messages,"system":system.join("\n\n"),"stream":true,"max_tokens":request.max_tokens.unwrap_or(4096),"temperature":request.temperature,"stop_sequences":request.stop,"tools":request.tools.iter().map(|t| json!({"name":t.name,"description":t.description,"input_schema":t.input_schema})).collect::<Vec<_>>()})
     }
     fn decode_event(&self, payload: &str) -> Vec<StreamEvent> {
+        let payload = payload.trim();
+        if payload.is_empty() {
+            return Vec::new();
+        }
         let Ok(v) = serde_json::from_str::<Value>(payload) else {
             return vec![StreamEvent::Failed(ProviderError {
-                message: "Invalid JSON stream event".into(),
+                message: payload.into(),
                 code: None,
                 kind: Some("decode_error".into()),
                 retryable: false,
             })];
         };
         match v.get("type").and_then(Value::as_str).unwrap_or_default() {
-            "content_block_start"
-                if v.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use") =>
-            {
-                vec![StreamEvent::ToolCallDelta(ToolCallDelta {
-                    index: v.get("index").and_then(Value::as_u64).unwrap_or(0) as u32,
-                    id: v
-                        .pointer("/content_block/id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    name: v
-                        .pointer("/content_block/name")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    arguments: None,
-                })]
+            "content_block_start" => {
+                if v.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use") {
+                    vec![StreamEvent::ToolCallDelta(ToolCallDelta {
+                        index: v.get("index").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        id: v
+                            .pointer("/content_block/id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        name: v
+                            .pointer("/content_block/name")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        arguments: None,
+                    })]
+                } else {
+                    Vec::new()
+                }
             }
             "content_block_delta" => match v.pointer("/delta/type").and_then(Value::as_str) {
                 Some("text_delta") => v
@@ -271,13 +296,11 @@ impl ProviderAdapter for AnthropicAdapter {
                 finish_reason: None,
             }],
             "error" => vec![StreamEvent::Failed(provider_error(&v))],
-            "ping" => vec![StreamEvent::Status {
-                status: "ping".into(),
-                message: None,
-            }],
-            other => vec![StreamEvent::Warning(format!(
-                "Ignored provider event: {other}"
-            ))],
+            "content_block_stop" | "ping" => Vec::new(),
+            other => {
+                tracing::warn!(event_type = other, "ignored unknown Anthropic stream event");
+                Vec::new()
+            }
         }
     }
 }
@@ -285,6 +308,18 @@ impl ProviderAdapter for AnthropicAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::neutral::Message;
+
+    fn request(messages: Vec<Message>) -> Request {
+        Request {
+            model: "test-model".into(),
+            messages,
+            tools: Vec::new(),
+            max_tokens: None,
+            temperature: None,
+            stop: None,
+        }
+    }
 
     fn decode_fixture(kind: AdapterKind, fixture: &str) -> Vec<StreamEvent> {
         fixture
@@ -314,12 +349,9 @@ mod tests {
                 ..
             })
         )));
-        assert!(matches!(
-            events.last(),
-            Some(StreamEvent::Completed {
-                finish_reason: Some(FinishReason::ToolCalls)
-            })
-        ));
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Status { status, message: Some(reason) }) if status == "finish_reason" && reason == "tool_calls")
+        );
     }
 
     #[test]
@@ -328,9 +360,6 @@ mod tests {
             AdapterKind::AnthropicMessages,
             include_str!("fixtures/anthropic_stream.jsonl"),
         );
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, StreamEvent::Status { status, .. } if status == "ping")));
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::ReasoningDelta(text) if text == "checking")));
@@ -352,5 +381,105 @@ mod tests {
         assert!(
             matches!(&events[0], StreamEvent::Failed(error) if error.message == "Try again" && error.retryable)
         );
+    }
+
+    #[test]
+    fn openai_request_omits_empty_tools_and_unset_options() {
+        let body = AdapterKind::OpenaiChatCompletions
+            .adapter()
+            .encode_request(&request(Vec::new()));
+
+        for key in [
+            "tools",
+            "tool_choice",
+            "max_tokens",
+            "temperature",
+            "stop",
+            "stream_options",
+        ] {
+            assert!(body.get(key).is_none(), "unexpected key: {key}");
+        }
+    }
+
+    #[test]
+    fn anthropic_tool_call_omits_empty_text_block() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentPart::Text {
+                    text: String::new(),
+                },
+                ContentPart::ToolCall {
+                    id: "call_1".into(),
+                    name: "lookup".into(),
+                    arguments: "{}".into(),
+                },
+            ],
+            name: None,
+        };
+        let body = AdapterKind::AnthropicMessages
+            .adapter()
+            .encode_request(&request(vec![message]));
+        let content = body
+            .pointer("/messages/0/content")
+            .unwrap()
+            .as_array()
+            .unwrap();
+
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "tool_use");
+    }
+
+    #[test]
+    fn normal_anthropic_sequence_has_no_warnings() {
+        let fixture = concat!(
+            "{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n",
+            "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+            "{\"type\":\"ping\"}\n",
+            "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n",
+            "{\"type\":\"content_block_stop\",\"index\":0}\n",
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n",
+            "{\"type\":\"message_stop\"}"
+        );
+        let events = decode_fixture(AdapterKind::AnthropicMessages, fixture);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Warning(_))));
+    }
+
+    #[test]
+    fn openai_decoder_skips_empty_payloads() {
+        let adapter = AdapterKind::OpenaiChatCompletions.adapter();
+        assert!(adapter.decode_event("  \t").is_empty());
+    }
+
+    #[test]
+    fn openai_decoder_preserves_raw_errors() {
+        let adapter = AdapterKind::OpenaiChatCompletions.adapter();
+        assert!(
+            matches!(adapter.decode_event("upstream unavailable").as_slice(), [StreamEvent::Failed(error)] if error.message == "upstream unavailable")
+        );
+    }
+
+    #[test]
+    fn openai_finish_reason_does_not_complete_before_usage() {
+        let adapter = AdapterKind::OpenaiChatCompletions.adapter();
+        let finish = adapter.decode_event(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#);
+        let usage = adapter.decode_event(r#"{"choices":[],"usage":{"total_tokens":3}}"#);
+
+        assert!(!finish
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Completed { .. })));
+        assert!(usage.iter().any(|event| matches!(
+            event,
+            StreamEvent::Usage(Usage {
+                total_tokens: Some(3),
+                ..
+            })
+        )));
+        assert!(matches!(
+            adapter.decode_event("[DONE]").as_slice(),
+            [StreamEvent::Completed { .. }]
+        ));
     }
 }

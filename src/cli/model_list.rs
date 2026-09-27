@@ -47,8 +47,8 @@ pub async fn list_models(provider: Option<String>) -> Result<(), Box<dyn Error>>
     }
 
     let client = reqwest::Client::new();
-    let models_response =
-        fetch_models(&client, &base_url, &api_key, &provider_internal_name).await?;
+    let auth_mode = config.provider_auth_mode(&provider_internal_name);
+    let models_response = fetch_models(&client, &base_url, &api_key, &auth_mode).await?;
 
     if models_response.data.is_empty() {
         println!("No models found for this provider.");

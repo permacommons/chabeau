@@ -199,14 +199,14 @@ pub fn spawn_mcp_sampling_call(
         let start = std::time::Instant::now();
         let ctx = context.action_context();
 
-        let (client, base_url, api_key, provider_name, model) = context
+        let (client, base_url, api_key, auth_mode, model) = context
             .app
             .read(|app| {
                 (
                     app.session.client.clone(),
                     app.session.base_url.clone(),
                     app.session.api_key.clone(),
-                    app.session.provider_name.clone(),
+                    app.config.provider_auth_mode(&app.session.provider_name),
                     app.session.model.clone(),
                 )
             })
@@ -260,7 +260,7 @@ pub fn spawn_mcp_sampling_call(
                 &client,
                 &base_url,
                 &api_key,
-                &provider_name,
+                &auth_mode,
                 chat_request,
             ),
         )

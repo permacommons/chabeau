@@ -88,6 +88,7 @@ impl App {
             base_url: self.session.base_url.clone(),
             api_key: self.session.api_key.clone(),
             provider_name: self.session.provider_name.clone(),
+            auth_mode: self.config.provider_auth_mode(&self.session.provider_name),
             adapter: self
                 .config
                 .get_custom_provider(&self.session.provider_name)

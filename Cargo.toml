@@ -44,7 +44,7 @@ rust-mcp-schema = { version = "2.0.0", default-features = false, features = ["sc
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 getrandom = "0.4"
-jsonschema = { version = "0.57.0", default-features = false }
+jsonschema = { version = "0.58.3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

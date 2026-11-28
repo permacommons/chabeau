@@ -52,7 +52,7 @@ winreg = "0.56"
 [build-dependencies]
 # vergen and vergen-git2 must share a vergen-lib release; keep both on the
 # same version (Dependabot groups them).
-vergen = "=10.0.3"
+vergen = "=10.0.4"
 vergen-git2 = { version = "10.0.3", features = ["build", "cargo", "rustc", "si"] }
 
 [dev-dependencies]
